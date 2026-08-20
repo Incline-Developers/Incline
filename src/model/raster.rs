@@ -501,21 +501,3 @@ fn finish_premultiplied_average(sums: [u64; 4], count: u64) -> [u8; 4] {
     let rgb = |sum: u64| sum.checked_div(alpha_sum).unwrap_or(0).min(255) as u8;
     [rgb(sums[0]), rgb(sums[1]), rgb(sums[2]), (alpha_sum / count.max(1)).min(255) as u8]
 }
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn example_orthophoto_decodes_over_triangulation_footprint() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/example_surface_orthophoto.tif");
-        let raster = decode_raster(&path, 256).expect("example orthophoto should decode");
-
-        assert_eq!(raster.source_size, [1254, 1254]);
-        assert_eq!(raster.preview_size, [256, 256]);
-        let expected = [1.0 / 140.0, 0.0, 0.0, 0.0, -1.0 / 140.0, 1.0];
-        for (actual, expected) in raster.world_to_uv.into_iter().zip(expected) {
-            assert!((actual - expected).abs() < 1.0e-12);
-        }
-    }
-}

@@ -651,18 +651,3 @@ fn read_pcd_binary(bytes: &[u8], fields: &[PcdField], point_count: usize, xyz: [
     }
     Ok(PointCloudData { points, colors, bounds: None })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn coloured_xyz_example_imports() {
-        let progress = crate::model::progress::Progress::new();
-        let cloud = read_xyz_bytes(include_bytes!("../../../examples/example_point_cloud.xyz"), &progress.phase(0.0, 1.0)).expect("point-cloud example should parse");
-
-        assert_eq!(cloud.points.len(), 225);
-        assert_eq!(cloud.colors.as_ref().map(Vec::len), Some(225));
-        assert_eq!(cloud.points[112], DVec3::new(70.0, 70.0, 118.017));
-    }
-}

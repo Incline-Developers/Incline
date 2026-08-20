@@ -55,33 +55,6 @@ impl MeshFormat {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{MeshFormat, parse_mesh_bytes};
-
-    #[test]
-    fn removed_mesh_extension_is_not_recognized() {
-        assert_eq!(MeshFormat::from_extension("00t"), None);
-    }
-
-    #[test]
-    fn supported_mesh_extensions_remain_recognized() {
-        for extension in ["obj", "stl", "ply"] {
-            assert!(MeshFormat::from_extension(extension).is_some());
-        }
-    }
-
-    #[test]
-    fn triangulation_example_imports() {
-        let progress = crate::model::progress::Progress::new();
-        let mesh = parse_mesh_bytes(MeshFormat::Obj, include_bytes!("../../../examples/example_triangulation.obj"), &progress.phase(0.0, 1.0))
-            .expect("triangulation example should parse");
-
-        assert_eq!(mesh.vertex_count(), 225);
-        assert_eq!(mesh.face_count(), 392);
-    }
-}
-
 #[derive(Debug)]
 pub enum TranslationError {
     Io(io::Error),

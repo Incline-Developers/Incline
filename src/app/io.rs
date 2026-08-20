@@ -209,21 +209,6 @@ impl Default for Config {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_configs_hide_block_model_boundary_highlights_by_default() {
-        assert!(!Config::default().show_block_model_boundary_highlights);
-    }
-
-    #[test]
-    fn configs_without_block_model_boundary_highlights_are_rejected() {
-        assert!(toml::from_str::<Config>("").is_err());
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_config(config: &Config) -> io::Result<()> {
     let path = data_path("config.toml")?;

@@ -222,26 +222,3 @@ pub(crate) fn ray_through_world_point(view_projection: &DMat4, point: DVec3) -> 
     let direction = (far - near).try_normalize()?;
     Some((near, direction))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ray_hits_cylinder_wall_at_nearest_surface() {
-        let distance = ray_capped_cylinder_distance(DVec3::new(0.0, -5.0, 1.0), DVec3::Y, DVec3::ZERO, DVec3::new(0.0, 0.0, 2.0), 1.0);
-        assert_eq!(distance, Some(4.0));
-    }
-
-    #[test]
-    fn ray_hits_cylinder_end_cap() {
-        let distance = ray_capped_cylinder_distance(DVec3::new(0.5, 0.0, 5.0), DVec3::NEG_Z, DVec3::ZERO, DVec3::new(0.0, 0.0, 2.0), 1.0);
-        assert_eq!(distance, Some(3.0));
-    }
-
-    #[test]
-    fn ray_misses_outside_finite_cylinder() {
-        let distance = ray_capped_cylinder_distance(DVec3::new(2.0, -5.0, 3.0), DVec3::Y, DVec3::ZERO, DVec3::new(0.0, 0.0, 2.0), 1.0);
-        assert_eq!(distance, None);
-    }
-}

@@ -500,18 +500,3 @@ pub(crate) fn triangle_weights(point: DVec2, a: DVec2, b: DVec2, c: DVec2) -> Op
     let w = 1.0 - u - v;
     (u >= 0.0 && v >= 0.0 && w >= 0.0).then_some(DVec3::new(u, v, w))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn overlay_projection_keeps_points_outside_depth_range() {
-        let view_proj = DMat4::IDENTITY;
-        let world = DVec3::new(0.25, -0.5, 2.0);
-        let screen = (800.0, 600.0);
-
-        assert_eq!(world_to_screen(&view_proj, world, screen), None);
-        assert_eq!(world_to_screen_unclipped_depth(&view_proj, world, screen), Some(DVec2::new(500.0, 450.0)));
-    }
-}

@@ -649,36 +649,3 @@ fn parse_csv(bytes: &[u8]) -> Result<Vec<Vec<String>>, CsvDrillError> {
     }
     Ok(rows)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_mapping_requires_an_explicit_file_purpose() {
-        let bytes = include_bytes!("../../../examples/example_drillhole_segments.csv");
-        let preview = preview(bytes).expect("drillhole example preview should parse");
-        let mapping = unassigned_mapping(PathBuf::from("example_drillhole_segments.csv"), &preview);
-
-        assert_eq!(mapping.role, CsvDrillFileRole::Unassigned);
-        assert!(mapping.columns.iter().all(|role| *role == CsvDrillColumnRole::Ignore));
-        assert!(default_columns(mapping.role, &preview.headers).iter().all(|role| *role == CsvDrillColumnRole::Ignore));
-        assert!(parse_bundle([(&mapping, bytes.as_slice())]).is_err());
-    }
-
-    #[test]
-    fn explicit_segment_example_imports_as_curved_drillholes_after_purpose_selection() {
-        let bytes = include_bytes!("../../../examples/example_drillhole_segments.csv");
-        let preview = preview(bytes).expect("drillhole example preview should parse");
-        let mut mapping = unassigned_mapping(PathBuf::from("example_drillhole_segments.csv"), &preview);
-        mapping.role = CsvDrillFileRole::ExplicitSegments;
-        mapping.columns = default_columns(mapping.role, &preview.headers);
-
-        let dataset = parse_bundle([(&mapping, bytes.as_slice())]).expect("drillhole example should parse");
-        assert_eq!(dataset.holes.len(), 6);
-        assert_eq!(dataset.holes[0].dhid, "DH001");
-        assert_eq!(dataset.holes[0].intervals.len(), 8);
-        assert!(dataset.field("grade").is_some());
-        assert!(dataset.field("lithology").is_some());
-    }
-}

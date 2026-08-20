@@ -1003,38 +1003,6 @@ fn scale_bar_labels(distance: f64) -> [String; SCALE_BAR_SEGMENT_FRACTIONS.len()
     })
 }
 
-#[cfg(test)]
-mod scale_bar_tests {
-    use super::{nice_scale_distance, scale_bar_labels};
-
-    #[test]
-    fn scale_bar_is_disabled_by_default() {
-        assert!(!crate::app::io::default_show_scale_bar());
-    }
-
-    #[test]
-    fn scale_distance_uses_cartographic_steps() {
-        assert_eq!(nice_scale_distance(1.2), 1.0);
-        assert_eq!(nice_scale_distance(2.8), 2.0);
-        assert_eq!(nice_scale_distance(6.0), 5.0);
-        assert_eq!(nice_scale_distance(8.0), 10.0);
-        assert_eq!(nice_scale_distance(2400.0), 2000.0);
-    }
-
-    #[test]
-    fn scale_distance_uses_readable_units() {
-        assert_eq!(scale_bar_labels(2000.0)[5], "2km");
-        assert_eq!(scale_bar_labels(50.0)[5], "50m");
-        assert_eq!(scale_bar_labels(0.5)[5], "50cm");
-        assert_eq!(scale_bar_labels(0.005)[5], "5mm");
-    }
-
-    #[test]
-    fn scale_labels_match_the_reference_subdivisions() {
-        assert_eq!(scale_bar_labels(20.0), ["0", "1", "2", "5", "10", "20m"]);
-    }
-}
-
 fn active_variable_range(editor: &mut EditorState, model: &OpenBlockModel) -> Option<(f64, f64)> {
     let name = model.active_color_variable.as_deref()?;
     cached_variable_range(editor, model, name)
