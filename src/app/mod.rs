@@ -1183,6 +1183,7 @@ impl<'a> App<'a> {
                     path: path.clone(),
                     visible: cloud.visible,
                     is_loaded: true,
+                    is_saved: cloud.is_saved,
                     point_count: cloud.points.len(),
                 });
             } else {
@@ -1193,6 +1194,7 @@ impl<'a> App<'a> {
                     path: path.clone(),
                     visible: false,
                     is_loaded: false,
+                    is_saved: true,
                     point_count: 0,
                 });
             }
@@ -1205,6 +1207,7 @@ impl<'a> App<'a> {
                     path: cloud.path.clone(),
                     visible: cloud.visible,
                     is_loaded: true,
+                    is_saved: cloud.is_saved,
                     point_count: cloud.points.len(),
                 });
             }

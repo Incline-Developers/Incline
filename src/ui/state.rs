@@ -1006,6 +1006,8 @@ pub(crate) struct EditorState {
     pub(crate) tri_close_unsaved: Option<TriangulationId>,
     // Unsaved generated block-model close confirmation
     pub(crate) block_model_close_unsaved: Option<BlockModelId>,
+    // In-memory point-cloud close confirmation
+    pub(crate) point_cloud_close_unsaved: Option<PointCloudId>,
     /// Active viewport-to-field triangulation picker, if any.
     pub(crate) triangulation_pick_target: Option<TriangulationPickTarget>,
     /// Live description of the valid object under the cursor while a dialog
@@ -1586,6 +1588,7 @@ impl EditorState {
             tri_surface_type: TriSurfaceType::Surface,
             tri_close_unsaved: None,
             block_model_close_unsaved: None,
+            point_cloud_close_unsaved: None,
             triangulation_pick_target: None,
             viewport_pick_hover_label: None,
             tri_cut_poly_open: false,
@@ -1894,6 +1897,8 @@ pub(crate) enum UiCommand {
     ClearActiveTriangulationRaster,
     LoadPointCloud(PathBuf),
     ClosePointCloud(PointCloudId),
+    /// Close an in-memory point cloud after the user confirmed the discard.
+    ClosePointCloudForce(PointCloudId),
     TogglePointCloudVisible(PointCloudId),
     RemovePointCloud(PathBuf),
     #[cfg(not(target_arch = "wasm32"))]
@@ -2329,6 +2334,7 @@ impl UiCommand {
             Self::ClearActiveTriangulationRaster => report("Clear Raster", "Removed from active triangulation".to_owned()),
             Self::LoadPointCloud(path) => report("Load Point Cloud", path.display().to_string()),
             Self::ClosePointCloud(id) => report("Close Point Cloud", format!("{id:?}")),
+            Self::ClosePointCloudForce(id) => report("Discard Point Cloud", format!("{id:?}")),
             Self::TogglePointCloudVisible(id) => report("Set Point Cloud Visibility", format!("{id:?}")),
             Self::RemovePointCloud(path) => report("Remove Point Cloud", path.display().to_string()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -2524,6 +2530,7 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) path: PathBuf,
     pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
+    pub(crate) is_saved: bool,
     pub(crate) point_count: usize,
 }
 

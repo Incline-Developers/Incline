@@ -11,6 +11,9 @@ pub(crate) struct PointCloudId(pub(crate) u64);
 pub(crate) struct LoadedPointCloud {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
+    /// Whether `path` names a reloadable point-cloud source. OMF point sets
+    /// use a display-only virtual path and therefore remain unsaved in memory.
+    pub(crate) is_saved: bool,
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, when the input provides them.
     pub(crate) colors: Option<Arc<Vec<u32>>>,
@@ -24,6 +27,7 @@ pub(crate) struct OpenPointCloud {
     pub(crate) id: PointCloudId,
     pub(crate) name: String,
     pub(crate) path: PathBuf,
+    pub(crate) is_saved: bool,
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, retained for lossless interchange.
     pub(crate) colors: Option<Arc<Vec<u32>>>,

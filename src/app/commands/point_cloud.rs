@@ -36,6 +36,7 @@ impl<'a> App<'a> {
             id,
             name: loaded.name,
             path: loaded.path,
+            is_saved: loaded.is_saved,
             points: loaded.points,
             colors: loaded.colors,
             prepared: loaded.prepared,
@@ -76,6 +77,7 @@ impl<'a> App<'a> {
                 Ok(LoadedPointCloud {
                     name: input.source.name.clone(),
                     path: display_path,
+                    is_saved: true,
                     points: std::sync::Arc::new(data.points),
                     colors,
                     prepared: std::sync::Arc::new(prepared),
@@ -150,6 +152,7 @@ impl<'a> App<'a> {
                     Ok(LoadedPointCloud {
                         name,
                         path,
+                        is_saved: true,
                         points: std::sync::Arc::new(data.points),
                         colors,
                         prepared: std::sync::Arc::new(prepared),

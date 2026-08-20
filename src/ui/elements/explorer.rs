@@ -550,12 +550,16 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         ui.label("No open point clouds");
                     }
                     for point_cloud in &project.point_clouds {
+                        let dirty_marker = if point_cloud.is_saved { "" } else { " *" };
+                        let label_text = format!("{}{dirty_marker}", point_cloud.name);
                         let label = if point_cloud.is_loaded {
-                            bold(&point_cloud.name)
+                            bold(&label_text)
                         } else {
-                            egui::RichText::new(&point_cloud.name).color(INACTIVE_TEXT_COLOR)
+                            egui::RichText::new(&label_text).color(INACTIVE_TEXT_COLOR)
                         };
-                        let tooltip = if point_cloud.is_loaded {
+                        let tooltip = if !point_cloud.is_saved {
+                            format!("Unsaved point cloud\n{} point(s)", point_cloud.point_count)
+                        } else if point_cloud.is_loaded {
                             format!("{}\n{} point(s)", point_cloud.path.display(), point_cloud.point_count)
                         } else {
                             point_cloud.path.display().to_string()
@@ -567,7 +571,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                 label,
                             )),
                             &tooltip,
-                            Some(point_cloud.path.as_path()),
+                            point_cloud.is_saved.then_some(point_cloud.path.as_path()),
                         );
 
                         if response.double_clicked() {
@@ -581,7 +585,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                         let cloud_path = point_cloud.path.clone();
                         response.context_menu(|ui| {
                             if let Some(id) = point_cloud.id {
-                                if ui.button("Unload").clicked() {
+                                if ui.button(if point_cloud.is_saved { "Unload" } else { "Close" }).clicked() {
                                     commands.push(UiCommand::ClosePointCloud(id));
                                     ui.close();
                                 }
@@ -590,8 +594,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     ui.close();
                                 }
                                 #[cfg(not(target_arch = "wasm32"))]
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if ui.button("Reveal in Explorer").clicked() {
+                                if point_cloud.is_saved && ui.button("Reveal in Explorer").clicked() {
                                     commands.push(UiCommand::RevealPointCloud(id));
                                     ui.close();
                                 }
@@ -607,7 +610,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                                     ui.close();
                                 }
                             }
-                            if ui.button("Remove Point Cloud").clicked() {
+                            if point_cloud.is_saved && ui.button("Remove Point Cloud").clicked() {
                                 commands.push(UiCommand::RemovePointCloud(cloud_path.clone()));
                                 ui.close();
                             }

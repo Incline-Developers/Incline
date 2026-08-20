@@ -1048,6 +1048,11 @@ fn draw_global_dialogs(
         dialogs::confirmations::draw_close_unsaved_block_model_dialog(root_ui, commands, editor);
     }
 
+    // Close in-memory point-cloud confirmation
+    if editor.point_cloud_close_unsaved.is_some() {
+        dialogs::confirmations::draw_close_unsaved_point_cloud_dialog(root_ui, commands, editor);
+    }
+
     // Create Triangulation (always mark geometry dirty while open)
     if editor.tri_create_open {
         geometry_dirty = true;

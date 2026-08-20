@@ -199,6 +199,15 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ClosePointCloud(id) => {
+                if self.point_clouds.iter().any(|cloud| cloud.id == id && !cloud.is_saved) {
+                    self.editor.point_cloud_close_unsaved = Some(id);
+                    return Ok(());
+                }
+                self.close_point_cloud(id);
+                Ok(())
+            }
+            UiCommand::ClosePointCloudForce(id) => {
+                self.editor.point_cloud_close_unsaved = None;
                 self.close_point_cloud(id);
                 Ok(())
             }

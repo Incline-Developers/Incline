@@ -977,6 +977,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             loaded: LoadedPointCloud {
                 name: element_name(element).to_owned(),
                 path: virtual_path(self.source_name, element_name(element), "pcd"),
+                is_saved: false,
                 points: Arc::new(positions),
                 colors: colors.map(Arc::new),
                 prepared: Arc::new(prepared),

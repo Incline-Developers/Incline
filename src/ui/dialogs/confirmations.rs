@@ -298,3 +298,25 @@ pub(crate) fn draw_close_unsaved_block_model_dialog(ui: &mut egui::Ui, commands:
         editor.block_model_close_unsaved = None;
     }
 }
+
+pub(crate) fn draw_close_unsaved_point_cloud_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let Some(id) = editor.point_cloud_close_unsaved else {
+        return;
+    };
+    let mut open = true;
+    DragableMenu::new("Unsaved Point Cloud").open(&mut open).min_width(270.0).show(ui.ctx(), |ui| {
+        ui.label("This point cloud exists only in memory.\nClose without saving?");
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("Close Without Saving").clicked() {
+                commands.push(UiCommand::ClosePointCloudForce(id));
+            }
+            if ui.button("Cancel").clicked() {
+                editor.point_cloud_close_unsaved = None;
+            }
+        });
+    });
+    if !open {
+        editor.point_cloud_close_unsaved = None;
+    }
+}
