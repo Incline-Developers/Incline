@@ -21,7 +21,7 @@ Check out the [releases page](https://inclinedesign.net/downloads/) and grab the
 
 ## Example data
 
-The [`examples`](examples/) directory contains small, import-ready block-model, drillhole, triangulation, point-cloud, and orthophoto datasets.
+The [`examples`](examples/) directory contains an import-ready OMF project with a coordinated open-pit design, continuous detailed topography, point cloud, drillholes, and orthophoto in a local mine grid.
 
 ## License
 
