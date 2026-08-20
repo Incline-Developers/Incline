@@ -6,10 +6,6 @@ Cross-platform, lightweight, and built for mining professionals. Incline is free
 
 ![Screenshot of the app](./docs/poster.png)
 
-## Community
-
-To start contributing, or for support and questions, [join our discord](https://discord.gg/S6VvP9Gv5z).
-
 ## Getting Started
 
 Check out the [releases page](https://inclinedesign.net/downloads/) and grab the latest version of Incline!
