@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" data-name="Layer 1" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <style>.cls-1{fill:none;stroke:#020202;stroke-miterlimit:10;stroke-width:1.92px;}</style>
+ </defs>
+ <polyline class="cls-1" points="12 23.5 12 17.75 12 14.88" style="fill:none;stroke:#0215c6"/>
+ <line class="cls-1" x1="12" x2="12" y1="9.13" y2=".5" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="15.35 2.9 12 6.25 8.65 2.9" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="12 23.5 12 17.75 12 14.88" style="fill:none;stroke:#0215c6"/>
+ <line class="cls-1" x1="12" x2="12" y1="9.13" y2=".5" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="8.65 21.1 12 17.75 15.35 21.1" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="21.96 17.75 16.98 14.88 14.49 13.44" style="fill:none;stroke:#0215c6"/>
+ <line class="cls-1" x1="9.51" x2="2.04" y1="10.56" y2="6.25" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="5.79 4.54 7.02 9.13 2.44 10.35" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="21.96 17.75 16.98 14.88 14.49 13.44" style="fill:none;stroke:#0215c6"/>
+ <line class="cls-1" x1="9.51" x2="2.04" y1="10.56" y2="6.25" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="18.21 19.46 16.98 14.88 21.56 13.65" style="fill:none;stroke:#0215c6"/>
+ <line class="cls-1" x1="9.51" x2="2.04" y1="13.44" y2="17.75" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="14.49 10.56 16.98 9.13 21.96 6.25" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="18.21 4.54 16.98 9.13 21.56 10.35" style="fill:none;stroke:#0215c6"/>
+ <line class="cls-1" x1="9.51" x2="2.04" y1="13.44" y2="17.75" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="14.49 10.56 16.98 9.13 21.96 6.25" style="fill:none;stroke:#0215c6"/>
+ <polyline class="cls-1" points="5.79 19.46 7.02 14.88 2.44 13.65" style="fill:none;stroke:#0215c6"/>
+ <path class="cls-1" d="M14.88,12a2.89,2.89,0,1,1-.39-1.44A2.9,2.9,0,0,1,14.88,12Z" style="fill:none;stroke:#0215c6"/>
+</svg>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <g style="stroke:none">
+  <path d="m12 1.5 10 5.25-10 5.25z" style="fill:#f0b6ff"/>
+  <path d="m12 1.5-10 5.25 10 5.25z" style="fill:#cf78f2"/>
+  <path d="m12 12 10-5.25v10.5z" style="fill:#a35fe8"/>
+  <path d="m12 12v10.5l10-5.25z" style="fill:#6d2fc0"/>
+  <path d="m12 12-10-5.25v10.5z" style="fill:#3d70ff"/>
+  <path d="m12 12v10.5l-10-5.25z" style="fill:#1a41c4"/>
+ </g>
+</svg>

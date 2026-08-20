@@ -1,0 +1,247 @@
+//! Unified scene interaction queries, independent of GPU buffer ownership.
+
+use std::collections::HashSet;
+
+use glam::{DMat4, DVec2, DVec3};
+
+use crate::{
+    Size,
+    model::{
+        Document, SceneEntityId,
+        drill_hole::{MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset},
+        spatial::ObjectSnapIndex,
+        triangulation::OpenTriangulation,
+    },
+    rendering::snap,
+    ui::state::CursorMode,
+};
+
+pub(crate) struct SceneQuery;
+
+impl SceneQuery {
+    pub(crate) fn nearest_surface(
+        triangulations: &[OpenTriangulation],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: Option<&HashSet<SceneEntityId>>,
+        ray_origin: DVec3,
+        ray_direction: DVec3,
+    ) -> Option<(SceneEntityId, DVec3)> {
+        triangulations
+            .iter()
+            .filter(|triangulation| {
+                let entity = triangulation.entity_id();
+                triangulation.visible && !hidden.contains(&entity) && frozen.is_none_or(|set| !set.contains(&entity))
+            })
+            .filter_map(|triangulation| {
+                triangulation
+                    .spatial
+                    .ray_hit(&triangulation.mesh, ray_origin, ray_direction)
+                    .map(|point| (triangulation.entity_id(), point))
+            })
+            .min_by(|(_, a), (_, b)| (*a - ray_origin).dot(ray_direction).total_cmp(&(*b - ray_origin).dot(ray_direction)))
+    }
+
+    /// Nearest rendered drill-hole cylinder under a ray. Explicit source
+    /// diameters use their world-space radius; diameter-less holes use the
+    /// same minimum pixel diameter as the drill-hole vertex shader.
+    pub(crate) fn nearest_drill_hole(drill_holes: &[OpenDrillHoleDataset], ray_origin: DVec3, ray_direction: DVec3, view_projection: &DMat4, screen: Size) -> Option<DVec3> {
+        let mut nearest = f64::INFINITY;
+        for dataset in drill_holes.iter().filter(|dataset| dataset.visible) {
+            for hole in &dataset.dataset.holes {
+                for pair in hole.trace.windows(2) {
+                    let [start, end] = [pair[0], pair[1]];
+                    if end.depth <= start.depth + 1.0e-9 || start.position.distance_squared(end.position) <= 1.0e-18 {
+                        continue;
+                    }
+                    let midpoint_depth = (start.depth + end.depth) * 0.5;
+                    if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(from, to)| *from <= midpoint_depth && midpoint_depth < *to) {
+                        continue;
+                    }
+                    let radius = drill_segment_radius(
+                        start.position,
+                        end.position,
+                        hole.diameter.map(|diameter| diameter * 0.5).unwrap_or(0.0),
+                        view_projection,
+                        screen,
+                    );
+                    if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, start.position, end.position, radius)
+                        && distance < nearest
+                    {
+                        nearest = distance;
+                    }
+                }
+            }
+        }
+        nearest.is_finite().then(|| ray_origin + ray_direction * nearest)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn snap(
+        document: &Document,
+        snap_index: &ObjectSnapIndex,
+        triangulations: &[OpenTriangulation],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        mode: &CursorMode,
+        view_projection: &DMat4,
+        screen: Size,
+        cursor: (f32, f32),
+        threshold: f32,
+        xray_enabled: bool,
+    ) -> Option<DVec3> {
+        let candidate = snap::snap_cursor(document, snap_index, triangulations, hidden, frozen, mode, view_projection, screen, cursor, threshold)?;
+        if xray_enabled {
+            return Some(candidate.world);
+        }
+        // Test visibility along the candidate's own screen-space ray. Using the
+        // cursor ray here skews the accepted snap region on sloped surfaces:
+        // the candidate may be several pixels from the cursor, so the cursor ray
+        // can hit the same surface in front of an otherwise visible vertex.
+        let (ray_origin, ray_direction) = ray_through_world_point(view_projection, candidate.world)?;
+        let candidate_depth = (candidate.world - ray_origin).dot(ray_direction);
+        // Surface snapping already found the nearest triangulation along this
+        // ray. Other snap modes still need the triangulation visibility test.
+        let surface_depth = (!matches!(mode, CursorMode::SnapToSurface))
+            .then(|| Self::nearest_surface(triangulations, hidden, None, ray_origin, ray_direction))
+            .flatten()
+            .map(|(_, point)| (point - ray_origin).dot(ray_direction));
+        let document_fill_depth = nearest_opaque_document_fill(document, snap_index, hidden, ray_origin, ray_direction).map(|point| (point - ray_origin).dot(ray_direction));
+        let occluder_depth = surface_depth.into_iter().chain(document_fill_depth).min_by(f64::total_cmp);
+        // A triangulation must occlude its own back-side vertices too. The small
+        // relative tolerance only absorbs ray/triangle floating-point noise at
+        // the visible surface; it does not open a path through the mesh.
+        if occluder_depth.is_some_and(|depth| {
+            let tolerance = 1.0e-5_f64.max(depth.abs() * 1.0e-9);
+            candidate_depth > depth + tolerance
+        }) {
+            None
+        } else {
+            Some(candidate.world)
+        }
+    }
+}
+
+fn drill_segment_radius(start: DVec3, end: DVec3, source_radius: f64, view_projection: &DMat4, screen: Size) -> f64 {
+    let Some(axis) = (end - start).try_normalize() else {
+        return source_radius;
+    };
+    let helper = if axis.z.abs() > 0.9 { DVec3::Y } else { DVec3::Z };
+    let right = helper.cross(axis).normalize();
+    let up = axis.cross(right);
+    let viewport = DVec2::new(f64::from(screen.0), f64::from(screen.1));
+    let pixels_per_world = [start, end]
+        .into_iter()
+        .map(|center| {
+            let center_clip = *view_projection * center.extend(1.0);
+            let safe_w = center_clip.w.abs().max(1.0e-6);
+            [right, up]
+                .into_iter()
+                .map(|radial| {
+                    let radial_clip = *view_projection * radial.extend(0.0);
+                    let ndc_per_world = (radial_clip.truncate().truncate() * center_clip.w - center_clip.truncate().truncate() * radial_clip.w) / (safe_w * safe_w);
+                    (ndc_per_world * viewport * 0.5).length()
+                })
+                .fold(0.0_f64, f64::max)
+        })
+        .fold(f64::INFINITY, f64::min);
+    let minimum_radius = (f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5) / pixels_per_world.max(1.0e-6);
+    source_radius.max(minimum_radius)
+}
+
+/// Distance along a normalized ray to a finite cylinder, including its flat
+/// end caps. Returns the first forward intersection.
+fn ray_capped_cylinder_distance(origin: DVec3, direction: DVec3, start: DVec3, end: DVec3, radius: f64) -> Option<f64> {
+    let axis_vector = end - start;
+    let length = axis_vector.length();
+    if length <= 1.0e-12 || radius <= 0.0 {
+        return None;
+    }
+    let axis = axis_vector / length;
+    let offset = origin - start;
+    let direction_axial = direction.dot(axis);
+    let offset_axial = offset.dot(axis);
+    let direction_radial = direction - axis * direction_axial;
+    let offset_radial = offset - axis * offset_axial;
+    let a = direction_radial.length_squared();
+    let b = 2.0 * direction_radial.dot(offset_radial);
+    let c = offset_radial.length_squared() - radius * radius;
+    let mut nearest = f64::INFINITY;
+
+    if a > 1.0e-18 {
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant >= 0.0 {
+            let root = discriminant.sqrt();
+            for distance in [(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)] {
+                let axial = offset_axial + distance * direction_axial;
+                if distance >= 0.0 && axial >= 0.0 && axial <= length {
+                    nearest = nearest.min(distance);
+                }
+            }
+        }
+    }
+
+    if direction_axial.abs() > 1.0e-18 {
+        for cap_axial in [0.0, length] {
+            let distance = (cap_axial - offset_axial) / direction_axial;
+            let radial = offset_radial + direction_radial * distance;
+            if distance >= 0.0 && radial.length_squared() <= radius * radius {
+                nearest = nearest.min(distance);
+            }
+        }
+    }
+
+    nearest.is_finite().then_some(nearest)
+}
+
+fn nearest_opaque_document_fill(document: &Document, snap_index: &ObjectSnapIndex, hidden: &HashSet<SceneEntityId>, ray_origin: DVec3, ray_direction: DVec3) -> Option<DVec3> {
+    snap_index.nearest_filled_polygon_hit(ray_origin, ray_direction, |object_index| {
+        let Some(object) = document.objects().get(object_index) else {
+            return false;
+        };
+        let entity = SceneEntityId::Object(object.id());
+        !hidden.contains(&entity) && document.layer(object.layer()).is_none_or(|layer| layer.visible) && document.object_fill_rgba(object)[3] >= 1.0 - f32::EPSILON
+    })
+}
+
+pub(crate) fn ray_through_world_point(view_projection: &DMat4, point: DVec3) -> Option<(DVec3, DVec3)> {
+    let clip = *view_projection * point.extend(1.0);
+    if clip.w.abs() <= f64::EPSILON {
+        return None;
+    }
+
+    let ndc = clip.truncate() / clip.w;
+    let inverse = view_projection.inverse();
+    let near_h = inverse * DVec3::new(ndc.x, ndc.y, 1.0).extend(1.0);
+    let far_h = inverse * DVec3::new(ndc.x, ndc.y, 0.0).extend(1.0);
+    if near_h.w.abs() <= f64::EPSILON || far_h.w.abs() <= f64::EPSILON {
+        return None;
+    }
+
+    let near = near_h.truncate() / near_h.w;
+    let far = far_h.truncate() / far_h.w;
+    let direction = (far - near).try_normalize()?;
+    Some((near, direction))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ray_hits_cylinder_wall_at_nearest_surface() {
+        let distance = ray_capped_cylinder_distance(DVec3::new(0.0, -5.0, 1.0), DVec3::Y, DVec3::ZERO, DVec3::new(0.0, 0.0, 2.0), 1.0);
+        assert_eq!(distance, Some(4.0));
+    }
+
+    #[test]
+    fn ray_hits_cylinder_end_cap() {
+        let distance = ray_capped_cylinder_distance(DVec3::new(0.5, 0.0, 5.0), DVec3::NEG_Z, DVec3::ZERO, DVec3::new(0.0, 0.0, 2.0), 1.0);
+        assert_eq!(distance, Some(3.0));
+    }
+
+    #[test]
+    fn ray_misses_outside_finite_cylinder() {
+        let distance = ray_capped_cylinder_distance(DVec3::new(2.0, -5.0, 3.0), DVec3::Y, DVec3::ZERO, DVec3::new(0.0, 0.0, 2.0), 1.0);
+        assert_eq!(distance, None);
+    }
+}

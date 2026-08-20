@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <g style="fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.5;stroke-dasharray:2.4,1.8;stroke:#c0762f">
+  <path d="m12 2 10 5-10 5-10-5z"/>
+  <path d="m2 7v10l10 5 10-5v-10"/>
+  <path d="m12 12v10"/>
+ </g>
+</svg>

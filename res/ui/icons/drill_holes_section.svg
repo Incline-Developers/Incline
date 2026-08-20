@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="800px"
+   height="800px"
+   fill="none"
+   version="1.1"
+   viewBox="0 0 24 24"
+   id="svg2"
+   sodipodi:docname="drill_holes_section.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview2"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.51132659"
+     inkscape:cx="-340.29132"
+     inkscape:cy="194.59187"
+     inkscape:window-width="2560"
+     inkscape:window-height="1366"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg2" />
+  <defs
+     id="defs1">
+    <clipPath
+       id="a">
+      <circle
+         transform="rotate(35.05)"
+         cx="15.943"
+         cy="2.8273"
+         r="12"
+         style="fill:#ff524b"
+         id="circle1" />
+    </clipPath>
+  </defs>
+  <path
+     style="fill:#000000;stroke:#ff524b;stroke-width:3.08156;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-dashoffset:2.58926;stroke-opacity:1"
+     d="m 11.865169,22.462405 0,-19.9481118"
+     id="path9"
+     sodipodi:nodetypes="cc" />
+  <path
+     style="fill:none;stroke:#cf504b;stroke-width:1.989;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-dashoffset:2.58926;stroke-opacity:1"
+     d="m 11.865169,1.5345131 c 0,0 7.675021,0.6090235 7.675021,2.4482009 0,1.8391774 -15.7487255,1.411298 -15.7234226,3.2774416 0.025303,1.8661436 8.0484016,2.9455484 8.0484016,2.9455484"
+     id="path6"
+     sodipodi:nodetypes="czzc" />
+  <path
+     style="fill:none;stroke:#cf504b;stroke-width:1.989;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-dashoffset:2.58926;stroke-opacity:1"
+     d="m 11.865169,10.205704 c 0,0 7.716507,0.526051 7.716507,2.448201 0,1.92215 -15.3915292,1.907046 -15.3915292,3.77528 0,1.868234 7.6750222,2.44771 7.6750222,2.44771"
+     id="path7"
+     sodipodi:nodetypes="czzc" />
+  <path
+     style="fill:none;stroke:#cf504b;stroke-width:1.989;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-dashoffset:2.58926;stroke-opacity:1;fill-opacity:1"
+     d="m 11.865169,18.876895 c 0,0 7.343128,-0.09625 7.343128,1.742929 0,1.839177 -7.343128,1.842581 -7.343128,1.842581"
+     id="path8"
+     sodipodi:nodetypes="czc" />
+  <path
+     style="fill:#000000;stroke:#ff524b;stroke-width:3.08156;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-dashoffset:2.58926;stroke-opacity:1"
+     d="m 11.865169,1.5345131 0,0.9797801"
+     id="path5"
+     sodipodi:nodetypes="cc" />
+  <path
+     style="fill:#000000;stroke:#ff524b;stroke-width:3.08156;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-dashoffset:2.58926;stroke-opacity:1"
+     d="M 11.865169,9.2259239 V 10.997761"
+     id="path10"
+     sodipodi:nodetypes="cc" />
+  <path
+     style="fill:#000000;stroke:#ff524b;stroke-width:3.08156;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-dashoffset:2.58926;stroke-opacity:1"
+     d="m 11.865169,21.511961 v 0.950444"
+     id="path11"
+     sodipodi:nodetypes="cc" />
+</svg>

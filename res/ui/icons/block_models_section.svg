@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient id="d" x1="5.8611" x2="9.9537" y1="4.325" y2="11.414" gradientUnits="userSpaceOnUse">
+   <stop style="stop-color:#ff3121" offset="0"/>
+   <stop style="stop-color:#b80f00" offset="1"/>
+  </linearGradient>
+  <linearGradient id="c" x1="15.033" x2="17.152" y1="3.9162" y2="11.822" gradientUnits="userSpaceOnUse">
+   <stop style="stop-color:#2168ff" offset="0"/>
+   <stop style="stop-color:#0048e1" offset="1"/>
+  </linearGradient>
+  <linearGradient id="b" x1="19.831" x2="12.354" y1="14.466" y2="17.795" gradientUnits="userSpaceOnUse">
+   <stop style="stop-color:#00c579" offset="0"/>
+   <stop style="stop-color:#00a063" offset="1"/>
+  </linearGradient>
+  <linearGradient id="a" x1="4.0616" x2="11.753" y1="17.53" y2="14.731" gradientUnits="userSpaceOnUse">
+   <stop style="stop-color:#7b21ff" offset="0"/>
+   <stop style="stop-color:#5100c9" offset="1"/>
+  </linearGradient>
+ </defs>
+ <rect x="3.8148" y="3.7386" width="8.1852" height="8.2614" rx="0" ry="2.3842e-7" style="fill:url(#d)"/>
+ <rect x="12" y="3.7386" width="8.1852" height="8.2614" rx="0" ry="0" style="fill:url(#c)"/>
+ <rect x="3.8148" y="12" width="8.1852" height="8.2614" rx="0" ry="0" style="fill:url(#a)"/>
+ <rect x="12" y="12" width="8.1852" height="8.2614" rx="0" ry="0" style="fill:url(#b)"/>
+</svg>

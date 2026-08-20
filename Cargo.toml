@@ -1,0 +1,147 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "Incline"
+version = "0.2.3"
+edition = "2024"
+description = "A free open-source mine design application"
+repository = "https://github.com/Incline-Developers/Incline"
+license-file = "LICENSE.md"
+keywords = ["mining", "cad", "design"]
+categories = ["graphics", "science"]
+exclude = [
+    "target/",
+    "docs/",
+]
+
+[build-dependencies]
+winresource = "0.1.31"
+
+[dependencies]
+anyhow = "1.0.104"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+chrono = "0.4.45"
+cosmic-text = "0.19.0"
+dxf = "0.6.1"
+earcut = "0.4.11"
+egui = "0.35.0"
+egui-wgpu = "0.35.0"
+egui_extras = { version = "0.35.0", default-features = false, features = ["svg"] }
+foldhash = "0.2.0"
+fontmesh = "0.6.0"
+glam = { version = "0.33.5", features = ["serde"] }
+laz = { version = "0.12.2", features = ["parallel"] }
+log = "0.4.33"
+lyon = "1.0.19"
+omf = { git = "https://github.com/gmggroup/omf-rust.git", rev = "64d305790b3415618a01f00a94cd914acd0b80ba" }
+png = "0.18.1"
+rayon = "1.12.0"
+rfd = { version = "0.17.2", features = ["file-handle-inner"] }
+robust = "1.2.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+spade = "2.15.1"
+strum = { version = "0.28.0", features = ["derive"] }
+thousands = "0.2.0"
+tiff = { version = "0.11.3", features = ["deflate", "fax", "jpeg", "lzw"], default-features = false }
+toml = "1.1.4"
+twox-hash = "2.1.3"
+uuid = { version = "1.24.1", features = ["js", "serde", "v4"] }
+web-time = "1.1.0"
+wgpu = "29.0.4"
+winit = "0.30.13"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs = "6.0.0"
+egui-winit = "0.35.0"
+memmap2 = "0.9.11"
+pollster = "1.0.1"
+semver = "1.0.28"
+tempfile = "3.27.0"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-log = "0.2.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+ureq = "3.4.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+console_log = "1.1.0"
+egui-winit = { version = "0.35.0", default-features = false, features = ["links"] }
+getrandom = { version = "0.4.3", features = ["wasm_js"] }
+js-sys = "0.3.104"
+wasm-bindgen = "0.2.127"
+wasm-bindgen-futures = "0.4.77"
+wasm-bindgen-rayon = { version = "1.3.0", features = ["no-bundler"] }
+web-sys = { version = "0.3.103", features = [
+    "BeforeUnloadEvent",
+    "Blob",
+    "BlobPropertyBag",
+    "Clipboard",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "IdbDatabase",
+    "IdbFactory",
+    "IdbObjectStore",
+    "IdbOpenDbRequest",
+    "IdbRequest",
+    "IdbTransaction",
+    "IdbTransactionMode",
+    "IdbVersionChangeEvent",
+    "MediaQueryList",
+    "Navigator",
+    "Node",
+    "Storage",
+    "Url",
+    "Window",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSCell", "NSImage", "NSMenu", "NSMenuItem"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSObject", "NSString"] }
+
+[profile.release]
+debug = 0
+strip = "symbols"
+lto = true
+codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"
+rustflags = ["-C", "force-frame-pointers=yes"]
+
+[profile.dev]
+opt-level = 1
+debug = 1
+strip = "none"
+incremental = true
+codegen-units = 256
+lto = false
+panic = "unwind"
+overflow-checks = true
+debug-assertions = true
+
+[package.metadata.packager]
+product-name = "Incline"
+identifier = "net.inclinedesign.incline"
+formats = ["app", "dmg"]
+icons = ["res/Incline.iconset/*.png"]
+category = "Productivity"
+out-dir = "dist"
+before-packaging-command = "cargo build --release"
+
+[package.metadata.packager.dmg]
+background = "res/dmg-background.png"
+window-size = { width = 660, height = 400 }
+app-position = { x = 180, y = 200 }
+application-folder-position = { x = 480, y = 200 }

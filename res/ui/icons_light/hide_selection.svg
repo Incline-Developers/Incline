@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs>
+  <pattern id="b" xlink:href="#a" patternTransform="matrix(.5637 0 0 .44212 136.9 661.91)" preserveAspectRatio="none"/>
+  <pattern id="a" width="5" height="5" style="fill:#434343" patternTransform="translate(125,600) scale(2)" patternUnits="userSpaceOnUse">
+   <path d="m0 0v5h5z" style="paint-order:stroke markers fill;stop-color:#000000"/>
+  </pattern>
+ </defs>
+ <path d="m1.4114 12.788c-0.15052-0.23841-0.22579-0.35756-0.26792-0.54137-0.031644-0.13805-0.031644-0.35579 0-0.49384 0.042134-0.18381 0.1174-0.30296 0.26792-0.54137 1.2439-1.9696 4.9465-6.9487 10.589-6.9487 5.6425 0 9.3451 4.9792 10.589 6.9487 0.15054 0.23841 0.22581 0.35756 0.26792 0.54137 0.03161 0.13805 0.03161 0.35579 0 0.49384-0.04211 0.18381-0.11738 0.30296-0.26792 0.54137-1.2439 1.9696-4.9465 6.9487-10.589 6.9487-5.6425 0-9.3451-4.9791-10.589-6.9487z" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2106" style="fill:url(#b);stroke:#1c1c1e"/>
+ <path d="m12 15.316c1.8314 0 3.3159-1.4845 3.3159-3.3159s-1.4845-3.3159-3.3159-3.3159c-1.8314 0-3.3159 1.4845-3.3159 3.3159s1.4845 3.3159 3.3159 3.3159z" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2106" style="fill:#fff;stroke:#1c1c1e"/>
+</svg>

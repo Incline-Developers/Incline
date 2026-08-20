@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <path d="m1.3622 18.785c7.25-10.159 13.37-10.213 21.123 0.50926" style="fill:none;stroke-dasharray:2.2, 2.6;stroke-dashoffset:1.1;stroke-linecap:round;stroke-width:1.5;stroke:#c07a1f"/>
+ <path d="m1.8519 18.852 4.616-15.392" style="fill:none;stroke-linecap:round;stroke-width:2.1547;stroke:#0065ff"/>
+ <path d="m22.155 18.653-4.616-15.192" style="fill:none;stroke-linecap:round;stroke-width:2.1547;stroke:#0065ff"/>
+ <ellipse transform="scale(-1,1)" cx="-17.61" cy="3.3582" rx="1.7005" ry="1.6858" style="fill:#fff;stroke-linecap:round;stroke-width:1.1482;stroke:#fff"/>
+ <path d="m1.1411 19.331h21.718" style="fill:#000;stroke-linecap:round;stroke-width:1.997;stroke:#fff"/>
+ <ellipse cx="6.3972" cy="3.3582" rx="1.7005" ry="1.6858" style="fill:#fff;stroke-linecap:round;stroke-width:1.1482;stroke:#fff"/>
+</svg>

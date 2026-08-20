@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <path transform="scale(-1 1)" d="m-3.7228 3.417a9.142 10.257 0 0 1-9.142 10.257v-10.257z" style="fill:#ffd100;stroke-dashoffset:171.18;stroke-width:.064602;stroke:#fff"/>
+ <rect transform="rotate(21.994)" x="14.228" y="5.9938" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(83.001)" x="5.5948" y="-5.6307" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect x="1.4728" y="3.3869" width="21.013" height="1.7898" style="fill:#0065ff;stroke-width:3.2861"/>
+ <path d="m22.007 2.3571a1.969 1.9438 0 0 1 1.9928 1.9171 1.969 1.9438 0 0 1-1.939 1.9701 1.969 1.9438 0 0 1-1.9986-1.9112 1.969 1.9438 0 0 1 1.933-1.9758" style="fill:#fff;stroke-width:5.2585"/>
+ <path d="m17.122 15.229q0-0.51043 0.11182-0.8731 0.1278-0.3761 0.41534-0.71191 0.30351-0.33581 0.8147-0.69848 0.62301-0.44327 0.95847-0.73878 0.35144-0.29551 0.49521-0.57759 0.14377-0.28208 0.14377-0.68505 0-0.64475-0.49521-0.99399-0.49521-0.34924-1.4377-0.34924-0.78275 0-1.3898 0.17462-0.60703 0.16119-1.1661 0.38954l-0.49521-0.94026q0.63898-0.28208 1.4058-0.47013 0.78275-0.18805 1.7412-0.18805 1.5176 0 2.3483 0.63132 0.83068 0.63132 0.83068 1.7193 0 0.60446-0.23962 1.0343-0.22364 0.4164-0.65496 0.77908-0.41534 0.34924-0.99042 0.75221-0.52716 0.3761-0.8147 0.65818-0.27157 0.28208-0.36741 0.56416-0.09584 0.26864-0.09584 0.65818v0.22835h-1.1182zm-0.36741 2.3372q0-0.497 0.27157-0.69848 0.28754-0.20148 0.71885-0.20148 0.39936 0 0.68691 0.20148 0.28754 0.20148 0.28754 0.69848 0 0.48356-0.28754 0.69848-0.28754 0.21492-0.68691 0.21492-0.43131 0-0.71885-0.21492-0.27157-0.21492-0.27157-0.69848z" style="fill:#fff;stroke-width:2.782" aria-label="?"/>
+ <path d="m1.9451 2.3571a1.969 1.9438 0 0 1 1.9928 1.9171 1.969 1.9438 0 0 1-1.939 1.9701 1.969 1.9438 0 0 1-1.9986-1.9112 1.969 1.9438 0 0 1 1.933-1.9758" style="fill:#fff;stroke-width:5.2585"/>
+ <rect transform="rotate(-90)" x="-20.801" y="11.105" width="17.414" height="1.7898" style="fill:#0065ff;stroke-width:2.9914"/>
+ <path d="m11.945 19.174a1.969 1.9438 0 0 1 1.9928 1.9171 1.969 1.9438 0 0 1-1.939 1.9701 1.969 1.9438 0 0 1-1.9986-1.9112 1.969 1.9438 0 0 1 1.933-1.9758" style="fill:#fff;stroke-width:5.2585"/>
+ <rect transform="rotate(77.922)" x="6.9055" y="-5.1127" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(71.06)" x="8.2198" y="-4.2249" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(67.529)" x="9.3346" y="-3.7192" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(62.45)" x="10.461" y="-2.8776" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(55.588)" x="11.483" y="-1.581" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(47.231)" x="12.402" y=".13024" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(42.152)" x="13.176" y="1.2282" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(35.29)" x="13.688" y="2.8198" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+ <rect transform="rotate(27.073)" x="13.872" y="4.784" width=".48491" height="2.3911" style="fill:#fff;stroke-width:2.8168"/>
+</svg>

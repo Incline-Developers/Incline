@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Incline Web</title>
+    <link data-trunk rel="icon" type="image/svg+xml" href="res/logo.svg" />
+    <link data-trunk rel="copy-file" href="_headers" />
+
+    <style>
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        canvas:focus {
+            outline: none;
+        }
+
+        #startup-panel {
+            position: fixed;
+            z-index: 1000;
+            left: 50%;
+            top: 18px;
+            transform: translateX(-50%);
+            width: min(720px, calc(100% - 32px));
+            font: 14px/1.45 system-ui, sans-serif;
+            pointer-events: none;
+        }
+
+        .startup-message {
+            box-sizing: border-box;
+            margin-bottom: 8px;
+            padding: 11px 14px;
+            border: 1px solid;
+            border-radius: 6px;
+            box-shadow: 0 3px 12px #0004;
+            white-space: pre-wrap;
+        }
+
+        .startup-warning {
+            color: #3d2900;
+            background: #ffd77a;
+            border-color: #b87900;
+        }
+
+        .startup-info {
+            color: #e8edf3;
+            background: #26313d;
+            border-color: #617387;
+        }
+
+        .startup-error {
+            color: #fff;
+            background: #8c1d23;
+            border-color: #ff8990;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="startup-panel" role="status" aria-live="polite"></div>
+    <script>
+        (() => {
+            const panel = document.getElementById("startup-panel");
+            const show = (kind, message) => {
+                const item = document.createElement("div");
+                item.className = `startup-message startup-${kind}`;
+                item.textContent = message;
+                panel.appendChild(item);
+            };
+            window.inclineStartupError = (message) => {
+                console.error(message);
+                show("error", `Incline could not start: ${message}`);
+            };
+            const loading = document.createElement("div");
+            loading.className = "startup-message startup-info";
+            loading.textContent = "Starting Incline Web…";
+            panel.appendChild(loading);
+            window.inclineStartupReady = () => loading.remove();
+
+            const touch = 0 < navigator.maxTouchPoints
+                || window.matchMedia?.("(pointer: coarse)").matches;
+            if (touch) {
+                show("warning", "Incline Web is designed for mouse and keyboard; touch input is not fully supported.");
+            }
+
+            const missing = [];
+            if (!("gpu" in navigator)) {
+                missing.push("WebGPU");
+            }
+            if (!window.crossOriginIsolated) {
+                missing.push("cross-origin isolation (COOP/COEP headers)");
+            }
+            if (!("SharedArrayBuffer" in window)) {
+                missing.push("SharedArrayBuffer/WebAssembly threads");
+            }
+            const sharedMemoryModule = new Uint8Array([
+                0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+                0x05, 0x04, 0x01, 0x03, 0x01, 0x01,
+            ]);
+            if (!WebAssembly.validate(sharedMemoryModule)) {
+                missing.push("WebAssembly shared-memory support");
+            }
+            if (missing.length) {
+                window.inclineStartupError(`This browser is missing ${missing.join(", ")}. Use a current browser over HTTPS or localhost and configure the required isolation headers.`);
+            }
+
+            addEventListener("error", event => {
+                const message = event.error?.message || event.message;
+                if (message) {
+                    window.inclineStartupError(message);
+                }
+            });
+            addEventListener("unhandledrejection", event => {
+                const message = event.reason?.message || String(event.reason || "Unknown startup failure");
+                window.inclineStartupError(message);
+            });
+        })();
+    </script>
+    <!-- Binaryen 123 does not auto-enable the threads/bulk-memory validators;
+         rustc LTO still performs the release optimizations for this module. -->
+    <link data-trunk rel="rust" data-wasm-opt="0">
+</body>
+</html>

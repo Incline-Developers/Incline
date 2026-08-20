@@ -1,0 +1,28 @@
+[target.'cfg(target_os = "linux")']
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    '--cfg', 'getrandom_backend="wasm_js"',
+    # Unwinding is unsupported on wasm; keep abort here while the release
+    # profile leaves panic = "unwind" for native builds (job panic recovery).
+    '-C', 'panic=abort',
+    '-C', 'target-feature=+atomics,+bulk-memory,+mutable-globals',
+    '-C', 'link-arg=--shared-memory',
+    # Every Web Worker must instantiate the module with the same shared
+    # WebAssembly.Memory. wasm-bindgen's thread transform therefore requires
+    # memory to be imported rather than owned/exported by the module.
+    '-C', 'link-arg=--import-memory',
+    '-C', 'link-arg=--max-memory=4294967296',
+    '-C', 'link-arg=--export=__heap_base',
+    '-C', 'link-arg=--export=__data_end',
+    '-C', 'link-arg=--export=__stack_pointer',
+    '-C', 'link-arg=--export=__wasm_init_tls',
+    '-C', 'link-arg=--export=__tls_size',
+    '-C', 'link-arg=--export=__tls_align',
+    '-C', 'link-arg=--export=__tls_base',
+]
+
+[unstable]
+build-std = ["std", "panic_abort"]
