@@ -25,7 +25,11 @@ pub(crate) const CELLS_PER_BRICK: usize = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
 pub(crate) const SUPER_FACTOR: usize = 4;
 pub(crate) const EMPTY_BRICK: u32 = u32::MAX;
 pub(crate) const UNIFORM_BRICK_FLAG: u32 = 0x8000_0000;
-pub(crate) const NOT_RESIDENT_SLOT: u32 = 0x7fff_ffff;
+/// At least one cell in the brick is visible and at least one is invisible
+/// under the active filter. Averaging such a brick across its full extent
+/// changes its silhouette, so the shader must retain cell-level marching.
+pub(crate) const MIXED_VISIBILITY_BRICK_FLAG: u32 = 0x4000_0000;
+pub(crate) const NOT_RESIDENT_SLOT: u32 = 0x3fff_ffff;
 // Cell payloads are 16 bits so two pack into one pool `u32`, halving pool
 // memory, upload bandwidth, and the CPU/mmap backing. Encoding (must match
 // the WGSL constants of the same name): `0xffff` empty, bit 15 the fallback
@@ -395,6 +399,7 @@ pub(crate) struct BrickStreamer {
     /// uniform.
     detail_required: Vec<bool>,
     uniform: Vec<bool>,
+    mixed_visibility: Vec<bool>,
     centers: Vec<[f32; 3]>,
     pending: VecDeque<u32>,
     fits: bool,
@@ -413,8 +418,9 @@ struct StreamPlan {
 }
 
 impl BrickStreamer {
-    fn new(pool_slots: u32, detail_required: Vec<bool>, uniform: Vec<bool>, centers: Vec<[f32; 3]>, replan_distance: f32) -> Self {
+    fn new(pool_slots: u32, detail_required: Vec<bool>, uniform: Vec<bool>, mixed_visibility: Vec<bool>, centers: Vec<[f32; 3]>, replan_distance: f32) -> Self {
         debug_assert_eq!(detail_required.len(), uniform.len());
+        debug_assert_eq!(uniform.len(), mixed_visibility.len());
         let occupied = uniform.len();
         let streamable = detail_required.iter().filter(|&&required| required).count();
         BrickStreamer {
@@ -424,6 +430,7 @@ impl BrickStreamer {
             free_slots: (0..pool_slots).rev().collect(),
             detail_required,
             uniform,
+            mixed_visibility,
             centers,
             pending: VecDeque::new(),
             fits: streamable <= pool_slots as usize,
@@ -437,17 +444,21 @@ impl BrickStreamer {
     }
 
     fn info(&self, ordinal: u32) -> u32 {
-        let flag = if self.uniform[ordinal as usize] { UNIFORM_BRICK_FLAG } else { 0 };
-        flag | self.ordinal_slot[ordinal as usize]
+        let ordinal = ordinal as usize;
+        let uniform_flag = if self.uniform[ordinal] { UNIFORM_BRICK_FLAG } else { 0 };
+        let visibility_flag = if self.mixed_visibility[ordinal] { MIXED_VISIBILITY_BRICK_FLAG } else { 0 };
+        uniform_flag | visibility_flag | self.ordinal_slot[ordinal]
     }
 
     fn all_info(&self) -> Vec<u32> {
         (0..self.ordinal_slot.len() as u32).map(|o| self.info(o)).collect()
     }
 
-    fn set_uniform(&mut self, uniform: Vec<bool>) {
+    fn set_style_flags(&mut self, uniform: Vec<bool>, mixed_visibility: Vec<bool>) {
         debug_assert_eq!(uniform.len(), self.uniform.len());
+        debug_assert_eq!(mixed_visibility.len(), self.mixed_visibility.len());
         self.uniform = uniform;
+        self.mixed_visibility = mixed_visibility;
         for (ordinal, &is_uniform) in self.uniform.iter().enumerate() {
             if is_uniform {
                 self.requested[ordinal] = false;
@@ -592,6 +603,10 @@ pub(crate) struct BlockVolumeAsset {
     /// therefore the stable upper bound for detailed-cell residency.
     brick_detail_required: Vec<bool>,
     pub(crate) brick_uniform: Vec<bool>,
+    /// Style-dependent bricks whose active filter leaves a mixture of visible
+    /// and invisible cells. Their aggregate is valid for colour/opacity but
+    /// not for silhouette, so the GPU does not use distance LOD for them.
+    brick_visibility_mixed: Vec<bool>,
     brick_centers: Vec<[f32; 3]>,
     occupied_count: usize,
     dims: [u32; 3],
@@ -687,6 +702,7 @@ pub(crate) fn upload_block_volume_gpu(
         pool_slots,
         asset.brick_detail_required.clone(),
         asset.brick_uniform.clone(),
+        asset.brick_visibility_mixed.clone(),
         asset.brick_centers.clone(),
         streamer_replan_distance(&asset),
     );
@@ -942,7 +958,8 @@ pub(crate) fn update_block_volume_style(queue: &wgpu::Queue, volume: &mut Cached
     volume.asset.brick_aggregates = style.aggregates;
     volume.asset.super_aggregates = style.super_aggregates;
     volume.asset.brick_uniform = style.uniform_flags.clone();
-    volume.streamer.set_uniform(style.uniform_flags);
+    volume.asset.brick_visibility_mixed = style.visibility_mixed_flags.clone();
+    volume.streamer.set_style_flags(style.uniform_flags, style.visibility_mixed_flags);
     queue.write_buffer(&volume.brick_info_buffer, 0, bytemuck::cast_slice(&volume.streamer.all_info()));
     update_block_volume_slice(queue, volume, scene_origin, block_model, boundary_highlights);
 }
@@ -1269,6 +1286,7 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
         super_aggregates: Vec::new(),
         brick_detail_required: Vec::new(),
         brick_uniform: Vec::new(),
+        brick_visibility_mixed: Vec::new(),
         brick_centers,
         occupied_count,
         dims,
@@ -1281,6 +1299,7 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
     asset.brick_aggregates = style.aggregates;
     asset.super_aggregates = style.super_aggregates;
     asset.brick_uniform = style.uniform_flags;
+    asset.brick_visibility_mixed = style.visibility_mixed_flags;
     Ok(Some(asset))
 }
 
@@ -1337,6 +1356,7 @@ struct BrickStyleData {
     aggregates: Vec<[f32; 4]>,
     super_aggregates: Vec<[f32; 4]>,
     uniform_flags: Vec<bool>,
+    visibility_mixed_flags: Vec<bool>,
 }
 
 /// Level-1 aggregates over `SUPER_FACTOR`^3-brick regions, derived from the
@@ -1464,7 +1484,7 @@ fn compute_brick_style_data(asset: &BlockVolumeAsset, color_transfer: &ColorTran
     let y_lengths = cell_lengths(&asset.y_planes);
     let z_lengths = cell_lengths(&asset.z_planes);
 
-    let per_brick: Vec<([f32; 4], bool)> = asset
+    let per_brick: Vec<([f32; 4], bool, bool)> = asset
         .occupied_brick_indices
         .par_iter()
         .enumerate()
@@ -1479,7 +1499,9 @@ fn compute_brick_style_data(asset: &BlockVolumeAsset, color_transfer: &ColorTran
             let mut optical_depth_volume_sum = 0.0f64;
             let mut rgb_sum = [0.0f64; 3];
             let mut first_appearance: Option<Option<[f32; 4]>> = None;
+            let mut first_visibility = None;
             let mut uniform = true;
+            let mut mixed_visibility = false;
             for lk in 0..BRICK_SIZE.min(dims[2] - bk * BRICK_SIZE) {
                 let k = bk * BRICK_SIZE + lk;
                 for lj in 0..BRICK_SIZE.min(dims[1] - bj * BRICK_SIZE) {
@@ -1490,6 +1512,11 @@ fn compute_brick_style_data(asset: &BlockVolumeAsset, color_transfer: &ColorTran
                         volume_sum += cell_volume;
                         let payload = brick_cells[brick_local_index(li, lj, lk)];
                         let visible = lut.resolve(payload).filter(|(rgba, _)| rgba[3] >= VISIBLE_ALPHA_EPSILON);
+                        let cell_visible = visible.is_some();
+                        match first_visibility {
+                            None => first_visibility = Some(cell_visible),
+                            Some(first) => mixed_visibility |= first != cell_visible,
+                        }
                         let appearance = visible.map(|(rgba, _)| *rgba);
                         match first_appearance {
                             None => first_appearance = Some(appearance),
@@ -1516,11 +1543,18 @@ fn compute_brick_style_data(asset: &BlockVolumeAsset, color_transfer: &ColorTran
             } else {
                 [0.0; 4]
             };
-            (aggregate, uniform)
+            (aggregate, uniform, mixed_visibility)
         })
         .collect();
 
-    let (aggregates, uniform_flags): (Vec<[f32; 4]>, Vec<bool>) = per_brick.into_iter().unzip();
+    let mut aggregates = Vec::with_capacity(per_brick.len());
+    let mut uniform_flags = Vec::with_capacity(per_brick.len());
+    let mut visibility_mixed_flags = Vec::with_capacity(per_brick.len());
+    for (aggregate, uniform, mixed_visibility) in per_brick {
+        aggregates.push(aggregate);
+        uniform_flags.push(uniform);
+        visibility_mixed_flags.push(mixed_visibility);
+    }
     let super_aggregates = if volume_super_bricks_enabled() {
         compute_super_aggregates(
             asset.dims,
@@ -1538,6 +1572,7 @@ fn compute_brick_style_data(asset: &BlockVolumeAsset, color_transfer: &ColorTran
         aggregates,
         super_aggregates,
         uniform_flags,
+        visibility_mixed_flags,
     }
 }
 

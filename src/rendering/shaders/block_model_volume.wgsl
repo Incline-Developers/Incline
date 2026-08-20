@@ -100,9 +100,12 @@ var<storage, read> brick_aggregates: BrickAggregates;
 // (`UNIFORM_BRICK_FLAG`): every real cell in the brick resolves to the same
 // appearance — one ramp RGBA, or invisible (empty / alpha below the epsilon)
 // — so its aggregate reproduces per-cell output exactly and it never needs
-// pool residency. Bits 0..31: the brick's cell-pool slot, or
+// pool residency. Bit 30 (`MIXED_VISIBILITY_BRICK_FLAG`): the active filter
+// leaves both visible and invisible cells in the brick, so an aggregate would
+// turn sparse cells into a brick-shaped silhouette and distance LOD is
+// forbidden. Bits 0..29: the brick's cell-pool slot, or
 // `NOT_RESIDENT_SLOT` when its cells are not currently uploaded. The flag
-// half is ramp-dependent (recomputed on restyle); the slot half is rewritten
+// bits are ramp-dependent (recomputed on restyle); the slot bits are rewritten
 // as the CPU streams bricks in and out.
 struct BrickInfo {
     values: array<u32>,
@@ -137,9 +140,11 @@ const FALLBACK_CELL_FLAG: u32 = 0x8000u;
 const CELL_GRADE_MASK: u32 = 0x7fffu;
 const CELL_GRADE_MAX: f32 = 32767.0;
 const EMPTY_BRICK: u32 = 0xffffffffu;
-// `brick_info` encoding; must match the constants in `gpu_cache.rs`.
+// `brick_info` encoding; must match the constants in
+// `block_model_volume_cache.rs`.
 const UNIFORM_BRICK_FLAG: u32 = 0x80000000u;
-const NOT_RESIDENT_SLOT: u32 = 0x7fffffffu;
+const MIXED_VISIBILITY_BRICK_FLAG: u32 = 0x40000000u;
+const NOT_RESIDENT_SLOT: u32 = 0x3fffffffu;
 const VISIBLE_ALPHA_EPSILON: f32 = 0.004;
 // Opaque stops retain surface-like occlusion: this optical depth saturates
 // within even a thin cell instead of being spread across the model chord.
@@ -504,14 +509,14 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         //  - non-resident mixed brick: cells not streamed in yet, integrate
         //    the aggregate as a graceful stand-in until the CPU uploads them.
         let ordinal = brick_table.values[brick_of(i, j, k)];
-        let coarse = fp_base + fp_slope * t > lod_len
-            || transmittance < LOW_TRANSMITTANCE_AGGREGATE_FLOOR;
         var brick_uniform = false;
+        var brick_mixed_visibility = false;
         var resident = false;
         var slot = NOT_RESIDENT_SLOT;
         if (ordinal != EMPTY_BRICK) {
             let info = brick_info.values[ordinal];
             brick_uniform = (info & UNIFORM_BRICK_FLAG) != 0u;
+            brick_mixed_visibility = (info & MIXED_VISIBILITY_BRICK_FLAG) != 0u;
             slot = info & NOT_RESIDENT_SLOT;
             resident = slot != NOT_RESIDENT_SLOT;
             if (feedback_sample && !brick_uniform && ordinal != last_feedback_ordinal) {
@@ -519,6 +524,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 last_feedback_ordinal = ordinal;
             }
         }
+        // A filtered brick containing both visible and invisible cells must
+        // retain its exact silhouette even when its cells are individually
+        // sub-pixel. Averaging opaque optical depth over that brick otherwise
+        // creates conspicuous solid square proxies around sparse cells.
+        let coarse = !brick_mixed_visibility && (fp_base + fp_slope * t > lod_len
+            || transmittance < LOW_TRANSMITTANCE_AGGREGATE_FLOOR);
         if (ordinal == EMPTY_BRICK || coarse || brick_uniform || !resident) {
             let bs = volume.brick_dims.w;
             var region = bs;
