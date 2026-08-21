@@ -1316,6 +1316,7 @@ impl<'a> App<'a> {
             point_clouds_membership_dirty,
             rasters_membership_dirty,
             has_active_project: self.workspace.has_active_project(),
+            active_project_epoch: self.workspace.active_project().map_or(0, |project| u64::from(project.runtime_id)),
             needs_startup_dialog: !self.workspace.has_active_project() && !self.startup_dialog_dismissed,
             active_path,
             active_triangulation_for_menu,

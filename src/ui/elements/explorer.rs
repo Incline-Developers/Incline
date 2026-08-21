@@ -108,6 +108,10 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
             ui.add_space(5.);
 
+            // Sections other than Projects belong to the active project, so
+            // they follow its contents: see `ExplorerHeader::auto_open`.
+            let epoch = project.active_project_epoch;
+
             // Keep the scroll area's contents as wide as the side panel even
             // when every section is collapsed. `ScrollArea` otherwise shrinks
             // horizontally to the headers' intrinsic width; a visible
@@ -196,7 +200,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
                 ExplorerHeader::new(egui::Id::new("designs_collapse"), "Designs")
                     .dirty(designs_dirty)
-                    .default_open(true)
+                    .auto_open(project.projects.first().map_or(0, |entry| entry.layers.len()), epoch)
                     .show(ui, |ui| {
                         let Some(entry) = project.projects.first() else {
                             ui.label("No open project");
@@ -261,7 +265,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 let triangulations_dirty = project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("triangulations_collapse"), "Triangulations")
                     .dirty(triangulations_dirty)
-                    .default_open(!project.triangulations.is_empty())
+                    .auto_open(project.triangulations.len(), epoch)
                     .show(ui, |ui| {
                         if project.triangulations.is_empty() {
                             ui.label("No triangulations");
@@ -338,7 +342,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
                 ExplorerHeader::new("rasters_collapse".into(), "Rasters")
                     .dirty(rasters_dirty)
-                    .default_open(!project.raster_textures.is_empty())
+                    .auto_open(project.raster_textures.len(), epoch)
                     .show(ui, |ui| {
                         if project.raster_textures.is_empty() {
                             ui.label("No image textures");
@@ -410,7 +414,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), "Point Clouds")
                     .dirty(point_clouds_dirty)
-                    .default_open(!project.point_clouds.is_empty())
+                    .auto_open(project.point_clouds.len(), epoch)
                     .show(ui, |ui| {
                         if project.point_clouds.is_empty() {
                             ui.label("No point clouds");
@@ -473,7 +477,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("block_models_collapse"), "Block Models")
                     .dirty(block_models_dirty)
-                    .default_open(!project.block_models.is_empty())
+                    .auto_open(project.block_models.len(), epoch)
                     .show(ui, |ui| {
                         if project.block_models.is_empty() {
                             ui.label("No block models");
@@ -533,7 +537,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), "Drill Holes")
                     .dirty(drill_holes_dirty)
-                    .default_open(!project.drill_holes.is_empty())
+                    .auto_open(project.drill_holes.len(), epoch)
                     .show(ui, |ui| {
                         if project.drill_holes.is_empty() {
                             ui.label("No drill holes");

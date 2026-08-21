@@ -2563,6 +2563,10 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds_membership_dirty: bool,
     pub(crate) rasters_membership_dirty: bool,
     pub(crate) has_active_project: bool,
+    /// Runtime id of the active project, or 0 when none is open. Changes on
+    /// every project switch, creation, close, and revert, which is what tells
+    /// the explorer's sections to re-sync their collapsed state.
+    pub(crate) active_project_epoch: u64,
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,

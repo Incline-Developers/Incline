@@ -66,12 +66,7 @@ impl egui::Widget for ExplorerEntry {
 /// Opens `id`'s collapsing state the first time `default_open` is true.
 ///
 /// `CollapsingState::load_with_default_open` only honours the default while no
-/// state has been stored yet, and sections pass a `default_open` derived from
-/// whether they have any entries.  On wasm the project is loaded asynchronously,
-/// so those first frames render empty sections, store the collapsed state, and
-/// the sections stay shut once their entries arrive.  Latching on the first
-/// `true` gives the same result on both platforms while still leaving the
-/// section under the user's control afterwards.
+/// state has been stored yet, and the Projects section wants to start open.
 fn apply_default_open_once(ctx: &egui::Context, id: egui::Id, default_open: bool) {
     if !default_open {
         return;
@@ -86,12 +81,57 @@ fn apply_default_open_once(ctx: &egui::Context, id: egui::Id, default_open: bool
     state.store(ctx);
 }
 
+/// What [`apply_auto_open`] saw for a section on the previous frame.
+#[derive(Clone, Copy)]
+struct AutoOpenState {
+    epoch: u64,
+    entries: usize,
+}
+
+/// Keep a project-scoped section's open state in step with its contents.
+///
+/// A section opens as soon as it gains an entry, and collapses as soon as it
+/// has none, so a newly created layer or imported model is never hidden behind
+/// a collapsed header and an empty header never sits open over a "nothing
+/// here" line. `epoch` identifies the active project: when it changes, the
+/// section mirrors the new project's contents outright, which also reopens a
+/// populated section the user had collapsed under the previous project.
+/// Between those points a populated section is left exactly as the user set
+/// it.
+///
+/// Every rule is a transition rather than a per-frame assertion, because the
+/// two inputs do not always change on the same frame: opening a project can
+/// publish the new active project a frame or more before its items are loaded
+/// or before the outgoing project's are dropped. Watching for the change
+/// rather than the state gets the same result whichever arrives first, and
+/// still lets the user expand an empty section by hand afterwards.
+fn apply_auto_open(ctx: &egui::Context, id: egui::Id, entries: usize, epoch: u64) {
+    let state_id = id.with("explorer_header_auto_open");
+    let previous = ctx.data_mut(|d| d.get_temp::<AutoOpenState>(state_id));
+    ctx.data_mut(|d| d.insert_temp(state_id, AutoOpenState { epoch, entries }));
+    let open = match previous {
+        Some(previous) if entries > previous.entries => Some(true),
+        Some(previous) if entries == 0 && (previous.entries > 0 || previous.epoch != epoch) => Some(false),
+        Some(previous) if previous.epoch != epoch => Some(true),
+        Some(_) => None,
+        None => Some(entries > 0),
+    };
+    if let Some(open) = open {
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, open);
+        state.set_open(open);
+        state.store(ctx);
+    }
+}
+
 /// A collapsible explorer section heading.
 pub(crate) struct ExplorerHeader {
     id: egui::Id,
     title: String,
     dirty: bool,
     default_open: bool,
+    /// Entry count and active-project epoch, for sections that follow their
+    /// contents. `None` leaves the section on plain `default_open` behaviour.
+    auto_open: Option<(usize, u64)>,
 }
 
 impl ExplorerHeader {
@@ -101,6 +141,7 @@ impl ExplorerHeader {
             title: title.into(),
             dirty: false,
             default_open: false,
+            auto_open: None,
         }
     }
 
@@ -118,6 +159,14 @@ impl ExplorerHeader {
         self
     }
 
+    /// Follow the section's contents: see [`apply_auto_open`]. `epoch`
+    /// identifies the active project, so switching projects re-syncs the
+    /// section against the new project's entries.
+    pub(crate) fn auto_open(mut self, entries: usize, epoch: u64) -> Self {
+        self.auto_open = Some((entries, epoch));
+        self
+    }
+
     pub(crate) fn show<R>(
         self,
         ui: &mut egui::Ui,
@@ -127,9 +176,15 @@ impl ExplorerHeader {
             id,
             mut title,
             dirty,
-            default_open,
+            mut default_open,
+            auto_open,
         } = self;
-        apply_default_open_once(ui.ctx(), id, default_open);
+        if let Some((entries, epoch)) = auto_open {
+            apply_auto_open(ui.ctx(), id, entries, epoch);
+            default_open = entries > 0;
+        } else {
+            apply_default_open_once(ui.ctx(), id, default_open);
+        }
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
         if dirty && !state.is_open() {
             title.push_str(" *");
