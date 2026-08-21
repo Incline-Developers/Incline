@@ -54,7 +54,7 @@ impl<'a> App<'a> {
     /// Commit any pending move to history without applying an additional delta.
     ///
     /// Unlike `cancel_move_delta` (which reverts objects), this keeps the
-    /// current document state — whatever `preview_move_delta` last produced —
+    /// current document state - whatever `preview_move_delta` last produced -
     /// and pushes a Replace command for each changed object.  Used by save
     /// paths so that an in-progress move is preserved rather than silently lost.
     pub(crate) fn commit_pending_move(&mut self) {
@@ -225,7 +225,7 @@ impl<'a> App<'a> {
             for object in originals {
                 let mut moved = object.clone();
                 translate_move_target(&mut moved, vertex_target, delta);
-                project.pidb.document.replace_object(moved);
+                project.project.document.replace_object(moved);
             }
         }
     }
@@ -243,7 +243,7 @@ impl<'a> App<'a> {
         };
         let project = &mut self.workspace.projects[index];
         for object in session.originals {
-            project.pidb.document.replace_object(object);
+            project.project.document.replace_object(object);
         }
     }
 
@@ -259,7 +259,7 @@ impl<'a> App<'a> {
             .iter()
             .filter_map(|handle| match handle {
                 SceneEntityId::Object(object_id) => Some(*object_id),
-                SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -273,34 +273,36 @@ impl<'a> App<'a> {
     }
 
     fn gizmo_axis_screen_basis(&self, axis_idx: u8, cursor_px: (f32, f32)) -> ((f32, f32), f64) {
-        let center = self.editor.move_gizmo_center_px.unwrap_or(cursor_px);
-        let (tip, px_per_world_unit) = match axis_idx {
-            0 => (self.editor.move_gizmo_x_tip_px.unwrap_or(cursor_px), self.editor.move_gizmo_x_px_per_world),
-            1 => (self.editor.move_gizmo_y_tip_px.unwrap_or(cursor_px), self.editor.move_gizmo_y_px_per_world),
-            _ => (self.editor.move_gizmo_z_tip_px.unwrap_or(cursor_px), self.editor.move_gizmo_z_px_per_world),
-        };
+        let gizmo = &self.editor.move_gizmo;
+        let index = usize::from(axis_idx).min(2);
+        let center = gizmo.center_px.unwrap_or(cursor_px);
+        let tip = gizmo.axis_tip_px[index].unwrap_or(cursor_px);
         let dx = tip.0 - center.0;
         let dy = tip.1 - center.1;
         let len = (dx * dx + dy * dy).sqrt().max(0.001);
-        ((dx / len, dy / len), px_per_world_unit.max(0.001))
+        ((dx / len, dy / len), gizmo.axis_px_per_world[index].max(0.001))
     }
 
+    /// Screen-pixel vectors produced by one world unit along each of the two
+    /// axes a plane handle - or the view ring - constrains movement to.
     fn gizmo_plane_screen_basis(&self, plane_idx: u8) -> Option<[(f64, f64); 2]> {
-        let center = self.editor.move_gizmo_center_px?;
-        let vector = |tip: Option<(f32, f32)>, px_per_world: f64| {
-            let tip = tip?;
+        let gizmo = &self.editor.move_gizmo;
+        if plane_idx == crate::ui::state::MOVE_GIZMO_VIEW_PLANE {
+            return gizmo.view_axes.is_some().then_some(gizmo.view_basis_px);
+        }
+        let center = gizmo.center_px?;
+        let vector = |index: usize| {
+            let tip = gizmo.axis_tip_px[index]?;
             let dx = f64::from(tip.0 - center.0);
             let dy = f64::from(tip.1 - center.1);
             let length = (dx * dx + dy * dy).sqrt();
+            let px_per_world = gizmo.axis_px_per_world[index];
             (length > 1.0e-6).then_some((dx / length * px_per_world, dy / length * px_per_world))
         };
-        let x = vector(self.editor.move_gizmo_x_tip_px, self.editor.move_gizmo_x_px_per_world);
-        let y = vector(self.editor.move_gizmo_y_tip_px, self.editor.move_gizmo_y_px_per_world);
-        let z = vector(self.editor.move_gizmo_z_tip_px, self.editor.move_gizmo_z_px_per_world);
         match plane_idx {
-            0 => Some([x?, y?]),
-            1 => Some([x?, z?]),
-            2 => Some([y?, z?]),
+            0 => Some([vector(0)?, vector(1)?]),
+            1 => Some([vector(0)?, vector(2)?]),
+            2 => Some([vector(1)?, vector(2)?]),
             _ => None,
         }
     }

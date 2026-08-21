@@ -13,7 +13,7 @@ Check out the [releases page](https://inclinedesign.net/downloads/) and grab the
 ## Features
 
 - Design-strings editing for points, circles, poly-lines, and text.
-- Design tools including offset, auto-bench, chamfer, relimit, fuse, polygon explosion, and bezier.
+- Design tools including offset, auto-bench, chamfer, relimit, fuse, polyline explosion, and bezier.
 - Triangulation loading, viewing, and editing.
 - Block model generation, viewing and filtering.
 - Cross-platform desktop target: Web Assembly, Windows, Linux, and macOS.
@@ -21,7 +21,7 @@ Check out the [releases page](https://inclinedesign.net/downloads/) and grab the
 
 ## Example data
 
-The [`examples`](examples/) directory contains an import-ready OMF project with a coordinated open-pit design, continuous detailed topography, point cloud, drillholes, and orthophoto in a local mine grid.
+The [`examples`](examples/) directory contains an import-ready project with a coordinated open-pit design, continuous detailed topography, point cloud, drillholes, and orthophoto in a local mine grid.
 
 ## License
 

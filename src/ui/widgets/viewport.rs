@@ -86,7 +86,7 @@ const SCALE_BAR_SEGMENT_FRACTIONS: [f64; 6] = [0.0, 0.05, 0.10, 0.25, 0.50, 1.0]
 /// Without this, a double-click meant to insert a new stop near (or, after
 /// edge-clamping, exactly on top of) an existing one produces a stop whose
 /// `t` is within the later dedup pass's `1e-4` tolerance of the existing
-/// stop — so the new stop is silently collapsed back out and insertion
+/// stop - so the new stop is silently collapsed back out and insertion
 /// appears to do nothing. This is most visible at the bar's edges: clamping
 /// an overshot click to exactly `0.0`/`1.0` collides with a stop already
 /// sitting at that exact edge (the common case for default colour ramps).
@@ -748,7 +748,7 @@ impl<'a> ColorScaleLegend<'a> {
             if value_popup_stop == Some(selected_stop) {
                 let popup_response = self.draw_stop_value_popup(ui, &mut stops, selected_stop, bar_rect, handle_row_rect, min, max, &mut changed);
                 // Close the value input when the user clicks anywhere outside
-                // it — unless this frame's click was on a stop handle, which
+                // it - unless this frame's click was on a stop handle, which
                 // (re)opens it for that stop. Clicking inside the popup to edit
                 // the value is not "elsewhere", so it stays open.
                 if !popup_kept_open && popup_response.is_some_and(|response| response.clicked_elsewhere()) {

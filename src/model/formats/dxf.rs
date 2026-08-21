@@ -1,4 +1,4 @@
-//! Convert a `dxf::Drawing` into the editable [`Document`] model.
+//! DXF import and design export for the editable [`Document`] model.
 //!
 //! The DXF is flattened and simplified for open-pit design: block/INSERT
 //! instances are baked into world space, ByLayer/ByBlock colour is resolved,
@@ -6,11 +6,15 @@
 //! preserved; ellipses/splines tessellated). The renderer then reads only the
 //! `Document`.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Cursor};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{fs, io::Write, path::Path};
 
+use anyhow::{Context, Result};
 use dxf::{
-    Block, Drawing,
-    entities::{Entity, EntityType},
+    Block, Color, Drawing, LwPolylineVertex, Point,
+    entities::{Entity, EntityType, LwPolyline, ModelPoint, Polyline as DxfPolyline, Text as DxfText, Vertex as DxfVertex},
+    enums::AcadVersion,
 };
 use glam::{DMat4, DQuat, DVec3, DVec4};
 
@@ -18,8 +22,9 @@ use crate::{
     model::{
         Document, LayerId, Object, ObjectColor, PolyVertex,
         geometry::{Transform, normalize_or_z, point_to_dvec3, vector_to_dvec3},
+        project::ProjectFile,
     },
-    rendering::color::aci_to_linear_rgba,
+    rendering::color::{COLOR_TABLE, aci_to_linear_rgba, linear_to_srgb_byte},
     userspace_warn,
 };
 
@@ -80,6 +85,200 @@ pub(crate) fn from_dxf(drawing: &Drawing) -> Document {
 
     doc.repair_degenerate_closed_polylines();
     doc
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_document(path: impl AsRef<Path>) -> Result<Document> {
+    let path = path.as_ref();
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    document_from_bytes(path.to_string_lossy().as_ref(), &bytes)
+}
+
+pub(crate) fn document_from_bytes(source_name: &str, bytes: &[u8]) -> Result<Document> {
+    let mut cursor = Cursor::new(bytes);
+    let drawing = Drawing::load(&mut cursor).with_context(|| format!("parse {source_name}"))?;
+    let document = from_dxf(&drawing);
+    document.validate().with_context(|| format!("validate imported DXF {source_name}"))?;
+    Ok(document)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn export_project(project: &ProjectFile, path: impl AsRef<Path>) -> Result<()> {
+    export_layers(project, None, path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn export_layer(project: &ProjectFile, layer: LayerId, path: impl AsRef<Path>) -> Result<()> {
+    export_layers(project, Some(layer), path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_layers(project: &ProjectFile, only_layer: Option<LayerId>, path: impl AsRef<Path>) -> Result<()> {
+    let drawing = export_drawing(project, only_layer);
+    crate::model::atomic_file::write_atomic(path.as_ref(), |file| {
+        let mut writer = std::io::BufWriter::new(file);
+        drawing.save(&mut writer)?;
+        Write::flush(&mut writer)?;
+        Ok(())
+    })
+    .with_context(|| format!("write {}", path.as_ref().display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn export_bytes(project: &ProjectFile, only_layer: Option<LayerId>) -> Result<Vec<u8>> {
+    let drawing = export_drawing(project, only_layer);
+    let mut bytes = Vec::new();
+    drawing.save(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn export_drawing(project: &ProjectFile, only_layer: Option<LayerId>) -> Drawing {
+    let mut drawing = Drawing::new();
+    drawing.header.version = AcadVersion::R2004;
+    for layer in project.document.layers() {
+        if only_layer.is_some_and(|id| id != layer.id) {
+            continue;
+        }
+        drawing.add_layer(dxf::tables::Layer {
+            name: layer.name.clone(),
+            color: Color::from_index(layer.color_index.unwrap_or(7).clamp(1, 255)),
+            is_layer_on: layer.visible,
+            ..Default::default()
+        });
+    }
+
+    for object in project.document.objects() {
+        if only_layer.is_some_and(|id| id != object.layer()) {
+            continue;
+        }
+        add_object_to_drawing(&project.document, object, &mut drawing);
+    }
+    drawing
+}
+
+fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Drawing) {
+    let Some(layer) = document.layer(object.layer()) else {
+        return;
+    };
+    let layer_name = layer.name.clone();
+    let object_color = object.color();
+
+    match object {
+        Object::Point { pos, .. } => {
+            let mut entity = Entity::new(EntityType::ModelPoint(ModelPoint {
+                location: point_from_vec3(*pos),
+                ..Default::default()
+            }));
+            entity.common.layer = layer_name;
+            apply_object_color(&mut entity.common, object_color);
+            drawing.add_entity(entity);
+        }
+        Object::Polyline { verts, closed, .. } => {
+            if verts.len() < 2 {
+                return;
+            }
+            let z0 = verts[0].pos.z;
+            let is_flat = verts.iter().all(|v| (v.pos.z - z0).abs() < 1e-9);
+            if is_flat {
+                let mut poly = LwPolyline {
+                    vertices: verts.iter().map(lw_vertex_from_poly_vertex).collect(),
+                    ..Default::default()
+                };
+                poly.set_is_closed(*closed);
+                let mut entity = Entity::new(EntityType::LwPolyline(poly));
+                entity.common.layer = layer_name;
+                apply_object_color(&mut entity.common, object_color);
+                entity.common.elevation = z0;
+                drawing.add_entity(entity);
+            } else {
+                let mut poly = DxfPolyline::default();
+                poly.set_is_3d_polyline(true);
+                poly.set_is_closed(*closed);
+                let positions: Vec<_> = if verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON) {
+                    crate::model::geometry::tessellate_polyline_bulges(verts, *closed)
+                } else {
+                    verts.iter().map(|vertex| vertex.pos).collect()
+                };
+                for pos in positions {
+                    let mut vertex = DxfVertex {
+                        location: Point::new(pos.x, pos.y, pos.z),
+                        bulge: 0.0,
+                        ..Default::default()
+                    };
+                    vertex.set_is_3d_polyline_vertex(true);
+                    poly.add_vertex(drawing, vertex);
+                }
+                let mut entity = Entity::new(EntityType::Polyline(poly));
+                entity.common.layer = layer_name;
+                apply_object_color(&mut entity.common, object_color);
+                drawing.add_entity(entity);
+            }
+        }
+        Object::Text {
+            pos, content, height, rotation, ..
+        } => {
+            let location = crate::model::geometry::text_anchor_top_to_bottom(*pos, *height, *rotation);
+            let mut entity = Entity::new(EntityType::Text(DxfText {
+                location: point_from_vec3(location),
+                text_height: *height,
+                value: content.clone(),
+                rotation: rotation.to_degrees(),
+                ..Default::default()
+            }));
+            entity.common.layer = layer_name;
+            apply_object_color(&mut entity.common, object_color);
+            drawing.add_entity(entity);
+        }
+    }
+}
+
+fn lw_vertex_from_poly_vertex(vertex: &PolyVertex) -> LwPolylineVertex {
+    LwPolylineVertex {
+        x: vertex.pos.x,
+        y: vertex.pos.y,
+        bulge: vertex.bulge,
+        ..Default::default()
+    }
+}
+
+fn point_from_vec3(pos: glam::DVec3) -> Point {
+    Point::new(pos.x, pos.y, pos.z)
+}
+
+fn apply_object_color(common: &mut dxf::entities::EntityCommon, color: ObjectColor) {
+    match color {
+        ObjectColor::ByLayer => {
+            common.color = Color::by_layer();
+            common.color_24_bit = 0;
+            common.transparency = 0;
+        }
+        ObjectColor::Fixed(rgba) => {
+            common.color = Color::from_index(nearest_aci(rgba));
+            let red = u32::from(linear_to_srgb_byte(rgba[0]));
+            let green = u32::from(linear_to_srgb_byte(rgba[1]));
+            let blue = u32::from(linear_to_srgb_byte(rgba[2]));
+            common.color_24_bit = ((red << 16) | (green << 8) | blue) as i32;
+            let alpha = (rgba[3].clamp(0.0, 1.0) * 255.0).round() as i32;
+            common.transparency = 0x0200_0000 | alpha;
+        }
+    }
+}
+
+fn nearest_aci(rgba: [f32; 4]) -> u8 {
+    let target = [
+        linear_to_srgb_byte(rgba[0]) as i32,
+        linear_to_srgb_byte(rgba[1]) as i32,
+        linear_to_srgb_byte(rgba[2]) as i32,
+    ];
+    (1..=255)
+        .min_by_key(|index| {
+            let rgb = COLOR_TABLE[*index as usize];
+            let dr = target[0] - i32::from(rgb[0]);
+            let dg = target[1] - i32::from(rgb[1]);
+            let db = target[2] - i32::from(rgb[2]);
+            dr * dr + dg * dg + db * db
+        })
+        .unwrap_or(7)
 }
 
 struct ImportCtx<'a> {
@@ -265,7 +464,7 @@ fn import_entities<'e>(entities: impl IntoIterator<Item = &'e Entity>, ctx: &mut
                 let closed = ellipse_is_full_loop(ell.start_parameter, ell.end_parameter);
                 let mut verts = ellipse_to_verts(ell, transform);
                 // For a full (closed) ellipse, ellipse_to_verts generates segments+1 points
-                // where the first and last coincide — drop the duplicate closing vertex.
+                // where the first and last coincide - drop the duplicate closing vertex.
                 if closed && verts.len() > 1 {
                     verts.pop();
                 }

@@ -33,7 +33,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        // Polygon-pick mode for cut-by-polygon: intercept the click and look for a closed polyline.
+        // Polyline-pick mode for cut-by-polyline: intercept the click and look for a closed polyline.
         if self.editor.tri_cut_poly_awaiting_pick {
             let frozen = &self.editor.frozen_handles;
             if let Some((SceneEntityId::Object(oid), _)) = self
@@ -57,9 +57,9 @@ impl<'a> App<'a> {
                         .get_object(oid)
                         .and_then(|o| {
                             let layer_id = o.layer();
-                            self.scene_document.layer(layer_id).map(|l| format!("Polygon on '{}'", l.name))
+                            self.scene_document.layer(layer_id).map(|l| format!("Polyline on '{}'", l.name))
                         })
-                        .unwrap_or_else(|| "Polygon".to_owned());
+                        .unwrap_or_else(|| "Polyline".to_owned());
                     self.editor.tri_cut_poly_object_id = Some(oid);
                     self.editor.tri_cut_poly_object_name = name;
                     self.editor.tri_cut_poly_awaiting_pick = false;
@@ -73,8 +73,8 @@ impl<'a> App<'a> {
 
         // In triangulation creation mode, every canvas press starts a potential
         // box selection. On release, a short press becomes a normal click-pick.
-        // This allows box drags to begin over a polygon instead of requiring
-        // empty space. Explicit field/polygon pickers above take priority over
+        // This allows box drags to begin over a polyline instead of requiring
+        // empty space. Explicit field/polyline pickers above take priority over
         // this broader selection mode when dialogs overlap.
         if self.editor.tri_create_open {
             self.editor.selection_box_start_px = self.editor.cursor_screen_px;
@@ -92,7 +92,14 @@ impl<'a> App<'a> {
         let frozen = &self.editor.frozen_handles;
         let picked = self.graphics.as_ref().and_then(|graphics| {
             graphics
-                .pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled)
+                .pick_scene_entity_at_cursor(
+                    PICK_THRESHOLD_PX,
+                    &self.triangulations,
+                    &self.drill_holes,
+                    &self.editor.hidden_handles,
+                    frozen,
+                    self.editor.xray_enabled,
+                )
                 .map(|(handle, world)| (Some(handle), world))
                 .or_else(|| graphics.cursor_world(self.editor.z_level).map(|world| (None, world)))
         });
@@ -105,15 +112,20 @@ impl<'a> App<'a> {
                     return;
                 }
 
+                // Selecting an object may retarget the active project, but never the
+                // active layer: that is owned solely by the toolbar layer selector.
                 if let SceneEntityId::Object(object_id) = handle {
                     self.activate_project_for_object(object_id);
-                    self.editor.active_layer = self.workspace.active_document().and_then(|document| document.get_object(object_id)).map(Object::layer);
                 }
                 let selection_mode = if self.modifiers.shift_key() {
                     SelectionMode::Toggle
                 } else if self.modifiers.control_key() {
                     SelectionMode::Add
-                } else if matches!(handle, SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_)) && self.editor.selected_handles.contains(&handle) {
+                } else if matches!(
+                    handle,
+                    SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) | SceneEntityId::DrillHole(_) | SceneEntityId::PointCloud(_)
+                ) && self.editor.selected_handles.contains(&handle)
+                {
                     SelectionMode::Toggle
                 } else {
                     SelectionMode::Replace
@@ -121,9 +133,7 @@ impl<'a> App<'a> {
                 self.editor.on_canvas_pick(handle, world, selection_mode);
                 self.active_triangulation = match handle {
                     SceneEntityId::Triangulation(id) if self.editor.selected_handles.contains(&handle) => Some(id),
-                    SceneEntityId::Triangulation(_) => None,
-                    SceneEntityId::BlockModel(_) => None,
-                    SceneEntityId::Object(_) => None,
+                    _ => None,
                 };
             }
             Some((None, world)) => {
@@ -198,11 +208,11 @@ impl<'a> App<'a> {
             Some(SceneEntityId::Object(id)) => match self.scene_document.get_object(id) {
                 Some(object @ Object::Polyline { closed: true, verts, .. }) if verts.len() >= 3 => {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
-                    (Some(id), Some(format!("Polygon | Layer: {layer} | {} vertices", verts.len())))
+                    (Some(id), Some(format!("Polyline | Layer: {layer} | {} vertices", verts.len())))
                 }
-                _ => (None, Some("Not selectable | Choose a closed polygon".to_owned())),
+                _ => (None, Some("Not selectable | Choose a closed polyline".to_owned())),
             },
-            Some(_) => (None, Some("Not selectable | Choose a closed polygon".to_owned())),
+            Some(_) => (None, Some("Not selectable | Choose a closed polyline".to_owned())),
             None => (None, None),
         };
         if self.editor.tool_highlight_id != next_highlight || self.editor.viewport_pick_hover_label != next_label {
@@ -285,9 +295,10 @@ impl<'a> App<'a> {
             return;
         }
 
-        // Delete element tool: box drag selects and confirms deletion; single click deletes at
-        // cursor.
-        if self.editor.active_tool == crate::ui::state::ActiveTool::DeleteElement {
+        // Delete Points tool: box drag selects point objects and confirms deletion; single click
+        // deletes the point (polyline vertex or point object) at the cursor. Polylines and other
+        // elements are deliberately never picked, so the tool can't delete a whole element.
+        if self.editor.active_tool == crate::ui::state::ActiveTool::DeletePoints {
             if dragged {
                 let cross_select = end.0 > start.0;
                 let enclosed = self
@@ -306,6 +317,7 @@ impl<'a> App<'a> {
                 for handle in enclosed {
                     if let SceneEntityId::Object(id) = handle
                         && active_object_ids.contains(&id)
+                        && matches!(self.scene_document.get_object(id), Some(Object::Point { .. }))
                     {
                         self.editor.selected_handles.insert(handle);
                     }
@@ -371,9 +383,7 @@ impl<'a> App<'a> {
                 self.editor.on_canvas_pick(handle, world, selection_mode);
                 self.active_triangulation = match handle {
                     SceneEntityId::Triangulation(id) if self.editor.selected_handles.contains(&handle) => Some(id),
-                    SceneEntityId::Triangulation(_) => None,
-                    SceneEntityId::BlockModel(_) => None,
-                    SceneEntityId::Object(_) => None,
+                    _ => None,
                 };
                 self.invalidate_geometry();
                 return;
@@ -410,6 +420,8 @@ impl<'a> App<'a> {
             SceneEntityId::Object(object_id) => active_object_ids.contains(object_id),
             SceneEntityId::Triangulation(_) => true,
             SceneEntityId::BlockModel(_) => true,
+            SceneEntityId::DrillHole(_) => true,
+            SceneEntityId::PointCloud(_) => true,
         });
         if self.modifiers.shift_key() {
             for handle in enclosed {
@@ -551,7 +563,7 @@ impl<'a> App<'a> {
     pub(crate) fn active_project_object_ids(&self) -> std::collections::HashSet<crate::model::ObjectId> {
         self.workspace
             .active_project()
-            .map(|project| project.pidb.document.objects().iter().map(Object::id).collect())
+            .map(|project| project.project.document.objects().iter().map(Object::id).collect())
             .unwrap_or_default()
     }
 }

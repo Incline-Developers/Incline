@@ -19,7 +19,7 @@ const MAX_VOLUME_METADATA_BYTES: usize = crate::app::memory::VOLUME_METADATA_LIM
 pub(crate) const BRICK_SIZE: usize = 8;
 pub(crate) const CELLS_PER_BRICK: usize = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
 /// Bricks per axis of a level-1 "super-brick" (so 32^3 cells). Super-brick
-/// aggregates live in the tail of the brick-aggregate buffer — no extra
+/// aggregates live in the tail of the brick-aggregate buffer - no extra
 /// binding, because the volume bind group already sits at WebGPU's default
 /// 8-storage-buffers-per-stage limit.
 pub(crate) const SUPER_FACTOR: usize = 4;
@@ -33,7 +33,7 @@ pub(crate) const NOT_RESIDENT_SLOT: u32 = 0x3fff_ffff;
 // Cell payloads are 16 bits so two pack into one pool `u32`, halving pool
 // memory, upload bandwidth, and the CPU/mmap backing. Encoding (must match
 // the WGSL constants of the same name): `0xffff` empty, bit 15 the fallback
-// flag, bits 0..14 a 15-bit quantized grade. Decode order matters — test
+// flag, bits 0..14 a 15-bit quantized grade. Decode order matters - test
 // empty before fallback, since empty also has bit 15 set.
 const EMPTY_CELL_PAYLOAD: u16 = 0xffff;
 const FALLBACK_CELL_FLAG: u16 = 1 << 15;
@@ -1313,7 +1313,7 @@ impl VolumeRampLut {
         let entry = |color: [f32; 4]| (color, volume_optical_depth_for_alpha(color[3].clamp(0.0, 1.0)));
         // The ramp is piecewise-constant over sorted stops, so the table is
         // runs of identical entries. Sweep the stop list alongside the grade
-        // index — one optical-depth (`ln`) evaluation per stop — instead of a
+        // index - one optical-depth (`ln`) evaluation per stop - instead of a
         // full `ramp_rgba` evaluation per entry: this runs on the render thread
         // on every colour-stop drag tick. Must mirror `ramp_rgba` exactly:
         // below the first stop is transparent, each stop's colour runs until
@@ -1364,7 +1364,7 @@ struct BrickStyleData {
 /// colours, w = child optical depth averaged over the region's *full* clipped
 /// volume (empty bricks dilute it, mirroring how empty cells dilute a brick's
 /// aggregate). Combining child optical depths linearly is exact for homogeneous
-/// children and a biased approximation otherwise — acceptable at this LOD
+/// children and a biased approximation otherwise - acceptable at this LOD
 /// tier. `w == 0` iff the region has no visible cell.
 fn compute_super_aggregates(
     dims: [u32; 3],
@@ -1614,7 +1614,7 @@ fn block_volume_planes(block_model: &OpenBlockModel) -> Option<(Vec<f32>, Vec<f3
 /// (`lower + index * step`), so a regular block's f64 bound cast to f32 lands
 /// exactly on its plane. Computing these in f32 drifted from the f64 bounds
 /// by more than the match tolerance at some indices in large models, and
-/// every block on such a plane was silently dropped from the volume — the
+/// every block on such a plane was silently dropped from the volume - the
 /// "missing strips" failure mode.
 fn regular_planes(lower: f64, upper: f64, cells: usize) -> Vec<f32> {
     let step = (upper - lower) / cells as f64;
@@ -1656,7 +1656,7 @@ fn plane_index(planes: &[f32], value: f32) -> Option<usize> {
 }
 
 /// Plane lookup strategy, chosen once per axis. Uniformly spaced plane
-/// arrays — `regular_planes` output and most explicit-bounds grids — resolve
+/// arrays - `regular_planes` output and most explicit-bounds grids - resolve
 /// in O(1) arithmetic; anything else (sub-blocked models) falls back to
 /// binary search. Six lookups per block made the searches dominate the
 /// volume-build profile.

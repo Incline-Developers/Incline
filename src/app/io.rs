@@ -85,33 +85,12 @@ pub(crate) fn finite_clamped(value: f64, min: f64, max: f64, default: f64) -> f6
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Session {
-    /// Paths of all pidb files that were open, sorted alphabetically by name.
+    /// Every native project remembered in the explorer.
     #[serde(default)]
     pub(crate) project_paths: Vec<PathBuf>,
-    /// Which of those paths was the active project.
-    pub(crate) active_path: Option<PathBuf>,
-    /// Directories whose supported mesh contents are shown in the explorer.
-    #[serde(default)]
-    pub(crate) triangulation_paths: Vec<PathBuf>,
-    /// Individually-opened mesh files (not whole directories).
-    #[serde(default)]
-    pub(crate) triangulation_file_paths: Vec<PathBuf>,
-    /// Mesh paths explicitly removed by the user; hidden even if their directory is scanned.
-    #[serde(default)]
-    pub(crate) triangulation_excluded_paths: Vec<PathBuf>,
-    /// Individually imported block-model sources.
-    #[serde(default)]
-    pub(crate) block_model_sources: Vec<crate::model::block_model::BlockModelSource>,
-    /// Imported mapped CSV drillhole bundles. Runtime colour
-    /// styling deliberately is not persisted.
-    #[serde(default)]
-    pub(crate) drill_hole_sources: Vec<crate::model::drill_hole::DrillHoleSource>,
-    /// Individually imported point cloud files (.las/.laz/.xyz/.pts/.pcd).
-    #[serde(default)]
-    pub(crate) point_cloud_file_paths: Vec<PathBuf>,
-    /// Individually imported georeferenced imagery (.tif/.tiff).
-    #[serde(default)]
-    pub(crate) raster_file_paths: Vec<PathBuf>,
+    /// The one native project restored at startup.
+    #[serde(default, alias = "active_path")]
+    pub(crate) current_project_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

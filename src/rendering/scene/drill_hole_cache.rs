@@ -31,14 +31,18 @@ pub(crate) struct DrillHoleGpuCache {
 }
 
 impl DrillHoleGpuCache {
-    pub(crate) fn sync(&mut self, device: &wgpu::Device, scene_origin: DVec3, datasets: &[OpenDrillHoleDataset]) {
-        self.entries.retain(|id, _| datasets.iter().any(|dataset| dataset.id == *id));
+    pub(crate) fn sync(&mut self, device: &wgpu::Device, scene_origin: DVec3, datasets: &[OpenDrillHoleDataset], editor: &crate::ui::state::EditorState) {
+        self.entries.retain(|id, _| datasets.iter().any(|dataset| dataset.id == *id && dataset.state.loaded));
         for dataset in datasets {
-            let key = dataset_key(dataset, scene_origin);
+            if !dataset.state.loaded {
+                continue;
+            }
+            let selected = editor.selected_handles.contains(&dataset.entity_id());
+            let key = dataset_key(dataset, scene_origin, selected);
             if self.entries.get(&dataset.id).is_some_and(|cached| cached.key == key) {
                 continue;
             }
-            let instances = build_instances(dataset, scene_origin);
+            let instances = build_instances(dataset, scene_origin, selected);
             let buffer = (!instances.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Drillhole Segment Instances"),
@@ -65,10 +69,11 @@ impl DrillHoleGpuCache {
     }
 }
 
-fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
+fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected: bool) -> u64 {
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
     dataset.visible.hash(&mut hash);
+    selected.hash(&mut hash);
     for value in scene_origin.to_array() {
         value.to_bits().hash(&mut hash);
     }
@@ -90,8 +95,8 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> u64 {
     hash.finish()
 }
 
-pub(crate) fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3) -> Vec<DrillSegmentInstance> {
-    if !dataset.visible {
+fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected: bool) -> Vec<DrillSegmentInstance> {
+    if !dataset.state.loaded || !dataset.visible {
         return Vec::new();
     }
     let mut instances = Vec::new();
@@ -133,9 +138,14 @@ pub(crate) fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec
                     .find(|interval| interval.from <= midpoint && midpoint < interval.to && interval.values.contains_key(&field.key))
                     .and_then(|interval| interval.values.get(&field.key))
             });
-            let color = field
-                .and_then(|field| value.map(|value| evaluate_color(field.kind.clone(), value, &dataset.color)))
-                .unwrap_or([1.0; 3]);
+            let color = if selected {
+                let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
+                [red, green, blue]
+            } else {
+                field
+                    .and_then(|field| value.map(|value| evaluate_color(field.kind.clone(), value, &dataset.color)))
+                    .unwrap_or([1.0; 3])
+            };
             let radius = hole.diameter.map_or(0.0, |diameter| (diameter * 0.5) as f32);
             instances.push(DrillSegmentInstance {
                 start: (start - scene_origin).as_vec3().to_array(),

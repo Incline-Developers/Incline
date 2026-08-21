@@ -148,7 +148,7 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
-        let doc = &mut project.pidb.document;
+        let doc = &mut project.project.document;
         let mut inserted = 0usize;
         let commands: Vec<Command> = source
             .iter()

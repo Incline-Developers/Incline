@@ -27,7 +27,7 @@ const FAINT_INK: [u8; 4] = [110, 110, 110, 255];
 /// for sheet labels (grid coordinates, scale-bar ticks, the title block).
 pub(crate) fn format_quantity(value: f64, decimals: usize) -> String {
     if !value.is_finite() {
-        return "—".to_owned();
+        return "-".to_owned();
     }
     let rendered = format!("{value:.decimals$}");
     let (sign, digits) = rendered.strip_prefix('-').map_or(("", rendered.as_str()), |rest| ("-", rest));
@@ -230,7 +230,7 @@ pub(crate) fn fitted_scale(spec: &PlotSpec, world_width: f64, world_height: f64)
     Ok(round_up_to_nice(needed.max(1.0)))
 }
 
-/// Round up to the next 1 / 2 / 2.5 / 5 × 10ⁿ value — the scales and grid
+/// Round up to the next 1 / 2 / 2.5 / 5 × 10ⁿ value - the scales and grid
 /// intervals drawings conventionally use.
 fn round_up_to_nice(value: f64) -> f64 {
     if !(value.is_finite() && value > 0.0) {

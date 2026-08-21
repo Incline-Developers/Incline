@@ -48,9 +48,12 @@ impl RasterGpuCache {
             ));
         }
 
-        let loaded: HashSet<_> = rasters.iter().map(|raster| raster.id).collect();
+        let loaded: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded).map(|raster| raster.id).collect();
         self.rasters.retain(|id, _| loaded.contains(id));
         for raster in rasters {
+            if !raster.state.loaded {
+                continue;
+            }
             if let Some(cached) = self.rasters.get_mut(&raster.id) {
                 if cached.scene_origin != scene_origin {
                     let map = map_uniform(raster.world_to_uv, scene_origin);

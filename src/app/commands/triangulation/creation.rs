@@ -166,18 +166,18 @@ impl<'a> App<'a> {
         let project = self
             .workspace
             .active_project()
-            .ok_or_else(|| anyhow::anyhow!("Open a PIDB project before creating a triangulation"))?;
+            .ok_or_else(|| anyhow::anyhow!("Open a project before creating a triangulation"))?;
         let project_key = crate::app::jobs::JobKey::Project {
             runtime_id: project.runtime_id,
-            document_revision: project.pidb.document.revision(),
+            document_revision: project.project.document.revision(),
         };
 
-        // Snapshot the referenced geometry into owned paths on the UI thread —
+        // Snapshot the referenced geometry into owned paths on the UI thread -
         // the worker must not touch `self.scene_document`.
         let (paths, rejected) = self.collect_triangulation_paths(&object_ids);
 
         if paths.is_empty() {
-            anyhow::bail!("No usable polylines selected — triangulation requires a closed boundary, or open strings whose endpoints form one");
+            anyhow::bail!("No usable polylines selected; triangulation requires a closed boundary, or open strings whose endpoints form one");
         }
         if rejected > 0 {
             userspace_warn!("Ignored {} non-polyline or degenerate object(s) during triangulation", rejected);
@@ -262,7 +262,7 @@ impl<'a> App<'a> {
     }
 
     /// Whether the coarse weld would actually move any vertex of the
-    /// selection — if not, offering "weld & retry" would be a no-op lie.
+    /// selection - if not, offering "weld & retry" would be a no-op lie.
     pub(crate) fn coarse_weld_would_change(&self, object_ids: &[ObjectId]) -> bool {
         let (mut paths, _) = self.collect_triangulation_paths(object_ids);
         weld_breakline_vertices(&mut paths, COARSE_WELD_TOL, COARSE_WELD_TOL) > 0
@@ -339,7 +339,7 @@ fn build_created_triangulation(
     };
 
     if all_faces.is_empty() {
-        anyhow::bail!("Triangulation produced no faces — polygons may be collinear or degenerate");
+        anyhow::bail!("Triangulation produced no faces; polylines may be collinear or degenerate");
     }
 
     userspace_log!(
@@ -546,7 +546,7 @@ fn assemble_triangulation_input(paths: Vec<BreaklinePath>) -> Result<Triangulati
 /// conflicted) and describes the first one found: a crossing point (with
 /// each edge's interpolated Z, to show whether it's even representable by a
 /// single-valued terrain), a collinear overlap, or near-but-not-exactly
-/// coincident endpoints — the common case when two breaklines were meant to
+/// coincident endpoints - the common case when two breaklines were meant to
 /// share a boundary but were digitized independently.
 type BreaklineRef<'a> = (&'a [glam::DVec3], bool);
 
@@ -569,7 +569,7 @@ fn diagnose_breakline_conflict(paths: &[BreaklineRef<'_>], path_index: usize, ed
             let (c, d) = breakline_edge(other_path, other_edge_index);
             // Edges that legitimately share an endpoint (adjacent edges
             // within a ring, or two rings meeting at a shared vertex) are
-            // not conflicts — skip them so a real conflict elsewhere isn't
+            // not conflicts - skip them so a real conflict elsewhere isn't
             // shadowed by this expected topology.
             let shares_endpoint = points_coincident(a, c) || points_coincident(a, d) || points_coincident(b, c) || points_coincident(b, d);
             if shares_endpoint {
@@ -633,7 +633,7 @@ fn describe_crossing(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam::DV
 }
 
 /// If the closest pair of endpoints between the two edges is suspiciously
-/// close (but not exactly coincident), report the gap — this is the
+/// close (but not exactly coincident), report the gap - this is the
 /// signature of two breaklines that were meant to share a vertex but were
 /// digitized independently and differ by floating-point/snap noise.
 fn nearest_endpoint_gap(a: glam::DVec3, b: glam::DVec3, c: glam::DVec3, d: glam::DVec3) -> Option<String> {
@@ -960,7 +960,7 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
             (positions[0].x + positions[1].x + positions[2].x) / 3.0,
             (positions[0].y + positions[1].y + positions[2].y) / 3.0,
         );
-        if !boundaries.iter().any(|ring| crate::model::geometry::point_in_polygon_xy(centroid, ring)) {
+        if !boundaries.iter().any(|ring| crate::model::geometry::point_in_polyline_xy(centroid, ring)) {
             continue;
         }
 
@@ -1001,11 +1001,11 @@ pub(super) fn closed_solid_from_breaklines(boundaries: &[Vec<glam::DVec3>], cons
         let ring = &boundaries[root_index];
         let group_rings: Vec<&Vec<glam::DVec3>> = boundaries
             .iter()
-            .filter(|candidate| std::ptr::eq(*candidate, ring) || crate::model::geometry::point_in_polygon_xy(candidate[0].truncate(), ring))
+            .filter(|candidate| std::ptr::eq(*candidate, ring) || crate::model::geometry::point_in_polyline_xy(candidate[0].truncate(), ring))
             .collect();
         let group_constraints: Vec<&Vec<glam::DVec3>> = constraints
             .iter()
-            .filter(|candidate| candidate.iter().any(|point| crate::model::geometry::point_in_polygon_xy(point.truncate(), ring)))
+            .filter(|candidate| candidate.iter().any(|point| crate::model::geometry::point_in_polyline_xy(point.truncate(), ring)))
             .collect();
         let closure_z = ring.iter().map(|point| point.z).sum::<f64>() / ring.len() as f64;
         let outer_z_span = ring
@@ -1060,7 +1060,7 @@ pub(super) fn closed_solid_from_breaklines(boundaries: &[Vec<glam::DVec3>], cons
                     })
                     .sum::<glam::DVec2>()
                     / 3.0;
-                if crate::model::geometry::point_in_polygon_xy(centroid, ring) {
+                if crate::model::geometry::point_in_polyline_xy(centroid, ring) {
                     face.swap(1, 2);
                 }
             }
@@ -1092,7 +1092,7 @@ pub(super) fn outer_breakline_indices(rings: &[Vec<glam::DVec3>]) -> Vec<usize> 
         .filter_map(|(index, ring)| {
             let probe = ring[0].truncate();
             let contained = rings.iter().enumerate().any(|(other_index, other)| {
-                other_index != index && signed_area_xy(other).abs() > signed_area_xy(ring).abs() && crate::model::geometry::point_in_polygon_xy(probe, other)
+                other_index != index && signed_area_xy(other).abs() > signed_area_xy(ring).abs() && crate::model::geometry::point_in_polyline_xy(probe, other)
             });
             (!contained).then_some(index)
         })
@@ -1105,7 +1105,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
     use spade::{ConstrainedDelaunayTriangulation, Point2};
 
     if ring.len() < 3 {
-        anyhow::bail!("A selected polygon has fewer than 3 vertices");
+        anyhow::bail!("A selected polyline has fewer than 3 vertices");
     }
     validate_single_ring_crossing_z(ring)?;
 
@@ -1115,14 +1115,14 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
 
     for v in ring {
         if !v.is_finite() {
-            anyhow::bail!("A selected polygon contains non-finite coordinates");
+            anyhow::bail!("A selected polyline contains non-finite coordinates");
         }
         let h = cdt.insert(Point2::new(v.x, v.y)).map_err(|error| anyhow::anyhow!("CDT insert failed: {error:?}"))?;
         match handle_z.entry(h.index()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
                 let existing_z = *existing.get();
                 if (existing_z - v.z).abs() > crate::model::kernel::Z_TOL {
-                    anyhow::bail!("Selected polygon contains the same XY point at conflicting elevations ({existing_z:.3} and {:.3})", v.z);
+                    anyhow::bail!("Selected polyline contains the same XY point at conflicting elevations ({existing_z:.3} and {:.3})", v.z);
                 }
             }
             std::collections::hash_map::Entry::Vacant(vacant) => {
@@ -1141,7 +1141,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
         // edge that reaches a split must agree on its interpolated elevation;
         // otherwise the ring cannot represent a single-valued surface.
         let constraint_edges = crate::logging::catch_panic_quietly(|| cdt.add_constraint_and_split(ha, hb, |point| point))
-            .ok_or_else(|| anyhow::anyhow!("Selected polygon edges cross or overlap themselves too closely in XY to triangulate"))?;
+            .ok_or_else(|| anyhow::anyhow!("Selected polyline edges cross or overlap themselves too closely in XY to triangulate"))?;
         for edge in constraint_edges {
             let edge = cdt.directed_edge(edge);
             for vertex in [edge.from(), edge.to()] {
@@ -1151,7 +1151,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
                 match handle_z.entry(index) {
                     std::collections::hash_map::Entry::Occupied(existing) => {
                         if (*existing.get() - edge_z).abs() > crate::model::kernel::Z_TOL {
-                            anyhow::bail!("Selected polygon edges cross in XY at conflicting elevations ({:.3} and {edge_z:.3})", existing.get());
+                            anyhow::bail!("Selected polyline edges cross in XY at conflicting elevations ({:.3} and {edge_z:.3})", existing.get());
                         }
                     }
                     std::collections::hash_map::Entry::Vacant(vacant) => {
@@ -1174,7 +1174,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
     let verts: Vec<mesh_data::Vertex> = indexed.iter().map(|(_, x, y, z)| mesh_data::Vertex::new(*x, *y, *z)).collect();
 
     // Filter to faces whose centroid lies inside the input ring so that concave
-    // polygons don't include CDT faces outside the boundary.
+    // polylines don't include CDT faces outside the boundary.
     let ring_xy: Vec<(f64, f64)> = ring.iter().map(|v| (v.x, v.y)).collect();
     let faces: Vec<[u32; 3]> = cdt
         .inner_faces()
@@ -1182,7 +1182,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
             let vs = f.vertices();
             let cx = (vs[0].position().x + vs[1].position().x + vs[2].position().x) / 3.0;
             let cy = (vs[0].position().y + vs[1].position().y + vs[2].position().y) / 3.0;
-            point_in_polygon_xy(cx, cy, &ring_xy)
+            point_in_polyline_xy(cx, cy, &ring_xy)
         })
         .map(|f| {
             let v = f.vertices();
@@ -1192,7 +1192,7 @@ pub(super) fn cdt_fill_ring(ring: &[glam::DVec3], flip_winding: bool) -> Result<
         .collect();
 
     if faces.is_empty() {
-        anyhow::bail!("Failed to triangulate polygon (may be degenerate or collinear)");
+        anyhow::bail!("Failed to triangulate polyline (may be degenerate or collinear)");
     }
     Ok((verts, faces))
 }
@@ -1206,7 +1206,7 @@ fn validate_single_ring_crossing_z(ring: &[glam::DVec3]) -> Result<()> {
             let d = ring[(other_edge_index + 1) % ring.len()];
             if let Some(detail) = conflicting_z_detail(a, b, c, d) {
                 return Err(anyhow::Error::new(BreaklineConflictFailure {
-                    message: format!("Selected polygon edges cross in XY at conflicting elevations (edge {edge_index} vs edge {other_edge_index}: {detail})"),
+                    message: format!("Selected polyline edges cross in XY at conflicting elevations (edge {edge_index} vs edge {other_edge_index}: {detail})"),
                     edges: [[a, b], [c, d]],
                     kind: BreaklineConflictKind::ConflictingElevation,
                 }));

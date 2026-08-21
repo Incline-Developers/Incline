@@ -42,13 +42,7 @@ impl<'a> App<'a> {
         if !source.path.is_file() {
             anyhow::bail!("Block model source does not exist: {}", source.path.display());
         }
-        if let Some(existing) = self.block_model_files.iter_mut().find(|existing| existing.path == source.path) {
-            *existing = source.clone();
-        } else {
-            self.block_model_files.push(source.clone());
-        }
         userspace_log!("Imported block model source {}", source.path.display());
-        self.persist_session();
         self.open_block_model_source(source)
     }
 
@@ -56,12 +50,10 @@ impl<'a> App<'a> {
     /// browser storage, under the display path already held by `source`.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn open_block_model_input(&mut self, input: crate::model::input::InputFile, source: BlockModelSource) -> Result<()> {
-        let model_name = input.source.name.clone();
-        if self.block_models.iter().any(|model| model.source.path == source.path) {
-            return Ok(());
-        }
+        let source_name = input.source.name.clone();
+        let model_name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), "Block model");
         self.spawn_job(
-            format!("Loading {model_name}…"),
+            format!("Loading {source_name}…"),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
@@ -83,16 +75,13 @@ impl<'a> App<'a> {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_block_model_source(&mut self, source: BlockModelSource) -> Result<()> {
-        if self.block_models.iter().find(|model| model.source.path == source.path).is_some() {
-            self.invalidate_geometry();
-            return Ok(());
-        }
         if self.pending_block_model_loads.iter().any(|(_, pending_source, _, _)| pending_source.path == source.path) {
             return Ok(());
         }
 
-        let name = file_name(&source.path);
-        let (ticket, progress) = self.begin_reported_task(format!("Loading {name}"));
+        let source_name = file_name(&source.path);
+        let name = crate::model::project::imported_item_name(&source.path, "Block model");
+        let (ticket, progress) = self.begin_reported_task(format!("Loading {source_name}"));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
@@ -206,9 +195,10 @@ impl<'a> App<'a> {
 
     pub(super) fn add_loaded_block_model(&mut self, loaded: LoadedBlockModel) {
         let dims = loaded.model.metadata.dims;
+        let name = crate::model::project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
         userspace_log!(
             "Loaded block model '{}': {} blocks ({} renderable), grid {}x{}x{}, {} variables",
-            loaded.name,
+            name,
             loaded.model.metadata.n_blocks,
             loaded.renderable_block_indices.len(),
             dims[0],
@@ -221,8 +211,8 @@ impl<'a> App<'a> {
         self.next_block_model_id += 1;
         let mut open_model = OpenBlockModel {
             id,
-            name: loaded.name,
-            source: loaded.source.clone(),
+            state: crate::model::project::ProjectItemState::dirty(loaded.source.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            name,
             model: loaded.model,
             blocks: loaded.blocks,
             renderable_block_indices: loaded.renderable_block_indices,
@@ -239,10 +229,7 @@ impl<'a> App<'a> {
         };
         open_model.reset_color_transfer_for_active_variable();
         self.block_models.push(open_model);
-        #[cfg(not(target_arch = "wasm32"))]
-        if !loaded.source.generated && !self.block_model_files.contains(&loaded.source) {
-            self.block_model_files.push(loaded.source);
-        }
+        self.touch_active_project_content();
         if should_fit {
             self.fit_view_to_extents();
         }
@@ -257,6 +244,8 @@ impl<'a> App<'a> {
             return;
         };
         model.visible = !model.visible;
+        model.state.touch();
+        self.touch_active_project_content();
         self.invalidate_topology_bounds_and_redraw();
     }
 
@@ -265,12 +254,14 @@ impl<'a> App<'a> {
             (model.active_color_variable.as_deref() != Some(variable.as_str())).then(|| {
                 model.active_color_variable = Some(variable.clone());
                 model.color_transfer = ColorTransferFunction::default();
+                model.state.touch();
                 model.begin_active_values_decode(&variable);
                 (model.model.clone(), std::sync::Arc::clone(&model.renderable_block_indices))
             })
         }) else {
             return;
         };
+        self.touch_active_project_content();
         self.request_topology_redraw();
 
         let requested_variable = variable.clone();
@@ -288,6 +279,8 @@ impl<'a> App<'a> {
                 {
                     model.install_active_values_cache(prepared);
                     model.reset_color_transfer_for_active_variable();
+                    model.state.touch();
+                    app.touch_active_project_content();
                     app.request_topology_redraw();
                 }
             }
@@ -304,6 +297,8 @@ impl<'a> App<'a> {
             return;
         };
         model.color_transfer.stops = normalized_color_stops(stops);
+        model.state.touch();
+        self.touch_active_project_content();
         self.request_topology_redraw();
     }
 
@@ -320,6 +315,8 @@ impl<'a> App<'a> {
         }
         if model.slice != slice {
             model.slice = slice;
+            model.state.touch();
+            self.touch_active_project_content();
             self.request_topology_redraw();
         }
     }
@@ -451,7 +448,6 @@ impl<'a> App<'a> {
                 source: BlockModelSource {
                     path: std::path::PathBuf::from(format!("generated/{generated_id}.blockmodel")),
                     csv_columns: None,
-                    generated: true,
                 },
                 model,
                 blocks,
@@ -476,12 +472,14 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn close_block_model(&mut self, id: BlockModelId) {
-        let Some(index) = self.block_models.iter().position(|model| model.id == id) else {
+        let Some(entity_id) = self.block_models.iter_mut().find(|model| model.id == id).map(|model| {
+            model.state.loaded = false;
+            model.entity_id()
+        }) else {
             return;
         };
-        let model = self.block_models.remove(index);
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::BlockModel(id));
-        self.clear_block_model_entity_state(model.entity_id());
+        self.clear_block_model_entity_state(entity_id);
         self.editor.block_model_table_pages.remove(&id);
         self.editor.viewport_block_model_id = self.editor.viewport_block_model_id.filter(|active| *active != id);
         self.editor.block_model_variable_ranges.retain(|(model_id, _), _| *model_id != id);
@@ -491,25 +489,16 @@ impl<'a> App<'a> {
         self.invalidate_topology_bounds_and_redraw();
     }
 
-    pub(crate) fn remove_block_model(&mut self, source: BlockModelSource) {
-        let pending = std::mem::take(&mut self.pending_block_model_loads);
-        for (ticket, pending_source, receiver, console_report) in pending {
-            if pending_source.path == source.path {
-                self.cancel_background_task(ticket);
-                if let Some(report) = console_report {
-                    report.cancel();
-                }
-            } else {
-                self.pending_block_model_loads.push((ticket, pending_source, receiver, console_report));
-            }
+    pub(crate) fn remove_block_model(&mut self, id: BlockModelId) {
+        self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::BlockModel(id));
+        self.clear_block_model_entity_state(SceneEntityId::BlockModel(id));
+        let previous_len = self.block_models.len();
+        self.block_models.retain(|model| model.id != id);
+        if self.block_models.len() != previous_len {
+            self.touch_active_project_content();
+            self.persist_session();
+            self.request_topology_redraw();
         }
-        let ids: Vec<_> = self.block_models.iter().filter(|model| model.source.path == source.path).map(|model| model.id).collect();
-        for id in ids {
-            self.close_block_model(id);
-        }
-        self.block_model_files.retain(|existing| existing.path != source.path);
-        self.persist_session();
-        self.request_topology_redraw();
     }
 
     pub(crate) fn create_ore_triangulation(&mut self, block_model_id: BlockModelId, variable: String, mode: OreFilterMode, min: f64, max: f64, name: String) -> Result<()> {

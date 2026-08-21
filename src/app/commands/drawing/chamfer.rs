@@ -12,7 +12,7 @@ use crate::{
 
 impl<'a> App<'a> {
     /// Called when the user clicks while the Chamfer tool is active.
-    /// Picks the nearest closed-polygon vertex within the threshold and stores it.
+    /// Picks the nearest closed-polyline vertex within the threshold and stores it.
     pub(crate) fn pick_chamfer_corner(&mut self) {
         let Some(graphics) = self.graphics.as_ref() else {
             return;
@@ -38,7 +38,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        // Only accept real closed polygons. Modifying tools are not restricted
+        // Only accept real closed polylines. Modifying tools are not restricted
         // to the active layer.
         if !self
             .active_document()
@@ -64,7 +64,7 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
-        let doc = &mut project.pidb.document;
+        let doc = &mut project.project.document;
         let Some(obj) = doc.get_object(oid) else {
             return;
         };
@@ -143,7 +143,7 @@ pub(crate) fn chamfer_max_radius(verts: &[PolyVertex], corner_index: usize) -> f
     max_tan * sin_half / cos_half
 }
 
-/// Replace a single corner of a closed polygon with a circular arc.
+/// Replace a single corner of a closed polyline with a circular arc.
 ///
 /// All other vertices are returned unchanged. Z is linearly interpolated along edges.
 pub(crate) fn chamfer_corner(verts: &[PolyVertex], corner_index: usize, radius: f64, segments: u32) -> Vec<PolyVertex> {

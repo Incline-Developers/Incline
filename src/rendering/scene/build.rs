@@ -6,13 +6,13 @@ use glam::{DVec3, Mat4, Vec3};
 use lyon::tessellation::VertexBuffers;
 
 use crate::{
-    model::{Document, Object, ObjectId, SceneEntityId},
+    model::{Document, Object, ObjectId, SceneEntityId, geometry::triangulate_polyline_fill},
     rendering::{
         StrokeVertex, Vertex,
         geometry::{DrawContext, draw_line, draw_screen_cross, tessellate_polyline_stroke},
         graphics::{DOC_LINE_WIDTH, DOC_TEXT_FONT_SIZE, TEXT_EDIT_INDICATOR_COLOR, YELLOW_HIGHLIGHT_COLOR, make_translucent, text_bounds_corners_with_layout_width},
         pick::{PickRecord, TextPickRecord, world_bounds_from_local_positions},
-        scene::document::{fill_polygon_hatch, fill_polygon_solid, polygon_hatch_spacing},
+        scene::document::{fill_polyline_hatch, fill_polyline_solid, polyline_hatch_spacing},
         text::{Text, TextBox, TextSystem},
     },
     ui::state::EditorState,
@@ -160,18 +160,22 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 } => {
                     let line_rgba = rgba;
                     let fill_rgba = document.object_fill_rgba(object);
-                    fill_opaque = *fill == crate::model::FillStyle::Solid && fill_rgba[3] >= 1.0 - f32::EPSILON;
                     tessellate_polyline_stroke(&mut draw_ctx, verts, *closed, *line_weight, line_rgba);
-                    if *closed && verts.len() >= 2 {
+                    if *closed
+                        && verts.len() >= 2
+                        && *fill != crate::model::FillStyle::Clear
+                        && let Some(fill_mesh) = triangulate_polyline_fill(verts)
+                    {
                         match fill {
                             crate::model::FillStyle::Solid => {
-                                fill_polygon_solid(draw_ctx.fill_vertex_buf, draw_ctx.fill_index_buf, verts, fill_rgba, draw_ctx.scene_origin);
+                                fill_opaque = fill_rgba[3] >= 1.0 - f32::EPSILON;
+                                fill_polyline_solid(draw_ctx.fill_vertex_buf, draw_ctx.fill_index_buf, &fill_mesh, fill_rgba, draw_ctx.scene_origin);
                             }
                             crate::model::FillStyle::Slashes | crate::model::FillStyle::Crosses => {
-                                let hatch_spacing = polygon_hatch_spacing(verts, 15.0);
-                                fill_polygon_hatch(&mut draw_ctx, verts, fill_rgba, 45.0, hatch_spacing, *line_weight);
+                                let hatch_spacing = polyline_hatch_spacing(&fill_mesh, 15.0);
+                                fill_polyline_hatch(&mut draw_ctx, &fill_mesh, fill_rgba, 45.0, hatch_spacing, *line_weight);
                                 if *fill == crate::model::FillStyle::Crosses {
-                                    fill_polygon_hatch(&mut draw_ctx, verts, fill_rgba, 135.0, hatch_spacing, *line_weight);
+                                    fill_polyline_hatch(&mut draw_ctx, &fill_mesh, fill_rgba, 135.0, hatch_spacing, *line_weight);
                                 }
                             }
                             crate::model::FillStyle::Clear => {}
@@ -492,7 +496,7 @@ pub(crate) struct DynamicSceneBuildInput<'a> {
 
 /// Per-frame geometry for the live drawing tools: the batter/berm preview.
 /// Stroke-only and tiny, so rebuilding it every frame while a tool is active
-/// is cheap — unlike the full document scene it replaces in that role.
+/// is cheap - unlike the full document scene it replaces in that role.
 pub(crate) fn rebuild_dynamic_scene(input: DynamicSceneBuildInput<'_>) {
     let DynamicSceneBuildInput {
         editor,

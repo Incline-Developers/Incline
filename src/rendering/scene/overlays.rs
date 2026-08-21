@@ -10,7 +10,7 @@ use crate::{
     },
     rendering::{
         StrokeVertex, Vertex,
-        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_sphere, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_sphere, tessellate_polyline_stroke},
         graphics::{DOC_LINE_WIDTH, MEASUREMENT_COLOR, PREVIEW_COLOR},
         pick::world_to_screen,
     },
@@ -108,7 +108,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     if editor.cursor_snapped
         && let Some(position) = editor.cursor_world
     {
-        draw_screen_sphere(&mut overlay, position, 7.0, PREVIEW_COLOR);
+        draw_screen_point_marker(&mut overlay, position, PREVIEW_COLOR);
     }
 
     if editor.active_tool == ActiveTool::VerticalSlice

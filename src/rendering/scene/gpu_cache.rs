@@ -13,7 +13,7 @@ use crate::{
     model::{
         block_model::{BlockModelId, BlockModelSlice, ColorTransferFunction, MAX_COLOR_STOPS, OpenBlockModel, color_variable_default},
         formats::mesh_data,
-        raster::RasterTextureId,
+        raster::{OpenRasterTexture, RasterTextureId},
         triangulation::{OpenTriangulation, TriangulationId},
     },
     rendering::{BlockInstance, SurfaceVertex},
@@ -25,7 +25,7 @@ const MAX_SURFACE_CHUNK_BYTES: usize = 256 * 1024 * 1024;
 pub(crate) const FALLBACK_BLOCK_GRADE: f32 = -1.0;
 const HIDDEN_BLOCK_GRADE: f32 = -2.0;
 /// Grades below this are discarded by `block_model.wgsl` (`grade < -1.5`).
-/// Geometry building must treat such blocks as absent — a discarded block
+/// Geometry building must treat such blocks as absent - a discarded block
 /// leaves a hole, so it can't be allowed to cull its neighbours' faces.
 use super::block_model_ramp::{VISIBLE_ALPHA_EPSILON, is_hidden_block_appearance, is_hidden_block_grade, make_translucent, ramp_alpha};
 
@@ -75,7 +75,7 @@ pub(crate) struct CachedEdgeChunk {
     pub(crate) instance_count: u32,
 }
 
-/// Per-instance edge geometry — position only. Color and width live in EdgeStyleUniform.
+/// Per-instance edge geometry - position only. Color and width live in EdgeStyleUniform.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct EdgeInstance {
@@ -231,7 +231,7 @@ pub(crate) use super::block_model_volume_cache::{
 
 /// A block model surface chunk plus enough CPU-side state to re-colour it
 /// (on an active-variable/legend switch) without re-walking blocks, redoing
-/// face culling, or reallocating GPU buffers — only geometry changes
+/// face culling, or reallocating GPU buffers - only geometry changes
 /// (translucency toggling, or the block model itself changing) need a full
 /// rebuild.
 pub(crate) struct CachedBlockModelSurfaceChunk {
@@ -353,6 +353,9 @@ impl BlockModelGpuCache {
 
     fn schedule_volume_builds(&mut self, block_models: &[OpenBlockModel], editor: &EditorState) {
         for block_model in block_models {
+            if !block_model.state.loaded {
+                continue;
+            }
             let entity = block_model.entity_id();
             let translucent = editor.translucent_handles.contains(&entity) || block_model_has_partial_alpha_stops(block_model);
             if !block_model_volume_preferred(block_model, translucent, editor.slice_mode_enabled) || !block_model.active_values_available_for_render() {
@@ -453,7 +456,7 @@ impl BlockModelGpuCache {
     /// stream is the exact subset rendered with depth writes, so this avoids
     /// scanning hidden/transparent blocks from the source model.
     pub(crate) fn nearest_opaque_hit(&self, ray_origin: DVec3, ray_direction: DVec3, hidden: &HashSet<crate::model::SceneEntityId>) -> Option<DVec3> {
-        self.nearest_hit(ray_origin, ray_direction, hidden, None, false)
+        self.nearest_hit(ray_origin, ray_direction, hidden, None, false).map(|(_, world)| world)
     }
 
     /// Nearest visible block under a ray, including translucent surface or
@@ -466,6 +469,17 @@ impl BlockModelGpuCache {
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: &HashSet<crate::model::SceneEntityId>,
     ) -> Option<DVec3> {
+        self.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen).map(|(_, world)| world)
+    }
+
+    /// Nearest visible block model plus its stable scene identity.
+    pub(crate) fn nearest_visible_entity_hit(
+        &self,
+        ray_origin: DVec3,
+        ray_direction: DVec3,
+        hidden: &HashSet<crate::model::SceneEntityId>,
+        frozen: &HashSet<crate::model::SceneEntityId>,
+    ) -> Option<(crate::model::SceneEntityId, DVec3)> {
         self.nearest_hit(ray_origin, ray_direction, hidden, Some(frozen), true)
     }
 
@@ -476,8 +490,9 @@ impl BlockModelGpuCache {
         hidden: &HashSet<crate::model::SceneEntityId>,
         frozen: Option<&HashSet<crate::model::SceneEntityId>>,
         include_transparent: bool,
-    ) -> Option<DVec3> {
+    ) -> Option<(crate::model::SceneEntityId, DVec3)> {
         let mut nearest = f64::INFINITY;
+        let mut nearest_entity = None;
         for (&id, cached) in &self.models {
             let entity = crate::model::SceneEntityId::BlockModel(id);
             if !cached.visible || hidden.contains(&entity) || frozen.is_some_and(|set| set.contains(&entity)) {
@@ -497,7 +512,11 @@ impl BlockModelGpuCache {
                     volume.nearest_opaque_cell_hit(volume_origin, volume_direction, &cached.color_transfer, cached.fallback_color[3])
                 };
                 if let Some(distance) = volume_hit {
-                    nearest = nearest.min(f64::from(distance));
+                    let distance = f64::from(distance);
+                    if distance < nearest {
+                        nearest = distance;
+                        nearest_entity = Some(entity);
+                    }
                 }
             }
             let transparent_chunks = if include_transparent { cached.transparent_surface_chunks.as_slice() } else { &[] };
@@ -522,11 +541,12 @@ impl BlockModelGpuCache {
                         && distance < nearest
                     {
                         nearest = distance;
+                        nearest_entity = Some(entity);
                     }
                 }
             }
         }
-        nearest.is_finite().then(|| ray_origin + ray_direction * nearest)
+        nearest_entity.map(|entity| (entity, ray_origin + ray_direction * nearest))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -542,7 +562,7 @@ impl BlockModelGpuCache {
         volume_layout: &wgpu::BindGroupLayout,
         edge_style_layout: &wgpu::BindGroupLayout,
     ) {
-        let loaded: HashSet<_> = block_models.iter().map(|model| model.id).collect();
+        let loaded: HashSet<_> = block_models.iter().filter(|model| model.state.loaded).map(|model| model.id).collect();
         self.models.retain(|id, _| loaded.contains(id));
         self.pending_volume_builds.retain(|id, _| loaded.contains(id));
         self.prepared_volumes.retain(|id, _| loaded.contains(id));
@@ -552,6 +572,9 @@ impl BlockModelGpuCache {
         self.poll_surface_builds();
         self.schedule_volume_builds(block_models, editor);
         for block_model in block_models {
+            if !block_model.state.loaded {
+                continue;
+            }
             let entity = block_model.entity_id();
             let selected = editor.selected_handles.contains(&entity);
             let force_translucent = editor.translucent_handles.contains(&entity);
@@ -594,7 +617,7 @@ impl BlockModelGpuCache {
                 let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
                 // The shader-hidden set (which also determines volume cell
                 // occupancy) is needed by both the volume fast-path decision
-                // and the chunk branches below, and walking it is O(blocks) —
+                // and the chunk branches below, and walking it is O(blocks) -
                 // compute it once, but only when something that can change it
                 // is dirty (skip it for edge/scene-origin-only updates).
                 let ramp_visibility_dirty = style_dirty && !same_ramp_visibility(&cached.color_transfer, &block_model.color_transfer);
@@ -629,7 +652,7 @@ impl BlockModelGpuCache {
                 // lets the scheduler skip building them. A colour-ramp-only
                 // change that leaves occupancy unchanged takes the cheap
                 // in-place restyle (recompute aggregates + stops uniform)
-                // instead of a full rebuild + re-upload of the large buffers —
+                // instead of a full rebuild + re-upload of the large buffers -
                 // this is what keeps dragging a gradient stop smooth.
                 let style_only = style_dirty && !variable_dirty && !geometry_dirty && !empty_visibility_dirty && !scene_origin_dirty;
                 if let Some(prepared) = prepared_volume {
@@ -697,7 +720,7 @@ impl BlockModelGpuCache {
                     if hidden_fingerprint == cached.hidden_fingerprint && !volume_present {
                         // The attribute/legend switch hides the same set of
                         // blocks, so which blocks and faces render is
-                        // unchanged — only re-colour, without re-walking
+                        // unchanged - only re-colour, without re-walking
                         // blocks or reallocating GPU buffers. Only reached
                         // when no volume represents the model.
                         recolor_block_model_surface_chunks(queue, block_model, &mut cached.surface_chunks);
@@ -727,7 +750,7 @@ impl BlockModelGpuCache {
                     // surface key captures both, so any geometry impact
                     // reschedules the chunks in the background. Here only the
                     // style uniform, edges, and fingerprint bookkeeping
-                    // update — that is what keeps dragging a gradient stop
+                    // update - that is what keeps dragging a gradient stop
                     // smooth on large models.
                     if hidden_fingerprint != cached.hidden_fingerprint {
                         if cached.edge_width > 0.0 {
@@ -957,7 +980,7 @@ fn ray_aabb_distance(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3) ->
 /// Hash of every input that changes the *contents* of the surface chunks
 /// (which blocks are drawn, face culling, opaque/transparent routing, baked
 /// scene-relative positions). Deliberately excluded: the active variable and
-/// ramp colours for opaque models — those only change per-instance grades and
+/// ramp colours for opaque models - those only change per-instance grades and
 /// the style uniform, which the recolor-in-place path and a uniform write
 /// handle without rebuilding geometry. Grade routing does depend on them for
 /// translucent/partial-alpha models, so they are keyed in that case.
@@ -982,7 +1005,7 @@ fn surface_chunks_key(scene_origin: DVec3, block_model: &OpenBlockModel, force_t
     // classification thresholds route blocks between the depth-writing and
     // transparent sets; exact alpha values and RGB never affect geometry.
     // For opaque models the ramp's only geometric influence is the hidden
-    // set, which the fingerprint above already captures — keying the stops
+    // set, which the fingerprint above already captures - keying the stops
     // there would rebuild on every stop-position drag for nothing.
     if force_translucent || has_partial_alpha_stops {
         block_model.active_color_variable.hash(&mut hasher);
@@ -1155,15 +1178,23 @@ impl TriangulationGpuCache {
         scene_origin: DVec3,
         scale_factor: f32,
         triangulations: &[OpenTriangulation],
+        rasters: &[OpenRasterTexture],
         editor: &EditorState,
         surface_style_layout: &wgpu::BindGroupLayout,
         surface_chunk_layout: &wgpu::BindGroupLayout,
         edge_style_layout: &wgpu::BindGroupLayout,
     ) {
-        let loaded: HashSet<_> = triangulations.iter().map(|tri| tri.id).collect();
+        // A drape survives unloading and hiding the raster, so the texture a
+        // surface actually samples is the drape filtered by what can be drawn.
+        let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded && raster.visible).map(|raster| raster.id).collect();
+        let loaded: HashSet<_> = triangulations.iter().filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
         self.meshes.retain(|id, _| loaded.contains(id));
         for triangulation in triangulations {
+            if !triangulation.state.loaded {
+                continue;
+            }
             let entity = triangulation.entity_id();
+            let raster_texture = triangulation.raster_texture.filter(|id| drawable_rasters.contains(id));
             let selected = editor.selected_handles.contains(&entity);
             // Selection is represented by the highlighted wireframe below. A live
             // picker hover temporarily overrides the face colour as well so the
@@ -1189,7 +1220,7 @@ impl TriangulationGpuCache {
             };
 
             if let Some(cached) = self.meshes.get_mut(&triangulation.id) {
-                let surface_dirty = cached.color != color || cached.raster_texture != triangulation.raster_texture || cached.raster_opacity != triangulation.raster_opacity;
+                let surface_dirty = cached.color != color || cached.raster_texture != raster_texture || cached.raster_opacity != triangulation.raster_opacity;
                 // Rebuild edge geometry only when edges flip between present and absent.
                 let edge_geom_dirty = (cached.edge_width == 0.0) != (edge_width == 0.0);
                 let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
@@ -1201,20 +1232,11 @@ impl TriangulationGpuCache {
                 if surface_dirty {
                     let style = SurfaceStyleUniform {
                         color,
-                        params: [
-                            if triangulation.raster_texture.is_some() {
-                                triangulation.raster_opacity.clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            },
-                            0.0,
-                            0.0,
-                            0.0,
-                        ],
+                        params: [if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 }, 0.0, 0.0, 0.0],
                     };
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.color = color;
-                    cached.raster_texture = triangulation.raster_texture;
+                    cached.raster_texture = raster_texture;
                     cached.raster_opacity = triangulation.raster_opacity;
                 }
 
@@ -1240,16 +1262,7 @@ impl TriangulationGpuCache {
 
                 let surface_style = SurfaceStyleUniform {
                     color,
-                    params: [
-                        if triangulation.raster_texture.is_some() {
-                            triangulation.raster_opacity.clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        },
-                        0.0,
-                        0.0,
-                        0.0,
-                    ],
+                    params: [if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 }, 0.0, 0.0, 0.0],
                 };
                 let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Surface Style Uniform"),
@@ -1296,7 +1309,7 @@ impl TriangulationGpuCache {
                         surface_style_buffer,
                         surface_style_bind_group,
                         color,
-                        raster_texture: triangulation.raster_texture,
+                        raster_texture,
                         raster_opacity: triangulation.raster_opacity,
                         edge_chunks,
                         edge_style_buffer,
@@ -1319,7 +1332,7 @@ const TARGET_FACES_PER_CHUNK: usize = 100_000;
 /// Upload indexed surface geometry as spatially-coherent chunks, walking faces
 /// in the precomputed XY-Morton order (`triangulation.surface_face_order`,
 /// built off-thread) so each chunk covers a compact region with a tight AABB
-/// the renderer can frustum-cull — rather than the old size-only split whose
+/// the renderer can frustum-cull - rather than the old size-only split whose
 /// chunks each spanned the whole mesh. No sorting happens here, so a huge
 /// mesh's first upload doesn't hitch the render thread. Colour is NOT baked in;
 /// it lives in a per-draw SurfaceStyle uniform (plus a per-chunk debug-colour
@@ -1644,8 +1657,8 @@ pub(crate) fn block_model_color_values(block_model: &OpenBlockModel) -> Option<B
 /// so the cheap recolor-in-place path is only valid while it is unchanged.
 ///
 /// XOR of per-index mixes rather than a sequential hasher: it is
-/// order-independent, so the O(blocks) scan — which runs on every ramp-drag
-/// tick to validate the restyle fast path — parallelizes cleanly. Block
+/// order-independent, so the O(blocks) scan - which runs on every ramp-drag
+/// tick to validate the restyle fast path - parallelizes cleanly. Block
 /// indices are unique, so equal hidden sets always fingerprint equal;
 /// distinct sets collide with ~2^-64 probability.
 fn hidden_blocks_fingerprint(block_model: &OpenBlockModel) -> u64 {
@@ -1716,7 +1729,7 @@ pub(crate) fn grade_for_block(color_values: &Option<BlockModelColorValues>, bloc
 }
 
 /// Whether the fragment shader will discard every fragment of the block at
-/// `block_index` — combining the hidden-grade sentinel with a colour-ramp
+/// `block_index` - combining the hidden-grade sentinel with a colour-ramp
 /// alpha below the visibility epsilon. Geometry building treats such blocks as
 /// absent, so this must stay in lockstep with `fs_main` in `block_model.wgsl`.
 fn block_is_hidden(color_values: &Option<BlockModelColorValues>, color_transfer: &ColorTransferFunction, block_index: usize, hide_empty: bool) -> bool {
@@ -1727,7 +1740,7 @@ fn block_is_hidden(color_values: &Option<BlockModelColorValues>, color_transfer:
 /// Recomputes and re-uploads `grade` for every already-built chunk of a
 /// block model, without re-walking blocks, redoing face culling, or
 /// reallocating GPU buffers. Valid whenever chunk geometry (which blocks are
-/// rendered, and which faces they have) hasn't changed — i.e. everything
+/// rendered, and which faces they have) hasn't changed - i.e. everything
 /// except a translucency toggle or the block model's own data changing.
 fn recolor_block_model_surface_chunks(queue: &wgpu::Queue, block_model: &OpenBlockModel, chunks: &mut [CachedBlockModelSurfaceChunk]) {
     let color_values = block_model_color_values(block_model);
@@ -1798,8 +1811,8 @@ fn build_block_model_surface_chunks(scene_origin: DVec3, block_model: &OpenBlock
     let occupancy = cull_shared_faces.then(|| build_block_occupancy(block_model, &drawn));
 
     // The shader places blocks with `rotation * local + translation`. Offset
-    // local bounds by `local_ref` — the local point that maps to the scene
-    // origin — so the f32 instance coordinates stay small (block-extent scale)
+    // local bounds by `local_ref` - the local point that maps to the scene
+    // origin - so the f32 instance coordinates stay small (block-extent scale)
     // and keep the precision the old CPU `local_to_world - scene_origin` had.
     // With this reference the translation is exactly zero (see
     // `block_model_style`), so only the rotation is uploaded.
@@ -1923,7 +1936,7 @@ fn block_model_instance_slice(scene_origin: DVec3, block_model: &OpenBlockModel)
 
 /// Whether the shader draws the block in the given pass: not hidden
 /// (`is_hidden_block_appearance`) and matching the pass's alpha selection.
-/// Fused so the colour ramp is evaluated once per block — this runs for every
+/// Fused so the colour ramp is evaluated once per block - this runs for every
 /// renderable block on each surface-chunk rebuild. Must stay in lockstep with
 /// `is_hidden_block_appearance` and `fs_main` in `block_model.wgsl`.
 fn block_is_drawn(grade: f32, has_grade: bool, color_transfer: &ColorTransferFunction, selection: BlockSurfaceSelection, fallback_alpha: f32) -> bool {
@@ -1994,7 +2007,7 @@ type BlockKeySet = HashSet<[u64; 6], foldhash::fast::RandomState>;
 
 /// Occupancy of the blocks that will actually be drawn: renderable geometry
 /// minus blocks the fragment shader hides outright. Only drawn blocks may
-/// cull a neighbour's shared face — a hidden block leaves a see-through hole,
+/// cull a neighbour's shared face - a hidden block leaves a see-through hole,
 /// so the face behind it must exist. This mirrors the shader's discard
 /// exactly, including blocks made invisible by a fully-transparent colour-ramp
 /// stop, so changing the ramp forces a geometry rebuild (correctness over

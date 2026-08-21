@@ -3,6 +3,8 @@ use std::{cmp::Ordering, collections::BinaryHeap, path::PathBuf, sync::Arc};
 use glam::DVec3;
 use rayon::prelude::*;
 
+use crate::model::project::ProjectItemState;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PointCloudId(pub(crate) u64);
 
@@ -11,9 +13,6 @@ pub(crate) struct PointCloudId(pub(crate) u64);
 pub(crate) struct LoadedPointCloud {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
-    /// Whether `path` names a reloadable point-cloud source. OMF point sets
-    /// use a display-only virtual path and therefore remain unsaved in memory.
-    pub(crate) is_saved: bool,
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, when the input provides them.
     pub(crate) colors: Option<Arc<Vec<u32>>>,
@@ -25,9 +24,8 @@ pub(crate) struct LoadedPointCloud {
 #[derive(Clone)]
 pub(crate) struct OpenPointCloud {
     pub(crate) id: PointCloudId,
+    pub(crate) state: ProjectItemState,
     pub(crate) name: String,
-    pub(crate) path: PathBuf,
-    pub(crate) is_saved: bool,
     pub(crate) points: Arc<Vec<DVec3>>,
     /// Source-order packed RGBA8 values, retained for lossless interchange.
     pub(crate) colors: Option<Arc<Vec<u32>>>,
@@ -38,6 +36,12 @@ pub(crate) struct OpenPointCloud {
     pub(crate) color: [f32; 4],
     /// Screen-facing splat width in source/world metres.
     pub(crate) point_size: f32,
+}
+
+impl OpenPointCloud {
+    pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
+        crate::model::SceneEntityId::PointCloud(self.id)
+    }
 }
 
 /// Position-only instance used by clouds without per-point colours.
@@ -226,7 +230,7 @@ fn build_uncolored_chunk(sorted: &[MortonPointIndex], source_points: &[DVec3], o
 /// Estimate the full-resolution point spacing of a Morton-sorted chunk. Morton
 /// order places spatial neighbours adjacently, so the nearest of a small window
 /// of successors approximates each point's true nearest neighbour without a
-/// spatial index. A high percentile — not the median — is used deliberately:
+/// spatial index. A high percentile - not the median - is used deliberately:
 /// the renderer sizes a prefix so splats at this spacing touch, and targeting
 /// the 90th percentile means ~90% of the surface is covered (matching the
 /// coverage goal of the screen-space probing this replaces). The window-min

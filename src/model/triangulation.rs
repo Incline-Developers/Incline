@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use crate::model::formats::mesh_data;
+use crate::model::{formats::mesh_data, project::ProjectItemState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TriangulationId(pub(crate) u64);
@@ -17,7 +17,7 @@ pub(crate) struct LoadedTriangulation {
 }
 
 /// A freshly generated triangulation with its mesh, BVH and edge list already
-/// built — the owned, `Send` output of the worker half of a background compute
+/// built - the owned, `Send` output of the worker half of a background compute
 /// job (include/cut/create). The UI thread turns this into an
 /// `OpenTriangulation` via `insert_generated_triangulation`.
 pub(crate) struct GeneratedTriangulation {
@@ -39,10 +39,8 @@ pub(crate) struct GeneratedTriangulationLog {
 #[derive(Clone, Debug)]
 pub(crate) struct OpenTriangulation {
     pub(crate) id: TriangulationId,
+    pub(crate) state: ProjectItemState,
     pub(crate) name: String,
-    pub(crate) path: PathBuf,
-    /// Whether `path` points to a mesh that has been written to disk.
-    pub(crate) is_saved: bool,
     pub(crate) mesh: Arc<mesh_data::Triangulation>,
     pub(crate) spatial: Arc<crate::model::spatial::TriangleBvh>,
     pub(crate) edges: Vec<[u32; 2]>,
@@ -71,7 +69,7 @@ impl OpenTriangulation {
 /// partitioning the map and letting each chunk own its vertical column culls
 /// far better than 3D height bands you rarely look at edge-on.
 ///
-/// Computed at mesh build/load time — off the render thread — and stored on
+/// Computed at mesh build/load time - off the render thread - and stored on
 /// `OpenTriangulation`, so the first GPU upload of a huge mesh doesn't sort
 /// millions of faces during a frame.
 pub(crate) fn morton_surface_face_order(mesh: &mesh_data::Triangulation) -> Vec<u32> {

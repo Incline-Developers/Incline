@@ -34,19 +34,19 @@ pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
                     let save = ui.add_enabled(
                         has_unsaved,
-                        ToolbarButton::new(egui::Image::new(unthemed_icon!("save_all_pidbs.svg")), "Save All PIDBs").id_salt("save_all_pidbs"),
+                        ToolbarButton::new(egui::Image::new(unthemed_icon!("save_project.svg")), "Save Project").id_salt("save_project"),
                     );
                     if save.clicked() {
-                        commands.push(UiCommand::SaveAllPidbs);
+                        commands.push(UiCommand::SaveProject);
                     }
 
                     #[cfg(target_arch = "wasm32")]
                     if ui
-                        .add_enabled(!project.projects.is_empty(), egui::Button::new("Download All PIDBs"))
-                        .on_hover_text("Download every open project as a .pidb file")
+                        .add_enabled(!project.projects.is_empty(), egui::Button::new("Download OMF"))
+                        .on_hover_text("Download the current project as an .omf file")
                         .clicked()
                     {
-                        commands.push(UiCommand::DownloadAllPidbs);
+                        commands.push(UiCommand::DownloadProject);
                     }
 
                     let undo_btn = ui.add_enabled(can_undo, ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), "Undo").id_salt("undo"));
@@ -75,7 +75,7 @@ pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     } else {
                         selected_layer.to_string()
                     };
-                    egui::ComboBox::from_id_salt("layer_combo_box").selected_text(layer_display).width(200.).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("layer_combo_box").selected_text(layer_display).width(300.).show_ui(ui, |ui| {
                         ui.selectable_value(&mut editor.active_layer, None, "None");
                         for layer in active_layers.iter().filter(|layer| layer.is_loaded) {
                             ui.selectable_value(&mut editor.active_layer, Some(layer.id), &layer.name);
@@ -108,7 +108,7 @@ pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, proj
 }
 
 /// Draw the left toolbar (New layer, MakePoint, MakeLine, MakePoly, MakeCircle, MakeText, Move, OffsetElement, DrapeToTopology,
-/// RelimitLine, FuseIntoPolygon, ExplodePolygon, DeleteElement).
+/// RelimitLine, FuseIntoPolyline, ExplodePolyline, DeletePoints).
 pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, editing_enabled: bool, project_active: bool, commands: &mut Vec<UiCommand>) -> egui::Rect {
     egui::Panel::left("left_tools_strip")
         .resizable(false)
@@ -160,8 +160,8 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
 
                                 tool_button(
                                     ui,
-                                    egui::Image::new(themed_icon!(ui, "create_polygon.svg")),
-                                    "Create Polygon",
+                                    egui::Image::new(themed_icon!(ui, "create_polyline.svg")),
+                                    "Create Polyline",
                                     editor,
                                     commands,
                                     ActiveTool::MakePoly,
@@ -228,16 +228,16 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                 tool_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "fuse_lines.svg")),
-                                    "Fuse Lines Into Polygon",
+                                    "Fuse Polylines",
                                     editor,
                                     commands,
-                                    ActiveTool::FuseIntoPolygon,
+                                    ActiveTool::FuseIntoPolyline,
                                 );
 
                                 tool_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "chamfer_corners.svg")),
-                                    "Chamfer Polygon Corners",
+                                    "Chamfer Polyline Corners",
                                     editor,
                                     commands,
                                     ActiveTool::Chamfer,
@@ -246,7 +246,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                 tool_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "create_bezier.svg")),
-                                    "Bezier Curve",
+                                    "Bezier Polyline",
                                     editor,
                                     commands,
                                     ActiveTool::Bezier,
@@ -263,20 +263,20 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
 
                                 tool_button(
                                     ui,
-                                    egui::Image::new(unthemed_icon!("explode_polygon.svg")),
-                                    "Explode Polygon to Lines",
+                                    egui::Image::new(unthemed_icon!("explode_polyline.svg")),
+                                    "Explode Polyline to Lines",
                                     editor,
                                     commands,
-                                    ActiveTool::ExplodePolygon,
+                                    ActiveTool::ExplodePolyline,
                                 );
 
                                 tool_button(
                                     ui,
                                     egui::Image::new(unthemed_icon!("delete_element.svg")),
-                                    "Delete",
+                                    "Delete Points",
                                     editor,
                                     commands,
-                                    ActiveTool::DeleteElement,
+                                    ActiveTool::DeletePoints,
                                 );
                             });
                         });
@@ -416,26 +416,18 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, g
             let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
                 ui.horizontal_centered(|ui| {
-                    let reveal_all = editor_action_button(
-                        ui,
-                        egui::Image::new(unthemed_icon!("reveal_all.svg")),
-                        "Reveal all elements",
-                        editor,
-                        EditorAction::RevealAll,
-                    );
+                    let reveal_all = action_button(ui, egui::Image::new(unthemed_icon!("reveal_all.svg")), "Reveal all elements");
                     if reveal_all {
-                        commands.push(UiCommand::RevealAllTriangulations);
+                        commands.push(UiCommand::RevealAllElements);
                     }
                     *geometry_dirty |= reveal_all;
 
                     ui.add_enabled_ui(!editor.slice_mode_enabled, |ui| {
-                        *geometry_dirty |= editor_action_button(
-                            ui,
-                            egui::Image::new(themed_icon!(ui, "hide_selection.svg")),
-                            "Hide selection",
-                            editor,
-                            EditorAction::HideSelection,
-                        );
+                        let hide_selection = action_button(ui, egui::Image::new(themed_icon!(ui, "hide_selection.svg")), "Hide selection");
+                        if hide_selection {
+                            commands.push(UiCommand::HideSelection);
+                        }
+                        *geometry_dirty |= hide_selection;
 
                         *geometry_dirty |= editor_action_button(
                             ui,
@@ -535,9 +527,11 @@ pub(crate) fn cursor_mode_button(ui: &mut egui::Ui, icon: egui::Image<'static>, 
 
 /// Draw a selection action button.  Returns `true` if the action was applied.
 pub(crate) fn editor_action_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, action: EditorAction) -> bool {
-    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("editor_action", tooltip)));
+    action_button(ui, icon, tooltip) && editor.apply_action(action)
+}
 
-    response.clicked() && editor.apply_action(action)
+fn action_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str) -> bool {
+    ui.add(ToolbarButton::new(icon, tooltip).id_salt(("editor_action", tooltip))).clicked()
 }
 
 fn shifted_up(ui: &mut egui::Ui, amount: f32, add_contents: impl FnOnce(&mut egui::Ui)) {

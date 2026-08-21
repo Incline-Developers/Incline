@@ -8,50 +8,85 @@ use crate::ui::{
 /// Draw the "Save before quit?" confirmation dialog.
 pub(crate) fn draw_exit_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, _editor: &mut EditorState) {
     let mut open = true;
-    #[cfg(not(target_arch = "wasm32"))]
     let title = "Exit: Unsaved Changes";
-    #[cfg(target_arch = "wasm32")]
-    let title = "Quit Incline?";
     DragableMenu::new(title).open(&mut open).show(ui.ctx(), |ui| {
         ui.set_width(280.);
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            ui.label("Save all modified PIDBs, unsaved triangulations, and unsaved block models before exiting?");
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button("Save and Exit").clicked() {
-                    commands.push(UiCommand::SaveAndExit);
-                }
-                if ui.button("Exit Without Saving").clicked() {
-                    commands.push(UiCommand::ExitWithoutSaving);
-                }
-                if ui.button("Cancel").clicked() {
-                    commands.push(UiCommand::CancelExit);
-                }
-            });
-        }
+        ui.label("Save the modified project before exiting?");
         #[cfg(target_arch = "wasm32")]
-        {
-            ui.label(
-                "Are you sure you want to quit? Browser PIDBs do not persist as files. \
-                     Download them as .pidb files before leaving.",
-            );
-            ui.add_space(10.0);
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Download All PIDBs").clicked() {
-                    commands.push(UiCommand::DownloadAllPidbs);
-                }
-                if ui.button("Quit Without Downloading").clicked() {
-                    commands.push(UiCommand::ExitWithoutSaving);
-                }
-                if ui.button("Cancel").clicked() {
-                    commands.push(UiCommand::CancelExit);
-                }
-            });
-        }
+        ui.label("Save the modified project to browser storage before exiting?");
+        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Save and Exit").clicked() {
+                commands.push(UiCommand::SaveAndExit);
+            }
+            if ui.button("Exit Without Saving").clicked() {
+                commands.push(UiCommand::ExitWithoutSaving);
+            }
+            if ui.button("Cancel").clicked() {
+                commands.push(UiCommand::CancelExit);
+            }
+        });
     });
     if !open {
         commands.push(UiCommand::CancelExit);
+    }
+}
+
+/// Draw the confirmation required before New/Open replaces the one active
+/// project. The pending action itself stays in the application core.
+pub(crate) fn draw_replace_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    if !editor.replace_project_confirm_open {
+        return;
+    }
+    let mut open = true;
+    DragableMenu::new("Replace Project: Unsaved Changes").open(&mut open).min_width(340.0).show(ui.ctx(), |ui| {
+        ui.set_max_width(340.0);
+        ui.label("Save changes to the current project before replacing it?");
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Save").clicked() {
+                commands.push(UiCommand::SaveAndReplaceProject);
+            }
+            if ui.button("Discard").clicked() {
+                commands.push(UiCommand::DiscardAndReplaceProject);
+            }
+            if ui.button("Cancel").clicked() {
+                commands.push(UiCommand::CancelProjectReplacement);
+            }
+        });
+    });
+    if !open {
+        commands.push(UiCommand::CancelProjectReplacement);
+    }
+}
+
+pub(crate) fn draw_lossy_save_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
+    if !editor.lossy_save_confirm_open {
+        return;
+    }
+    let warnings = project.projects.first().map(|entry| entry.lossy_save_warnings.as_slice()).unwrap_or_default();
+    let mut open = true;
+    DragableMenu::new("Confirm OMF Rewrite").open(&mut open).min_width(420.0).show(ui.ctx(), |ui| {
+        ui.set_max_width(520.0);
+        ui.label("Incline cannot reproduce all content from the original OMF. Saving will omit the following content:");
+        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+            for warning in warnings {
+                ui.label(format!("• {warning}"));
+            }
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Save Anyway").clicked() {
+                commands.push(UiCommand::ConfirmLossyProjectSave);
+            }
+            if ui.button("Cancel").clicked() {
+                commands.push(UiCommand::CancelLossyProjectSave);
+            }
+        });
+    });
+    if !open {
+        commands.push(UiCommand::CancelLossyProjectSave);
     }
 }
 
@@ -104,9 +139,9 @@ pub(crate) fn draw_delete_layer_confirm_dialog(ui: &mut egui::Ui, commands: &mut
     }
 }
 
-/// Draw the confirmation dialog shown before closing a dirty PIDB.
-pub(crate) fn draw_close_pidb_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
-    let Some(runtime_id) = editor.pending_close_pidb else {
+/// Draw the confirmation dialog shown before closing a dirty project.
+pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
+    let Some(runtime_id) = editor.pending_close_project else {
         return;
     };
     let name = project
@@ -114,56 +149,80 @@ pub(crate) fn draw_close_pidb_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCom
         .iter()
         .find(|entry| entry.runtime_id == runtime_id)
         .map(|entry| entry.name.as_str())
-        .unwrap_or("this PIDB");
+        .unwrap_or("this project");
     let mut open = true;
+    let removing = editor.remove_project_after_close;
     #[cfg(not(target_arch = "wasm32"))]
-    let title = "Close PIDB: Unsaved Changes";
+    let title = if removing {
+        "Remove Project: Unsaved Changes"
+    } else {
+        "Close Project: Unsaved Changes"
+    };
     #[cfg(target_arch = "wasm32")]
-    let title = "Delete Project";
+    let title = if removing {
+        "Remove Project: Unsaved Changes"
+    } else {
+        "Close Project: Unsaved Changes"
+    };
     DragableMenu::new(title).open(&mut open).min_width(320.0).show(ui.ctx(), |ui| {
         ui.set_max_width(320.);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            ui.label(format!("Save changes to '{name}' before closing it?"));
+            ui.label(if removing {
+                format!("Save changes to '{name}' before removing it from Incline?")
+            } else {
+                format!("Save changes to '{name}' before closing it?")
+            });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Save and Close").clicked() {
-                    commands.push(UiCommand::SaveAndClosePidb(runtime_id));
+                if ui.button(if removing { "Save and Remove" } else { "Save and Close" }).clicked() {
+                    commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                 }
-                if ui.button("Close Without Saving").clicked() {
-                    commands.push(UiCommand::ClosePidbForce(runtime_id));
+                if ui.button(if removing { "Remove Without Saving" } else { "Close Without Saving" }).clicked() {
+                    commands.push(UiCommand::CloseProjectForce(runtime_id));
                 }
                 if ui.button("Cancel").clicked() {
-                    editor.pending_close_pidb = None;
+                    commands.push(UiCommand::CancelCloseProject);
                 }
             });
         }
         #[cfg(target_arch = "wasm32")]
         {
-            ui.label(format!(
-                "Are you sure you want to delete '{name}'?\nThis closes the project and removes any saved browser copy. It cannot be undone."
-            ));
+            ui.label(if removing {
+                format!("Remove '{name}' and delete its browser-stored copy? Unsaved changes will be lost.")
+            } else {
+                format!("Save changes to '{name}' before closing it?")
+            });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Delete Project").clicked() {
-                    commands.push(UiCommand::ClosePidbForce(runtime_id));
+                if removing {
+                    if ui.button("Remove Project").clicked() {
+                        commands.push(UiCommand::CloseProjectForce(runtime_id));
+                    }
+                } else {
+                    if ui.button("Save and Close").clicked() {
+                        commands.push(UiCommand::SaveAndCloseProject(runtime_id));
+                    }
+                    if ui.button("Close Without Saving").clicked() {
+                        commands.push(UiCommand::CloseProjectForce(runtime_id));
+                    }
                 }
                 if ui.button("Cancel").clicked() {
-                    editor.pending_close_pidb = None;
+                    commands.push(UiCommand::CancelCloseProject);
                 }
             });
         }
     });
     if !open {
-        editor.pending_close_pidb = None;
+        commands.push(UiCommand::CancelCloseProject);
     }
 }
 
-/// Draw the confirmation dialog shown before discarding a dirty PIDB's
+/// Draw the confirmation dialog shown before discarding a dirty project's
 /// changes (reverting to the last saved version on disk).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn draw_discard_pidb_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
-    let Some(runtime_id) = editor.pending_discard_pidb else {
+pub(crate) fn draw_discard_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
+    let Some(runtime_id) = editor.pending_discard_project else {
         return;
     };
     let name = project
@@ -171,7 +230,7 @@ pub(crate) fn draw_discard_pidb_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         .iter()
         .find(|entry| entry.runtime_id == runtime_id)
         .map(|entry| entry.name.as_str())
-        .unwrap_or("this PIDB");
+        .unwrap_or("this project");
     let mut open = true;
     DragableMenu::new("Discard Changes").open(&mut open).min_width(320.0).show(ui.ctx(), |ui| {
         ui.set_max_width(320.);
@@ -182,19 +241,19 @@ pub(crate) fn draw_discard_pidb_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui.button("Discard Changes").clicked() {
-                commands.push(UiCommand::DiscardPidbChanges(runtime_id));
+                commands.push(UiCommand::DiscardProjectChanges(runtime_id));
             }
             if ui.button("Cancel").clicked() {
-                editor.pending_discard_pidb = None;
+                editor.pending_discard_project = None;
             }
         });
     });
     if !open {
-        editor.pending_discard_pidb = None;
+        editor.pending_discard_project = None;
     }
 }
 
-/// Confirm restoring just one dirty layer from its saved PIDB while retaining
+/// Confirm restoring just one dirty layer from its saved project while retaining
 /// unsaved work on the other layers.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn draw_discard_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
@@ -221,102 +280,5 @@ pub(crate) fn draw_discard_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
     });
     if !open {
         editor.pending_discard_layer = None;
-    }
-}
-
-pub(crate) fn draw_confirm_load_all_folder_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
-    let folder_path = match &editor.confirm_load_all_folder {
-        Some(p) => p.clone(),
-        None => return,
-    };
-    let folder_name = folder_path.file_name().and_then(|n| n.to_str()).unwrap_or("folder").to_owned();
-    let mut open = true;
-    DragableMenu::new("Load All Triangulations").open(&mut open).min_width(270.0).show(ui.ctx(), |ui| {
-        ui.label(format!("Load all triangulations in \"{folder_name}\"?"));
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button("Load All").clicked() {
-                commands.push(UiCommand::LoadAllTriangulationsInFolder(folder_path.clone()));
-                editor.confirm_load_all_folder = None;
-            }
-            if ui.button("Cancel").clicked() {
-                editor.confirm_load_all_folder = None;
-            }
-        });
-    });
-    if !open {
-        editor.confirm_load_all_folder = None;
-    }
-}
-
-pub(crate) fn draw_close_unsaved_tri_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
-    let Some(tri_id) = editor.tri_close_unsaved else {
-        return;
-    };
-    let mut open = true;
-    DragableMenu::new("Unsaved Triangulation").open(&mut open).min_width(270.0).show(ui.ctx(), |ui| {
-        ui.label("This triangulation is not saved to disk.\nSave now?");
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button("Save As...").clicked() {
-                commands.push(UiCommand::SaveAndCloseTriangulationAs(tri_id));
-            }
-            if ui.button("Close Without Saving").clicked() {
-                commands.push(UiCommand::CloseTriangulationForce(tri_id));
-            }
-            if ui.button("Cancel").clicked() {
-                editor.tri_close_unsaved = None;
-            }
-        });
-    });
-    if !open {
-        editor.tri_close_unsaved = None;
-    }
-}
-
-pub(crate) fn draw_close_unsaved_block_model_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
-    let Some(id) = editor.block_model_close_unsaved else {
-        return;
-    };
-    let mut open = true;
-    DragableMenu::new("Unsaved Block Model").open(&mut open).min_width(270.0).show(ui.ctx(), |ui| {
-        ui.label("This block model is not saved to disk.\nSave now?");
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button("Save As...").clicked() {
-                commands.push(UiCommand::SaveAndCloseBlockModelAs(id));
-            }
-            if ui.button("Close Without Saving").clicked() {
-                commands.push(UiCommand::CloseBlockModelForce(id));
-            }
-            if ui.button("Cancel").clicked() {
-                editor.block_model_close_unsaved = None;
-            }
-        });
-    });
-    if !open {
-        editor.block_model_close_unsaved = None;
-    }
-}
-
-pub(crate) fn draw_close_unsaved_point_cloud_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
-    let Some(id) = editor.point_cloud_close_unsaved else {
-        return;
-    };
-    let mut open = true;
-    DragableMenu::new("Unsaved Point Cloud").open(&mut open).min_width(270.0).show(ui.ctx(), |ui| {
-        ui.label("This point cloud exists only in memory.\nClose without saving?");
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button("Close Without Saving").clicked() {
-                commands.push(UiCommand::ClosePointCloudForce(id));
-            }
-            if ui.button("Cancel").clicked() {
-                editor.point_cloud_close_unsaved = None;
-            }
-        });
-    });
-    if !open {
-        editor.point_cloud_close_unsaved = None;
     }
 }

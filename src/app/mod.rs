@@ -15,8 +15,7 @@ pub(crate) mod web_storage;
 use std::rc::Rc;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashSet},
-    fs,
+    collections::{BTreeSet, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
@@ -46,20 +45,24 @@ use crate::{
         Document, LayerId, Object, ObjectId, SceneEntityId,
         block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
         drill_hole::{DrillHoleSource, OpenDrillHoleDataset},
-        formats::MeshFormat,
-        pidb::{self, OpenProject, Workspace},
+        project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
         spatial::ObjectSnapIndex,
         triangulation::{OpenTriangulation, TriangulationId},
     },
     rendering::graphics::Graphics,
-    ui::state::{EditorState, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiProjectView, UiTriangulationEntry},
+    ui::state::{EditorState, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiProjectView, UiTrackedProjectEntry, UiTriangulationEntry},
     userspace_warn,
 };
 #[cfg(target_arch = "wasm32")]
 use crate::{userspace_error, userspace_log};
 
 pub(crate) const PICK_THRESHOLD_PX: f32 = 8.0;
+
+/// Cursor radius, in logical pixels, for grabbing an individual vertex with the
+/// Move tool. Deliberately tight - just outside the drawn vertex marker - so a
+/// vertex only grabs when the cursor is genuinely on it.
+pub(crate) const MOVE_VERTEX_PICK_PX: f32 = 6.0;
 
 fn rate_interval(rate: u32) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(rate.clamp(1, 1000)))
@@ -210,7 +213,7 @@ pub(crate) struct App<'a> {
     close_requested: bool,
     /// Set when the renderer failed unrecoverably. Distinct from the ordinary
     /// `close_requested` flag: fatal shutdown first writes recovery copies of
-    /// every dirty PIDB and waits for background writers to settle.
+    /// the dirty project and waits for its background writer to settle.
     fatal_shutdown: bool,
     /// Consecutive surface-validation failures survived via reconfigure.
     /// Reset by a successful frame; beyond the bound the failure is fatal.
@@ -233,38 +236,15 @@ pub(crate) struct App<'a> {
     #[cfg(target_arch = "wasm32")]
     browser_saves_pending: HashSet<u32>,
     #[cfg(target_arch = "wasm32")]
-    browser_deletes_pending: HashSet<u32>,
+    browser_deletes_pending: HashSet<crate::model::project::ProjectId>,
     #[cfg(target_arch = "wasm32")]
     browser_delete_after_save: HashSet<u32>,
-    /// Reserved browser-only source labels. Browser APIs expose only a
-    /// basename, so duplicate selections receive a stable numbered suffix
-    /// before they enter path-keyed scene/source controls.
     #[cfg(target_arch = "wasm32")]
-    browser_source_paths: HashSet<PathBuf>,
-    /// Every triangulation held in browser storage, loaded or not — the web
-    /// build's equivalent of the tracked mesh files on disk. Kept beside the
-    /// triangulation list rather than on `OpenTriangulation`, which is shared
-    /// with the desktop build.
+    browser_project_loads_pending: HashSet<crate::model::project::ProjectId>,
     #[cfg(target_arch = "wasm32")]
-    browser_triangulations: Vec<crate::app::commands::triangulation::browser::BrowserTriangulationEntry>,
-    /// Records whose mesh is being read out of IndexedDB, so a second
-    /// double-click cannot start the same load twice.
-    #[cfg(target_arch = "wasm32")]
-    browser_triangulation_loads: HashSet<String>,
-    /// Imports held in browser storage, decoded into the scene or not — the
-    /// web build's equivalent of the tracked source files on disk. Kept beside
-    /// the loaded-data lists, which are shared with the desktop build.
-    #[cfg(target_arch = "wasm32")]
-    browser_point_clouds: Vec<crate::app::commands::browser_data::BrowserDataEntry>,
-    #[cfg(target_arch = "wasm32")]
-    browser_block_models: Vec<crate::app::commands::browser_data::BrowserDataEntry>,
-    #[cfg(target_arch = "wasm32")]
-    browser_rasters: Vec<crate::app::commands::browser_data::BrowserDataEntry>,
-    #[cfg(target_arch = "wasm32")]
-    browser_drill_holes: Vec<crate::app::commands::browser_data::BrowserDataEntry>,
-    /// Import records being read out of IndexedDB, across all three kinds.
-    #[cfg(target_arch = "wasm32")]
-    browser_data_loads: HashSet<String>,
+    tracked_browser_projects: Vec<crate::app::web_storage::BrowserProjectSummary>,
+    #[cfg(not(target_arch = "wasm32"))]
+    tracked_project_paths: Vec<PathBuf>,
     /// Latest non-zero window size awaiting surface reconfiguration. Resize
     /// events arrive in bursts while dragging, so intermediate sizes are
     /// deliberately replaced instead of configuring a swapchain for each one.
@@ -273,33 +253,22 @@ pub(crate) struct App<'a> {
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
     editor: EditorState,
-    workspace: Workspace,
+    workspace: ProjectStore,
     /// Explorer/menu snapshot reused while its allocation-free source
     /// fingerprint is unchanged.
     ui_project_view_cache: RefCell<Option<(u64, Arc<UiProjectView>)>>,
     startup_dialog_dismissed: bool,
     triangulations: Vec<OpenTriangulation>,
-    triangulation_dirs: Vec<PathBuf>,
-    /// Supported mesh paths discovered in each tracked directory. Directory
-    /// contents change much less often than the UI redraws, so keep filesystem
-    /// scanning and sorting out of the render loop.
-    triangulation_dir_entries: BTreeMap<PathBuf, Vec<PathBuf>>,
-    triangulation_files: Vec<PathBuf>,
-    triangulation_excluded_paths: BTreeSet<PathBuf>,
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
     block_models: Vec<OpenBlockModel>,
-    block_model_files: Vec<BlockModelSource>,
     active_block_model: Option<BlockModelId>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
-    drill_hole_files: Vec<DrillHoleSource>,
     next_drill_hole_id: u64,
     point_clouds: Vec<crate::model::point_cloud::OpenPointCloud>,
-    point_cloud_files: Vec<PathBuf>,
     next_point_cloud_id: u64,
     raster_textures: Vec<OpenRasterTexture>,
-    raster_files: Vec<PathBuf>,
     next_raster_texture_id: u64,
     empty_document: Document,
     scene_document: Document,
@@ -307,7 +276,7 @@ pub(crate) struct App<'a> {
     /// Set by `invalidate_geometry`; the index rebuilds lazily on the next
     /// snap/orbit query via `refresh_snap_index`.
     snap_index_dirty: bool,
-    /// `Workspace::composite_key()` of the last `scene_document` build;
+    /// `ProjectStore::composite_key()` of the last `scene_document` build;
     /// `None` forces the next invalidation to rebuild.
     scene_document_key: Option<u64>,
     history: crate::model::History,
@@ -332,11 +301,18 @@ pub(crate) struct App<'a> {
     pending_drill_hole_loads: Vec<PendingLoad<DrillHoleSource, crate::model::drill_hole::LoadedDrillHoleDataset>>,
     pending_point_cloud_loads: Vec<PendingLoad<PathBuf, crate::model::point_cloud::LoadedPointCloud>>,
     pending_raster_loads: Vec<PendingLoad<PathBuf, crate::model::raster::LoadedRasterTexture>>,
-    /// PIDB paths currently being parsed. They remain reserved until the job
+    /// project paths currently being parsed. They remain reserved until the job
     /// applies so a Save As/New action cannot change the bytes underneath it.
     #[cfg(not(target_arch = "wasm32"))]
-    pending_pidb_open_paths: HashSet<PathBuf>,
+    pending_project_open_paths: HashSet<PathBuf>,
     pub(crate) pending_file_dialogs: Vec<PendingFileDialog>,
+    /// New/Open action held while the active dirty project waits for an
+    /// explicit Save/Discard/Cancel replacement decision.
+    pending_project_replacement: Option<commands::file::FileDialogAction>,
+    project_replacement_after_save: bool,
+    project_replacement_bypass: bool,
+    pending_lossy_save_as: Option<commands::file::FileDialogAction>,
+    project_asset_baseline: SaveToken,
     /// Triangulation saves/exports running on background threads; drained by
     /// `poll_saves` each frame.
     pending_saves: Vec<commands::file::PendingSave>,
@@ -377,48 +353,30 @@ impl<'a> Default for App<'a> {
             #[cfg(target_arch = "wasm32")]
             browser_delete_after_save: HashSet::new(),
             #[cfg(target_arch = "wasm32")]
-            browser_source_paths: HashSet::new(),
+            browser_project_loads_pending: HashSet::new(),
             #[cfg(target_arch = "wasm32")]
-            browser_triangulations: Vec::new(),
-            #[cfg(target_arch = "wasm32")]
-            browser_triangulation_loads: HashSet::new(),
-            #[cfg(target_arch = "wasm32")]
-            browser_point_clouds: Vec::new(),
-            #[cfg(target_arch = "wasm32")]
-            browser_block_models: Vec::new(),
-            #[cfg(target_arch = "wasm32")]
-            browser_rasters: Vec::new(),
-            #[cfg(target_arch = "wasm32")]
-            browser_drill_holes: Vec::new(),
-            #[cfg(target_arch = "wasm32")]
-            browser_data_loads: HashSet::new(),
+            tracked_browser_projects: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            tracked_project_paths: Vec::new(),
             pending_resize: None,
             last_render_time: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
             editor: EditorState::new(),
-            workspace: Workspace::default(),
+            workspace: ProjectStore::default(),
             ui_project_view_cache: RefCell::new(None),
             startup_dialog_dismissed: false,
             triangulations: Vec::new(),
-            triangulation_dirs: Vec::new(),
-            triangulation_dir_entries: BTreeMap::new(),
-            triangulation_files: Vec::new(),
-            triangulation_excluded_paths: BTreeSet::new(),
             active_triangulation: None,
             next_triangulation_id: 0,
             block_models: Vec::new(),
-            block_model_files: Vec::new(),
             active_block_model: None,
             next_block_model_id: 0,
             drill_holes: Vec::new(),
-            drill_hole_files: Vec::new(),
             next_drill_hole_id: 0,
             point_clouds: Vec::new(),
-            point_cloud_files: Vec::new(),
             next_point_cloud_id: 0,
             raster_textures: Vec::new(),
-            raster_files: Vec::new(),
             next_raster_texture_id: 0,
             empty_document: Document::new(),
             scene_document: Document::new(),
@@ -442,8 +400,13 @@ impl<'a> Default for App<'a> {
             pending_point_cloud_loads: Vec::new(),
             pending_raster_loads: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            pending_pidb_open_paths: HashSet::new(),
+            pending_project_open_paths: HashSet::new(),
             pending_file_dialogs: Vec::new(),
+            pending_project_replacement: None,
+            project_replacement_after_save: false,
+            project_replacement_bypass: false,
+            pending_lossy_save_as: None,
+            project_asset_baseline: SaveToken::default(),
             pending_saves: Vec::new(),
             pending_jobs: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -460,16 +423,18 @@ impl<'a> App<'a> {
     fn handle_mac_menu_action(&mut self, action: crate::mac::MacMenuAction) {
         use crate::{mac::MacMenuAction, ui::state::UiCommand};
 
+        let active_project_id = self.workspace.active_project().map(|project| project.runtime_id);
         let command = match action {
-            MacMenuAction::SaveAllPidbs => Some(UiCommand::SaveAllPidbs),
-            MacMenuAction::NewPidb => Some(UiCommand::NewPidb),
-            MacMenuAction::OpenPidb => Some(UiCommand::OpenPidb),
+            MacMenuAction::SaveProject => Some(UiCommand::SaveProject),
+            MacMenuAction::SaveProjectAs => active_project_id.map(UiCommand::SaveProjectAs),
+            MacMenuAction::CloseProject => active_project_id.map(UiCommand::CloseProject),
+            MacMenuAction::NewProject => Some(UiCommand::NewProject),
+            MacMenuAction::OpenProject => Some(UiCommand::OpenProject),
             MacMenuAction::OpenImport => {
                 self.editor.show_import = true;
                 self.editor.show_export = false;
                 None
             }
-            MacMenuAction::OpenTriangulationFolder => Some(UiCommand::OpenTriangulationFolder),
             MacMenuAction::OpenExport => {
                 self.editor.show_import = false;
                 self.editor.show_export = true;
@@ -487,7 +452,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
             MacMenuAction::OpenSetSelectionZ => Some(UiCommand::OpenSetSelectionZValueDialog),
             MacMenuAction::OpenCreateTriangulation => Some(UiCommand::OpenCreateTriangulation),
-            MacMenuAction::OpenCutTriangulationByPolygon => Some(UiCommand::OpenCutTriangulationByPolygon),
+            MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
             MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),
             MacMenuAction::OpenCutTriangulationBySurface => Some(UiCommand::OpenCutTriangulationBySurface),
             MacMenuAction::OpenCutTopologyByPitShell => Some(UiCommand::OpenCutTopologyByPitShell),
@@ -575,28 +540,11 @@ impl<'a> App<'a> {
         }
         crate::app::web_storage::install_dirty_guard();
         crate::app::web_storage::install_paste_listener(event_loop_proxy.clone());
-        // Each restore is its own task: they are independent reads, and running
-        // them concurrently means one slow store does not hold up the rest of
-        // the explorer. Entries appear as each one lands.
         {
             let proxy = event_loop_proxy.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let result = crate::app::web_storage::load_session_projects().await;
                 let _ = proxy.send_event(AppEvent::BrowserProjectsRestored(result));
-            });
-        }
-        {
-            let proxy = event_loop_proxy.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let result = crate::app::web_storage::list_assets(crate::app::web_storage::BrowserStore::Triangulations).await;
-                let _ = proxy.send_event(AppEvent::BrowserTriangulationsRestored(result));
-            });
-        }
-        for kind in crate::app::commands::browser_data::BrowserDataKind::ALL {
-            let proxy = event_loop_proxy.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let result = crate::app::web_storage::list_assets(kind.store()).await;
-                let _ = proxy.send_event(AppEvent::BrowserDataRestored { kind, result });
             });
         }
         Ok(app)
@@ -655,7 +603,7 @@ impl<'a> App<'a> {
         self.editor.active_layer.and_then(|layer| {
             self.workspace
                 .active_project()
-                .and_then(|project| (project.loaded_layers.contains(&layer) && project.pidb.document.layer(layer).is_some()).then_some(layer))
+                .and_then(|project| (project.loaded_layers.contains(&layer) && project.project.document.layer(layer).is_some()).then_some(layer))
         })
     }
 
@@ -664,11 +612,185 @@ impl<'a> App<'a> {
     }
 
     fn set_active_project(&mut self, project: OpenProject) {
+        self.clear_project_owned_data();
         let index = self.workspace.add_and_activate(project);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = self.workspace.projects[index].path.clone() {
+            self.track_project_path(path);
+        }
         self.clear_editor_transient_state();
         self.history.activate(self.workspace.projects[index].runtime_id);
         self.invalidate_geometry();
         self.persist_session();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn track_project_path(&mut self, path: PathBuf) {
+        if !self.tracked_project_paths.iter().any(|tracked| tracked == &path) {
+            self.tracked_project_paths.push(path);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn track_browser_project(&mut self, id: crate::model::project::ProjectId, name: String) {
+        if let Some(project) = self.tracked_browser_projects.iter_mut().find(|project| project.id == id) {
+            project.name = name;
+        } else {
+            self.tracked_browser_projects.push(crate::app::web_storage::BrowserProjectSummary { id, name });
+        }
+    }
+
+    pub(super) fn touch_active_project_content(&mut self) {
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.touch_content();
+        }
+    }
+
+    /// Dirty state for the complete OMF aggregate, including item revisions
+    /// and collection membership as well as the Designs document. Keeping
+    /// this check at the aggregate boundary ensures the title, close prompt,
+    /// and Save command cannot overlook a dirty item row.
+    pub(crate) fn project_content_is_dirty(&self, runtime_id: u32) -> bool {
+        let Some(project) = self.workspace.active_project().filter(|project| project.runtime_id == runtime_id) else {
+            return false;
+        };
+        let membership_changed = |current: &[u64], saved: &[(u64, u64)]| current.len() != saved.len() || current.iter().any(|id| !saved.iter().any(|(saved_id, _)| saved_id == id));
+        project.has_unsaved_changes()
+            || self.triangulations.iter().any(|item| item.state.is_dirty())
+            || self.block_models.iter().any(|item| item.state.is_dirty())
+            || self.drill_holes.iter().any(|item| item.state.is_dirty())
+            || self.point_clouds.iter().any(|item| item.state.is_dirty())
+            || self.raster_textures.iter().any(|item| item.state.is_dirty())
+            || membership_changed(
+                &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.project_asset_baseline.triangulations,
+            )
+            || membership_changed(
+                &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.project_asset_baseline.block_models,
+            )
+            || membership_changed(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes)
+            || membership_changed(
+                &self.point_clouds.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.project_asset_baseline.point_clouds,
+            )
+            || membership_changed(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
+    }
+
+    pub(super) fn project_asset_save_token(&self) -> SaveToken {
+        SaveToken {
+            triangulations: self.triangulations.iter().map(|item| (item.id.0, item.state.revision())).collect(),
+            block_models: self.block_models.iter().map(|item| (item.id.0, item.state.revision())).collect(),
+            drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.revision())).collect(),
+            point_clouds: self.point_clouds.iter().map(|item| (item.id.0, item.state.revision())).collect(),
+            rasters: self.raster_textures.iter().map(|item| (item.id.0, item.state.revision())).collect(),
+        }
+    }
+
+    pub(super) fn mark_project_asset_snapshot_saved(&mut self, token: &SaveToken) {
+        for (id, revision) in &token.triangulations {
+            if let Some(item) = self.triangulations.iter_mut().find(|item| item.id.0 == *id) {
+                item.state.mark_snapshot_saved(*revision);
+            }
+        }
+        for (id, revision) in &token.block_models {
+            if let Some(item) = self.block_models.iter_mut().find(|item| item.id.0 == *id) {
+                item.state.mark_snapshot_saved(*revision);
+            }
+        }
+        for (id, revision) in &token.drill_holes {
+            if let Some(item) = self.drill_holes.iter_mut().find(|item| item.id.0 == *id) {
+                item.state.mark_snapshot_saved(*revision);
+            }
+        }
+        for (id, revision) in &token.point_clouds {
+            if let Some(item) = self.point_clouds.iter_mut().find(|item| item.id.0 == *id) {
+                item.state.mark_snapshot_saved(*revision);
+            }
+        }
+        for (id, revision) in &token.rasters {
+            if let Some(item) = self.raster_textures.iter_mut().find(|item| item.id.0 == *id) {
+                item.state.mark_snapshot_saved(*revision);
+            }
+        }
+        self.project_asset_baseline = token.clone();
+    }
+
+    pub(super) fn mark_all_project_content_saved(&mut self) {
+        for item in &mut self.triangulations {
+            item.state.mark_saved();
+        }
+        for item in &mut self.block_models {
+            item.state.mark_saved();
+        }
+        for item in &mut self.drill_holes {
+            item.state.mark_saved();
+        }
+        for item in &mut self.point_clouds {
+            item.state.mark_saved();
+        }
+        for item in &mut self.raster_textures {
+            item.state.mark_saved();
+        }
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.mark_saved();
+        }
+        self.project_asset_baseline = self.project_asset_save_token();
+    }
+
+    /// Drop the single project's retained content and every derived runtime
+    /// cache before New/Open installs a replacement project. File-dialog
+    /// lifecycle code resolves unsaved-work confirmation before calling this.
+    fn clear_project_owned_data(&mut self) {
+        self.cancel_jobs(|_| true);
+        for (ticket, _, _, report) in std::mem::take(&mut self.pending_triangulation_loads) {
+            self.cancel_background_task(ticket);
+            if let Some(report) = report {
+                report.cancel();
+            }
+        }
+        for (ticket, _, _, report) in std::mem::take(&mut self.pending_block_model_loads) {
+            self.cancel_background_task(ticket);
+            if let Some(report) = report {
+                report.cancel();
+            }
+        }
+        for (ticket, _, _, report) in std::mem::take(&mut self.pending_drill_hole_loads) {
+            self.cancel_background_task(ticket);
+            if let Some(report) = report {
+                report.cancel();
+            }
+        }
+        for (ticket, _, _, report) in std::mem::take(&mut self.pending_point_cloud_loads) {
+            self.cancel_background_task(ticket);
+            if let Some(report) = report {
+                report.cancel();
+            }
+        }
+        for (ticket, _, _, report) in std::mem::take(&mut self.pending_raster_loads) {
+            self.cancel_background_task(ticket);
+            if let Some(report) = report {
+                report.cancel();
+            }
+        }
+
+        self.workspace = ProjectStore::default();
+        self.history = crate::model::History::new();
+        self.triangulations.clear();
+        self.next_triangulation_id = 0;
+        self.active_triangulation = None;
+        self.block_models.clear();
+        self.next_block_model_id = 0;
+        self.active_block_model = None;
+        self.drill_holes.clear();
+        self.next_drill_hole_id = 0;
+        self.point_clouds.clear();
+        self.next_point_cloud_id = 0;
+        self.raster_textures.clear();
+        self.next_raster_texture_id = 0;
+        self.project_asset_baseline = SaveToken::default();
+        self.clear_editor_transient_state();
+        self.scene_document_key = None;
     }
 
     fn activate_project_index(&mut self, index: usize) {
@@ -678,7 +800,7 @@ impl<'a> App<'a> {
         let active_tool = self.editor.active_tool;
         self.clear_editor_transient_state();
         // Object interaction is allowed to retarget the current tool to a
-        // different PIDB. Its project-specific preview state was cleared
+        // different project. Its project-specific preview state was cleared
         // above, but the chosen tool itself remains armed.
         self.editor.active_tool = active_tool;
         self.workspace.set_active_index(index);
@@ -700,7 +822,7 @@ impl<'a> App<'a> {
         }
         self.editor.clear_project_transients();
         self.pending_topology_click = None;
-        // Clear any in-progress move session so it cannot bleed into the new PIDB.
+        // Clear any in-progress move session so it cannot bleed into the new project.
         self.move_session_original = None;
         self.drag = None;
         self.gizmo_drag = None;
@@ -709,6 +831,13 @@ impl<'a> App<'a> {
     }
 
     fn invalidate_geometry(&mut self) {
+        // Project-persistent design visibility is mirrored into the editor's
+        // unified scene filter so selection tools that query the retained
+        // document directly exclude the same objects as the rendered scene.
+        self.editor.hidden_handles.retain(|handle| !matches!(handle, SceneEntityId::Object(_)));
+        if let Some(project) = self.workspace.active_project() {
+            self.editor.hidden_handles.extend(project.project.document.hidden_object_ids().map(SceneEntityId::Object));
+        }
         // Many of the ~90 invalidation sites fire for editor-state reasons
         // (selection, tool changes) with the documents untouched; the
         // composite clone and snap index only need refreshing when the
@@ -846,7 +975,7 @@ impl<'a> App<'a> {
         self.workspace
             .projects
             .iter()
-            .any(|project| project.pidb.document.objects().iter().any(|object| project.loaded_layers.contains(&object.layer())))
+            .any(|project| project.project.document.objects().iter().any(|object| project.loaded_layers.contains(&object.layer())))
             || !self.triangulations.is_empty()
             || !self.block_models.is_empty()
             || !self.drill_holes.is_empty()
@@ -870,7 +999,7 @@ impl<'a> App<'a> {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title(format!("{} — Slice preview · Wheel zoom · Middle-drag pan · F fit", crate::APP_NAME))
+            .with_title(format!("{} | Slice preview · Wheel zoom · Middle-drag pan · F fit", crate::APP_NAME))
             .with_window_icon(window_icon())
             .with_min_inner_size(winit::dpi::PhysicalSize::new(320, 240))
             .with_inner_size(winit::dpi::PhysicalSize::new(800, 700));
@@ -897,78 +1026,84 @@ impl<'a> App<'a> {
         let mut hasher = DefaultHasher::new();
         self.workspace.active_index.hash(&mut hasher);
         self.startup_dialog_dismissed.hash(&mut hasher);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.tracked_project_paths.hash(&mut hasher);
+        #[cfg(target_arch = "wasm32")]
+        for project in &self.tracked_browser_projects {
+            project.id.hash(&mut hasher);
+            project.name.hash(&mut hasher);
+        }
         for project in &self.workspace.projects {
             project.runtime_id.hash(&mut hasher);
             project.path.hash(&mut hasher);
             #[cfg(target_arch = "wasm32")]
-            matches!(project.persistence, crate::model::pidb::ProjectPersistence::BrowserRecord(_)).hash(&mut hasher);
-            project.pidb.metadata.name.hash(&mut hasher);
+            matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)).hash(&mut hasher);
+            project.project.metadata.name.hash(&mut hasher);
+            project.lossy_save_warnings.hash(&mut hasher);
             project.has_unsaved_changes().hash(&mut hasher);
             // Edits and successful async save completions can each change the
             // per-layer dirty set independently.
-            project.pidb.document.revision().hash(&mut hasher);
+            project.project.document.revision().hash(&mut hasher);
             project.savepoint_revision().hash(&mut hasher);
             let mut loaded_layers: Vec<_> = project.loaded_layers.iter().copied().collect();
             loaded_layers.sort_unstable_by_key(|layer| layer.0);
             loaded_layers.hash(&mut hasher);
-            for layer in project.pidb.document.layers() {
+            for layer in project.project.document.layers() {
                 layer.id.hash(&mut hasher);
                 layer.name.hash(&mut hasher);
             }
         }
 
-        self.triangulation_files.hash(&mut hasher);
-        self.triangulation_dirs.hash(&mut hasher);
-        self.triangulation_dir_entries.hash(&mut hasher);
         self.active_triangulation.hash(&mut hasher);
         for triangulation in &self.triangulations {
             triangulation.id.hash(&mut hasher);
             triangulation.name.hash(&mut hasher);
-            triangulation.path.hash(&mut hasher);
             (triangulation.visible && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
-            triangulation.is_saved.hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
+            triangulation.state.loaded.hash(&mut hasher);
+            triangulation.state.revision().hash(&mut hasher);
         }
 
-        self.block_model_files.hash(&mut hasher);
         self.active_block_model.hash(&mut hasher);
         for model in &self.block_models {
             model.id.hash(&mut hasher);
             model.name.hash(&mut hasher);
-            model.source.hash(&mut hasher);
             model.visible.hash(&mut hasher);
             model.renderable_block_indices.len().hash(&mut hasher);
             model.model.color_variables().into_iter().filter(|variable| !variable.special).count().hash(&mut hasher);
+            model.state.loaded.hash(&mut hasher);
+            model.state.revision().hash(&mut hasher);
         }
 
-        self.drill_hole_files.hash(&mut hasher);
         for dataset in &self.drill_holes {
             dataset.id.hash(&mut hasher);
             dataset.name.hash(&mut hasher);
-            dataset.source.hash(&mut hasher);
             dataset.visible.hash(&mut hasher);
             dataset.dataset.holes.len().hash(&mut hasher);
             dataset.dataset.fields.len().hash(&mut hasher);
+            dataset.state.loaded.hash(&mut hasher);
+            dataset.state.revision().hash(&mut hasher);
         }
 
-        self.point_cloud_files.hash(&mut hasher);
         for cloud in &self.point_clouds {
             cloud.id.hash(&mut hasher);
             cloud.name.hash(&mut hasher);
-            cloud.path.hash(&mut hasher);
             cloud.visible.hash(&mut hasher);
             cloud.points.len().hash(&mut hasher);
+            cloud.state.loaded.hash(&mut hasher);
+            cloud.state.revision().hash(&mut hasher);
         }
 
-        self.raster_files.hash(&mut hasher);
         for raster in &self.raster_textures {
             raster.id.hash(&mut hasher);
             raster.name.hash(&mut hasher);
-            raster.path.hash(&mut hasher);
+            raster.visible.hash(&mut hasher);
             raster.source_size.hash(&mut hasher);
             raster.driver_name.hash(&mut hasher);
             raster.projection.hash(&mut hasher);
+            raster.state.loaded.hash(&mut hasher);
+            raster.state.revision().hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -980,6 +1115,7 @@ impl<'a> App<'a> {
         {
             return Arc::clone(view);
         }
+        let project_dirty = self.workspace.active_project().is_some_and(|project| self.project_content_is_dirty(project.runtime_id));
         let projects: Vec<UiProjectEntry> = self
             .workspace
             .projects
@@ -989,14 +1125,16 @@ impl<'a> App<'a> {
                 let dirty_layers = project.dirty_layer_ids();
                 UiProjectEntry {
                     runtime_id: project.runtime_id,
-                    name: project.pidb.metadata.name.clone(),
-                    dirty: project.has_unsaved_changes(),
+                    name: project.project.metadata.name.clone(),
+                    dirty: project_dirty,
+                    designs_dirty: project.designs_dirty(),
+                    lossy_save_warnings: project.lossy_save_warnings.clone(),
                     is_active: self.workspace.active_index == Some(index),
                     #[cfg(target_arch = "wasm32")]
-                    stored_in_browser: matches!(project.persistence, crate::model::pidb::ProjectPersistence::BrowserRecord(_)),
+                    stored_in_browser: matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)),
                     path: project.path.clone(),
                     layers: project
-                        .pidb
+                        .project
                         .document
                         .layers()
                         .iter()
@@ -1010,287 +1148,173 @@ impl<'a> App<'a> {
                 }
             })
             .collect();
-        let loaded_by_path: BTreeMap<PathBuf, &OpenTriangulation> = self.triangulations.iter().map(|tri| (tri.path.clone(), tri)).collect();
-        let mut triangulations = Vec::new();
-        // Individually-opened files — no group, shown flat and removable.
-        let mut seen_paths: BTreeSet<PathBuf> = BTreeSet::new();
-        for path in &self.triangulation_files {
-            if seen_paths.contains(path) {
-                continue;
-            }
-            seen_paths.insert(path.clone());
-            if let Some(tri) = loaded_by_path.get(path) {
-                triangulations.push(UiTriangulationEntry {
-                    id: Some(tri.id),
-                    name: tri.name.clone(),
-                    visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
-                    is_active: self.active_triangulation == Some(tri.id),
-                    is_loaded: true,
-                    is_saved: tri.is_saved,
-                    path: path.clone(),
-                    group: None,
-                });
-            } else {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_owned();
-                triangulations.push(UiTriangulationEntry {
-                    id: None,
-                    name,
-                    visible: false,
-                    is_active: false,
-                    is_loaded: false,
-                    is_saved: true,
-                    path: path.clone(),
-                    group: None,
-                });
-            }
-        }
-        // Directory-scanned files — grouped under their source dir.
-        for dir in &self.triangulation_dirs {
-            if let Some(entries) = self.triangulation_dir_entries.get(dir) {
-                for path in entries {
-                    if !seen_paths.contains(path) {
-                        seen_paths.insert(path.clone());
-                        if let Some(tri) = loaded_by_path.get(path) {
-                            triangulations.push(UiTriangulationEntry {
-                                id: Some(tri.id),
-                                name: tri.name.clone(),
-                                visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
-                                is_active: self.active_triangulation == Some(tri.id),
-                                is_loaded: true,
-                                is_saved: tri.is_saved,
-                                path: path.clone(),
-                                group: Some(dir.clone()),
-                            });
-                        } else {
-                            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_owned();
-                            triangulations.push(UiTriangulationEntry {
-                                id: None,
-                                name,
-                                visible: false,
-                                is_active: false,
-                                is_loaded: false,
-                                is_saved: true,
-                                path: path.clone(),
-                                group: Some(dir.clone()),
-                            });
-                        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut tracked_projects = {
+            let active = self.workspace.active_project();
+            self.tracked_project_paths
+                .iter()
+                .map(|path| {
+                    let is_active = active.and_then(|project| project.path.as_ref()).is_some_and(|active_path| active_path == path);
+                    let name = if is_active {
+                        active.map(|project| project.project.metadata.name.clone()).unwrap_or_else(|| file_name(path))
+                    } else {
+                        path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("project").to_owned()
+                    };
+                    UiTrackedProjectEntry {
+                        name,
+                        is_active,
+                        dirty: is_active && project_dirty,
+                        path: path.clone(),
                     }
-                }
-            }
-        }
-        // Include in-memory (generated) triangulations not covered by any file/dir list.
-        for tri in &self.triangulations {
-            if !seen_paths.contains(&tri.path) {
-                triangulations.push(UiTriangulationEntry {
-                    id: Some(tri.id),
-                    name: tri.name.clone(),
-                    visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
-                    is_active: self.active_triangulation == Some(tri.id),
-                    is_loaded: true,
-                    is_saved: tri.is_saved,
-                    path: tri.path.clone(),
-                    group: None,
-                });
-            }
-        }
-        let loaded_block_by_path: BTreeMap<PathBuf, &OpenBlockModel> = self.block_models.iter().map(|model| (model.source.path.clone(), model)).collect();
-        let mut block_models = Vec::new();
-        let mut seen_block_models = BTreeSet::new();
-        for source in &self.block_model_files {
-            if !seen_block_models.insert(source.path.clone()) {
-                continue;
-            }
-            if let Some(model) = loaded_block_by_path.get(&source.path) {
-                block_models.push(UiBlockModelEntry {
-                    id: Some(model.id),
-                    name: model.name.clone(),
-                    source: model.source.clone(),
-                    visible: model.visible,
-                    is_active: self.active_block_model == Some(model.id),
-                    is_loaded: true,
-                    _block_count: model.renderable_block_indices.len(),
-                    variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
-                });
-            } else {
-                let name = source.path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_owned();
-                block_models.push(UiBlockModelEntry {
-                    id: None,
-                    name,
-                    source: source.clone(),
-                    visible: false,
-                    is_active: false,
-                    is_loaded: false,
-                    _block_count: 0,
-                    variable_count: 0,
-                });
-            }
-        }
-        for model in &self.block_models {
-            if !seen_block_models.contains(&model.source.path) {
-                block_models.push(UiBlockModelEntry {
-                    id: Some(model.id),
-                    name: model.name.clone(),
-                    source: model.source.clone(),
-                    visible: model.visible,
-                    is_active: self.active_block_model == Some(model.id),
-                    is_loaded: true,
-                    _block_count: model.renderable_block_indices.len(),
-                    variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
-                });
-            }
-        }
-        let loaded_drill_holes: BTreeMap<DrillHoleSource, &OpenDrillHoleDataset> = self.drill_holes.iter().map(|dataset| (dataset.source.clone(), dataset)).collect();
-        let mut drill_holes = Vec::new();
-        let mut seen_drill_holes = BTreeSet::new();
-        for source in &self.drill_hole_files {
-            if !seen_drill_holes.insert(source.clone()) {
-                continue;
-            }
-            if let Some(dataset) = loaded_drill_holes.get(source) {
-                drill_holes.push(UiDrillHoleEntry {
-                    id: Some(dataset.id),
-                    name: dataset.name.clone(),
-                    visible: dataset.visible,
-                    is_loaded: true,
-                    source: source.clone(),
-                    hole_count: dataset.dataset.holes.len(),
-                    field_count: dataset.dataset.fields.len(),
-                });
-            } else {
-                drill_holes.push(UiDrillHoleEntry {
-                    id: None,
-                    name: source.display_name(),
-                    visible: false,
-                    is_loaded: false,
-                    source: source.clone(),
-                    hole_count: 0,
-                    field_count: 0,
-                });
-            }
-        }
-
-        let loaded_cloud_by_path: BTreeMap<PathBuf, &crate::model::point_cloud::OpenPointCloud> = self.point_clouds.iter().map(|cloud| (cloud.path.clone(), cloud)).collect();
-        let mut point_clouds = Vec::new();
-        let mut seen_point_clouds = BTreeSet::new();
-        for path in &self.point_cloud_files {
-            if !seen_point_clouds.insert(path.clone()) {
-                continue;
-            }
-            if let Some(cloud) = loaded_cloud_by_path.get(path) {
-                point_clouds.push(UiPointCloudEntry {
-                    id: Some(cloud.id),
-                    name: cloud.name.clone(),
-                    path: path.clone(),
-                    visible: cloud.visible,
-                    is_loaded: true,
-                    is_saved: cloud.is_saved,
-                    point_count: cloud.points.len(),
-                });
-            } else {
-                let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_owned();
-                point_clouds.push(UiPointCloudEntry {
-                    id: None,
-                    name,
-                    path: path.clone(),
-                    visible: false,
-                    is_loaded: false,
-                    is_saved: true,
-                    point_count: 0,
-                });
-            }
-        }
-        for cloud in &self.point_clouds {
-            if !seen_point_clouds.contains(&cloud.path) {
-                point_clouds.push(UiPointCloudEntry {
-                    id: Some(cloud.id),
-                    name: cloud.name.clone(),
-                    path: cloud.path.clone(),
-                    visible: cloud.visible,
-                    is_loaded: true,
-                    is_saved: cloud.is_saved,
-                    point_count: cloud.points.len(),
-                });
-            }
-        }
-
-        let loaded_raster_by_path: BTreeMap<PathBuf, &OpenRasterTexture> = self.raster_textures.iter().map(|raster| (raster.path.clone(), raster)).collect();
-        // Highlight only rasters a loaded triangulation is actually using;
-        // dormant session assignments waiting to be restored don't count.
-        let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
-        let mut raster_textures = Vec::new();
-        let mut seen_rasters = BTreeSet::new();
-        for path in &self.raster_files {
-            if !seen_rasters.insert(path.clone()) {
-                continue;
-            }
-            if let Some(raster) = loaded_raster_by_path.get(path) {
-                raster_textures.push(crate::ui::state::UiRasterTextureEntry {
-                    name: raster.name.clone(),
-                    path: path.clone(),
-                    is_loaded: true,
-                    is_draped: draped_raster_ids.contains(&raster.id),
-                    source_size: raster.source_size,
-                    driver_name: raster.driver_name.clone(),
-                    projection: raster.projection.clone(),
-                });
-            } else {
-                raster_textures.push(crate::ui::state::UiRasterTextureEntry {
-                    name: path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_owned(),
-                    path: path.clone(),
-                    is_loaded: false,
-                    is_draped: false,
-                    source_size: [0, 0],
-                    driver_name: String::new(),
-                    projection: String::new(),
-                });
-            }
-        }
-        // A browser raster is normally listed through `raster_files`, which
-        // its stored record registers on import. Surface any loaded raster
-        // that is missing one anyway — a failed write leaves the image usable
-        // for this session, and its drape, undrape, unload and remove controls
-        // have to stay reachable.
+                })
+                .collect::<Vec<_>>()
+        };
         #[cfg(target_arch = "wasm32")]
-        for raster in &self.raster_textures {
-            if !seen_rasters.insert(raster.path.clone()) {
-                continue;
+        let mut tracked_projects = {
+            let active = self.workspace.active_project();
+            let mut entries = self
+                .tracked_browser_projects
+                .iter()
+                .map(|stored| UiTrackedProjectEntry {
+                    name: stored.name.clone(),
+                    is_active: active.is_some_and(|project| project.id == stored.id),
+                    dirty: active.is_some_and(|project| project.id == stored.id) && project_dirty,
+                    id: stored.id,
+                    stored_in_browser: true,
+                })
+                .collect::<Vec<_>>();
+            if let Some(active) = active
+                && !entries.iter().any(|entry| entry.id == active.id)
+            {
+                entries.push(UiTrackedProjectEntry {
+                    name: active.project.metadata.name.clone(),
+                    is_active: true,
+                    dirty: project_dirty,
+                    id: active.id,
+                    stored_in_browser: false,
+                });
             }
-            raster_textures.push(crate::ui::state::UiRasterTextureEntry {
+            entries
+        };
+        let mut triangulations = self
+            .triangulations
+            .iter()
+            .map(|tri| UiTriangulationEntry {
+                id: tri.id,
+                name: tri.name.clone(),
+                source_name: tri.state.source_name.clone(),
+                visible: tri.visible && tri.state.loaded && !self.editor.hidden_handles.contains(&tri.entity_id()),
+                is_active: self.active_triangulation == Some(tri.id),
+                is_loaded: tri.state.loaded,
+                dirty: tri.state.is_dirty(),
+            })
+            .collect::<Vec<_>>();
+        let mut block_models = self
+            .block_models
+            .iter()
+            .map(|model| UiBlockModelEntry {
+                id: model.id,
+                name: model.name.clone(),
+                source_name: model.state.source_name.clone(),
+                visible: model.visible && model.state.loaded,
+                is_active: self.active_block_model == Some(model.id),
+                is_loaded: model.state.loaded,
+                dirty: model.state.is_dirty(),
+                _block_count: model.renderable_block_indices.len(),
+                variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
+            })
+            .collect::<Vec<_>>();
+        let mut drill_holes = self
+            .drill_holes
+            .iter()
+            .map(|dataset| UiDrillHoleEntry {
+                id: dataset.id,
+                name: dataset.name.clone(),
+                source_name: dataset.state.source_name.clone(),
+                visible: dataset.visible && dataset.state.loaded,
+                is_loaded: dataset.state.loaded,
+                dirty: dataset.state.is_dirty(),
+                hole_count: dataset.dataset.holes.len(),
+                field_count: dataset.dataset.fields.len(),
+            })
+            .collect::<Vec<_>>();
+        let mut point_clouds = self
+            .point_clouds
+            .iter()
+            .map(|cloud| UiPointCloudEntry {
+                id: cloud.id,
+                name: cloud.name.clone(),
+                source_name: cloud.state.source_name.clone(),
+                visible: cloud.visible && cloud.state.loaded,
+                is_loaded: cloud.state.loaded,
+                dirty: cloud.state.is_dirty(),
+                point_count: cloud.points.len(),
+            })
+            .collect::<Vec<_>>();
+        let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
+        let mut raster_textures = self
+            .raster_textures
+            .iter()
+            .map(|raster| crate::ui::state::UiRasterTextureEntry {
+                id: raster.id,
                 name: raster.name.clone(),
-                path: raster.path.clone(),
-                is_loaded: true,
+                source_name: raster.state.source_name.clone(),
+                visible: raster.visible && raster.state.loaded,
+                is_loaded: raster.state.loaded,
+                dirty: raster.state.is_dirty(),
                 is_draped: draped_raster_ids.contains(&raster.id),
                 source_size: raster.source_size,
                 driver_name: raster.driver_name.clone(),
                 projection: raster.projection.clone(),
-            });
-        }
+            })
+            .collect::<Vec<_>>();
 
-        // Explorer display order: natural (alphanumeric) by name, with
-        // triangulation folders sorted above loose files. Sorting the view
-        // only — underlying model order is untouched.
+        // Explorer display order is natural (alphanumeric) by item name.
+        // Sorting the view only leaves retained project order untouched.
         let mut projects = projects;
         for project in &mut projects {
             project.layers.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         }
         projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name).then_with(|| a.path.cmp(&b.path)));
-        triangulations.sort_by(|a, b| crate::natural_sort::grouped_file_cmp(a.group.as_deref(), &a.name, b.group.as_deref(), &b.name));
+        tracked_projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
+        triangulations.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         block_models.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         drill_holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         point_clouds.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         raster_textures.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
 
         let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
+        let same_membership = |current: &[u64], saved: &[(u64, u64)]| current.len() == saved.len() && current.iter().all(|id| saved.iter().any(|(saved_id, _)| saved_id == id));
+        let triangulations_membership_dirty = !same_membership(
+            &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.project_asset_baseline.triangulations,
+        );
+        let block_models_membership_dirty = !same_membership(
+            &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.project_asset_baseline.block_models,
+        );
+        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes);
+        let point_clouds_membership_dirty = !same_membership(
+            &self.point_clouds.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.project_asset_baseline.point_clouds,
+        );
+        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters);
         let active_triangulation_for_menu = self
             .active_triangulation
             .and_then(|id| self.triangulations.iter().find(|tri| tri.id == id).map(|tri| (tri.id, tri.color)));
         let view = Arc::new(UiProjectView {
+            tracked_projects,
             projects,
             triangulations,
             block_models,
             drill_holes,
             point_clouds,
             raster_textures,
+            triangulations_membership_dirty,
+            block_models_membership_dirty,
+            drill_holes_membership_dirty,
+            point_clouds_membership_dirty,
+            rasters_membership_dirty,
             has_active_project: self.workspace.has_active_project(),
             needs_startup_dialog: !self.workspace.has_active_project() && !self.startup_dialog_dismissed,
             active_path,
@@ -1300,155 +1324,35 @@ impl<'a> App<'a> {
         view
     }
 
-    /// Restore projects from a saved session. Called from `main` after startup.
-    /// Non-existent or invalid paths are skipped independently. All restored
-    /// PIDBs are parsed and kept open; the saved active path restores only the
-    /// editing target.
+    /// Restore the tracked native project catalog and reopen its active entry.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn load_session_projects(&mut self, session: &io::Session) {
-        let had_active = self.workspace.has_active_project();
+        self.tracked_project_paths.clear();
         for path in &session.project_paths {
-            if !path.exists() {
-                log::warn!("Session project no longer exists, skipping: {}", path.display());
-                continue;
-            }
-            if self.workspace.project_index_for_path(path).is_some() {
-                continue;
-            }
-            match pidb::load(path).and_then(|pidb| pidb::open_project(Some(path.clone()), pidb)) {
-                Ok(project) => {
-                    self.workspace.add_inactive(project);
-                }
-                Err(error) => {
-                    log::warn!("Failed to reopen session project {}: {error}", path.display());
-                }
-            }
+            self.track_project_path(path.clone());
         }
-        if !had_active
-            && let Some(active_path) = &session.active_path
-            && let Some(index) = self.workspace.project_index_for_path(active_path)
-        {
-            self.workspace.set_active_index(index);
+        if let Some(path) = session.current_project_path.clone() {
+            self.track_project_path(path);
         }
-        if let Some(project) = self.workspace.active_project() {
-            self.history.activate(project.runtime_id);
-        }
-
-        // Restore folder-scanned triangulation directories.
-        self.triangulation_excluded_paths = session.triangulation_excluded_paths.iter().cloned().collect();
-        for path in &session.triangulation_paths {
-            if path.is_dir() && !self.triangulation_dirs.contains(path) {
-                self.triangulation_dirs.push(path.clone());
-            }
-        }
-        self.triangulation_dirs.sort();
-        self.triangulation_dirs.dedup();
-        self.refresh_triangulation_dir_entries();
-
-        // Restore individually-opened triangulation files.
-        for path in &session.triangulation_file_paths {
-            if MeshFormat::from_path(path).is_some() && path.is_file() && !self.triangulation_excluded_paths.contains(path) && !self.triangulation_files.contains(path) {
-                self.triangulation_files.push(path.clone());
-            }
-        }
-
-        for source in &session.block_model_sources {
-            if source.csv_columns.is_some() && source.path.is_file() && !self.block_model_files.contains(source) {
-                self.block_model_files.push(source.clone());
-            }
-        }
-        for source in &session.drill_hole_sources {
-            let exists = match source {
-                DrillHoleSource::LegacyDhd { .. } => false,
-                DrillHoleSource::Csv { files, .. } => files.iter().all(|mapping| mapping.path.is_file()),
-                DrillHoleSource::Omf { .. } => false,
-            };
-            if exists && !self.drill_hole_files.contains(source) {
-                self.drill_hole_files.push(source.clone());
-            }
-        }
-
-        for path in &session.point_cloud_file_paths {
-            if path.is_file() && !self.point_cloud_files.contains(path) {
-                self.point_cloud_files.push(path.clone());
-            }
-        }
-        for path in &session.raster_file_paths {
-            if path.is_file() && !self.raster_files.contains(path) {
-                self.raster_files.push(path.clone());
-            }
-        }
-    }
-
-    fn scan_triangulation_dir(dir: &Path) -> Vec<PathBuf> {
-        let mut paths: Vec<_> = match fs::read_dir(dir) {
-            Ok(entries) => entries
-                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                .filter(|path| MeshFormat::from_path(path).is_some())
-                .collect(),
-            Err(error) => {
-                userspace_warn!("Could not scan triangulation folder {}: {error}", dir.display());
-                Vec::new()
-            }
+        let Some(path) = session.current_project_path.as_ref().filter(|path| path.is_file()).cloned() else {
+            return;
         };
-        paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-        paths
-    }
-
-    fn refresh_triangulation_dir_entries(&mut self) {
-        self.triangulation_dir_entries = self
-            .triangulation_dirs
-            .iter()
-            .map(|dir| {
-                let files = Self::scan_triangulation_dir(dir)
-                    .into_iter()
-                    .filter(|path| !self.triangulation_excluded_paths.contains(path))
-                    .collect();
-                (dir.clone(), files)
-            })
-            .collect();
+        let result = std::fs::read(&path).map_err(anyhow::Error::from).and_then(|bytes| {
+            let source_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("project.omf").to_owned();
+            let progress = crate::model::progress::Progress::new();
+            crate::model::formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0)).map(|bundle| (source_name, bundle))
+        });
+        match result {
+            Ok((source_name, bundle)) => self.apply_opened_omf_bundle(Some(path), source_name, bundle),
+            Err(error) => log::warn!("Failed to reopen session project: {error:#}"),
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn persist_session(&self) {
-        let mut paths: Vec<PathBuf> = self.workspace.projects.iter().filter_map(|project| project.path.clone()).collect();
-        paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-        let active_path = self.workspace.active_project().and_then(|p| p.path.clone());
-        let triangulation_paths: Vec<PathBuf> = {
-            let deduped: BTreeSet<_> = self.triangulation_dirs.iter().cloned().collect();
-            deduped.into_iter().collect()
-        };
-        let triangulation_file_paths: Vec<PathBuf> = {
-            let deduped: BTreeSet<_> = self.triangulation_files.iter().cloned().collect();
-            deduped.into_iter().collect()
-        };
-        let triangulation_excluded_paths: Vec<PathBuf> = self.triangulation_excluded_paths.iter().cloned().collect();
-        let block_model_sources: Vec<BlockModelSource> = {
-            let deduped: BTreeSet<_> = self.block_model_files.iter().cloned().collect();
-            deduped.into_iter().collect()
-        };
-        let drill_hole_sources: Vec<DrillHoleSource> = {
-            let deduped: BTreeSet<_> = self.drill_hole_files.iter().cloned().collect();
-            deduped.into_iter().collect()
-        };
-        let point_cloud_file_paths: Vec<PathBuf> = {
-            let deduped: BTreeSet<_> = self.point_cloud_files.iter().cloned().collect();
-            deduped.into_iter().collect()
-        };
-        let raster_file_paths: Vec<PathBuf> = {
-            let deduped: BTreeSet<_> = self.raster_files.iter().cloned().collect();
-            deduped.into_iter().collect()
-        };
         let session = io::Session {
-            project_paths: paths,
-            active_path,
-            triangulation_paths,
-            triangulation_file_paths,
-            triangulation_excluded_paths,
-            block_model_sources,
-            drill_hole_sources,
-            point_cloud_file_paths,
-            raster_file_paths,
+            project_paths: self.tracked_project_paths.clone(),
+            current_project_path: self.workspace.active_project().and_then(|project| project.path.clone()),
         };
         if let Err(e) = io::save_session(&session) {
             log::warn!("Failed to save session: {e}");
@@ -1457,48 +1361,25 @@ impl<'a> App<'a> {
 
     #[cfg(target_arch = "wasm32")]
     fn persist_session(&self) {
-        let ids: Vec<_> = self
-            .workspace
-            .projects
-            .iter()
-            .filter_map(|project| match project.persistence {
-                crate::model::pidb::ProjectPersistence::BrowserRecord(id) => Some(id),
-                _ => None,
-            })
-            .collect();
+        let id = self.workspace.active_project().and_then(|project| match project.persistence {
+            crate::model::project::ProjectPersistence::BrowserRecord(id) => Some(id),
+            _ => None,
+        });
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(error) = crate::app::web_storage::save_session(&ids).await {
+            if let Err(error) = crate::app::web_storage::save_session(id).await {
                 userspace_warn!("Failed to save browser session: {error}");
             }
         });
     }
+}
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn allocate_browser_source_path(&mut self, name: &str) -> PathBuf {
-        let visible_name = Path::new(name)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("browser-file");
-        let original = PathBuf::from(visible_name);
-        if self.browser_source_paths.insert(original.clone()) {
-            return original;
-        }
-
-        let path = Path::new(visible_name);
-        let stem = path.file_stem().and_then(|stem| stem.to_str()).filter(|stem| !stem.is_empty()).unwrap_or("browser-file");
-        let extension = path.extension().and_then(|extension| extension.to_str());
-        for copy in 2_u32.. {
-            let candidate = match extension {
-                Some(extension) if !extension.is_empty() => PathBuf::from(format!("{stem} ({copy}).{extension}")),
-                _ => PathBuf::from(format!("{stem} ({copy})")),
-            };
-            if self.browser_source_paths.insert(candidate.clone()) {
-                return candidate;
-            }
-        }
-        unreachable!("the browser source suffix counter is unbounded")
-    }
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn browser_source_filename(name: &str) -> PathBuf {
+    Path::new(name)
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("browser-file"))
 }
 
 impl<'a> ApplicationHandler<AppEvent> for App<'a> {
@@ -1569,15 +1450,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         #[cfg(target_arch = "wasm32")]
-        crate::app::web_storage::set_dirty(
-            // IndexedDB is useful session recovery, but it is not a durable
-            // user-owned PIDB file. Keep the browser's leave-page warning
-            // armed until every open PIDB has been explicitly closed.
-            !self.workspace.projects.is_empty()
-                || self.triangulations.iter().any(|tri| !tri.is_saved)
-                || self.block_models.iter().any(|model| model.source.generated)
-                || self.editor.text_editing_enabled,
-        );
+        crate::app::web_storage::set_dirty(self.has_unsaved_changes_for_exit());
         #[cfg(target_os = "macos")]
         for action in crate::mac::drain_actions() {
             self.handle_mac_menu_action(action);
@@ -1684,50 +1557,119 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 }
             }
             AppEvent::BrowserProjectsRestored(result) => match result {
-                Ok(records) => {
-                    let mut restored = 0usize;
-                    for record in records {
-                        match pidb::open_browser_project(record.id, record.pidb) {
-                            Ok(project) => {
-                                self.workspace.add_inactive(project);
-                                restored += 1;
+                Ok(restored) => {
+                    self.tracked_browser_projects = restored.projects;
+                    if let Some(record) = restored.current_project {
+                        let source_name = format!("{}.omf", record.name.trim_end_matches(".omf"));
+                        let progress = crate::model::progress::Progress::new();
+                        match crate::model::formats::omf::from_bytes(&source_name, record.omf_bytes, &progress.phase(0.0, 1.0)) {
+                            Ok(bundle) => {
+                                self.apply_opened_omf_bundle(None, source_name, bundle);
+                                if let Some(project) = self.workspace.active_project_mut() {
+                                    project.id = record.id;
+                                    project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(record.id);
+                                }
+                                // `set_active_project` persists before the
+                                // restored browser identity is attached.
+                                self.persist_session();
+                                userspace_log!("Restored browser project '{}'.", record.name);
                             }
                             Err(error) => userspace_warn!("Could not restore browser project '{}': {error:#}", record.name),
                         }
                     }
-                    // Session restoration deliberately has no active editing
-                    // target and no loaded layers or transient selections.
-                    self.workspace.active_index = None;
-                    self.clear_editor_transient_state();
-                    self.history = crate::model::History::new();
-                    if restored > 0 {
-                        self.invalidate_geometry();
-                        userspace_log!("Restored {restored} saved browser project(s)");
+                }
+                Err(error) => userspace_warn!("Could not restore the browser project: {error}"),
+            },
+            AppEvent::BrowserProjectLoaded { project_id, ticket, result } => {
+                self.finish_background_task(ticket, false);
+                match result {
+                    Ok(Some(record)) => {
+                        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
+                            if cancel.is_cancelled() {
+                                anyhow::bail!("Cancelled");
+                            }
+                            progress.set_fraction(0.1);
+                            let source_name = format!("{}.omf", record.name.trim_end_matches(".omf"));
+                            let bundle = crate::model::formats::omf::from_bytes(&source_name, record.omf_bytes, &progress.phase(0.1, 1.0))?;
+                            Ok((record.id, record.name, source_name, bundle))
+                        };
+                        let apply = move |app: &mut App, result| {
+                            app.browser_project_loads_pending.remove(&project_id);
+                            match result {
+                                Ok((record_id, record_name, source_name, bundle)) => {
+                                    app.apply_opened_omf_bundle(None, source_name, bundle);
+                                    if let Some(project) = app.workspace.active_project_mut() {
+                                        project.id = record_id;
+                                        project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(record_id);
+                                    }
+                                    app.persist_session();
+                                    userspace_log!("Activated browser project '{}'.", record_name);
+                                }
+                                Err(error) => userspace_warn!("Could not activate browser project: {error:#}"),
+                            }
+                        };
+                        self.spawn_job_reporting_progress("Switching project…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
+                    }
+                    Ok(None) => {
+                        self.browser_project_loads_pending.remove(&project_id);
+                        userspace_warn!("That browser project no longer exists");
+                    }
+                    Err(error) => {
+                        self.browser_project_loads_pending.remove(&project_id);
+                        userspace_warn!("Could not load the browser project: {error}");
                     }
                 }
-                Err(error) => userspace_warn!("Could not restore browser projects: {error}"),
-            },
+            }
             AppEvent::BrowserProjectSaved {
                 runtime_id,
                 project_id,
                 snapshot_hash,
                 snapshot_layer_hashes,
+                asset_token,
                 result,
             } => {
                 self.browser_saves_pending.remove(&runtime_id);
                 match result {
                     Ok(()) => {
                         if let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) {
-                            let project = &mut self.workspace.projects[index];
-                            project.id = project_id;
-                            project.persistence = crate::model::pidb::ProjectPersistence::BrowserRecord(project_id);
-                            project.path = None;
-                            project.mark_snapshot_saved(snapshot_hash, snapshot_layer_hashes);
-                            userspace_log!("Saved '{}' to browser storage", project.pidb.metadata.name);
+                            self.mark_project_asset_snapshot_saved(&asset_token);
+                            let name = {
+                                let project = &mut self.workspace.projects[index];
+                                project.id = project_id;
+                                project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(project_id);
+                                project.path = None;
+                                project.lossy_save_warnings.clear();
+                                project.lossy_save_confirmed = false;
+                                project.mark_snapshot_saved(snapshot_hash, snapshot_layer_hashes);
+                                project.project.metadata.name.clone()
+                            };
+                            self.track_browser_project(project_id, name.clone());
+                            userspace_log!("Saved '{}' to browser storage", name);
                             self.persist_session();
                         }
+                        if self.project_replacement_after_save
+                            && self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id)
+                            && let Err(error) = self.continue_project_replacement()
+                        {
+                            userspace_warn!("Could not replace the current project: {error:#}");
+                        }
+                        if self.editor.pending_close_project == Some(runtime_id) {
+                            self.close_project(runtime_id);
+                        }
                     }
-                    Err(error) => userspace_warn!("Browser save failed: {error}"),
+                    Err(error) => {
+                        if self.project_replacement_after_save && self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id) {
+                            self.project_replacement_after_save = false;
+                            self.editor.replace_project_confirm_open = true;
+                        }
+                        if let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id)
+                            && !self.workspace.projects[index].lossy_save_warnings.is_empty()
+                        {
+                            self.workspace.projects[index].lossy_save_confirmed = false;
+                            self.editor.lossy_save_confirm_open = true;
+                        }
+                        userspace_warn!("Browser save failed: {error}");
+                    }
                 }
 
                 if self.browser_delete_after_save.remove(&runtime_id)
@@ -1735,14 +1677,19 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 {
                     userspace_warn!("Could not delete browser project: {error:#}");
                 }
+                self.try_finish_deferred_exit();
             }
-            AppEvent::BrowserProjectDeleted { runtime_id, result } => {
-                self.browser_deletes_pending.remove(&runtime_id);
+            AppEvent::BrowserProjectDeleted { project_id, runtime_id, result } => {
+                self.browser_deletes_pending.remove(&project_id);
                 match result {
                     Ok(()) => {
-                        if self.workspace.project_index_for_runtime_id(runtime_id).is_some() {
-                            self.close_pidb(runtime_id);
+                        self.tracked_browser_projects.retain(|project| project.id != project_id);
+                        if let Some(runtime_id) = runtime_id
+                            && self.workspace.project_index_for_runtime_id(runtime_id).is_some()
+                        {
+                            self.close_project(runtime_id);
                         }
+                        self.persist_session();
                         userspace_log!("Deleted browser project");
                     }
                     Err(error) => {
@@ -1756,24 +1703,13 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     self.redraw_requested = true;
                 }
             }
-            AppEvent::BrowserTriangulationsRestored(result) => match result {
-                Ok(summaries) => self.catalogue_browser_triangulations(summaries),
-                Err(error) => userspace_warn!("Could not list browser triangulations: {error}"),
-            },
-            AppEvent::BrowserTriangulationFetched { record_id, result } => self.apply_fetched_browser_triangulation(record_id, result),
-            AppEvent::BrowserTriangulationStored { id, record_id, name, result } => self.apply_stored_browser_triangulation(id, record_id, name, result),
-            AppEvent::BrowserDataRestored { kind, result } => match result {
-                Ok(summaries) => self.catalogue_browser_data(kind, summaries),
-                Err(error) => userspace_warn!("Could not list stored browser data: {error}"),
-            },
-            AppEvent::BrowserDataFetched { kind, record_id, result } => self.apply_fetched_browser_data(kind, record_id, result),
-            AppEvent::BrowserDataStored { kind, record_id, name, result } => self.apply_stored_browser_data(kind, record_id, name, result),
         }
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn file_name(path: &Path) -> String {
-    path.file_name().and_then(|name| name.to_str()).unwrap_or("project.pidb").to_string()
+    path.file_name().and_then(|name| name.to_str()).unwrap_or("project.omf").to_string()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1787,45 +1723,26 @@ enum GraphicsState {
 #[cfg(target_arch = "wasm32")]
 pub(crate) enum AppEvent {
     GraphicsInitializationFinished,
-    BrowserProjectsRestored(std::result::Result<Vec<crate::app::web_storage::BrowserProjectRecord>, String>),
+    BrowserProjectsRestored(std::result::Result<crate::app::web_storage::BrowserSessionProjects, String>),
+    BrowserProjectLoaded {
+        project_id: crate::model::project::ProjectId,
+        ticket: BackgroundTaskTicket,
+        result: std::result::Result<Option<crate::app::web_storage::BrowserProjectRecord>, String>,
+    },
     BrowserProjectSaved {
         runtime_id: u32,
-        project_id: crate::model::pidb::ProjectId,
+        project_id: crate::model::project::ProjectId,
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
+        asset_token: crate::model::project::SaveToken,
         result: std::result::Result<(), String>,
     },
     BrowserProjectDeleted {
-        runtime_id: u32,
+        project_id: crate::model::project::ProjectId,
+        runtime_id: Option<u32>,
         result: std::result::Result<(), String>,
     },
     BrowserClipboardPasted(String),
-    BrowserTriangulationsRestored(std::result::Result<Vec<crate::app::web_storage::BrowserAssetSummary>, String>),
-    BrowserTriangulationFetched {
-        record_id: String,
-        result: std::result::Result<Option<crate::app::web_storage::BrowserAssetRecord>, String>,
-    },
-    BrowserTriangulationStored {
-        id: crate::model::triangulation::TriangulationId,
-        record_id: String,
-        name: String,
-        result: std::result::Result<(), String>,
-    },
-    BrowserDataRestored {
-        kind: crate::app::commands::browser_data::BrowserDataKind,
-        result: std::result::Result<Vec<crate::app::web_storage::BrowserAssetSummary>, String>,
-    },
-    BrowserDataFetched {
-        kind: crate::app::commands::browser_data::BrowserDataKind,
-        record_id: String,
-        result: std::result::Result<Option<crate::app::web_storage::BrowserAssetRecord>, String>,
-    },
-    BrowserDataStored {
-        kind: crate::app::commands::browser_data::BrowserDataKind,
-        record_id: String,
-        name: String,
-        result: std::result::Result<(), String>,
-    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]

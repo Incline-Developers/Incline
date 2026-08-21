@@ -1,8 +1,7 @@
 //! Georeferenced raster import, lifetime and triangulation assignment.
 
-use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -23,14 +22,11 @@ fn raster_preview_dimension_limit(downscale: bool, hardware_limit: u32) -> u32 {
 }
 
 impl<'a> App<'a> {
-    /// Decode raster bytes chosen in the browser, or read back out of browser
-    /// storage, under the display name `display_path` already holds.
+    /// Decode raster bytes chosen in the browser into retained project data.
+    /// `display_path` is filename-only provenance for this import transaction.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn open_raster_input(&mut self, input: crate::model::input::InputFile, display_path: std::path::PathBuf) {
         let name = input.source.name.clone();
-        if self.raster_textures.iter().any(|raster| raster.path == display_path) {
-            return;
-        }
         let hardware_limit = self.graphics.as_ref().map(|graphics| graphics.max_raster_texture_dimension()).unwrap_or(u32::MAX);
         let preview_limit = raster_preview_dimension_limit(self.editor.downscale_raster_previews, hardware_limit);
         self.spawn_job(
@@ -60,17 +56,13 @@ impl<'a> App<'a> {
         if !path.is_file() {
             anyhow::bail!("Raster file does not exist: {}", path.display());
         }
-        if !self.raster_files.contains(&path.to_path_buf()) {
-            self.raster_files.push(path.to_path_buf());
-        }
-        self.persist_session();
         self.open_raster_path(path.to_path_buf());
         Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_raster_path(&mut self, path: PathBuf) {
-        if self.raster_textures.iter().any(|raster| raster.path == path) || self.pending_raster_loads.iter().any(|(_, pending, _, _)| *pending == path) {
+        if self.pending_raster_loads.iter().any(|(_, pending, _, _)| *pending == path) {
             return;
         }
 
@@ -135,9 +127,10 @@ impl<'a> App<'a> {
     pub(super) fn add_loaded_raster(&mut self, loaded: crate::model::raster::LoadedRasterTexture) {
         let id = RasterTextureId(self.next_raster_texture_id);
         self.next_raster_texture_id += 1;
+        let name = crate::model::project::unique_item_name(loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
         userspace_log!(
             "Loaded raster {} via {} ({}x{}, preview {}x{})",
-            loaded.name,
+            name,
             loaded.driver_name,
             loaded.source_size[0],
             loaded.source_size[1],
@@ -146,15 +139,18 @@ impl<'a> App<'a> {
         );
         self.raster_textures.push(OpenRasterTexture {
             id,
-            name: loaded.name,
-            path: loaded.path,
+            state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            name,
+            visible: true,
             source_size: loaded.source_size,
             preview_size: loaded.preview_size,
+            full_rgba: loaded.full_rgba,
             rgba: loaded.rgba,
             world_to_uv: loaded.world_to_uv,
             projection: loaded.projection,
             driver_name: loaded.driver_name,
         });
+        self.touch_active_project_content();
         self.redraw_requested = true;
     }
 
@@ -165,97 +161,105 @@ impl<'a> App<'a> {
             .iter_mut()
             .find(|triangulation| triangulation.id == triangulation_id)
             .context("The active triangulation is no longer loaded")?;
-        triangulation.raster_texture = None;
+        if triangulation.raster_texture.take().is_some() {
+            triangulation.state.touch();
+            self.touch_active_project_content();
+        }
         self.redraw_requested = true;
         Ok(())
     }
 
-    fn cancel_pending_raster_loads(&mut self, path: &Path) {
-        let pending = std::mem::take(&mut self.pending_raster_loads);
-        for (ticket, pending_path, receiver, console_report) in pending {
-            if pending_path == path {
-                self.cancel_background_task(ticket);
-                if let Some(report) = console_report {
-                    report.cancel();
-                }
-            } else {
-                self.pending_raster_loads.push((ticket, pending_path, receiver, console_report));
-            }
-        }
+    pub(crate) fn toggle_raster_visible(&mut self, id: RasterTextureId) {
+        let Some(raster) = self.raster_textures.iter_mut().find(|raster| raster.id == id) else {
+            return;
+        };
+        raster.visible = !raster.visible;
+        raster.state.touch();
+        self.touch_active_project_content();
+        self.redraw_requested = true;
     }
 
-    /// Drop the raster's pixel data but keep its file entry in the explorer.
-    pub(crate) fn unload_raster(&mut self, path: &Path) {
-        self.cancel_pending_raster_loads(path);
-        let unloaded_ids: std::collections::HashSet<_> = self.raster_textures.iter().filter(|raster| raster.path == path).map(|raster| raster.id).collect();
-        self.raster_textures.retain(|raster| raster.path != path);
-        for triangulation in &mut self.triangulations {
-            if triangulation.raster_texture.is_some_and(|id| unloaded_ids.contains(&id)) {
-                triangulation.raster_texture = None;
+    /// Drop runtime use of the raster while retaining its project-owned pixels.
+    pub(crate) fn unload_raster(&mut self, id: RasterTextureId) {
+        for raster in &mut self.raster_textures {
+            if raster.id == id {
+                raster.state.loaded = false;
             }
         }
         self.redraw_requested = true;
     }
 
-    pub(crate) fn remove_raster(&mut self, path: &Path) {
-        self.cancel_pending_raster_loads(path);
-        let removed_ids: std::collections::HashSet<_> = self.raster_textures.iter().filter(|raster| raster.path == path).map(|raster| raster.id).collect();
-        self.raster_textures.retain(|raster| raster.path != path);
-        self.raster_files.retain(|existing| existing != path);
+    pub(crate) fn remove_raster(&mut self, id: RasterTextureId) {
+        let mut changed = self.raster_textures.iter().any(|raster| raster.id == id);
+        self.raster_textures.retain(|raster| raster.id != id);
         for triangulation in &mut self.triangulations {
-            if triangulation.raster_texture.is_some_and(|id| removed_ids.contains(&id)) {
+            if triangulation.raster_texture == Some(id) {
                 triangulation.raster_texture = None;
+                triangulation.state.touch();
+                changed = true;
             }
         }
-        self.persist_session();
-        self.redraw_requested = true;
+        if changed {
+            self.touch_active_project_content();
+            self.persist_session();
+            self.redraw_requested = true;
+        }
     }
 
-    /// Drape the raster at `path` over every loaded triangulation whose
+    /// Drape the raster over every loaded triangulation whose
     /// world-XY extent overlaps the raster footprint. Until draped, a loaded
     /// raster only shows as a flat plan-view image.
-    pub(crate) fn drape_raster_over_surfaces(&mut self, path: &Path) -> Result<()> {
-        let raster = self
-            .raster_textures
-            .iter()
-            .find(|raster| raster.path == path)
-            .context("Load the texture before draping it")?;
+    pub(crate) fn drape_raster_over_surfaces(&mut self, id: RasterTextureId) -> Result<()> {
+        let raster = self.raster_textures.iter().find(|raster| raster.id == id).context("Load the texture before draping it")?;
         let raster_id = raster.id;
         let raster_name = raster.name.clone();
         let world_to_uv = raster.world_to_uv;
-        let mut draped_any = false;
+        let mut overlaps_any = false;
+        let mut changed = false;
         for triangulation in &mut self.triangulations {
             let bounds = triangulation.mesh.bounds();
             if !raster_overlaps_extent(world_to_uv, [bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]) {
                 continue;
             }
-            triangulation.raster_texture = Some(raster_id);
-            userspace_log!("Draped raster {} over triangulation {} (overlapping extents)", raster_name, triangulation.name);
-            draped_any = true;
+            overlaps_any = true;
+            if triangulation.raster_texture != Some(raster_id) {
+                triangulation.raster_texture = Some(raster_id);
+                triangulation.state.touch();
+                userspace_log!("Draped raster {} over triangulation {} (overlapping extents)", raster_name, triangulation.name);
+                changed = true;
+            }
         }
-        if !draped_any {
+        if !overlaps_any {
             anyhow::bail!("No loaded triangulation overlaps the extents of {raster_name}");
         }
-        self.redraw_requested = true;
+        if changed {
+            self.touch_active_project_content();
+            self.redraw_requested = true;
+        }
         Ok(())
     }
 
-    /// Remove the raster at `path` from every triangulation it is draped
+    /// Remove the raster from every triangulation it is draped
     /// over, returning it to the flat plan-view image.
-    pub(crate) fn undrape_raster(&mut self, path: &Path) {
-        let draped_ids: std::collections::HashSet<_> = self.raster_textures.iter().filter(|raster| raster.path == path).map(|raster| raster.id).collect();
+    pub(crate) fn undrape_raster(&mut self, id: RasterTextureId) {
+        let mut changed = false;
         for triangulation in &mut self.triangulations {
-            if triangulation.raster_texture.is_some_and(|id| draped_ids.contains(&id)) {
+            if triangulation.raster_texture == Some(id) {
                 triangulation.raster_texture = None;
+                triangulation.state.touch();
+                changed = true;
             }
         }
-        self.redraw_requested = true;
+        if changed {
+            self.touch_active_project_content();
+            self.redraw_requested = true;
+        }
     }
 }
 
 /// Whether a raster's world footprint overlaps the XY extent `[min, max]`.
 /// Maps the extent's corners through the affine world-to-UV transform and
-/// intersects their UV bounding box with the raster's [0,1]² UV square —
+/// intersects their UV bounding box with the raster's [0,1]² UV square -
 /// conservative for rotated geotransforms, exact for north-up ones.
 fn raster_overlaps_extent(world_to_uv: [f64; 6], min: [f64; 2], max: [f64; 2]) -> bool {
     let [a, b, c, d, e, f] = world_to_uv;

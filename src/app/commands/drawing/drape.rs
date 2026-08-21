@@ -101,7 +101,7 @@ impl<'a> App<'a> {
         if !replacements.is_empty()
             && let Some(project) = self.workspace.active_project_mut()
         {
-            self.history.execute(&mut project.pidb.document, Command::Batch(replacements));
+            self.history.execute(&mut project.project.document, Command::Batch(replacements));
         }
 
         let selected_objects = self.editor.drape_object_ids.clone();

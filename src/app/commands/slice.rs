@@ -7,7 +7,7 @@ use crate::{app::App, ui::state::ActiveTool, userspace_log};
 impl<'a> App<'a> {
     /// Canvas click while the Vertical Slice tool is armed. First click
     /// stores the line start; the second computes the slice frame and enters
-    /// slice mode. Z of the picks only seeds the initial view elevation —
+    /// slice mode. Z of the picks only seeds the initial view elevation -
     /// the line is flat in XY by construction.
     pub(crate) fn slice_line_click(&mut self) {
         if matches!(

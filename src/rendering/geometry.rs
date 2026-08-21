@@ -88,7 +88,7 @@ pub(crate) fn draw_line(ctx: &mut DrawContext, start: DVec3, end: DVec3, line_wi
 /// Draw a filled circle (sphere indicator) in screen space at the given world position.
 /// `radius_px` is in device pixels.
 pub(crate) fn draw_screen_sphere(ctx: &mut DrawContext, center: DVec3, radius_px: f32, color: [f32; 4]) {
-    const SEGMENTS: u32 = 12;
+    const SEGMENTS: u32 = 16;
     let base = ctx.stroke_vertex_buf.len() as u32;
     let position = local(center, ctx.scene_origin);
     ctx.stroke_vertex_buf.push(StrokeVertex {
@@ -111,6 +111,16 @@ pub(crate) fn draw_screen_sphere(ctx: &mut DrawContext, center: DVec3, radius_px
     for i in 0..SEGMENTS {
         ctx.stroke_index_buf.extend_from_slice(&[base, base + i + 1, base + (i + 1) % SEGMENTS + 1]);
     }
+}
+
+/// Snap marker matching the design-vertex markers drawn by `design_point.wgsl`:
+/// same pixel footprint and dark outline, round instead of square and filled
+/// with `color` so a snapped vertex reads as highlighted rather than covered.
+pub(crate) fn draw_screen_point_marker(ctx: &mut DrawContext, center: DVec3, color: [f32; 4]) {
+    const OUTER_PX: f32 = 8.0;
+    const INNER_PX: f32 = 6.0;
+    draw_screen_sphere(ctx, center, OUTER_PX * 0.5 * ctx.scale_factor, [0.0, 0.0, 0.0, 1.0]);
+    draw_screen_sphere(ctx, center, INNER_PX * 0.5 * ctx.scale_factor, color);
 }
 
 pub(crate) fn draw_screen_cross(ctx: &mut DrawContext, center: DVec3, half_size_px: f32, line_width: f32, color: [f32; 4]) {

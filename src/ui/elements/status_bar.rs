@@ -93,7 +93,7 @@ fn draw_progress_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill)
         BarFill::Marquee => {
             // egui's `ProgressBar::animate` only shimmers the *filled* part, so a
             // task with no percentage would have to render as a full (i.e. "done"
-            // looking) bar to animate at all — hence the hand-painted marquee.
+            // looking) bar to animate at all - hence the hand-painted marquee.
             ui.ctx().request_repaint();
             // Cosine ease so the chunk slows at each end rather than snapping around.
             let time = ui.input(|i| i.time);
@@ -196,7 +196,7 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState) -> egui::
                         },
                         // Idle: hold the last task at 100%. Before the first task of
                         // the session there is nothing to report, so the bar is
-                        // hidden — but its space is still reserved so the panel
+                        // hidden - but its space is still reserved so the panel
                         // doesn't change height when it appears.
                         None => match &editor.last_finished_task {
                             Some(finished) => draw_progress_bar(

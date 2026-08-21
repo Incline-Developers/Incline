@@ -145,7 +145,7 @@ pub(crate) fn snap_cursor(
 
     for tri in triangulations {
         let entity = tri.entity_id();
-        if !tri.visible || hidden.contains(&entity) || frozen.contains(&entity) {
+        if !tri.state.loaded || !tri.visible || hidden.contains(&entity) || frozen.contains(&entity) {
             continue;
         }
         match mode {

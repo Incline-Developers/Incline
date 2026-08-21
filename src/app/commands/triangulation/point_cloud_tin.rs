@@ -328,8 +328,8 @@ fn spatial_grid_subsample_terrain(
 }
 
 /// Exact fixed-point accumulator for a cell's summed coordinates. Summing raw
-/// f64 in parallel is non-associative, so the resulting mean — and thus the
-/// truncation order and Delaunay topology built from it — varied run to run.
+/// f64 in parallel is non-associative, so the resulting mean - and thus the
+/// truncation order and Delaunay topology built from it - varied run to run.
 /// Quantising each coordinate to fixed-point integers before summing makes the
 /// total order-independent and the whole TIN reproducible. `SCALE` is finer than
 /// the survey's own quantisation, so no meaningful precision is lost, and i128
@@ -395,7 +395,7 @@ impl OccupancyGrid {
 
     /// True when a triangle spans terrain the survey never covered. The three
     /// edges are walked cell by cell (not just sampled at their midpoints), so a
-    /// gap crossed anywhere along an edge is caught — a narrow, curved or
+    /// gap crossed anywhere along an edge is caught - a narrow, curved or
     /// off-centre hole no longer slips between a handful of sample points. The
     /// centroid is checked too, and the dilation keeps legitimately coarse
     /// triangles over real, if sparse, ground.
@@ -417,7 +417,7 @@ impl OccupancyGrid {
             let dy = end.y - start.y;
             let length = (dx * dx + dy * dy).sqrt();
             let steps = ((length / self.cell_size).ceil() as usize).clamp(1, MAX_EDGE_SAMPLES);
-            // Skip the endpoints — they are grid vertices and always occupied.
+            // Skip the endpoints - they are grid vertices and always occupied.
             for step in 1..steps {
                 let t = step as f64 / steps as f64;
                 if !self.near_points(start.x + dx * t, start.y + dy * t) {
@@ -436,7 +436,7 @@ impl OccupancyGrid {
 /// `target` of them fall inside it.
 ///
 /// Occupancy is probed at a coarse resolution chosen so each cell holds
-/// thousands of points — dense enough that the strided sample reliably hits
+/// thousands of points - dense enough that the strided sample reliably hits
 /// every occupied cell. Probing at the (possibly fine) budget resolution would
 /// miss sparse cells, underestimate the footprint, and drive the candidate grid
 /// toward the full point count and a memory blow-up at high budgets.
@@ -487,7 +487,7 @@ fn choose_terrain_cell_size(points: &[DVec3], min: DVec3, area: f64, target: usi
         return Ok((area / target as f64).sqrt().max(1.0e-9));
     }
     // Coarse cells straddling the boundary slightly overestimate the footprint,
-    // which errs toward a larger cell size — fewer candidate cells, never a
+    // which errs toward a larger cell size - fewer candidate cells, never a
     // blow-up.
     let footprint_area = occupied.len() as f64 * probe_size * probe_size;
     Ok((footprint_area / target as f64).sqrt().max(1.0e-9))
@@ -535,7 +535,7 @@ fn bin_terrain_cells(points: &[DVec3], min: DVec3, cell_size: f64, cancel: &crat
 /// Additive least-squares plane-fit moments plus the total squared vertical
 /// residual to that plane. Moments of disjoint point sets add, so a quadtree
 /// node accumulates its children's moments and the residual measures how poorly
-/// one plane approximates the node — the driver of adaptive refinement.
+/// one plane approximates the node - the driver of adaptive refinement.
 #[derive(Clone, Copy, Default)]
 struct PlaneMoments {
     n: f64,
@@ -640,7 +640,7 @@ struct QuadTree {
 
 /// A candidate refinement: replacing an active node with its children. `key` is
 /// the residual reduction per added vertex; ties break on node index so the
-/// heap order — and thus the whole selection — is deterministic.
+/// heap order - and thus the whole selection - is deterministic.
 struct Split {
     key: f64,
     node: usize,
@@ -763,7 +763,7 @@ fn build_quadtree(leaves: &[(u64, PlaneMoments, DVec3, bool)]) -> QuadTree {
 ///
 /// Phase 1 refines every branch touching the footprint edge down to fine cells
 /// so the boundary keeps its shape instead of collapsing into a few large
-/// triangles — but only while the budget has room for the extra vertices a
+/// triangles - but only while the budget has room for the extra vertices a
 /// split introduces. `count` tracks the eventual active-node total (the roots,
 /// plus one extra per split beyond the node it replaces), so descent stops
 /// before it can exceed `budget`; a fragmented footprint that makes nearly
@@ -787,7 +787,7 @@ fn greedy_cut(tree: &QuadTree, budget: usize) -> Vec<usize> {
         }
     }
 
-    // Phase 2 — residual: refine the highest error-per-vertex interior nodes
+    // Phase 2 - residual: refine the highest error-per-vertex interior nodes
     // until the budget is spent.
     let mut heap = std::collections::BinaryHeap::new();
     for (node, &is_active) in active.iter().enumerate() {
@@ -823,7 +823,7 @@ fn greedy_cut(tree: &QuadTree, budget: usize) -> Vec<usize> {
 /// Adaptive terrain sampler: a fine candidate grid aggregated into a quadtree,
 /// then greedily refined where a single plane fits the surface worst per added
 /// vertex. Complex ground (crests, benches, drains) keeps fine detail while
-/// planar areas — even steep batters — collapse to a few vertices. Fully
+/// planar areas - even steep batters - collapse to a few vertices. Fully
 /// deterministic.
 fn adaptive_quadtree_subsample_terrain(
     points: &[DVec3],

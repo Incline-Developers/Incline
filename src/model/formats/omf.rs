@@ -1,8 +1,8 @@
 //! Whole-project Open Mining Format (OMF) interchange.
 //!
 //! OMF is a container for mining data, not a triangle-mesh encoding.  This
-//! module therefore translates a snapshot of every open Incline data family
-//! to one OMF project and decodes all matching OMF element types on import.
+//! module therefore translates a snapshot of every project-owned data family
+//! to one project and decodes all matching OMF element types on import.
 //! Native OMF geometry and attributes keep the file useful in other programs;
 //! `incline:*` metadata preserves application-specific semantics for lossless
 //! round trips (bulged design strings, text, drill intervals, and styling).
@@ -28,9 +28,9 @@ use crate::{
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
         },
-        pidb::{self, PidbFile, PidbMetadata},
         point_cloud::{LoadedPointCloud, OpenPointCloud, finite_bounds, prepare_for_render},
         progress::Phase,
+        project::{self, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
         triangulation::{LoadedTriangulation, OpenTriangulation, morton_surface_face_order, unique_edges},
     },
@@ -43,13 +43,15 @@ const META_OBJECT: &str = "incline:object";
 const META_LAYER: &str = "incline:layer";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
+const META_ID: &str = "incline:id";
+const META_DRILL_HOLE: &str = "incline:drill_hole";
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
 #[derive(Clone, Default)]
-pub(crate) struct ExportSnapshot {
+pub(crate) struct ProjectSnapshot {
     pub(crate) name: String,
-    pub(crate) designs: Vec<PidbFile>,
+    pub(crate) designs: Option<ProjectFile>,
     pub(crate) triangulations: Vec<OpenTriangulation>,
     pub(crate) block_models: Vec<OpenBlockModel>,
     pub(crate) drill_holes: Vec<OpenDrillHoleDataset>,
@@ -57,12 +59,12 @@ pub(crate) struct ExportSnapshot {
     pub(crate) rasters: Vec<OpenRasterTexture>,
 }
 
-impl std::fmt::Debug for ExportSnapshot {
+impl std::fmt::Debug for ProjectSnapshot {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("ExportSnapshot")
+            .debug_struct("ProjectSnapshot")
             .field("name", &self.name)
-            .field("designs", &self.designs.len())
+            .field("designs", &usize::from(self.designs.is_some()))
             .field("triangulations", &self.triangulations.len())
             .field("block_models", &self.block_models.len())
             .field("drill_holes", &self.drill_holes.len())
@@ -72,9 +74,9 @@ impl std::fmt::Debug for ExportSnapshot {
     }
 }
 
-impl ExportSnapshot {
+impl ProjectSnapshot {
     pub(crate) fn is_empty(&self) -> bool {
-        self.designs.is_empty()
+        self.designs.is_none()
             && self.triangulations.is_empty()
             && self.block_models.is_empty()
             && self.drill_holes.is_empty()
@@ -83,26 +85,39 @@ impl ExportSnapshot {
     }
 
     fn item_count(&self) -> usize {
-        self.designs.len() + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len()
+        usize::from(self.designs.is_some()) + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len()
     }
 }
 
 pub(crate) struct ImportedTriangulation {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedTriangulation,
     pub(crate) visible: bool,
     pub(crate) color: [f32; 4],
     pub(crate) line_color: [f32; 4],
     pub(crate) line_weight: Option<f32>,
     pub(crate) raster_opacity: f32,
+    pub(crate) raster_texture_id: Option<u64>,
 }
 
 pub(crate) struct ImportedBlockModel {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedBlockModel,
     pub(crate) visible: bool,
     pub(crate) color: [f32; 4],
+    pub(crate) slice: Option<crate::model::block_model::BlockModelSlice>,
+    pub(crate) color_transfer: crate::model::block_model::ColorTransferFunction,
+    pub(crate) hide_empty_color_values: bool,
 }
 
 pub(crate) struct ImportedPointCloud {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedPointCloud,
     pub(crate) visible: bool,
     pub(crate) color: [f32; 4],
@@ -110,19 +125,34 @@ pub(crate) struct ImportedPointCloud {
 }
 
 pub(crate) struct ImportedDrillHoles {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedDrillHoleDataset,
+    pub(crate) visible: bool,
+    pub(crate) color: crate::model::drill_hole::DrillColorState,
+}
+
+pub(crate) struct ImportedRaster {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
+    pub(crate) loaded: LoadedRasterTexture,
     pub(crate) visible: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct ImportBundle {
     pub(crate) project_name: String,
-    pub(crate) designs: Vec<PidbFile>,
+    pub(crate) coordinate_reference_system: String,
+    pub(crate) units: String,
+    pub(crate) origin: [f64; 3],
+    pub(crate) designs: Vec<ProjectFile>,
     pub(crate) triangulations: Vec<ImportedTriangulation>,
     pub(crate) block_models: Vec<ImportedBlockModel>,
     pub(crate) drill_holes: Vec<ImportedDrillHoles>,
     pub(crate) point_clouds: Vec<ImportedPointCloud>,
-    pub(crate) rasters: Vec<LoadedRasterTexture>,
+    pub(crate) rasters: Vec<ImportedRaster>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -133,7 +163,7 @@ impl ImportBundle {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn write_path(snapshot: ExportSnapshot, path: &Path, progress: &Phase) -> Result<()> {
+pub(crate) fn write_path(snapshot: ProjectSnapshot, path: &Path, progress: &Phase) -> Result<()> {
     crate::model::atomic_file::write_atomic(path, |file| {
         write_to(snapshot, file, progress)?;
         Ok(())
@@ -141,12 +171,12 @@ pub(crate) fn write_path(snapshot: ExportSnapshot, path: &Path, progress: &Phase
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) fn to_bytes(snapshot: ExportSnapshot, progress: &Phase) -> Result<Vec<u8>> {
+pub(crate) fn to_bytes(snapshot: ProjectSnapshot, progress: &Phase) -> Result<Vec<u8>> {
     let cursor = write_to(snapshot, Cursor::new(Vec::new()), progress)?;
     Ok(cursor.into_inner())
 }
 
-fn write_to<W: Write + Seek + Send>(snapshot: ExportSnapshot, output: W, progress: &Phase) -> Result<W> {
+fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progress: &Phase) -> Result<W> {
     if snapshot.is_empty() {
         bail!("There is no open Incline data to export");
     }
@@ -161,7 +191,7 @@ fn write_to<W: Write + Seek + Send>(snapshot: ExportSnapshot, output: W, progres
         .filter(|projection| !projection.is_empty())
         .collect::<BTreeSet<_>>();
 
-    for design in &snapshot.designs {
+    if let Some(design) = &snapshot.designs {
         elements.push(write_design(&mut writer, design)?);
         complete += 1;
         progress.set_items(complete, total);
@@ -198,11 +228,18 @@ fn write_to<W: Write + Seek + Send>(snapshot: ExportSnapshot, output: W, progres
     let mut project = omf_crate::Project::new(if snapshot.name.trim().is_empty() { "Incline project" } else { &snapshot.name });
     project.application = format!("Incline {}", env!("CARGO_PKG_VERSION"));
     project.description = "Mining data exported by Incline".to_owned();
-    if coordinate_reference_systems.len() == 1 {
+    if let Some(design) = snapshot.designs.as_ref()
+        && !design.metadata.coordinate_reference_system.trim().is_empty()
+    {
+        project.coordinate_reference_system = design.metadata.coordinate_reference_system.clone();
+    } else if coordinate_reference_systems.len() == 1 {
         project.coordinate_reference_system = coordinate_reference_systems.into_iter().next().unwrap_or_default().to_owned();
     }
+    if let Some(design) = snapshot.designs.as_ref() {
+        project.units = design.metadata.units.clone();
+    }
     project.elements = elements;
-    let (output, _warnings) = writer.finish(project).context("finish OMF project")?;
+    let (output, _warnings) = writer.finish(project).context("finish project")?;
     progress.finish();
     Ok(output)
 }
@@ -217,6 +254,40 @@ fn kind(element: &omf_crate::Element) -> Option<&str> {
 
 fn element_name(element: &omf_crate::Element) -> &str {
     element.metadata.get(META_NAME).and_then(Value::as_str).unwrap_or(&element.name)
+}
+
+fn element_id(element: &omf_crate::Element) -> Option<u64> {
+    element
+        .metadata
+        .get(META_ID)
+        .and_then(|value| value.as_str().and_then(|value| value.parse().ok()).or_else(|| value.as_u64()))
+}
+
+fn element_source_name(element: &omf_crate::Element) -> Option<String> {
+    element
+        .metadata
+        .get(META_SOURCE)
+        .and_then(|value| value.get("filename"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn element_source_format(element: &omf_crate::Element) -> Option<String> {
+    element
+        .metadata
+        .get(META_SOURCE)
+        .and_then(|value| value.get("format"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn put_item_identity(element: &mut omf_crate::Element, id: u64, source_name: Option<&str>, source_format: Option<&str>, fallback_format: &str) {
+    put(element, META_ID, id.to_string());
+    if source_name.is_some() || source_format.is_some() {
+        put(element, META_SOURCE, json!({ "filename": source_name, "format": source_format.unwrap_or(fallback_format) }));
+    }
 }
 
 fn make_element_names_unique(elements: &mut [omf_crate::Element]) {
@@ -258,7 +329,8 @@ fn element_color(element: &omf_crate::Element, fallback: [f32; 4]) -> [f32; 4] {
     element.color.map(linear_rgba).unwrap_or(fallback)
 }
 
-fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, design: &PidbFile) -> Result<omf_crate::Element> {
+fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, design: &ProjectFile) -> Result<omf_crate::Element> {
+    const LOCAL_MASK: u64 = u32::MAX as u64;
     let document = &design.document;
     let mut layers = Vec::with_capacity(document.layers().len());
     for layer in document.layers() {
@@ -269,17 +341,19 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         let mut element = omf_crate::Element::new(layer.name.clone(), omf_crate::Composite::new(objects));
         element.color = Some(rgba8(layer.color));
         put(&mut element, META_KIND, "design_layer");
-        put(&mut element, META_LAYER, serde_json::to_value(layer)?);
+        let mut portable_layer = layer.clone();
+        portable_layer.id = crate::model::LayerId(layer.id.0 & LOCAL_MASK);
+        put(&mut element, META_LAYER, serde_json::to_value(portable_layer)?);
         layers.push(element);
     }
-    let mut element = omf_crate::Element::new(design.metadata.name.clone(), omf_crate::Composite::new(layers));
-    put(&mut element, META_KIND, "design_database");
-    put(&mut element, "incline:format_version", design.format_version);
+    let mut element = omf_crate::Element::new("Designs", omf_crate::Composite::new(layers));
+    put(&mut element, META_KIND, "designs");
     Ok(element)
 }
 
 fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, document: &Document, object: &Object) -> Result<omf_crate::Element> {
-    let local_id = object.id().0 & u64::from(u32::MAX);
+    const LOCAL_MASK: u64 = u32::MAX as u64;
+    let local_id = object.id().0 & LOCAL_MASK;
     let (name, geometry): (String, omf_crate::Geometry) = match object {
         Object::Point { pos, .. } => (format!("Point {local_id}"), omf_crate::PointSet::new(writer.array_vertices([pos.to_array()])?).into()),
         Object::Polyline { verts, closed, .. } => {
@@ -289,7 +363,7 @@ fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
                 segments.push([(verts.len() - 1) as u32, 0]);
             }
             (
-                format!("{} {local_id}", if *closed { "Polygon" } else { "Polyline" }),
+                format!("{} {local_id}", if verts.len() == 2 { "Line" } else { "Polyline" }),
                 omf_crate::LineSet::new(writer.array_vertices(vertices)?, writer.array_segments(segments)?).into(),
             )
         }
@@ -309,7 +383,9 @@ fn write_design_object<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
             Object::Text { .. } => "design_text",
         },
     );
-    put(&mut element, META_OBJECT, serde_json::to_value(object)?);
+    let portable_object = object.with_id_and_layer(crate::model::ObjectId(local_id), crate::model::LayerId(object.layer().0 & LOCAL_MASK));
+    put(&mut element, META_OBJECT, serde_json::to_value(portable_object)?);
+    put(&mut element, META_STYLE, json!({ "visible": !document.is_object_hidden(object.id()) }));
     Ok(element)
 }
 
@@ -323,6 +399,13 @@ fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
     );
     element.color = Some(rgba8(triangulation.color));
     put(&mut element, META_KIND, "triangulation");
+    put_item_identity(
+        &mut element,
+        triangulation.id.0,
+        triangulation.state.source_name.as_deref(),
+        triangulation.state.source_format.as_deref(),
+        "surface",
+    );
     put(
         &mut element,
         META_STYLE,
@@ -332,6 +415,7 @@ fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
             "line_color": triangulation.line_color,
             "line_weight": triangulation.line_weight,
             "raster_opacity": triangulation.raster_opacity,
+            "raster_texture_id": triangulation.raster_texture.map(|id| id.0),
         }),
     );
     Ok(element)
@@ -351,6 +435,13 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         ));
     }
     put(&mut element, META_KIND, "point_cloud");
+    put_item_identity(
+        &mut element,
+        cloud.id.0,
+        cloud.state.source_name.as_deref(),
+        cloud.state.source_format.as_deref(),
+        "point-set",
+    );
     put(
         &mut element,
         META_STYLE,
@@ -431,10 +522,24 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         }
     }
     put(&mut element, META_KIND, "block_model");
+    put_item_identity(
+        &mut element,
+        open.id.0,
+        open.state.source_name.as_deref(),
+        open.state.source_format.as_deref(),
+        "block-model",
+    );
     put(
         &mut element,
         META_STYLE,
-        json!({ "visible": open.visible, "color": open.color, "active_color_variable": open.active_color_variable }),
+        json!({
+            "visible": open.visible,
+            "color": open.color,
+            "slice": open.slice,
+            "active_color_variable": open.active_color_variable,
+            "color_transfer": open.color_transfer,
+            "hide_empty_color_values": open.hide_empty_color_values,
+        }),
     );
     Ok(element)
 }
@@ -451,8 +556,14 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     }
     let mut element = omf_crate::Element::new(open.name.clone(), omf_crate::Composite::new(holes));
     put(&mut element, META_KIND, "drillhole_dataset");
-    put(&mut element, META_SOURCE, serde_json::to_value(&open.source)?);
-    put(&mut element, META_STYLE, json!({ "visible": open.visible }));
+    put_item_identity(
+        &mut element,
+        open.id.0,
+        open.state.source_name.as_deref(),
+        open.state.source_format.as_deref(),
+        "drill-holes",
+    );
+    put(&mut element, META_STYLE, json!({ "visible": open.visible, "color": open.color }));
     Ok(Some(element))
 }
 
@@ -563,7 +674,7 @@ fn write_drill_hole<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer
         }
     }
     put(&mut element, META_KIND, "drillhole");
-    put(&mut element, "incline:drill_hole", serde_json::to_value(hole)?);
+    put(&mut element, META_DRILL_HOLE, serde_json::to_value(hole)?);
     Ok(Some(element))
 }
 
@@ -589,7 +700,7 @@ fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             writer.array_triangles([[0, 1, 2], [0, 2, 3]])?,
         ),
     );
-    let png = encode_png(raster.preview_size, &raster.rgba)?;
+    let png = encode_png(raster.source_size, &raster.full_rgba)?;
     element.attributes.push(omf_crate::Attribute::from_texture_map(
         "Raster",
         writer.image_bytes(&png)?,
@@ -597,10 +708,18 @@ fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         writer.array_texcoords([[0.0_f64, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])?,
     ));
     put(&mut element, META_KIND, "raster");
+    put_item_identity(
+        &mut element,
+        raster.id.0,
+        raster.state.source_name.as_deref(),
+        raster.state.source_format.as_deref(),
+        "raster",
+    );
     put(
         &mut element,
         META_STYLE,
         json!({
+            "visible": raster.visible,
             "world_to_uv": raster.world_to_uv,
             "source_size": raster.source_size,
             "preview_size": raster.preview_size,
@@ -638,11 +757,29 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
         image_dim: Some(65_536),
         validation: Some(1_000),
     });
-    let (project, problems) = reader.project().context("read OMF project index")?;
+    let (project, problems) = reader.project().context("read project index")?;
     let mut bundle = ImportBundle {
         project_name: project.name.clone(),
+        coordinate_reference_system: project.coordinate_reference_system.clone(),
+        units: project.units.clone(),
+        origin: project.origin,
         ..Default::default()
     };
+    if !project.description.trim().is_empty() && project.description != "Mining data exported by Incline" {
+        bundle.warnings.push("Project description is not retained".to_owned());
+    }
+    if !project.author.trim().is_empty() {
+        bundle.warnings.push("Project author is not retained".to_owned());
+    }
+    if !project.application.trim().is_empty() && !project.application.starts_with("Incline ") {
+        bundle.warnings.push(format!("Project application metadata '{}' is not retained", project.application));
+    }
+    if !project.metadata.is_empty() {
+        bundle.warnings.push(format!(
+            "Project has unsupported metadata keys: {}",
+            project.metadata.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
     if !problems.is_empty() {
         bundle.warnings.push(format!("OMF validation warnings: {problems:?}"));
     }
@@ -650,6 +787,7 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
         reader: &reader,
         project_origin: DVec3::from_array(project.origin),
         project_crs: project.coordinate_reference_system,
+        project_units: project.units,
         source_name,
         bundle,
         generic_design: Document::new(),
@@ -698,6 +836,7 @@ struct Decoder<'a, R: omf_crate::file::ReadAt> {
     reader: &'a omf_crate::file::Reader<R>,
     project_origin: DVec3,
     project_crs: String,
+    project_units: String,
     source_name: &'a str,
     bundle: ImportBundle,
     generic_design: Document,
@@ -707,11 +846,13 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     fn finish(mut self) -> Result<ImportBundle> {
         if !self.generic_design.layers().is_empty() {
             self.generic_design.validate().context("validate OMF line-set designs")?;
-            self.bundle.designs.push(PidbFile {
-                format_version: pidb::PIDB_FORMAT_VERSION,
+            self.bundle.designs.push(ProjectFile {
+                format_version: project::PROJECT_FORMAT_VERSION,
                 document: self.generic_design,
-                metadata: PidbMetadata {
-                    name: format!("{}.pidb", file_stem(self.source_name)),
+                metadata: ProjectMetadata {
+                    name: file_stem(self.source_name),
+                    coordinate_reference_system: self.project_crs.clone(),
+                    units: self.project_units.clone(),
                 },
             });
         }
@@ -719,8 +860,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn walk(&mut self, element: &omf_crate::Element) -> Result<()> {
+        self.record_unsupported_content(element);
         match kind(element) {
-            Some("design_database") => {
+            Some("designs" | "design_database") => {
                 let design = self.read_design(element)?;
                 self.bundle.designs.push(design);
                 return Ok(());
@@ -756,61 +898,140 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         Ok(())
     }
 
-    fn read_design(&mut self, element: &omf_crate::Element) -> Result<PidbFile> {
+    fn record_unsupported_content(&mut self, element: &omf_crate::Element) {
+        const KNOWN_METADATA: &[&str] = &[META_KIND, META_NAME, META_OBJECT, META_LAYER, META_SOURCE, META_STYLE, META_ID, META_DRILL_HOLE];
+        let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
+        if !unknown_metadata.is_empty() {
+            self.bundle
+                .warnings
+                .push(format!("Element '{}' has unsupported metadata keys: {}", element.name, unknown_metadata.join(", ")));
+        }
+        if !element.description.trim().is_empty() {
+            self.bundle
+                .warnings
+                .push(format!("Element '{}' has a description that Incline does not retain", element.name));
+        }
+
+        let incline_kind = kind(element);
+        let unsupported_attributes = element
+            .attributes
+            .iter()
+            .filter(|attribute| {
+                if matches!(incline_kind, Some("designs" | "design_database" | "drillhole_dataset" | "drillhole" | "raster")) {
+                    return false;
+                }
+                match &element.geometry {
+                    omf_crate::Geometry::Surface(_) | omf_crate::Geometry::GridSurface(_) => !matches!(
+                        attribute.data,
+                        omf_crate::AttributeData::MappedTexture { .. } | omf_crate::AttributeData::ProjectedTexture { .. }
+                    ),
+                    omf_crate::Geometry::PointSet(_) => !matches!(attribute.data, omf_crate::AttributeData::Color { .. }),
+                    omf_crate::Geometry::BlockModel(_) => !matches!(attribute.data, omf_crate::AttributeData::Number { .. } | omf_crate::AttributeData::Category { .. }),
+                    omf_crate::Geometry::LineSet(_) | omf_crate::Geometry::Composite(_) => true,
+                }
+            })
+            .map(|attribute| attribute.name.clone())
+            .collect::<Vec<_>>();
+        if !unsupported_attributes.is_empty() {
+            self.bundle.warnings.push(format!(
+                "Element '{}' has unsupported attributes that will be omitted: {}",
+                element.name,
+                unsupported_attributes.join(", ")
+            ));
+        }
+        for attribute in &element.attributes {
+            if !attribute.description.trim().is_empty() || !attribute.metadata.is_empty() {
+                self.bundle.warnings.push(format!(
+                    "Attribute '{}' on element '{}' has descriptive metadata that Incline does not retain",
+                    attribute.name, element.name
+                ));
+            }
+        }
+    }
+
+    fn read_design(&mut self, element: &omf_crate::Element) -> Result<ProjectFile> {
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
-            bail!("Incline design database '{}' is not an OMF composite", element.name);
+            bail!("Incline designs element '{}' is not an OMF composite", element.name);
         };
         let mut document = Document::new();
         for layer_element in &composite.elements {
-            let layer_template = layer_element
+            self.record_unsupported_content(layer_element);
+            let mut layer_template = layer_element
                 .metadata
                 .get(META_LAYER)
                 .cloned()
                 .and_then(|value| serde_json::from_value::<Layer>(value).ok());
+            if let Some(layer) = layer_template.as_mut() {
+                layer.elevation += self.project_origin.z as f32;
+            }
             let color = layer_template
                 .as_ref()
                 .map(|layer| layer.color)
                 .unwrap_or_else(|| element_color(layer_element, [1.0, 1.0, 1.0, 1.0]));
-            let layer_id = document.add_layer(
-                layer_template
-                    .as_ref()
-                    .map(|layer| layer.name.clone())
-                    .unwrap_or_else(|| element_name(layer_element).to_owned()),
-                layer_template.as_ref().and_then(|layer| layer.color_index),
-                color,
-                layer_template.as_ref().is_none_or(|layer| layer.visible),
-                layer_template.as_ref().map_or(0.0, |layer| layer.elevation),
-            );
+            let layer_id = if let Some(layer) = layer_template.as_ref()
+                && layer.id.0 <= u32::MAX as u64
+                && document.layer(layer.id).is_none()
+            {
+                document.append_layer_snapshot(layer, std::iter::empty());
+                layer.id
+            } else {
+                document.add_layer(
+                    layer_template
+                        .as_ref()
+                        .map(|layer| layer.name.clone())
+                        .unwrap_or_else(|| element_name(layer_element).to_owned()),
+                    layer_template.as_ref().and_then(|layer| layer.color_index),
+                    color,
+                    layer_template.as_ref().is_none_or(|layer| layer.visible),
+                    layer_template.as_ref().map_or(0.0, |layer| layer.elevation),
+                )
+            };
             let children = match &layer_element.geometry {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),
                 _ => std::slice::from_ref(layer_element),
             };
             for object_element in children {
-                if let Some(value) = object_element.metadata.get(META_OBJECT).cloned()
-                    && let Ok(object) = serde_json::from_value::<Object>(value)
-                {
-                    let id = document.allocate_object_id();
-                    document.insert_object(object.with_id_and_layer(id, layer_id));
-                    continue;
+                if !std::ptr::eq(layer_element, object_element) {
+                    self.record_unsupported_content(object_element);
+                }
+                if let Some(value) = object_element.metadata.get(META_OBJECT).cloned() {
+                    match serde_json::from_value::<Object>(value) {
+                        Ok(mut object) => {
+                            object.translate(self.project_origin);
+                            let source_id = object.id();
+                            let id = if source_id.0 <= u32::MAX as u64 && document.get_object(source_id).is_none() {
+                                source_id
+                            } else {
+                                document.allocate_object_id()
+                            };
+                            document.insert_object(object.with_id_and_layer(id, layer_id));
+                            if style_bool(object_element.metadata.get(META_STYLE), "visible") == Some(false) {
+                                document.set_object_hidden(id, true);
+                            }
+                            continue;
+                        }
+                        Err(error) => self.bundle.warnings.push(format!(
+                            "Design object '{}' has invalid Incline metadata and was reconstructed from native geometry where possible: {error}",
+                            object_element.name
+                        )),
+                    }
                 }
                 self.append_design_geometry(&mut document, layer_id, object_element)?;
             }
         }
-        document.validate().with_context(|| format!("validate design database '{}'", element.name))?;
-        Ok(PidbFile {
-            format_version: pidb::PIDB_FORMAT_VERSION,
+        document.validate().with_context(|| format!("validate designs '{}'", element.name))?;
+        Ok(ProjectFile {
+            format_version: project::PROJECT_FORMAT_VERSION,
             document,
-            metadata: PidbMetadata {
-                name: if element_name(element).to_ascii_lowercase().ends_with(".pidb") {
-                    element_name(element).to_owned()
-                } else {
-                    format!("{}.pidb", element_name(element))
-                },
+            metadata: ProjectMetadata {
+                name: element_name(element).to_owned(),
+                coordinate_reference_system: self.project_crs.clone(),
+                units: self.project_units.clone(),
             },
         })
     }
 
-    fn append_design_geometry(&self, document: &mut Document, layer: crate::model::LayerId, element: &omf_crate::Element) -> Result<()> {
+    fn append_design_geometry(&mut self, document: &mut Document, layer: crate::model::LayerId, element: &omf_crate::Element) -> Result<()> {
         match &element.geometry {
             omf_crate::Geometry::PointSet(points) => {
                 let offset = self.project_origin + DVec3::from_array(points.origin);
@@ -837,7 +1058,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     });
                 }
             }
-            _ => {}
+            _ => self
+                .bundle
+                .warnings
+                .push(format!("Skipped unsupported '{}' geometry nested inside the Designs composite", element.name)),
         }
         Ok(())
     }
@@ -931,6 +1155,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let style = element.metadata.get(META_STYLE);
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
         self.bundle.triangulations.push(ImportedTriangulation {
+            preferred_id: element_id(element),
+            source_name: element_source_name(element),
+            source_format: element_source_format(element),
             loaded: LoadedTriangulation {
                 name: element_name(element).to_owned(),
                 path: virtual_path(self.source_name, element_name(element), "obj"),
@@ -947,6 +1174,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
                 .unwrap_or(Some(1.0)),
             raster_opacity: style_f32(style, "raster_opacity").unwrap_or(1.0),
+            raster_texture_id: style_value(style, "raster_texture_id"),
         });
         Ok(())
     }
@@ -974,10 +1202,12 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let prepared = prepare_for_render(&positions, colors.as_deref(), bounds);
         let style = element.metadata.get(META_STYLE);
         self.bundle.point_clouds.push(ImportedPointCloud {
+            preferred_id: element_id(element),
+            source_name: element_source_name(element),
+            source_format: element_source_format(element),
             loaded: LoadedPointCloud {
                 name: element_name(element).to_owned(),
                 path: virtual_path(self.source_name, element_name(element), "pcd"),
-                is_saved: false,
                 points: Arc::new(positions),
                 colors: colors.map(Arc::new),
                 prepared: Arc::new(prepared),
@@ -1080,12 +1310,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .or_else(|| model.color_variables().into_iter().find(|variable| !variable.special).map(|variable| variable.name.clone()));
         let active_values_cache = OpenBlockModel::prepare_active_values_cache(&model, &renderable, active_color_variable.as_deref());
         self.bundle.block_models.push(ImportedBlockModel {
+            preferred_id: element_id(element),
+            source_name: element_source_name(element),
+            source_format: element_source_format(element),
             loaded: LoadedBlockModel {
                 name: element_name(element).to_owned(),
                 source: crate::model::block_model::BlockModelSource {
                     path: virtual_path(self.source_name, element_name(element), "csv"),
                     csv_columns: None,
-                    generated: true,
                 },
                 model,
                 blocks,
@@ -1098,6 +1330,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             },
             visible: style_bool(style, "visible").unwrap_or(true),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.72, 0.72, 0.75, 1.0])),
+            slice: style_value(style, "slice"),
+            color_transfer: style_value(style, "color_transfer").unwrap_or_default(),
+            hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
         });
         Ok(())
     }
@@ -1161,9 +1396,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         };
         let mut holes = Vec::new();
         for child in &composite.elements {
-            if let Some(value) = child.metadata.get("incline:drill_hole").cloned()
-                && let Ok(hole) = serde_json::from_value::<DrillHole>(value)
+            self.record_unsupported_content(child);
+            if let Some(value) = child.metadata.get(META_DRILL_HOLE).cloned()
+                && let Ok(mut hole) = serde_json::from_value::<DrillHole>(value)
             {
+                hole.collar += self.project_origin;
+                for station in &mut hole.trace {
+                    station.position += self.project_origin;
+                }
                 holes.push(hole);
                 continue;
             }
@@ -1177,6 +1417,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let dataset = Arc::new(DrillHoleDataset::new(holes));
         let path = virtual_path(self.source_name, element_name(element), "omf");
         Ok(Some(ImportedDrillHoles {
+            preferred_id: element_id(element),
+            source_name: element_source_name(element),
+            source_format: element_source_format(element),
             loaded: LoadedDrillHoleDataset {
                 name: element_name(element).to_owned(),
                 source: DrillHoleSource::Omf {
@@ -1186,6 +1429,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 dataset,
             },
             visible: style_bool(element.metadata.get(META_STYLE), "visible").unwrap_or(true),
+            color: style_value(element.metadata.get(META_STYLE), "color").unwrap_or_default(),
         }))
     }
 
@@ -1261,6 +1505,16 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             let world_to_uv = style
                 .and_then(|style| style.get("world_to_uv"))
                 .and_then(|value| serde_json::from_value::<[f64; 6]>(value.clone()).ok())
+                .map(|[a, b, c, d, e, f]| {
+                    [
+                        a,
+                        b,
+                        c - a * self.project_origin.x - b * self.project_origin.y,
+                        d,
+                        e,
+                        f - d * self.project_origin.x - e * self.project_origin.y,
+                    ]
+                })
                 .or(derived_world_to_uv);
             let Some(world_to_uv) = world_to_uv else {
                 self.bundle.warnings.push(format!(
@@ -1269,28 +1523,56 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 ));
                 continue;
             };
-            let source_size = style
+            let declared_source_size = style
                 .and_then(|style| style.get("source_size"))
                 .and_then(|value| serde_json::from_value::<[u32; 2]>(value.clone()).ok())
+                .unwrap_or(size);
+            if declared_source_size != size {
+                self.bundle.warnings.push(format!(
+                    "Raster '{}' declared source size {} × {}, but its embedded full-resolution image is {} × {}; the image dimensions were used",
+                    element_name(element),
+                    declared_source_size[0],
+                    declared_source_size[1],
+                    size[0],
+                    size[1]
+                ));
+            }
+            let preview_size = style
+                .and_then(|style| style.get("preview_size"))
+                .and_then(|value| serde_json::from_value::<[u32; 2]>(value.clone()).ok())
+                .filter(|[width, height]| *width > 0 && *height > 0 && *width <= size[0] && *height <= size[1])
                 .unwrap_or(size);
             let projection = style
                 .and_then(|style| style.get("projection"))
                 .and_then(Value::as_str)
                 .unwrap_or(&self.project_crs)
                 .to_owned();
-            self.bundle.rasters.push(LoadedRasterTexture {
-                name: if attribute.name == "Raster" {
-                    element_name(element).to_owned()
-                } else {
-                    format!("{} – {}", element_name(element), attribute.name)
+            let full_rgba = Arc::new(decoded.into_raw());
+            let rgba = if preview_size == size {
+                Arc::clone(&full_rgba)
+            } else {
+                Arc::new(crate::model::raster::downscale_rgba(&full_rgba, size, preview_size)?)
+            };
+            self.bundle.rasters.push(ImportedRaster {
+                preferred_id: element_id(element),
+                source_name: element_source_name(element),
+                source_format: element_source_format(element),
+                visible: style_bool(style, "visible").unwrap_or(true),
+                loaded: LoadedRasterTexture {
+                    name: if attribute.name == "Raster" {
+                        element_name(element).to_owned()
+                    } else {
+                        format!("{} – {}", element_name(element), attribute.name)
+                    },
+                    path: virtual_path(self.source_name, element_name(element), "tif"),
+                    source_size: size,
+                    preview_size,
+                    full_rgba,
+                    rgba,
+                    world_to_uv,
+                    projection,
+                    driver_name: "OMF texture".to_owned(),
                 },
-                path: virtual_path(self.source_name, element_name(element), "tif"),
-                source_size,
-                preview_size: size,
-                rgba: Arc::new(decoded.into_raw()),
-                world_to_uv,
-                projection,
-                driver_name: "OMF texture".to_owned(),
             });
         }
         Ok(())

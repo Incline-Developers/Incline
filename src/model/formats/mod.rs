@@ -1,6 +1,6 @@
 //! Translation between the application's triangulations and common triangle-mesh formats.
 //!
-//! OBJ and PLY polygons are triangulated in their dominant plane. STL normals,
+//! OBJ and PLY polylines are triangulated in their dominant plane. STL normals,
 //! OBJ materials/texture coordinates, and PLY properties other than positions
 //! and vertex indices are intentionally ignored.
 
@@ -15,7 +15,7 @@ pub(crate) mod point_cloud;
 use std::{
     collections::HashMap,
     error::Error,
-    fmt, fs,
+    fmt,
     io::{self, Write},
     path::Path,
 };
@@ -29,8 +29,10 @@ use crate::model::progress::Phase;
 const PARSE_PROGRESS_STRIDE: usize = 4096;
 /// Share of a load spent pulling the file off disk, as opposed to parsing it.
 /// Both halves report exactly; only the split between them is an estimate.
+#[cfg(not(target_arch = "wasm32"))]
 const FILE_READ_SHARE: f32 = 0.35;
 /// Bytes per `read` when reading a file with progress.
+#[cfg(not(target_arch = "wasm32"))]
 const FILE_READ_CHUNK: usize = 1 << 22;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +108,7 @@ impl From<ReadError> for TranslationError {
 /// Read the mesh at `path`, reporting into `progress`: the file read is exact
 /// (the size is known up front) and each parser counts the items it walks, so
 /// the percentage is real rather than a guess at how long a load takes.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn read_mesh_with_progress(path: impl AsRef<Path>, progress: &Phase) -> Result<Triangulation, TranslationError> {
     let path = path.as_ref();
     let format = MeshFormat::from_path(path).ok_or_else(|| unsupported_path(path))?;
@@ -116,10 +119,11 @@ pub fn read_mesh_with_progress(path: impl AsRef<Path>, progress: &Phase) -> Resu
 /// Read a whole file in chunks, reporting bytes read. `fs::read` would be one
 /// opaque call; the file size is known here, so the bar can move while a large
 /// mesh streams off disk.
+#[cfg(not(target_arch = "wasm32"))]
 fn read_file_with_progress(path: &Path, progress: &Phase) -> io::Result<Vec<u8>> {
     use std::io::Read;
 
-    let mut file = fs::File::open(path)?;
+    let mut file = std::fs::File::open(path)?;
     let total = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
     let mut bytes = Vec::with_capacity(total as usize);
     let mut chunk = vec![0u8; FILE_READ_CHUNK];
@@ -194,6 +198,7 @@ pub(crate) fn write_item_total(items: usize) -> u64 {
     items.max(1) as u64
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn unsupported_path(path: &Path) -> TranslationError {
     TranslationError::UnsupportedExtension(path.extension().and_then(|s| s.to_str()).unwrap_or("").to_string())
 }
@@ -258,9 +263,9 @@ pub fn read_obj_bytes_with_progress(bytes: &[u8], progress: &Phase) -> Result<Tr
             parse_faces.advance_by(1);
             let mut fields = line.split_ascii_whitespace();
             fields.next(); // skip "f"
-            let polygon = fields.map(|field| parse_obj_index(field, *vcount_at_point, *line_number)).collect::<Result<Vec<_>, _>>()?;
+            let polyline = fields.map(|field| parse_obj_index(field, *vcount_at_point, *line_number)).collect::<Result<Vec<_>, _>>()?;
             let mut tris = Vec::new();
-            triangulate(&polygon, &vertices, &mut tris, *line_number)?;
+            triangulate(&polyline, &vertices, &mut tris, *line_number)?;
             Ok(tris)
         })
         .collect::<Result<Vec<Vec<[u32; 3]>>, TranslationError>>()?;
@@ -600,7 +605,7 @@ fn read_ascii_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result<
     let positions = ply_position_properties(vertex_element)?;
     let mut rows = text.lines().enumerate();
     let mut vertices = Vec::new();
-    let mut polygons = Vec::<(Vec<u32>, usize)>::new();
+    let mut polylines = Vec::<(Vec<u32>, usize)>::new();
     // The header declares every element count, so the row total is exact.
     let total_rows = ply_row_total(header);
     let mut rows_read = 0usize;
@@ -630,11 +635,11 @@ fn read_ascii_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result<
                 }
                 vertices.push(Vertex::new(xyz[0], xyz[1], xyz[2]));
             } else if element.name == "face" {
-                let mut polygon = None;
+                let mut polyline = None;
                 for property in &element.properties {
                     let values = ascii_ply_property_values(&fields, &mut field_index, property, line_number)?;
                     if matches!(property, PlyProperty::List { name, .. } if name == "vertex_indices" || name == "vertex_index") {
-                        polygon = Some(
+                        polyline = Some(
                             values
                                 .iter()
                                 .map(|value| value.parse::<u32>().map_err(|_| invalid(Some(line_number), "invalid PLY face index")))
@@ -642,7 +647,7 @@ fn read_ascii_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result<
                         );
                     }
                 }
-                polygons.push((polygon.ok_or_else(|| invalid(Some(line_number), "PLY face has no vertex_indices property"))?, line_number));
+                polylines.push((polyline.ok_or_else(|| invalid(Some(line_number), "PLY face has no vertex_indices property"))?, line_number));
             } else {
                 for property in &element.properties {
                     ascii_ply_property_values(&fields, &mut field_index, property, line_number)?;
@@ -652,8 +657,8 @@ fn read_ascii_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result<
     }
 
     let mut triangles = Vec::new();
-    for (polygon, line_number) in polygons {
-        triangulate(&polygon, &vertices, &mut triangles, line_number)?;
+    for (polyline, line_number) in polylines {
+        triangulate(&polyline, &vertices, &mut triangles, line_number)?;
     }
     build_mesh(vertices, triangles)
 }
@@ -686,7 +691,7 @@ fn read_binary_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result
     let positions = ply_position_properties(vertex_element)?;
     let mut offset = 0;
     let mut vertices = Vec::new();
-    let mut polygons = Vec::<(Vec<u32>, usize)>::new();
+    let mut polylines = Vec::<(Vec<u32>, usize)>::new();
     let total_rows = ply_row_total(header);
     let mut rows_read = 0usize;
 
@@ -714,7 +719,7 @@ fn read_binary_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result
                 }
                 vertices.push(Vertex::new(xyz[0], xyz[1], xyz[2]));
             } else if element.name == "face" {
-                let mut polygon = None;
+                let mut polyline = None;
                 for property in &element.properties {
                     match property {
                         PlyProperty::Scalar { data_type, .. } => {
@@ -733,7 +738,7 @@ fn read_binary_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result
                                     let value = read_ply_integer(bytes, &mut offset, *item_type)?;
                                     values.push(u32::try_from(value).map_err(|_| TranslationError::TooLarge("face index"))?);
                                 }
-                                polygon = Some(values);
+                                polyline = Some(values);
                             } else {
                                 offset = offset
                                     .checked_add(count.checked_mul(item_type.byte_len()).ok_or_else(|| invalid(None, "PLY list byte length overflows"))?)
@@ -742,7 +747,7 @@ fn read_binary_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result
                         }
                     }
                 }
-                polygons.push((polygon.ok_or_else(|| invalid(None, "PLY face has no vertex_indices property"))?, element_index + 1));
+                polylines.push((polyline.ok_or_else(|| invalid(None, "PLY face has no vertex_indices property"))?, element_index + 1));
             } else {
                 for property in &element.properties {
                     match property {
@@ -757,8 +762,8 @@ fn read_binary_ply(bytes: &[u8], header: &PlyHeader, progress: &Phase) -> Result
     }
 
     let mut triangles = Vec::new();
-    for (polygon, face_index) in polygons {
-        triangulate(&polygon, &vertices, &mut triangles, face_index)?;
+    for (polyline, face_index) in polylines {
+        triangulate(&polyline, &vertices, &mut triangles, face_index)?;
     }
     build_mesh(vertices, triangles)
 }
@@ -912,33 +917,33 @@ pub fn write_ply_with_progress(mesh: &Triangulation, writer: &mut impl Write, pr
     Ok(())
 }
 
-fn triangulate(polygon: &[u32], vertices: &[Vertex], output: &mut Vec<[u32; 3]>, line: usize) -> Result<(), TranslationError> {
-    if polygon.len() < 3 {
+fn triangulate(polyline: &[u32], vertices: &[Vertex], output: &mut Vec<[u32; 3]>, line: usize) -> Result<(), TranslationError> {
+    if polyline.len() < 3 {
         return Err(invalid(Some(line), "face has fewer than three vertices"));
     }
-    if polygon.iter().any(|index| *index as usize >= vertices.len()) {
+    if polyline.iter().any(|index| *index as usize >= vertices.len()) {
         return Err(invalid(Some(line), "face index is out of range"));
     }
-    if polygon.len() == 3 {
-        output.push([polygon[0], polygon[1], polygon[2]]);
+    if polyline.len() == 3 {
+        output.push([polyline[0], polyline[1], polyline[2]]);
         return Ok(());
     }
 
-    // Project onto the polygon's dominant plane so vertical and tilted faces
+    // Project onto the polyline's dominant plane so vertical and tilted faces
     // triangulate just as correctly as horizontal ones. Scale first so valid
     // but very large finite coordinates cannot overflow Newell/earcut math.
-    let coordinate_scale = polygon.iter().flat_map(|index| vertices[*index as usize].as_array()).map(f64::abs).fold(0.0_f64, f64::max);
+    let coordinate_scale = polyline.iter().flat_map(|index| vertices[*index as usize].as_array()).map(f64::abs).fold(0.0_f64, f64::max);
     if coordinate_scale == 0.0 || !coordinate_scale.is_finite() {
         return Err(invalid(Some(line), "face is degenerate"));
     }
-    let scaled = polygon
+    let scaled = polyline
         .iter()
         .map(|index| vertices[*index as usize].as_array().map(|value| value / coordinate_scale))
         .collect::<Vec<_>>();
     let mut normal = [0.0_f64; 3];
-    for index in 0..polygon.len() {
+    for index in 0..polyline.len() {
         let current = scaled[index];
-        let next = scaled[(index + 1) % polygon.len()];
+        let next = scaled[(index + 1) % polyline.len()];
         normal[0] += (current[1] - next[1]) * (current[2] + next[2]);
         normal[1] += (current[2] - next[2]) * (current[0] + next[0]);
         normal[2] += (current[0] - next[0]) * (current[1] + next[1]);
@@ -967,7 +972,7 @@ fn triangulate(polygon: &[u32], vertices: &[Vertex], output: &mut Vec<[u32; 3]>,
             .as_chunks::<3>()
             .0
             .iter()
-            .map(|triangle| [polygon[triangle[0]], polygon[triangle[1]], polygon[triangle[2]]]),
+            .map(|triangle| [polyline[triangle[0]], polyline[triangle[1]], polyline[triangle[2]]]),
     );
     Ok(())
 }

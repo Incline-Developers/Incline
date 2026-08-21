@@ -77,7 +77,7 @@ impl<'a> Graphics<'a> {
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
         if let Some(slice) = self.slice_view.as_mut() {
             // Slice mode owns the clip planes: the symmetric depth extent *is*
-            // the slab, so the scene-fitting passes below must not run — they
+            // the slab, so the scene-fitting passes below must not run - they
             // would blow the clip range back out to the scene bounds.
             slice.width = editor.slice_width_input.clamp(0.1, 1.0e6);
             slice.move_speed = editor.slice_speed_input.clamp(0.0, 1.0e6);
@@ -139,6 +139,7 @@ impl<'a> Graphics<'a> {
             self.scene_origin,
             scale_factor,
             triangulations,
+            rasters,
             editor,
             &self.surface_style_bind_group_layout,
             &self.surface_chunk_bind_group_layout,
@@ -155,7 +156,7 @@ impl<'a> Graphics<'a> {
             &self.block_model_volume_bind_group_layout,
             &self.edge_style_bind_group_layout,
         );
-        self.drill_hole_gpu.sync(&self.device, self.scene_origin, drill_holes);
+        self.drill_hole_gpu.sync(&self.device, self.scene_origin, drill_holes, editor);
         self.point_cloud_gpu.sync(
             &self.device,
             &self.queue,
@@ -165,6 +166,7 @@ impl<'a> Graphics<'a> {
             glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj),
             (self.camera.position - self.scene_origin).as_vec3(),
             point_clouds,
+            editor,
             &self.edge_style_bind_group_layout,
         );
         self.design_point_gpu.sync(
@@ -174,7 +176,7 @@ impl<'a> Graphics<'a> {
             &editor.hidden_handles,
             self.scene_origin,
             scale_factor,
-            editor.show_points || matches!(editor.active_tool, crate::ui::state::ActiveTool::DeleteElement | crate::ui::state::ActiveTool::Move),
+            editor.show_points || editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
             self.geometry_dirty || self.cached_document_revision != document.revision(),
         );
         let render_style_key = editor.render_style_key();

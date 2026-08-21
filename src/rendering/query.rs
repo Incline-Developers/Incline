@@ -30,7 +30,7 @@ impl SceneQuery {
             .iter()
             .filter(|triangulation| {
                 let entity = triangulation.entity_id();
-                triangulation.visible && !hidden.contains(&entity) && frozen.is_none_or(|set| !set.contains(&entity))
+                triangulation.state.loaded && triangulation.visible && !hidden.contains(&entity) && frozen.is_none_or(|set| !set.contains(&entity))
             })
             .filter_map(|triangulation| {
                 triangulation
@@ -41,12 +41,28 @@ impl SceneQuery {
             .min_by(|(_, a), (_, b)| (*a - ray_origin).dot(ray_direction).total_cmp(&(*b - ray_origin).dot(ray_direction)))
     }
 
-    /// Nearest rendered drill-hole cylinder under a ray. Explicit source
+    /// Nearest selectable drill-hole dataset under a ray. Explicit source
     /// diameters use their world-space radius; diameter-less holes use the
-    /// same minimum pixel diameter as the drill-hole vertex shader.
-    pub(crate) fn nearest_drill_hole(drill_holes: &[OpenDrillHoleDataset], ray_origin: DVec3, ray_direction: DVec3, view_projection: &DMat4, screen: Size) -> Option<DVec3> {
+    /// same minimum pixel diameter as the shader. The additional pixel
+    /// tolerance makes thin traces practical to click.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn nearest_drill_hole_entity(
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        ray_origin: DVec3,
+        ray_direction: DVec3,
+        view_projection: &DMat4,
+        screen: Size,
+        threshold_px: f32,
+    ) -> Option<(SceneEntityId, DVec3)> {
         let mut nearest = f64::INFINITY;
-        for dataset in drill_holes.iter().filter(|dataset| dataset.visible) {
+        let mut nearest_entity = None;
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+            let entity = dataset.entity_id();
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
             for hole in &dataset.dataset.holes {
                 for pair in hole.trace.windows(2) {
                     let [start, end] = [pair[0], pair[1]];
@@ -63,16 +79,18 @@ impl SceneQuery {
                         hole.diameter.map(|diameter| diameter * 0.5).unwrap_or(0.0),
                         view_projection,
                         screen,
+                        threshold_px,
                     );
                     if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, start.position, end.position, radius)
                         && distance < nearest
                     {
                         nearest = distance;
+                        nearest_entity = Some(entity);
                     }
                 }
             }
         }
-        nearest.is_finite().then(|| ray_origin + ray_direction * nearest)
+        nearest_entity.map(|entity| (entity, ray_origin + ray_direction * nearest))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -121,7 +139,7 @@ impl SceneQuery {
     }
 }
 
-fn drill_segment_radius(start: DVec3, end: DVec3, source_radius: f64, view_projection: &DMat4, screen: Size) -> f64 {
+fn drill_segment_radius(start: DVec3, end: DVec3, source_radius: f64, view_projection: &DMat4, screen: Size, threshold_px: f32) -> f64 {
     let Some(axis) = (end - start).try_normalize() else {
         return source_radius;
     };
@@ -144,7 +162,7 @@ fn drill_segment_radius(start: DVec3, end: DVec3, source_radius: f64, view_proje
                 .fold(0.0_f64, f64::max)
         })
         .fold(f64::INFINITY, f64::min);
-    let minimum_radius = (f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5) / pixels_per_world.max(1.0e-6);
+    let minimum_radius = (f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
     source_radius.max(minimum_radius)
 }
 
@@ -194,7 +212,7 @@ fn ray_capped_cylinder_distance(origin: DVec3, direction: DVec3, start: DVec3, e
 }
 
 fn nearest_opaque_document_fill(document: &Document, snap_index: &ObjectSnapIndex, hidden: &HashSet<SceneEntityId>, ray_origin: DVec3, ray_direction: DVec3) -> Option<DVec3> {
-    snap_index.nearest_filled_polygon_hit(ray_origin, ray_direction, |object_index| {
+    snap_index.nearest_filled_polyline_hit(ray_origin, ray_direction, |object_index| {
         let Some(object) = document.objects().get(object_index) else {
             return false;
         };

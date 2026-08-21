@@ -253,7 +253,7 @@ impl<'a> App<'a> {
         }
 
         if let Some(project) = self.workspace.active_project_mut() {
-            let doc = &mut project.pidb.document;
+            let doc = &mut project.project.document;
             let commands = offset_specs
                 .into_iter()
                 .map(|(layer, verts, closed, color, fill, line_weight)| {

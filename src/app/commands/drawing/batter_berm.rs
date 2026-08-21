@@ -160,7 +160,7 @@ impl<'a> App<'a> {
         let rings = self.editor.batter_berm_rings_world.clone();
 
         if let Some(project) = self.workspace.active_project_mut() {
-            let doc = &mut project.pidb.document;
+            let doc = &mut project.project.document;
             let commands = rings
                 .into_iter()
                 .map(|ring_verts| {
@@ -214,10 +214,10 @@ fn mode_to_side_and_dz(verts: &[glam::DVec3], closed: bool, mode: BatterBermMode
     (side, delta_z)
 }
 
-/// Returns the sign that offsets geometry inward for the given polygon.
+/// Returns the sign that offsets geometry inward for the given polyline.
 fn inward_side(verts: &[glam::DVec3], closed: bool) -> f64 {
     if closed && verts.len() >= 3 {
-        // Positive offset = left of directed edges = inward for CCW polygons.
+        // Positive offset = left of directed edges = inward for CCW polylines.
         let area = crate::model::geometry::signed_area_xy(verts);
         if area > 0.0 { 1.0 } else { -1.0 }
     } else {
@@ -443,7 +443,7 @@ fn push_distinct_offset_point(points: &mut Vec<glam::DVec3>, point: glam::DVec3)
 }
 
 fn valid_inward_offset(previous: &[glam::DVec3], next: &[glam::DVec3], closed: bool) -> bool {
-    use crate::model::geometry::{point_in_polygon_xy, signed_area_xy};
+    use crate::model::geometry::{point_in_polyline_xy, signed_area_xy};
 
     if !closed {
         return next.len() >= 2;
@@ -464,7 +464,7 @@ fn valid_inward_offset(previous: &[glam::DVec3], next: &[glam::DVec3], closed: b
     for i in 0..next.len() {
         let a = next[i];
         let b = next[(i + 1) % next.len()];
-        if !point_in_polygon_xy(a.truncate(), previous) || !point_in_polygon_xy(a.lerp(b, 0.5).truncate(), previous) {
+        if !point_in_polyline_xy(a.truncate(), previous) || !point_in_polyline_xy(a.lerp(b, 0.5).truncate(), previous) {
             return false;
         }
     }

@@ -9,7 +9,7 @@ macro_rules! batch_property {
         let Some(project) = $self.workspace.active_project_mut() else {
             return;
         };
-        let doc = &mut project.pidb.document;
+        let doc = &mut project.project.document;
         let cmds: Vec<Command> = $ids
             .iter()
             .filter_map(|&id| {
@@ -95,11 +95,11 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
-        if project.pidb.document.layer(target_layer).is_none() {
+        if project.project.document.layer(target_layer).is_none() {
             return;
         }
 
-        let doc = &mut project.pidb.document;
+        let doc = &mut project.project.document;
         let mut selected_after = Vec::new();
         let cmds: Vec<Command> = if copy {
             let originals: Vec<Object> = ids.iter().filter_map(|&id| doc.get_object(id).cloned()).collect();

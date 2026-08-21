@@ -58,10 +58,6 @@ impl egui::Widget for ToolbarButton {
             Color32::TRANSPARENT
         };
         ui.painter().rect_filled(rect, self.corner_radius, fill);
-        if self.selected {
-            ui.painter()
-                .rect_stroke(rect, self.corner_radius, Stroke::new(1.0, ui.visuals().selection.stroke.color), egui::StrokeKind::Inside);
-        }
 
         let icon_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(self.icon_size, rect);
         self.icon.fit_to_exact_size(self.icon_size).paint_at(ui, icon_rect);

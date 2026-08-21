@@ -7,7 +7,10 @@ use crate::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
         themed_icon, unthemed_icon,
         widgets::{
-            menu::{DragableMenu, MenuField, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
+            context_menu::{
+                ContextMenu, ContextMenuAction, ContextMenuFieldColor32, ContextMenuFieldCombo, ContextMenuFieldF32, ContextMenuFieldSegmented, context_menu_separator,
+            },
+            menu::{DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
     },
@@ -52,6 +55,34 @@ fn fill_style_label(style: FillStyle) -> &'static str {
     }
 }
 
+/// Title for the canvas context menu, named after the kind of entity that is
+/// selected (e.g. "Triangulation Properties"). Selections spanning several
+/// kinds fall back to a generic label.
+fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> String {
+    use crate::model::SceneEntityId;
+
+    // (label, whether it came from a document object)
+    let mut kind: Option<(&'static str, bool)> = None;
+    for &handle in &editor.selected_handles {
+        let (label, is_object) = match handle {
+            SceneEntityId::Object(id) => (document.get_object(id).map_or("Object", crate::model::Object::kind_name), true),
+            SceneEntityId::Triangulation(_) => ("Triangulation", false),
+            SceneEntityId::BlockModel(_) => ("Block Model", false),
+            SceneEntityId::DrillHole(_) => ("Drill Hole", false),
+            SceneEntityId::PointCloud(_) => ("Point Cloud", false),
+        };
+        match kind {
+            None => kind = Some((label, is_object)),
+            Some((existing, _)) if existing == label => {}
+            // Mixed object kinds (a line and a text object, say) still share a menu.
+            Some((_, true)) if is_object => kind = Some(("Object", true)),
+            Some(_) => return "Properties".to_string(),
+        }
+    }
+
+    kind.map_or_else(|| "Properties".to_string(), |(label, _)| format!("{label} Properties"))
+}
+
 /// Draw the canvas right-click context menu for selected objects and triangulations.
 ///
 /// Provides controls for line/fill colour, polyline open/closed toggle,
@@ -69,16 +100,15 @@ pub(crate) fn draw_right_click_context(
 ) {
     let ppp = ui.ctx().pixels_per_point();
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
-    let mut open = true;
-    DragableMenu::new("Properties").open(&mut open).default_pos(pos).min_width(150.0).show(ui.ctx(), |ui| {
-        ui.set_max_width(220.);
+    let title = canvas_context_menu_title(editor, document);
+    ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
         // Gather selected document objects
         let selected_obj_ids: Vec<ObjectId> = editor
             .selected_handles
             .iter()
             .filter_map(|&h| match h {
                 crate::model::SceneEntityId::Object(id) => Some(id),
-                crate::model::SceneEntityId::Triangulation(_) | crate::model::SceneEntityId::BlockModel(_) => None,
+                _ => None,
             })
             .collect();
 
@@ -87,6 +117,11 @@ pub(crate) fn draw_right_click_context(
             .copied()
             .filter(|&id| matches!(document.get_object(id), Some(crate::model::Object::Polyline { .. })))
             .collect();
+
+        let selected_drill_hole = editor.selected_handles.iter().find_map(|&h| match h {
+            crate::model::SceneEntityId::DrillHole(id) => Some(id),
+            _ => None,
+        });
 
         let has_doc_objects = !selected_obj_ids.is_empty();
         let has_polys = !selected_polys.is_empty();
@@ -101,7 +136,7 @@ pub(crate) fn draw_right_click_context(
                     .map(|obj| document.object_rgba(obj))
                     .unwrap_or([0.0; 4]);
                 let mut color32 = rgba_to_color32(first_line_color);
-                let color_resp = MenuFieldColor32::new("Line Colour", &mut color32).show(ui);
+                let color_resp = ContextMenuFieldColor32::new("Line Colour", &mut color32).show(ui);
                 if color_resp.drag_stopped() || (color_resp.changed() && !color_resp.dragged()) {
                     let rgba = color32_to_rgba(color32);
                     let new_color = ObjectColor::Fixed(rgba);
@@ -112,7 +147,7 @@ pub(crate) fn draw_right_click_context(
 
             if has_tri && let Some((tri_id, mut face_color)) = project.active_triangulation_for_menu {
                 let mut color32 = rgba_to_color32(face_color);
-                let color_resp = MenuFieldColor32::new("Face Colour", &mut color32).show(ui);
+                let color_resp = ContextMenuFieldColor32::new("Face Colour", &mut color32).show(ui);
                 if color_resp.drag_stopped() || (color_resp.changed() && !color_resp.dragged()) {
                     face_color = color32_to_rgba(color32);
                     commands.push(UiCommand::SetTriangulationColor(tri_id, face_color));
@@ -120,7 +155,17 @@ pub(crate) fn draw_right_click_context(
                 }
             }
 
-            ui.separator();
+            context_menu_separator(ui);
+        }
+
+        // --- Drill hole colouring ---
+        if let Some(drill_hole_id) = selected_drill_hole {
+            if ContextMenuAction::new("Colour by...").show(ui).clicked() {
+                commands.push(UiCommand::OpenDrillHoleColorDialog(drill_hole_id));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+
+            context_menu_separator(ui);
         }
 
         // --- Polyline-specific controls ---
@@ -134,31 +179,24 @@ pub(crate) fn draw_right_click_context(
 
             // Open / Closed toggle
             let mut is_closed = first_closed;
-            MenuField::new("Shape").show(ui, |ui, _| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut is_closed, false, "Open");
-                    ui.selectable_value(&mut is_closed, true, "Closed");
-                })
-                .response
-            });
+            ContextMenuFieldSegmented::new("Shape", &mut is_closed, [(true, "Closed".into()), (false, "Open".into())]).show(ui);
             if is_closed != first_closed {
                 commands.push(UiCommand::BatchSetPolylineClosed(selected_polys.clone(), is_closed));
                 *geometry_dirty = true;
             }
 
-            ui.separator();
+            context_menu_separator(ui);
 
             // Fill dropdown
             let mut fill = first_fill;
             let old_fill = fill;
-            MenuFieldCombo::new(
+            ContextMenuFieldCombo::new(
                 "ctx_fill_combo",
                 "Fill",
                 &mut fill,
                 fill_style_label(first_fill),
                 [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
             )
-            .width(139.0)
             .show(ui);
             if fill != old_fill {
                 commands.push(UiCommand::BatchSetObjectFill(selected_polys.clone(), fill));
@@ -172,7 +210,7 @@ pub(crate) fn draw_right_click_context(
 
             let mut committed_line_weight = None;
             if let Some((_, line_weight_input)) = editor.canvas_context_line_weight_input.as_mut() {
-                let lw_resp = MenuFieldF32::new("Line Weight", line_weight_input, 0.1..=20.0)
+                let lw_resp = ContextMenuFieldF32::new("Line Weight", line_weight_input, 0.1..=20.0)
                     .help_text("Stroke width used to draw the selected polylines.")
                     .speed(0.1)
                     .show(ui);
@@ -185,11 +223,11 @@ pub(crate) fn draw_right_click_context(
                 *geometry_dirty = true;
             }
 
-            ui.separator();
+            context_menu_separator(ui);
         }
 
         if has_doc_objects {
-            if ui.button("Move to Layer...").clicked() {
+            if ContextMenuAction::new("Move to Layer...").show(ui).clicked() {
                 let target_layer = project
                     .projects
                     .iter()
@@ -204,16 +242,25 @@ pub(crate) fn draw_right_click_context(
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
 
-            ui.separator();
+            context_menu_separator(ui);
         }
 
-        if ui.button("Close").clicked() {
+        if !editor.selected_handles.is_empty() {
+            if ContextMenuAction::new("Hide Selection").show(ui).clicked() {
+                commands.push(UiCommand::HideSelection);
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+            if ContextMenuAction::new("Freeze Selection").show(ui).clicked() {
+                *geometry_dirty |= editor.apply_action(crate::ui::state::EditorAction::FreezeSelection);
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+            context_menu_separator(ui);
+        }
+
+        if ContextMenuAction::new("Close").show(ui).clicked() {
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
     });
-    if !open {
-        commands.push(UiCommand::CloseCanvasContextMenu);
-    }
 }
 
 pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
@@ -363,88 +410,13 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
     }
 }
 
-pub(crate) fn draw_move_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    let Some(dialog) = editor.move_layer_dialog.as_mut() else {
-        return;
-    };
-    let source_name = project
-        .projects
-        .iter()
-        .find(|entry| entry.is_active)
-        .and_then(|entry| entry.layers.iter().find(|layer| layer.id == dialog.layer_id).map(|layer| layer.name.as_str()))
-        .unwrap_or("Layer");
-
-    let source_runtime_id = project
-        .projects
-        .iter()
-        .find(|entry| entry.layers.iter().any(|layer| layer.id == dialog.layer_id))
-        .map(|entry| entry.runtime_id);
-    let is_valid_target = |runtime_id: &u32| {
-        project
-            .projects
-            .iter()
-            .any(|entry| Some(entry.runtime_id) != source_runtime_id && entry.runtime_id == *runtime_id)
-    };
-    if dialog.target_project.as_ref().is_none_or(|target| !is_valid_target(target)) {
-        dialog.target_project = project
-            .projects
-            .iter()
-            .find(|entry| Some(entry.runtime_id) != source_runtime_id)
-            .map(|entry| entry.runtime_id);
-    }
-
-    let selected_label = dialog
-        .target_project
-        .and_then(|runtime_id| project.projects.iter().find(|entry| entry.runtime_id == runtime_id))
-        .map(|entry| entry.name.as_str())
-        .unwrap_or("Choose a PIDB");
-    let pidb_options = project
-        .projects
-        .iter()
-        .filter(|entry| Some(entry.runtime_id) != source_runtime_id)
-        .map(|entry| (Some(entry.runtime_id), entry.name.clone().into()));
-    let can_apply = dialog.target_project.is_some();
-    let mut close = false;
-    let mut apply = false;
-    let mut open = true;
-
-    DragableMenu::new("Move Layer").open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
-        ui.set_max_width(300.0);
-        ui.label(source_name);
-        MenuFieldCombo::new("move_layer_target_project", "PIDB", &mut dialog.target_project, selected_label, pidb_options)
-            .width(200.0)
-            .show(ui);
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.add_enabled(can_apply, egui::Button::new("Move")).clicked() {
-                apply = true;
-            }
-            if ui.button("Cancel").clicked() {
-                close = true;
-            }
-        });
-    });
-
-    if apply {
-        if let Some(target_project) = dialog.target_project {
-            commands.push(UiCommand::MoveLayerToPidb {
-                layer_id: dialog.layer_id,
-                target_project,
-            });
-        }
-        editor.move_layer_dialog = None;
-    } else if close || !open {
-        editor.move_layer_dialog = None;
-    }
-}
-
-/// Draw the startup dialog prompting the user to open or create a .pidb file.
-pub(crate) fn draw_select_pidb_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+/// Draw the startup dialog prompting the user to open or create a .omf file.
+pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
 
-    egui::Area::new(egui::Id::new("select_pidb_dialog"))
+    egui::Area::new(egui::Id::new("select_project_dialog"))
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
@@ -462,30 +434,25 @@ pub(crate) fn draw_select_pidb_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                         ui.add_space(30.0);
-                        select_pidb_action_column(ui, "Project", COLUMN_WIDTH, |ui| {
-                            if select_pidb_action_row(ui, egui::Image::new(themed_icon!(ui, "create_pidb.svg")), "New PIDB", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
-                                commands.push(UiCommand::NewPidb);
+                        select_project_action_column(ui, "Project", COLUMN_WIDTH, |ui| {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "create_project.svg")), "New project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                                commands.push(UiCommand::NewProject);
                             }
-                            if select_pidb_action_row(ui, egui::Image::new(themed_icon!(ui, "import_pidb.svg")), "Import", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
-                                editor.show_export = false;
-                                editor.show_import = true;
-                                commands.push(UiCommand::CloseStartupDialog);
-                            }
-                            if select_pidb_action_row(ui, egui::Image::new(themed_icon!(ui, "load_pidb.svg")), "Load PIDB", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
-                                commands.push(UiCommand::OpenPidb);
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_project.svg")), "Load project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                                commands.push(UiCommand::OpenProject);
                             }
                         });
 
                         ui.add_space(PANEL_SIZE - (COLUMN_WIDTH * 2.0) - 60.0);
 
-                        select_pidb_action_column(ui, "Application", COLUMN_WIDTH, |ui| {
-                            if select_pidb_action_row(ui, egui::Image::new(themed_icon!(ui, "open_preferences.svg")), "Preferences", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                        select_project_action_column(ui, "Application", COLUMN_WIDTH, |ui| {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_preferences.svg")), "Preferences", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 commands.push(UiCommand::OpenPreferences);
                             }
-                            if select_pidb_action_row(ui, egui::Image::new(themed_icon!(ui, "open_website.svg")), "Website", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_website.svg")), "Website", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
                             }
-                            if select_pidb_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Close", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Close", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 commands.push(UiCommand::CloseStartupDialog);
                             }
                         });
@@ -564,7 +531,7 @@ pub(crate) fn draw_select_pidb_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         });
 }
 
-fn select_pidb_action_column(ui: &mut egui::Ui, heading: &'static str, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
+fn select_project_action_column(ui: &mut egui::Ui, heading: &'static str, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.vertical(|ui| {
         ui.set_width(width);
         ui.label(egui::RichText::new(heading).size(12.0).color(ui.visuals().weak_text_color()));
@@ -573,7 +540,7 @@ fn select_pidb_action_column(ui: &mut egui::Ui, heading: &'static str, width: f3
     });
 }
 
-fn select_pidb_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &'static str, width: f32, height: f32) -> egui::Response {
+fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &'static str, width: f32, height: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     if response.hovered() {
         ui.painter().rect_filled(rect, egui::CornerRadius::same(2), ui.visuals().widgets.hovered.bg_fill);
@@ -594,24 +561,24 @@ fn select_pidb_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: 
     response
 }
 
-/// Draw the browser-only prompt used to name a new PIDB before it is created.
+/// Draw the browser-only prompt used to name a new project before it is created.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn draw_create_pidb_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("create_pidb_panel", "Create a new PIDB", viewport_rect)
+pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
+    ViewportDockPanel::new("create_project_panel", "Create a new project", viewport_rect)
         .min_width(240.0)
         .show(ui.ctx(), |ui| {
-            let can_create = !editor.new_pidb_name.trim().is_empty();
-            let name_response = MenuFieldText::new("PIDB name", &mut editor.new_pidb_name).hint_text("Required").show(ui);
+            let can_create = !editor.new_project_name.trim().is_empty();
+            let name_response = MenuFieldText::new("Project name", &mut editor.new_project_name).hint_text("Required").show(ui);
             let submitted = name_response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             ui.horizontal(|ui| {
-                if (submitted || ui.add_enabled(can_create, egui::Button::new("Create PIDB")).clicked()) && can_create {
-                    commands.push(UiCommand::CreateBrowserPidb {
-                        name: editor.new_pidb_name.trim().to_owned(),
+                if (submitted || ui.add_enabled(can_create, egui::Button::new("Create project")).clicked()) && can_create {
+                    commands.push(UiCommand::CreateBrowserProject {
+                        name: editor.new_project_name.trim().to_owned(),
                     });
-                    editor.new_pidb_dialog_open = false;
+                    editor.new_project_dialog_open = false;
                 }
                 if ui.button("Cancel").clicked() {
-                    editor.new_pidb_dialog_open = false;
+                    editor.new_project_dialog_open = false;
                 }
             });
         });
@@ -733,9 +700,9 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
     editor.text_edit_position_frames = editor.text_edit_position_frames.saturating_sub(1);
 }
 
-/// Draw the polygon finish dialog (Close / Leave open / Cancel) near the cursor.
-pub(crate) fn draw_finish_polygon_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("finish_poly_dialog", "Finish Polygon", viewport_rect).show(ui, |ui| {
+/// Draw the polyline finish dialog (Close / Leave open / Cancel) near the cursor.
+pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
+    ViewportDockPanel::new("finish_poly_dialog", "Finish Polyline", viewport_rect).show(ui, |ui| {
         MenuField::new("Shape").show(ui, |ui, _| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Open").clicked() {
@@ -1137,7 +1104,7 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
 
     ViewportDockPanel::new("chamfer_panel", "Chamfer", viewport_rect).min_width(200.0).show(ui.ctx(), |ui| {
         if !corner_picked {
-            ui.label("Click a corner on a closed polygon.");
+            ui.label("Click a corner on a closed polyline.");
         } else {
             MenuFieldU32::new("Segments", &mut editor.chamfer_segments, 1..=64)
                 .help_text(
@@ -1158,7 +1125,7 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
 
         ui.add_space(4.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Grey out when the displayed value is "0.00" (2 dp) — matches user perception.
+            // Grey out when the displayed value is "0.00" (2 dp) - matches user perception.
             let can_apply = corner_picked && (editor.chamfer_radius * 100.0).round() > 0.0;
             if ui.add_enabled(can_apply, egui::Button::new("Apply")).clicked() && can_apply {
                 commands.push(UiCommand::ApplyChamfer);
@@ -1190,7 +1157,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
 
     ViewportDockPanel::new("bezier_panel", "Bezier Curve", viewport_rect).min_width(400.0).show(ui.ctx(), |ui| {
         if editor.bezier_poly_id.is_none() {
-            ui.label("Click a polyline or closed polygon to begin.");
+            ui.label("Click an open or closed polyline to begin.");
         } else if !both_selected {
             match editor.bezier_selected_verts[0] {
                 None => {
@@ -1213,7 +1180,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
                 let previous = editor.bezier_replace_longer;
                 MenuField::new("Replace path")
                     .help_text(
-                        "Choose which of the two polygon paths between the selected vertices \
+                        "Choose which of the two polyline paths between the selected vertices \
                              will be replaced. Length includes elevation and curved edges.",
                     )
                     .show(ui, |ui, row_height| {

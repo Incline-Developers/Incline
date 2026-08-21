@@ -98,25 +98,34 @@ fn for_each_visible_object_aabb(
 
     for triangulation in triangulations
         .iter()
-        .filter(|triangulation| triangulation.visible && !hidden.contains(&triangulation.entity_id()))
+        .filter(|triangulation| triangulation.state.loaded && triangulation.visible && !hidden.contains(&triangulation.entity_id()))
     {
         let bounds = triangulation.mesh.bounds();
         emit(DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z), DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z));
     }
 
-    for block_model in block_models.iter().filter(|block_model| block_model.visible && !hidden.contains(&block_model.entity_id())) {
+    for block_model in block_models
+        .iter()
+        .filter(|block_model| block_model.state.loaded && block_model.visible && !hidden.contains(&block_model.entity_id()))
+    {
         if let Some((block_min, block_max)) = block_model.visible_world_bounds() {
             emit(block_min, block_max);
         }
     }
 
-    for dataset in drill_holes.iter().filter(|dataset| dataset.visible) {
+    for dataset in drill_holes
+        .iter()
+        .filter(|dataset| dataset.state.loaded && dataset.visible && !hidden.contains(&dataset.entity_id()))
+    {
         if let Some((min, max)) = dataset.dataset.bounds {
             emit(min, max);
         }
     }
 
-    for point_cloud in point_clouds.iter().filter(|point_cloud| point_cloud.visible) {
+    for point_cloud in point_clouds
+        .iter()
+        .filter(|point_cloud| point_cloud.state.loaded && point_cloud.visible && !hidden.contains(&point_cloud.entity_id()))
+    {
         let (cloud_min, cloud_max) = point_cloud.bounds;
         emit(cloud_min, cloud_max);
     }

@@ -10,7 +10,7 @@ var<uniform> camera: CameraUniform;
 
 struct PointCloudStyle {
     color: vec4<f32>,
-    // x: screen-facing splat width in world units.
+    // x: screen-facing splat width in world units; y: selected flag.
     options: vec4<f32>,
     // Fixed cloud origin relative to the current floating scene origin.
     origin: vec4<f32>,
@@ -47,7 +47,8 @@ fn expand_point(pos: vec3<f32>, color: vec4<f32>, vertex_index: u32) -> VertexOu
 
 @vertex
 fn vs_colored(point: ColoredPointInput, @builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    return expand_point(point.pos, point.color, vertex_index);
+    let color = select(point.color, style.color, style.options.y > 0.5);
+    return expand_point(point.pos, color, vertex_index);
 }
 
 @vertex

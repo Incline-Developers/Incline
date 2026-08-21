@@ -60,7 +60,7 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
-        let doc = &mut project.pidb.document;
+        let doc = &mut project.project.document;
         let id = doc.allocate_object_id();
         doc.insert_object(Object::Text {
             id,
@@ -158,9 +158,9 @@ impl<'a> App<'a> {
             && let Some(object_id) = object_id
             && let Some(project_index) = self.workspace.project_index_for_object(object_id)
             && let Some(project) = self.workspace.projects.get_mut(project_index)
-            && project.pidb.document.get_object(object_id).is_some()
+            && project.project.document.get_object(object_id).is_some()
         {
-            project.pidb.document.remove_object(object_id);
+            project.project.document.remove_object(object_id);
             self.editor.selected_handles.remove(&SceneEntityId::Object(object_id));
         }
         self.finish_text_edit_state();

@@ -13,7 +13,7 @@
 //!   two segments cross, are decided with adaptive-precision predicates
 //!   ([`robust::orient2d`]), never with an epsilon.
 //! - **Tolerances are metric.** "Close enough to coincide" is a distance in
-//!   world metres ([`XY_TOL`], [`Z_TOL`]), applied to points — never to
+//!   world metres ([`XY_TOL`], [`Z_TOL`]), applied to points - never to
 //!   parameters (`t`, `u`) or to raw cross products, whose scale varies with
 //!   the input.
 //! - **Kernel classifies, callers filter.** [`segment_segment`] reports the
@@ -101,7 +101,7 @@ pub(crate) enum SegSeg {
     /// from every endpoint. `t` parametrizes `a -> b`, `u` parametrizes
     /// `c -> d`.
     Crossing { point: DVec2, t: f64, u: f64 },
-    /// The segments meet within [`XY_TOL`] of at least one endpoint —
+    /// The segments meet within [`XY_TOL`] of at least one endpoint -
     /// a shared vertex or a T-junction.
     Touching { point: DVec2, t: f64, u: f64 },
     /// The segments run along the same line (within [`XY_TOL`] laterally)
@@ -229,14 +229,14 @@ pub(crate) enum PolyContainment {
     OnBoundary,
 }
 
-/// Robust point-in-polygon: exact-sign crossing count ([`orient2d`] decides
+/// Robust point-in-polyline: exact-sign crossing count ([`orient2d`] decides
 /// which side of an edge the ray passes), with points within [`XY_TOL`] of
 /// the ring classified [`PolyContainment::OnBoundary`] first so callers make
 /// the borderline call explicitly instead of inheriting float noise.
 ///
 /// The ring is closed implicitly (last vertex connects to the first);
 /// zero-length edges are skipped. Fewer than 3 distinct vertices → `Outside`.
-pub(crate) fn point_in_polygon(point: DVec2, ring: impl IntoIterator<Item = DVec2>) -> PolyContainment {
+pub(crate) fn point_in_polyline(point: DVec2, ring: impl IntoIterator<Item = DVec2>) -> PolyContainment {
     let mut iter = ring.into_iter();
     let Some(first) = iter.next() else {
         return PolyContainment::Outside;

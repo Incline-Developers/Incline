@@ -11,36 +11,45 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
-                    if ui.add_enabled(has_unsaved, egui::Button::new("Save All")).clicked() {
-                        commands.push(UiCommand::SaveAllPidbs);
+                    let active_project = project.projects.iter().find(|entry| entry.is_active);
+                    if ui.add_enabled(has_unsaved, egui::Button::new("Save Project")).clicked() {
+                        commands.push(UiCommand::SaveProject);
+                        ui.close();
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if ui.add_enabled(active_project.is_some(), egui::Button::new("Save Project As...")).clicked() {
+                        if let Some(project) = active_project {
+                            commands.push(UiCommand::SaveProjectAs(project.runtime_id));
+                        }
                         ui.close();
                     }
                     #[cfg(target_arch = "wasm32")]
-                    if ui.add_enabled(!project.projects.is_empty(), egui::Button::new("Download All PIDBs")).clicked() {
-                        commands.push(UiCommand::DownloadAllPidbs);
+                    if ui.add_enabled(!project.projects.is_empty(), egui::Button::new("Download OMF")).clicked() {
+                        commands.push(UiCommand::DownloadProject);
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("New PIDB...").clicked() {
-                        commands.push(UiCommand::NewPidb);
+                    if ui.button("New project...").clicked() {
+                        commands.push(UiCommand::NewProject);
                         ui.close();
                     }
-                    if ui.button("Open PIDBs...").clicked() {
-                        commands.push(UiCommand::OpenPidb);
+                    if ui.button("Open project...").clicked() {
+                        commands.push(UiCommand::OpenProject);
+                        ui.close();
+                    }
+                    if ui.add_enabled(active_project.is_some(), egui::Button::new("Close Project")).clicked() {
+                        if let Some(project) = active_project {
+                            commands.push(UiCommand::CloseProject(project.runtime_id));
+                        }
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Import...").clicked() {
+                    if ui.add_enabled(active_project.is_some(), egui::Button::new("Import...")).clicked() {
                         editor.show_import = true;
                         editor.show_export = false;
                         ui.close();
                     }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if ui.button("Add Triangulation Folder...").clicked() {
-                        commands.push(UiCommand::OpenTriangulationFolder);
-                        ui.close();
-                    }
-                    if ui.button("Export...").clicked() {
+                    if ui.add_enabled(active_project.is_some(), egui::Button::new("Export...")).clicked() {
                         editor.show_import = false;
                         editor.show_export = true;
                         ui.close();
@@ -110,8 +119,8 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Clip Surface by Polygon...").clicked() {
-                        commands.push(UiCommand::OpenCutTriangulationByPolygon);
+                    if ui.button("Clip Surface by Polyline...").clicked() {
+                        commands.push(UiCommand::OpenCutTriangulationByPolyline);
                         ui.close();
                     }
                     if ui.button("Slice Triangulation by Z Range...").clicked() {

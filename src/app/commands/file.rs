@@ -1,13 +1,11 @@
-#[cfg(target_arch = "wasm32")]
-use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
 use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
     task::{Context as TaskContext, Poll, Waker},
 };
-#[cfg(not(target_arch = "wasm32"))]
-use std::{process::Command, sync::mpsc};
 
 use anyhow::{Context, Result};
 use rfd::AsyncFileDialog;
@@ -30,7 +28,7 @@ use crate::{
         LayerId,
         block_model::BlockModelId,
         formats::{self, MeshFormat},
-        pidb::{self, OpenProject},
+        project::{self, OpenProject},
         triangulation::TriangulationId,
     },
     ui::state::DataMenu,
@@ -42,29 +40,18 @@ use crate::{
     model::{Layer, Object},
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-fn is_dxf_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("dxf"))
-}
-
-fn project_has_unsaved_changes(project: &OpenProject) -> bool {
-    project.has_unsaved_changes()
-}
-
 /// Whether Save still has work to do for a project browser storage has never
 /// held a copy of.
 ///
-/// A PIDB opened, imported or restored in the browser starts out identical to
-/// the bytes it came from, so "has unsaved changes" is false — but on desktop
+/// A project opened, imported or restored in the browser starts out identical to
+/// the bytes it came from, so "has unsaved changes" is false - but on desktop
 /// those bytes are a file that stays put, and in the browser they are nowhere
-/// at all until a record exists. Without this, saving an opened PIDB writes
+/// at all until a record exists. Without this, saving an opened project writes
 /// nothing and the project is gone on the next reload.
 fn project_needs_first_browser_save(project: &OpenProject) -> bool {
     #[cfg(target_arch = "wasm32")]
     {
-        !matches!(project.persistence, crate::model::pidb::ProjectPersistence::BrowserRecord(_))
+        !matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -73,8 +60,8 @@ fn project_needs_first_browser_save(project: &OpenProject) -> bool {
     }
 }
 
-/// Write a recovery copy of every dirty project into `recovery_dir`,
-/// returning every success and failure. Used during fatal shutdown, when the normal
+/// Write a recovery copy of the dirty project into `recovery_dir`, returning
+/// success or failure details. Used during fatal shutdown, when the normal
 /// guarded exit flow (confirmation dialogs, Save As) is no longer available.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct RecoveryReport {
@@ -83,30 +70,20 @@ pub(crate) struct RecoveryReport {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn write_recovery_copies(workspace: &pidb::Workspace, recovery_dir: &Path) -> Result<RecoveryReport> {
+pub(crate) fn write_recovery_copy(snapshot: formats::omf::ProjectSnapshot, runtime_id: u32, recovery_dir: &Path) -> Result<RecoveryReport> {
     std::fs::create_dir_all(recovery_dir).with_context(|| format!("create {}", recovery_dir.display()))?;
     let mut written = Vec::new();
     let mut failures = Vec::new();
-    for project in &workspace.projects {
-        if !project.has_unsaved_changes() {
-            continue;
-        }
-        let stem = project
-            .path
-            .as_deref()
-            .and_then(Path::file_stem)
-            .and_then(|stem| stem.to_str())
-            .map(str::to_owned)
-            .unwrap_or_else(|| project.pidb.metadata.name.trim_end_matches(".pidb").to_owned());
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs())
-            .unwrap_or(0);
-        let path = recovery_dir.join(format!("{stem}-{timestamp}-{}.recovery.pidb", project.runtime_id));
-        match pidb::save(&path, &project.pidb) {
-            Ok(()) => written.push(path),
-            Err(error) => failures.push(format!("project '{}' -> {}: {error:#}", project.pidb.metadata.name, path.display())),
-        }
+    let stem = snapshot.name.trim_end_matches(".omf").to_owned();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let path = recovery_dir.join(format!("{stem}-{timestamp}-{runtime_id}.recovery.omf"));
+    let progress = crate::model::progress::Progress::new();
+    match formats::omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0)) {
+        Ok(()) => written.push(path),
+        Err(error) => failures.push(format!("project '{stem}' -> {}: {error:#}", path.display())),
     }
     Ok(RecoveryReport { written, failures })
 }
@@ -135,17 +112,20 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 #[cfg_attr(target_arch = "wasm32", allow(clippy::enum_variant_names))]
 pub(crate) enum FileDialogAction {
     #[cfg(not(target_arch = "wasm32"))]
-    NewPidb(PathBuf),
+    NewProject(PathBuf),
     #[cfg(not(target_arch = "wasm32"))]
-    OpenPidb(Vec<PathBuf>),
+    OpenProject(Vec<PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    SwitchProject(PathBuf),
     #[cfg(target_arch = "wasm32")]
-    WebOpenPidb(Vec<std::result::Result<crate::model::input::InputFile, String>>),
+    WebOpenProject(Vec<std::result::Result<crate::model::input::InputFile, String>>),
+    #[cfg(target_arch = "wasm32")]
+    WebStoredProject(crate::model::project::ProjectId),
+    #[cfg(target_arch = "wasm32")]
+    WebNewProject(String),
     /// Import DXF files into the active project.
     #[cfg(not(target_arch = "wasm32"))]
     ImportDxfInto { paths: Vec<PathBuf> },
-    /// (source_path, pidb_save_path).
-    #[cfg(not(target_arch = "wasm32"))]
-    ImportAsPidb(Vec<(PathBuf, PathBuf)>),
     #[cfg(not(target_arch = "wasm32"))]
     ImportTriangulation(Vec<PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
@@ -159,40 +139,27 @@ pub(crate) enum FileDialogAction {
         kind: DataMenu,
         files: Vec<std::result::Result<crate::model::input::InputFile, String>>,
     },
-    #[cfg(not(target_arch = "wasm32"))]
-    OpenTriangulationFolder(PathBuf),
     /// Export a layer from the project that owned it when the chooser opened.
     #[cfg(not(target_arch = "wasm32"))]
     ExportLayerDxf { project_runtime_id: u32, layer: LayerId, path: PathBuf },
     /// Export the project selected when the chooser opened to DXF.
     #[cfg(not(target_arch = "wasm32"))]
-    ExportPidbDxf { project_runtime_id: u32, path: PathBuf },
-    /// Export a copy of the project selected when the chooser opened.
+    ExportProjectDxf { project_runtime_id: u32, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
-    ExportPidbCopy { project_runtime_id: u32, path: PathBuf },
-    #[cfg(not(target_arch = "wasm32"))]
-    ExportOmf { snapshot: formats::omf::ExportSnapshot, path: PathBuf },
+    ExportOmf { snapshot: formats::omf::ProjectSnapshot, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportTriangulation { id: TriangulationId, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportBlockModelCsv { id: BlockModelId, path: PathBuf },
-    #[cfg(not(target_arch = "wasm32"))]
-    SaveBlockModelAs { id: BlockModelId, path: PathBuf, close_after: bool },
-    #[cfg(not(target_arch = "wasm32"))]
-    SaveTriangulationAs { id: TriangulationId, path: PathBuf },
-    #[cfg(not(target_arch = "wasm32"))]
-    SaveAndCloseTriangulationAs { id: TriangulationId, path: PathBuf },
     /// Save one open project under a new path.
     #[cfg(not(target_arch = "wasm32"))]
-    SavePidbAs { project_runtime_id: u32, path: PathBuf },
+    SaveProjectAs { project_runtime_id: u32, path: PathBuf },
     /// Export the main viewport to a PNG image.
     #[cfg(not(target_arch = "wasm32"))]
     ExportViewportImage(PathBuf),
     /// Render and write the configured plot sheet.
     #[cfg(not(target_arch = "wasm32"))]
     ExportPlotSheet(PathBuf),
-    #[cfg(target_arch = "wasm32")]
-    WebDownloadPidb { project_runtime_id: u32, file_name: String },
     #[cfg(target_arch = "wasm32")]
     WebDownloadDxf {
         project_runtime_id: u32,
@@ -232,27 +199,16 @@ pub(crate) struct PendingSave {
 
 #[cfg(not(target_arch = "wasm32"))]
 enum PendingSaveKind {
-    /// Save/Save-As: on success update the triangulation's path/name/is_saved
-    /// and register the file in the session; optionally close it afterwards.
-    Save {
-        id: TriangulationId,
-        close_after: bool,
-    },
     /// Export a copy: leave the open triangulation's metadata unchanged.
     Export {
         name: String,
     },
-    /// Save a generated block model as a reloadable CSV source.
-    BlockModel {
-        id: BlockModelId,
-        close_after: bool,
-        mapping: crate::model::formats::csv_block_model::CsvColumnMapping,
-    },
-    /// PIDB snapshot written independently of subsequent in-memory edits.
-    Pidb {
+    /// project snapshot written independently of subsequent in-memory edits.
+    Project {
         runtime_id: u32,
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
+        asset_token: crate::model::project::SaveToken,
         /// Close once this write finishes. Set when a close request arrives
         /// after the worker has already started and can no longer be stopped.
         close_after: bool,
@@ -274,16 +230,14 @@ pub(crate) enum PendingSave {}
 fn save_label(kind: &PendingSaveKind, path: &Path) -> String {
     let name = file_name(path);
     match kind {
-        PendingSaveKind::Save { .. } => format!("Saving {name}"),
         PendingSaveKind::Export { .. } => format!("Exporting {name}"),
-        PendingSaveKind::BlockModel { .. } => format!("Saving {name}"),
-        PendingSaveKind::Pidb { .. } => format!("Saving {name}"),
+        PendingSaveKind::Project { .. } => format!("Saving {name}"),
         PendingSaveKind::DxfExport { .. } => format!("Exporting {name}"),
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const PIDB_REVERT_JOB_LABEL: &str = "Reverting PIDB…";
+const PROJECT_REVERT_JOB_LABEL: &str = "Reverting project…";
 #[cfg(not(target_arch = "wasm32"))]
 const LAYER_REVERT_JOB_LABEL: &str = "Reverting layer…";
 
@@ -321,7 +275,7 @@ impl<'a> App<'a> {
                 self.cancel_exit_request();
             }
             // A cancelled Save As also cancels a close waiting on it.
-            self.editor.pending_close_pidb = None;
+            self.cancel_close_project();
         }
         for (action, report) in resolved {
             self.redraw_requested = true;
@@ -352,128 +306,147 @@ impl<'a> App<'a> {
         self.try_finish_deferred_exit();
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_open_project_path(&mut self, path: PathBuf, status_label: &'static str) -> Result<()> {
+        if self.save_path_is_pending(&path) {
+            return Ok(());
+        }
+        self.pending_project_open_paths.insert(path.clone());
+        let reserved_path = path.clone();
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
+            if cancel.is_cancelled() {
+                anyhow::bail!("Cancelled");
+            }
+            progress.set_fraction(0.0);
+            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            progress.set_fraction(0.1);
+            let source_name = file_name(&path);
+            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.1, 1.0))?;
+            Ok((path, source_name, bundle))
+        };
+        let apply = move |app: &mut App, result: Result<(PathBuf, String, formats::omf::ImportBundle)>| {
+            app.pending_project_open_paths.remove(&reserved_path);
+            match result {
+                Ok((path, source_name, bundle)) => app.apply_opened_omf_bundle(Some(path), source_name, bundle),
+                Err(error) => userspace_warn!("Could not open {}: {error:#}", reserved_path.display()),
+            }
+        };
+        self.spawn_job_reporting_progress(status_label, vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
+        Ok(())
+    }
+
     pub(super) fn execute_file_dialog_action(&mut self, action: FileDialogAction) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let replaces_project = matches!(
+            &action,
+            FileDialogAction::NewProject(_) | FileDialogAction::OpenProject(_) | FileDialogAction::SwitchProject(_)
+        );
+        #[cfg(target_arch = "wasm32")]
+        let replaces_project = matches!(
+            &action,
+            FileDialogAction::WebNewProject(_) | FileDialogAction::WebOpenProject(_) | FileDialogAction::WebStoredProject(_)
+        );
+        #[cfg(target_arch = "wasm32")]
+        if replaces_project && !self.browser_project_loads_pending.is_empty() {
+            anyhow::bail!("Wait for the current project switch to finish");
+        }
+        if replaces_project && !self.project_replacement_bypass && self.has_unsaved_changes_for_exit() {
+            self.pending_project_replacement = Some(action);
+            self.editor.replace_project_confirm_open = true;
+            self.redraw_requested = true;
+            return Ok(());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let FileDialogAction::SaveProjectAs { project_runtime_id, .. } = &action
+            && self
+                .workspace
+                .project_index_for_runtime_id(*project_runtime_id)
+                .and_then(|index| self.workspace.projects.get(index))
+                .is_some_and(|project| !project.lossy_save_warnings.is_empty() && !project.lossy_save_confirmed)
+        {
+            self.pending_lossy_save_as = Some(action);
+            self.editor.lossy_save_confirm_open = true;
+            self.redraw_requested = true;
+            return Ok(());
+        }
+        self.project_replacement_bypass = false;
         match action {
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::NewPidb(path) => {
-                if self.workspace.project_index_for_path(&path).is_some() {
-                    anyhow::bail!("That PIDB is already open: {}", path.display());
-                }
+            FileDialogAction::NewProject(path) => {
                 self.ensure_save_path_not_pending(&path)?;
-                let pidb = pidb::new_empty(Some(path.clone()));
-                pidb::save(&path, &pidb)?;
-                let project = pidb::open_project(Some(path.clone()), pidb)?;
+                let design = project::new_empty(Some(path.clone()));
+                let snapshot = formats::omf::ProjectSnapshot {
+                    name: path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned(),
+                    designs: Some(design.clone()),
+                    ..Default::default()
+                };
+                let progress = crate::model::progress::Progress::new();
+                formats::omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))?;
+                let project = project::open_project(Some(path.clone()), design)?;
                 self.set_active_project(project);
-                userspace_log!("Created new PIDB: {}", path.display());
+                userspace_log!("Created new project: {}", path.display());
                 self.persist_session();
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::OpenPidb(paths) => {
-                let paths: Vec<_> = paths
-                    .into_iter()
-                    .filter(|path| self.workspace.project_index_for_path(path).is_none() && !self.save_path_is_pending(path))
-                    .collect();
-                if paths.is_empty() {
+            FileDialogAction::OpenProject(paths) => {
+                let Some(path) = paths.into_iter().next() else {
                     return Ok(());
-                }
-                self.pending_pidb_open_paths.extend(paths.iter().cloned());
-                let reserved_paths = paths.clone();
+                };
+                self.start_open_project_path(path, "Opening project…")
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::SwitchProject(path) => self.start_open_project_path(path, "Switching project…"),
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebOpenProject(files) => {
                 let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
-                    // One file at a time, so files opened is an exact count.
-                    let total = paths.len() as u64;
-                    let mut loaded = Vec::with_capacity(paths.len());
-                    for (index, path) in paths.into_iter().enumerate() {
-                        if cancel.is_cancelled() {
-                            anyhow::bail!("Cancelled");
-                        }
-                        progress.set_items(index as u64, total);
-                        let result = pidb::load(&path).map_err(|error| format!("{error:#}"));
-                        loaded.push((path, result));
+                    if cancel.is_cancelled() {
+                        anyhow::bail!("Cancelled");
                     }
-                    Ok(loaded)
+                    let file = files.into_iter().next().context("No OMF file was selected")?.map_err(anyhow::Error::msg)?;
+                    let name = file.source.name;
+                    let bundle = formats::omf::from_bytes(&name, file.bytes, &progress.phase(0.0, 1.0))?;
+                    Ok((name, bundle))
                 };
-                let apply = move |app: &mut App, result: Result<Vec<(PathBuf, std::result::Result<pidb::PidbFile, String>)>>| {
-                    for path in &reserved_paths {
-                        app.pending_pidb_open_paths.remove(path);
+                let apply = |app: &mut App, result: Result<(String, formats::omf::ImportBundle)>| match result {
+                    Ok((name, bundle)) => app.apply_opened_omf_bundle(None, name, bundle),
+                    Err(error) => {
+                        userspace_warn!("Could not open browser project: {error:#}");
                     }
-                    let Ok(loaded) = result else {
-                        return;
-                    };
-                    let mut count = 0usize;
-                    for (path, result) in loaded {
-                        match result.and_then(|pidb| pidb::open_project(Some(path.clone()), pidb).map_err(|error| format!("{error:#}"))) {
-                            Ok(project) => {
-                                if app.workspace.project_index_for_path(&path).is_none() {
-                                    app.workspace.add_inactive(project);
-                                    count += 1;
-                                }
-                            }
-                            Err(error) => {
-                                userspace_warn!("Could not open {}: {error}", path.display());
-                            }
-                        }
-                    }
-                    if count > 0 {
-                        app.invalidate_geometry();
-                        app.persist_session();
-                    }
-                    userspace_log!("Added {count} PIDB file(s)");
                 };
-                self.spawn_job_reporting_progress("Opening PIDB files…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
+                self.spawn_job_reporting_progress("Opening browser project…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebOpenPidb(files) => {
-                let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
-                    let total = files.len() as u64;
-                    let mut parsed = Vec::with_capacity(files.len());
-                    for (index, file) in files.into_iter().enumerate() {
-                        if cancel.is_cancelled() {
-                            anyhow::bail!("Cancelled");
-                        }
-                        progress.set_items(index as u64, total);
-                        match file {
-                            Ok(file) => {
-                                let name = file.source.name.clone();
-                                parsed.push((name.clone(), pidb::load_bytes(&name, &file.bytes)));
-                            }
-                            Err(error) => parsed.push(("selected PIDB".to_owned(), Err(anyhow::anyhow!(error)))),
-                        }
-                    }
-                    Ok(parsed)
-                };
-                let apply = |app: &mut App, result: Result<Vec<(String, Result<crate::model::pidb::PidbFile>)>>| {
-                    let parsed = match result {
-                        Ok(parsed) => parsed,
-                        Err(error) => {
-                            userspace_warn!("Could not open browser PIDBs: {error:#}");
-                            return;
-                        }
-                    };
-                    let mut count = 0usize;
-                    for (name, pidb_file) in parsed {
-                        match pidb_file.and_then(|pidb| pidb::open_imported_project(name.clone(), pidb)) {
-                            Ok(project) => {
-                                app.workspace.add_inactive(project);
-                                count += 1;
-                            }
-                            Err(error) => userspace_warn!("Could not open {name}: {error:#}"),
-                        }
-                    }
-                    if count > 0 {
-                        app.invalidate_geometry();
-                    }
-                    userspace_log!("Added {count} browser PIDB file(s)");
-                };
-                self.spawn_job_reporting_progress("Opening browser PIDB files…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
+            FileDialogAction::WebStoredProject(project_id) => {
+                if self.workspace.active_project().is_some_and(|project| project.id == project_id) {
+                    return Ok(());
+                }
+                let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
+                if !self.browser_project_loads_pending.insert(project_id) {
+                    return Ok(());
+                }
+                let (ticket, _progress) = self.begin_reported_task("Switching project…");
+                wasm_bindgen_futures::spawn_local(async move {
+                    let result = crate::app::web_storage::load_project(project_id).await;
+                    let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectLoaded { project_id, ticket, result });
+                });
+                Ok(())
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebNewProject(name) => {
+                let mut project_file = project::new_empty(None);
+                project_file.metadata.name = sanitize_project_name(&name);
+                let project = project::open_project(None, project_file)?;
+                self.set_active_project(project);
+                userspace_log!("Created new browser project");
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ImportDxfInto { paths } => {
-                let project = self.workspace.active_project().context("No active .pidb to import into")?;
+                let project = self.workspace.active_project().context("No active .omf to import into")?;
                 let runtime_id = project.runtime_id;
-                let document_revision = project.pidb.document.revision();
+                let document_revision = project.project.document.revision();
                 let import_count = paths.len();
                 let compute = move |cancel: &crate::app::jobs::CancelFlag| {
                     let mut parsed = Vec::with_capacity(paths.len());
@@ -481,7 +454,7 @@ impl<'a> App<'a> {
                         if cancel.is_cancelled() {
                             anyhow::bail!("Cancelled");
                         }
-                        let document = pidb::parse_dxf_document(&path)?;
+                        let document = formats::dxf::read_document(&path)?;
                         parsed.push((path, document));
                     }
                     Ok(parsed)
@@ -498,15 +471,15 @@ impl<'a> App<'a> {
                         return;
                     };
                     let project = &mut app.workspace.projects[project_index];
-                    let existing: std::collections::HashSet<LayerId> = project.pidb.document.layers().iter().map(|layer| layer.id).collect();
+                    let existing: std::collections::HashSet<LayerId> = project.project.document.layers().iter().map(|layer| layer.id).collect();
                     let mut total_added = 0usize;
                     for (path, imported) in parsed {
-                        let added = pidb::merge_document(&mut project.pidb.document, &imported);
+                        let added = project::merge_document(&mut project.project.document, &imported);
                         userspace_log!("Imported {added} object(s) from {}", path.display());
                         total_added += added;
                     }
                     let new_ids: Vec<LayerId> = project
-                        .pidb
+                        .project
                         .document
                         .layers()
                         .iter()
@@ -522,11 +495,6 @@ impl<'a> App<'a> {
                     app.invalidate_geometry();
                     app.fit_view_to_extents();
                     userspace_log!("Imported {import_count} DXF(s) into the project: {total_added} object(s)");
-                    if total_added > 0
-                        && let Err(error) = app.save_project(runtime_id)
-                    {
-                        userspace_warn!("Imported geometry is dirty but could not be saved: {error:#}");
-                    }
                 };
                 self.spawn_job(
                     "Parsing DXF import…",
@@ -537,45 +505,10 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::ImportAsPidb(pairs) => {
-                let count = pairs.len();
-                for (source_path, pidb_path) in &pairs {
-                    if self.workspace.project_index_for_path(pidb_path).is_some() {
-                        anyhow::bail!("That PIDB is already open: {}", pidb_path.display());
-                    }
-                    self.ensure_save_path_not_pending(pidb_path)?;
-                    let mut pidb_data = pidb::pidb_from_dxf_path(source_path)?;
-                    pidb_data.metadata.name = pidb_path.file_name().and_then(|n| n.to_str()).unwrap_or("Imported.pidb").to_string();
-                    pidb::save(pidb_path, &pidb_data)?;
-                    let project = pidb::open_project(Some(pidb_path.clone()), pidb_data)?;
-                    self.set_active_project(project);
-                    let layer_ids: Vec<LayerId> = self
-                        .workspace
-                        .active_project()
-                        .into_iter()
-                        .flat_map(|project| project.pidb.document.layers())
-                        .map(|layer| layer.id)
-                        .collect();
-                    if let Some(project) = self.workspace.active_project_mut() {
-                        project.loaded_layers.extend(layer_ids.iter().copied());
-                    }
-                    self.editor.active_layer = layer_ids.first().copied();
-                    self.invalidate_geometry();
-                    self.fit_view_to_extents();
-                }
-                userspace_log!("Imported {count} file(s) as .pidb");
-                Ok(())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ImportTriangulation(paths) => {
                 let count = paths.len();
                 for path in &paths {
-                    if !self.triangulation_files.contains(path) {
-                        self.triangulation_files.push(path.clone());
-                        self.open_triangulation_path(path)?;
-                    } else {
-                        self.open_triangulation_path(path)?;
-                    }
+                    self.open_triangulation_path(path)?;
                 }
                 userspace_log!("Queued {count} triangulation file(s) for import");
                 Ok(())
@@ -684,69 +617,27 @@ impl<'a> App<'a> {
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::OpenTriangulationFolder(dir) => {
-                if !dir.is_dir() {
-                    return Ok(());
-                }
-                let entries = Self::scan_triangulation_dir(&dir);
-                if entries.is_empty() {
-                    return Ok(());
-                }
-                let total_files = entries.len();
-                let mut added_dirs = 0usize;
-                if !entries.is_empty() {
-                    if !self.triangulation_dirs.contains(&dir) {
-                        self.triangulation_dirs.push(dir.clone());
-                        added_dirs += 1;
-                    }
-                    self.triangulation_dir_entries.insert(dir.clone(), entries);
-                }
-                self.triangulation_dirs.sort();
-                self.triangulation_dirs.dedup();
-                self.persist_session();
-                userspace_log!("Added triangulation folder: {} ({} files across {added_dirs} folders)", dir.display(), total_files);
-                Ok(())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportLayerDxf { project_runtime_id, layer, path } => {
                 self.commit_export_move_if_needed(project_runtime_id);
                 self.ensure_save_path_not_pending(&path)?;
                 let project_index = self
                     .workspace
                     .project_index_for_runtime_id(project_runtime_id)
-                    .context("The PIDB selected for export is no longer open")?;
+                    .context("The project selected for export is no longer open")?;
                 let project = &self.workspace.projects[project_index];
-                self.spawn_dxf_write(project.pidb.clone(), Some(layer), path, format!("layer {:?}", layer));
+                self.spawn_dxf_write(project.project.clone(), Some(layer), path, format!("layer {:?}", layer));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::ExportPidbDxf { project_runtime_id, path } => {
+            FileDialogAction::ExportProjectDxf { project_runtime_id, path } => {
                 self.commit_export_move_if_needed(project_runtime_id);
                 self.ensure_save_path_not_pending(&path)?;
                 let project_index = self
                     .workspace
                     .project_index_for_runtime_id(project_runtime_id)
-                    .context("The PIDB selected for export is no longer open")?;
+                    .context("The project selected for export is no longer open")?;
                 let project = &self.workspace.projects[project_index];
-                self.spawn_dxf_write(project.pidb.clone(), None, path, "PIDB".to_owned());
-                Ok(())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::ExportPidbCopy { project_runtime_id, path } => {
-                self.commit_export_move_if_needed(project_runtime_id);
-                self.ensure_save_path_not_pending(&path)?;
-                let project_index = self
-                    .workspace
-                    .project_index_for_runtime_id(project_runtime_id)
-                    .context("The PIDB selected for export is no longer open")?;
-                let project = &self.workspace.projects[project_index];
-                if self.workspace.project_index_for_path(&path).is_some() {
-                    anyhow::bail!("Choose a path not used by an open PIDB");
-                }
-                let mut exported = project.pidb.clone();
-                exported.metadata.name = file_name(&path);
-                pidb::save(&path, &exported)?;
-                userspace_log!("Exported PIDB copy to {}", path.display());
+                self.spawn_dxf_write(project.project.clone(), None, path, "project".to_owned());
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -757,8 +648,8 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportTriangulation { id, path } => {
                 MeshFormat::from_path(&path).context("Choose a filename ending in .obj, .stl, or .ply")?;
-                if self.triangulations.iter().any(|other| other.id != id && other.path == path) || self.pending_triangulation_loads.iter().any(|(_, p, _, _)| p == &path) {
-                    anyhow::bail!("Another loaded triangulation already uses {}", path.display());
+                if self.pending_triangulation_loads.iter().any(|(_, pending, _, _)| pending == &path) {
+                    anyhow::bail!("A triangulation import from {} is still in progress", path.display());
                 }
                 if self.pending_saves.iter().any(|save| save.path == path) {
                     anyhow::bail!("A save to {} is already in progress", path.display());
@@ -773,43 +664,32 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportBlockModelCsv { id, path } => self.export_block_model_csv_to_path(id, path),
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::SaveBlockModelAs { id, path, close_after } => {
-                self.commit_block_model_save(id, path, close_after)?;
-                if close_after {
-                    self.editor.block_model_close_unsaved = None;
-                }
-                Ok(())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::SaveTriangulationAs { id, path } => {
-                self.commit_triangulation_save(id, path, false)?;
-                Ok(())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::SaveAndCloseTriangulationAs { id, path } => {
-                // The close happens in poll_saves once the background save
-                // succeeds; dismiss the unsaved-close prompt immediately.
-                self.commit_triangulation_save(id, path, true)?;
-                self.editor.tri_close_unsaved = None;
-                Ok(())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::SavePidbAs { project_runtime_id, path } => {
+            FileDialogAction::SaveProjectAs { project_runtime_id, path } => {
                 if self.project_revert_is_pending(project_runtime_id) {
-                    anyhow::bail!("Wait for the PIDB revert to finish before saving");
+                    anyhow::bail!("Wait for the project revert to finish before saving");
                 }
                 let project_index = self
                     .workspace
                     .project_index_for_runtime_id(project_runtime_id)
-                    .context("The selected .pidb is no longer open")?;
+                    .context("The selected project is no longer open")?;
+                if self.workspace.active_index == Some(project_index) && self.has_pending_move_delta() {
+                    self.commit_pending_move();
+                }
                 self.ensure_project_has_no_pending_text_edit(project_index)?;
-                self.ensure_pidb_save_path_available(project_index, &path)?;
-                let project = &mut self.workspace.projects[project_index];
-                let previous_name = std::mem::replace(&mut project.pidb.metadata.name, file_name(&path));
-                let snapshot = project.pidb.clone();
-                let snapshot_hash = project.current_content_hash();
-                let snapshot_layer_hashes = project.current_layer_hashes();
-                self.spawn_pidb_write(project_runtime_id, snapshot_hash, snapshot_layer_hashes, snapshot, path, Some(previous_name));
+                self.ensure_project_save_path_available(project_index, &path)?;
+                let new_name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned();
+                let (previous_name, snapshot_hash, snapshot_layer_hashes) = {
+                    let project = &mut self.workspace.projects[project_index];
+                    let previous_name = std::mem::replace(&mut project.project.metadata.name, new_name.clone());
+                    let snapshot_hash = project.current_content_hash();
+                    let snapshot_layer_hashes = project.current_layer_hashes();
+                    project.project.metadata.name = previous_name.clone();
+                    (previous_name, snapshot_hash, snapshot_layer_hashes)
+                };
+                let mut snapshot = self.omf_export_snapshot()?;
+                let asset_token = self.project_asset_save_token();
+                snapshot.name = new_name;
+                self.spawn_project_write(project_runtime_id, snapshot_hash, snapshot_layer_hashes, asset_token, snapshot, path, Some(previous_name));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -829,31 +709,6 @@ impl<'a> App<'a> {
                 self.write_plot_sheet(crate::app::commands::plot::PlotTarget::File(path))
             }
             #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebDownloadPidb { project_runtime_id, file_name } => {
-                self.commit_export_move_if_needed(project_runtime_id);
-                let project = self
-                    .workspace
-                    .project_index_for_runtime_id(project_runtime_id)
-                    .and_then(|index| self.workspace.projects.get(index))
-                    .context("The PIDB selected for export is no longer open")?;
-                let snapshot = project.pidb.clone();
-                self.spawn_job(
-                    "Encoding PIDB download…",
-                    vec![crate::app::jobs::JobKey::Anonymous],
-                    move |cancel| {
-                        if cancel.is_cancelled() {
-                            anyhow::bail!("Cancelled");
-                        }
-                        pidb::to_bytes(&snapshot)
-                    },
-                    move |_app, result| match result {
-                        Ok(bytes) => Self::trigger_browser_download(file_name, bytes, "application/octet-stream", "PIDB"),
-                        Err(error) => userspace_warn!("PIDB download encoding failed: {error:#}"),
-                    },
-                );
-                Ok(())
-            }
-            #[cfg(target_arch = "wasm32")]
             FileDialogAction::WebDownloadDxf {
                 project_runtime_id,
                 layer,
@@ -864,8 +719,8 @@ impl<'a> App<'a> {
                     .workspace
                     .project_index_for_runtime_id(project_runtime_id)
                     .and_then(|index| self.workspace.projects.get(index))
-                    .context("The PIDB selected for export is no longer open")?;
-                let snapshot = project.pidb.clone();
+                    .context("The project selected for export is no longer open")?;
+                let snapshot = project.project.clone();
                 self.spawn_job(
                     "Encoding DXF download…",
                     vec![crate::app::jobs::JobKey::Anonymous],
@@ -873,7 +728,7 @@ impl<'a> App<'a> {
                         if cancel.is_cancelled() {
                             anyhow::bail!("Cancelled");
                         }
-                        pidb::export_to_dxf_bytes(&snapshot, layer)
+                        formats::dxf::export_bytes(&snapshot, layer)
                     },
                     move |_app, result| match result {
                         Ok(bytes) => Self::trigger_browser_download(file_name, bytes, "application/dxf", "DXF"),
@@ -973,101 +828,6 @@ impl<'a> App<'a> {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    /// Start a background save of the mesh for `id` to `path`. Metadata and
-    /// session updates happen in `poll_saves` once the worker finishes. Shared
-    /// by SaveTriangulationAs and SaveAndCloseTriangulationAs actions.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn commit_triangulation_save(&mut self, id: TriangulationId, path: PathBuf, close_after: bool) -> Result<()> {
-        if self.triangulations.iter().any(|other| other.id != id && other.path == path) || self.pending_triangulation_loads.iter().any(|(_, p, _, _)| p == &path) {
-            anyhow::bail!("Another loaded triangulation already uses {}", path.display());
-        }
-        if self
-            .pending_saves
-            .iter()
-            .any(|save| save.path == path || matches!(save.kind, PendingSaveKind::Save { id: pending, .. } if pending == id))
-        {
-            anyhow::bail!("A save involving {} is already in progress", path.display());
-        }
-        MeshFormat::from_path(&path).context("Choose a filename ending in .obj, .stl, or .ply")?;
-        let triangulation = self.triangulations.iter().find(|t| t.id == id).context("The triangulation is no longer loaded")?;
-        let mesh = std::sync::Arc::clone(&triangulation.mesh);
-        userspace_log!("Saving triangulation '{}' to {}", triangulation.name, path.display());
-        self.spawn_triangulation_write(PendingSaveKind::Save { id, close_after }, mesh, path);
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn commit_block_model_save(&mut self, id: BlockModelId, mut path: PathBuf, close_after: bool) -> Result<()> {
-        if path.extension().is_none() {
-            path.set_extension("csv");
-        }
-        if !path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))
-        {
-            anyhow::bail!("Choose a filename ending in .csv");
-        }
-        if self.block_models.iter().any(|other| other.id != id && other.source.path == path)
-            || self.block_model_files.iter().any(|source| source.path == path)
-            || self.pending_block_model_loads.iter().any(|(_, source, _, _)| source.path == path)
-        {
-            anyhow::bail!("Another block model already uses {}", path.display());
-        }
-        if self
-            .pending_saves
-            .iter()
-            .any(|save| save.path == path || matches!(save.kind, PendingSaveKind::BlockModel { id: pending, .. } if pending == id))
-        {
-            anyhow::bail!("A save involving {} is already in progress", path.display());
-        }
-        let block_model = self
-            .block_models
-            .iter()
-            .find(|model| model.id == id)
-            .context("The selected block model is no longer loaded")?;
-        let model = block_model.model.clone();
-        let blocks = std::sync::Arc::clone(&block_model.blocks);
-        let renderable = std::sync::Arc::clone(&block_model.renderable_block_indices);
-        let mapping = crate::model::formats::csv_block_model::export_mapping(&model);
-        userspace_log!("Saving block model '{}' to {}", block_model.name, path.display());
-        self.spawn_block_model_write(PendingSaveKind::BlockModel { id, close_after, mapping }, model, blocks, renderable, path);
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_block_model_write(
-        &mut self,
-        kind: PendingSaveKind,
-        model: crate::model::formats::block_model_data::BlockModelData,
-        blocks: std::sync::Arc<crate::model::block_model::BlockBoundsSource>,
-        renderable: std::sync::Arc<crate::model::block_model::RenderableBlockIndices>,
-        path: PathBuf,
-    ) {
-        let (ticket, _progress) = self.begin_reported_task(format!("Saving {}", file_name(&path)));
-        let (result_tx, result_rx) = mpsc::channel();
-        self.pending_saves.push(PendingSave {
-            ticket,
-            console_report: crate::logging::retain_current_report(),
-            kind,
-            path: path.clone(),
-            result_rx,
-        });
-        let window = self.window.clone();
-        crate::app::jobs::spawn_io_task(move || {
-            let result = crate::app::jobs::run_compute_catching_panic(|| {
-                crate::model::atomic_file::write_atomic(&path, |file| {
-                    crate::model::formats::csv_block_model::write(&model, &blocks, &renderable, file).map_err(anyhow::Error::new)
-                })
-            });
-            let _ = result_tx.send(result);
-            if let Some(window) = window.as_ref() {
-                window.request_redraw();
-            }
-        });
-    }
-
     /// Spawn a worker thread that writes `mesh` to `path`, streaming progress
     /// back for the status bar. Completion is handled in `poll_saves`.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1114,11 +874,16 @@ impl<'a> App<'a> {
     pub(crate) fn poll_saves(&mut self) {
         let pending = std::mem::take(&mut self.pending_saves);
         let mut still_pending = Vec::new();
-        let mut finish_pidb_actions = false;
+        let mut finish_project_actions = false;
+        let mut continue_project_replacement = false;
 
         for mut save in pending {
-            let deferred_pidb_close = match &save.kind {
-                PendingSaveKind::Pidb {
+            let project_save_runtime_id = match &save.kind {
+                PendingSaveKind::Project { runtime_id, .. } => Some(*runtime_id),
+                _ => None,
+            };
+            let deferred_project_close = match &save.kind {
+                PendingSaveKind::Project {
                     runtime_id, close_after: true, ..
                 } => Some(*runtime_id),
                 _ => None,
@@ -1130,68 +895,41 @@ impl<'a> App<'a> {
                         self.finish_background_task(save.ticket, false);
                         self.redraw_requested = true;
                         match save.kind {
-                            PendingSaveKind::Save { id, close_after } => {
-                                if let Some(tri) = self.triangulations.iter_mut().find(|t| t.id == id) {
-                                    let saved_name = tri.name.clone();
-                                    tri.path = save.path.clone();
-                                    tri.name = file_name(&save.path);
-                                    tri.is_saved = true;
-                                    if !self.triangulation_files.contains(&save.path) {
-                                        self.triangulation_files.push(save.path.clone());
-                                    }
-                                    self.triangulation_excluded_paths.remove(&save.path);
-                                    userspace_log!("Saved triangulation '{}' to {}", saved_name, save.path.display());
-                                    self.persist_session();
-                                    if close_after {
-                                        self.close_triangulation(id);
-                                    }
-                                }
-                            }
                             PendingSaveKind::Export { name } => {
                                 userspace_log!("Exported triangulation '{}' to {}", name, save.path.display());
                             }
-                            PendingSaveKind::BlockModel { id, close_after, mapping } => {
-                                let saved = self.block_models.iter_mut().find(|model| model.id == id).map(|model| {
-                                    let previous_name = model.name.clone();
-                                    model.name = file_name(&save.path);
-                                    model.source = crate::model::block_model::BlockModelSource {
-                                        path: save.path.clone(),
-                                        csv_columns: Some(mapping),
-                                        generated: false,
-                                    };
-                                    (previous_name, model.source.clone())
-                                });
-                                if let Some((previous_name, source)) = saved {
-                                    if !self.block_model_files.contains(&source) {
-                                        self.block_model_files.push(source);
-                                    }
-                                    userspace_log!("Saved block model '{}' to {}", previous_name, save.path.display());
-                                    self.persist_session();
-                                    if close_after {
-                                        self.close_block_model(id);
-                                    }
-                                }
-                            }
-                            PendingSaveKind::Pidb {
+                            PendingSaveKind::Project {
                                 runtime_id,
                                 snapshot_hash,
                                 snapshot_layer_hashes,
+                                asset_token,
                                 close_after,
                                 save_as_previous_name,
                             } => {
                                 if let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) {
-                                    self.workspace.projects[index].mark_snapshot_saved(snapshot_hash, snapshot_layer_hashes);
+                                    self.mark_project_asset_snapshot_saved(&asset_token);
+                                    self.workspace.projects[index].lossy_save_warnings.clear();
+                                    self.workspace.projects[index].lossy_save_confirmed = false;
                                     if save_as_previous_name.is_some() {
                                         self.workspace.projects[index].path = Some(save.path.clone());
-                                        userspace_log!("Saved PIDB as: {}", save.path.display());
+                                        self.workspace.projects[index].project.metadata.name =
+                                            save.path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned();
+                                        userspace_log!("Saved project as: {}", save.path.display());
                                     } else {
-                                        userspace_log!("Saved PIDB: {}", save.path.display());
+                                        userspace_log!("Saved project: {}", save.path.display());
+                                    }
+                                    self.workspace.projects[index].mark_snapshot_saved(snapshot_hash, snapshot_layer_hashes);
+                                    if save_as_previous_name.is_some() {
+                                        self.track_project_path(save.path.clone());
                                     }
                                     self.persist_session();
-                                    if close_after {
-                                        self.editor.pending_close_pidb = Some(runtime_id);
+                                    if self.project_replacement_after_save && self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id) {
+                                        continue_project_replacement = true;
                                     }
-                                    finish_pidb_actions = true;
+                                    if close_after {
+                                        self.editor.pending_close_project = Some(runtime_id);
+                                    }
+                                    finish_project_actions = true;
                                 }
                             }
                             PendingSaveKind::DxfExport { description } => {
@@ -1211,26 +949,29 @@ impl<'a> App<'a> {
                     let mut complete = || {
                         self.finish_background_task(save.ticket, false);
                         self.redraw_requested = true;
-                        if let PendingSaveKind::Pidb {
-                            runtime_id,
-                            save_as_previous_name: Some(previous_name),
-                            ..
-                        } = &save.kind
-                            && let Some(index) = self.workspace.project_index_for_runtime_id(*runtime_id)
-                            && self.workspace.projects[index].pidb.metadata.name == file_name(&save.path)
-                        {
-                            self.workspace.projects[index].pidb.metadata.name = previous_name.clone();
-                        }
                         let message = format!("{e:#}");
                         userspace_warn!("Save failed: {message}");
-                        if let Some(runtime_id) = deferred_pidb_close
+                        if let Some(runtime_id) = deferred_project_close
                             && self.workspace.project_index_for_runtime_id(runtime_id).is_some()
                         {
-                            self.editor.pending_close_pidb = Some(runtime_id);
-                            finish_pidb_actions = true;
+                            self.editor.pending_close_project = Some(runtime_id);
+                            finish_project_actions = true;
                         }
                         if self.exit_after_pending_saves {
                             self.cancel_exit_request();
+                        }
+                        if self.project_replacement_after_save
+                            && project_save_runtime_id.is_some_and(|runtime_id| self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id))
+                        {
+                            self.project_replacement_after_save = false;
+                            self.editor.replace_project_confirm_open = true;
+                        }
+                        if let Some(runtime_id) = project_save_runtime_id
+                            && let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id)
+                            && !self.workspace.projects[index].lossy_save_warnings.is_empty()
+                        {
+                            self.workspace.projects[index].lossy_save_confirmed = false;
+                            self.editor.lossy_save_confirm_open = true;
                         }
                     };
                     if let Some(report) = console_report.as_ref() {
@@ -1247,11 +988,11 @@ impl<'a> App<'a> {
                         self.finish_background_task(save.ticket, false);
                         self.redraw_requested = true;
                         userspace_warn!("Save worker ended without a result");
-                        if let Some(runtime_id) = deferred_pidb_close
+                        if let Some(runtime_id) = deferred_project_close
                             && self.workspace.project_index_for_runtime_id(runtime_id).is_some()
                         {
-                            self.editor.pending_close_pidb = Some(runtime_id);
-                            finish_pidb_actions = true;
+                            self.editor.pending_close_project = Some(runtime_id);
+                            finish_project_actions = true;
                         }
                         if self.exit_after_pending_saves {
                             self.cancel_exit_request();
@@ -1268,8 +1009,11 @@ impl<'a> App<'a> {
         }
 
         self.pending_saves = still_pending;
-        if finish_pidb_actions && let Err(error) = self.finish_pending_pidb_actions() {
-            userspace_warn!("Could not finish the pending PIDB action: {error:#}");
+        if finish_project_actions && let Err(error) = self.finish_pending_project_actions() {
+            userspace_warn!("Could not finish the pending project action: {error:#}");
+        }
+        if continue_project_replacement && let Err(error) = self.continue_project_replacement() {
+            userspace_warn!("Could not replace the current project: {error:#}");
         }
         self.try_finish_deferred_exit();
     }
@@ -1279,56 +1023,177 @@ impl<'a> App<'a> {
 
     // ── Dialog spawners (non-blocking) ──────────────────────────────────────
 
-    pub(crate) fn choose_new_pidb(&mut self) {
+    pub(crate) fn choose_new_project(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
-            self.editor.new_pidb_name.clear();
-            self.editor.new_pidb_dialog_open = true;
+            self.editor.new_project_name.clear();
+            self.editor.new_project_dialog_open = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async {
             let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("ProInspector database", &["pidb"])
-                .set_file_name("new_project.pidb")
+                .add_filter("Project", &["omf"])
+                .set_file_name("new_project.omf")
                 .save_file()
                 .await?
                 .into_path();
-            Some(FileDialogAction::NewPidb(path))
+            Some(FileDialogAction::NewProject(path))
         });
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn create_browser_pidb(&mut self, name: String) -> Result<()> {
-        let mut pidb_file = pidb::new_empty(None);
-        pidb_file.metadata.name = sanitize_pidb_name(&name);
-        let project = pidb::open_project(None, pidb_file)?;
-        self.set_active_project(project);
-        userspace_log!("Created new browser PIDB");
-        // Browser projects are persisted only after an explicit Save action.
-        // Keeping the new project dirty also feeds the before-unload guard.
+    pub(crate) fn create_browser_project(&mut self, name: String) -> Result<()> {
+        self.execute_file_dialog_action(FileDialogAction::WebNewProject(name))
+    }
+
+    pub(crate) fn continue_project_replacement(&mut self) -> Result<()> {
+        let Some(action) = self.pending_project_replacement.take() else {
+            self.editor.replace_project_confirm_open = false;
+            self.project_replacement_after_save = false;
+            return Ok(());
+        };
+        self.editor.replace_project_confirm_open = false;
+        self.project_replacement_after_save = false;
+        self.project_replacement_bypass = true;
+        self.execute_file_dialog_action(action)
+    }
+
+    pub(crate) fn save_and_continue_project_replacement(&mut self) -> Result<()> {
+        let runtime_id = self.workspace.active_project().context("No active project to save")?.runtime_id;
+        self.editor.replace_project_confirm_open = false;
+        self.project_replacement_after_save = true;
+        if let Err(error) = self.save_project(runtime_id) {
+            self.project_replacement_after_save = false;
+            self.editor.replace_project_confirm_open = true;
+            return Err(error);
+        }
         Ok(())
     }
 
-    pub(crate) fn choose_open_pidb(&mut self) {
+    pub(crate) fn discard_and_continue_project_replacement(&mut self) -> Result<()> {
+        self.clear_editor_transient_state();
+        self.continue_project_replacement()
+    }
+
+    pub(crate) fn cancel_project_replacement(&mut self) {
+        self.pending_project_replacement = None;
+        self.project_replacement_after_save = false;
+        self.project_replacement_bypass = false;
+        self.editor.replace_project_confirm_open = false;
+    }
+
+    pub(crate) fn confirm_lossy_project_save(&mut self) -> Result<()> {
+        let runtime_id = self.workspace.active_project().context("No active project to save")?.runtime_id;
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.lossy_save_confirmed = true;
+        }
+        self.editor.lossy_save_confirm_open = false;
+        if let Some(action) = self.pending_lossy_save_as.take() {
+            self.execute_file_dialog_action(action)
+        } else {
+            self.save_project(runtime_id)
+        }
+    }
+
+    pub(crate) fn cancel_lossy_project_save(&mut self) {
+        self.pending_lossy_save_as = None;
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.lossy_save_confirmed = false;
+        }
+        if self.project_replacement_after_save {
+            self.project_replacement_after_save = false;
+            self.editor.replace_project_confirm_open = true;
+        }
+        if self.exit_after_pending_saves {
+            self.cancel_exit_request();
+        }
+        self.editor.lossy_save_confirm_open = false;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn activate_tracked_project(&mut self, path: PathBuf) -> Result<()> {
+        if self.workspace.active_project().and_then(|project| project.path.as_ref()) == Some(&path) {
+            return Ok(());
+        }
+        if !self.pending_project_open_paths.is_empty() {
+            anyhow::bail!("Wait for the project to finish opening");
+        }
+        self.execute_file_dialog_action(FileDialogAction::SwitchProject(path))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn activate_tracked_project(&mut self, project_id: crate::model::project::ProjectId) -> Result<()> {
+        if self.workspace.active_project().is_some_and(|project| project.id == project_id) {
+            return Ok(());
+        }
+        if !self.browser_project_loads_pending.is_empty() {
+            anyhow::bail!("Wait for the browser project to finish opening");
+        }
+        if self.browser_deletes_pending.contains(&project_id) {
+            anyhow::bail!("Wait for the browser project removal to finish");
+        }
+        self.execute_file_dialog_action(FileDialogAction::WebStoredProject(project_id))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn remove_tracked_project(&mut self, path: PathBuf) -> Result<()> {
+        if self.pending_project_open_paths.contains(&path) {
+            anyhow::bail!("Wait for the project to finish opening");
+        }
+        if let Some(runtime_id) = self
+            .workspace
+            .active_project()
+            .filter(|project| project.path.as_ref() == Some(&path))
+            .map(|project| project.runtime_id)
+        {
+            self.editor.remove_project_after_close = true;
+            self.request_close_project(runtime_id);
+        } else {
+            self.tracked_project_paths.retain(|tracked| tracked != &path);
+            self.persist_session();
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn remove_tracked_project(&mut self, project_id: crate::model::project::ProjectId) -> Result<()> {
+        if self.browser_project_loads_pending.contains(&project_id) {
+            anyhow::bail!("Wait for the browser project to finish opening");
+        }
+        if let Some(runtime_id) = self.workspace.active_project().filter(|project| project.id == project_id).map(|project| project.runtime_id) {
+            self.editor.remove_project_after_close = true;
+            self.request_close_project(runtime_id);
+            Ok(())
+        } else {
+            self.start_browser_project_delete(project_id, None)
+        }
+    }
+
+    pub(crate) fn cancel_close_project(&mut self) {
+        self.editor.pending_close_project = None;
+        self.editor.remove_project_after_close = false;
+    }
+
+    pub(crate) fn choose_open_project(&mut self) {
         #[cfg(target_arch = "wasm32")]
         self.spawn_file_dialog(async {
-            let handles = AsyncFileDialog::new().add_filter("ProInspector database", &["pidb"]).pick_files().await?;
+            let handles = AsyncFileDialog::new().add_filter("Project", &["omf"]).pick_files().await?;
             let mut files = Vec::with_capacity(handles.len());
             for handle in handles {
                 files.push(crate::model::input::read_browser_handle(handle).await);
             }
-            Some(FileDialogAction::WebOpenPidb(files))
+            Some(FileDialogAction::WebOpenProject(files))
         });
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async {
             let paths = AsyncFileDialog::new()
-                .add_filter("ProInspector database", &["pidb"])
+                .add_filter("Project", &["omf"])
                 .pick_files()
                 .await?
                 .into_iter()
                 .map(FileHandleExt::into_path)
                 .collect();
-            Some(FileDialogAction::OpenPidb(paths))
+            Some(FileDialogAction::OpenProject(paths))
         });
     }
 
@@ -1337,16 +1202,16 @@ impl<'a> App<'a> {
         {
             let _ = paths;
             let files = self.take_web_import_files(DataMenu::Dxf)?;
-            let project = self.workspace.active_project().context("No active .pidb to import into")?;
+            let project = self.workspace.active_project().context("No active .omf to import into")?;
             let runtime_id = project.runtime_id;
-            let document_revision = project.pidb.document.revision();
+            let document_revision = project.project.document.revision();
             let compute = move |cancel: &crate::app::jobs::CancelFlag| {
                 let mut parsed = Vec::with_capacity(files.len());
                 for file in files {
                     if cancel.is_cancelled() {
                         anyhow::bail!("Cancelled");
                     }
-                    parsed.push((file.source.name.clone(), pidb::parse_dxf_document_bytes(&file.source.name, &file.bytes)?));
+                    parsed.push((file.source.name.clone(), formats::dxf::document_from_bytes(&file.source.name, &file.bytes)?));
                 }
                 Ok(parsed)
             };
@@ -1362,15 +1227,15 @@ impl<'a> App<'a> {
                     return;
                 };
                 let project = &mut app.workspace.projects[index];
-                let existing: std::collections::HashSet<_> = project.pidb.document.layers().iter().map(|layer| layer.id).collect();
+                let existing: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
                 let mut total = 0usize;
                 for (name, document) in parsed {
-                    let added = pidb::merge_document(&mut project.pidb.document, &document);
+                    let added = project::merge_document(&mut project.project.document, &document);
                     total += added;
                     userspace_log!("Imported {added} object(s) from {name}");
                 }
                 let new_layers: Vec<_> = project
-                    .pidb
+                    .project
                     .document
                     .layers()
                     .iter()
@@ -1397,12 +1262,6 @@ impl<'a> App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.execute_file_dialog_action(FileDialogAction::ImportDxfInto { paths })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn open_web_pidb_sources(&mut self) -> Result<()> {
-        let files = self.take_web_import_files(DataMenu::Pidb)?;
-        self.execute_file_dialog_action(FileDialogAction::WebOpenPidb(files.into_iter().map(Ok).collect()))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1455,7 +1314,7 @@ impl<'a> App<'a> {
             anyhow::bail!("Choose point-cloud files before importing");
         }
         for file in files {
-            let path = self.persist_browser_import(crate::app::commands::browser_data::BrowserDataKind::PointCloud, &file);
+            let path = crate::app::browser_source_filename(&file.source.name);
             self.open_point_cloud_input(file, path);
         }
         Ok(())
@@ -1465,19 +1324,10 @@ impl<'a> App<'a> {
     pub(crate) fn import_web_raster_sources(&mut self) -> Result<()> {
         let files = self.take_web_import_files(DataMenu::Geotiff)?;
         for file in files {
-            let path = self.persist_browser_import(crate::app::commands::browser_data::BrowserDataKind::Raster, &file);
+            let path = crate::app::browser_source_filename(&file.source.name);
             self.open_raster_input(file, path);
         }
         Ok(())
-    }
-
-    /// Reserve an import's explorer name and copy its bytes into browser
-    /// storage, so the entry outlives both an unload and the tab.
-    #[cfg(target_arch = "wasm32")]
-    fn persist_browser_import(&mut self, kind: crate::app::commands::browser_data::BrowserDataKind, file: &crate::model::input::InputFile) -> PathBuf {
-        let path = self.allocate_browser_source_path(&file.source.name);
-        self.store_browser_data(kind, &file.source.name, &path, &file.bytes);
-        path
     }
 
     pub(crate) fn choose_import_source_files(&mut self, kind: DataMenu) {
@@ -1486,7 +1336,6 @@ impl<'a> App<'a> {
             let dialog = match kind {
                 DataMenu::Dxf => AsyncFileDialog::new().add_filter("AutoCAD DXF", &["dxf"]),
                 DataMenu::Omf => AsyncFileDialog::new().add_filter("Open Mining Format", &["omf"]),
-                DataMenu::Pidb => AsyncFileDialog::new().add_filter("ProInspector database", &["pidb"]),
                 DataMenu::Obj => AsyncFileDialog::new().add_filter("Wavefront OBJ", &["obj"]),
                 DataMenu::Stl => AsyncFileDialog::new().add_filter("STL", &["stl"]),
                 DataMenu::Ply => AsyncFileDialog::new().add_filter("PLY", &["ply"]),
@@ -1514,7 +1363,6 @@ impl<'a> App<'a> {
             let dialog = match kind {
                 DataMenu::Dxf => AsyncFileDialog::new().add_filter("AutoCAD DXF", &["dxf"]),
                 DataMenu::Omf => AsyncFileDialog::new().add_filter("Open Mining Format", &["omf"]),
-                DataMenu::Pidb => AsyncFileDialog::new().add_filter("ProInspector database", &["pidb"]),
                 DataMenu::Obj => AsyncFileDialog::new().add_filter("Wavefront OBJ", &["obj"]),
                 DataMenu::Stl => AsyncFileDialog::new().add_filter("STL", &["stl"]),
                 DataMenu::Ply => AsyncFileDialog::new().add_filter("PLY", &["ply"]),
@@ -1535,56 +1383,6 @@ impl<'a> App<'a> {
         });
     }
 
-    pub(crate) fn choose_import_as_pidb_paths(&mut self, kind: DataMenu, source_paths: Vec<PathBuf>) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = source_paths;
-            let result = (|| -> Result<()> {
-                let files = self.take_web_import_files(kind)?;
-                let mut imported = 0usize;
-                for file in &files {
-                    let mut pidb_data = pidb::pidb_from_dxf_bytes(&file.source.name, &file.bytes)?;
-                    let stem = Path::new(&file.source.name).file_stem().and_then(|stem| stem.to_str()).unwrap_or("Imported");
-                    pidb_data.metadata.name = format!("{stem}.pidb");
-                    let project = pidb::open_project(None, pidb_data)?;
-                    self.set_active_project(project);
-                    if let Some(project) = self.workspace.active_project_mut() {
-                        project.loaded_layers.extend(project.pidb.document.layers().iter().map(|layer| layer.id));
-                    }
-                    imported += 1;
-                }
-                self.invalidate_geometry();
-                self.fit_view_to_extents();
-                userspace_log!("Imported {imported} browser file(s) as PIDB projects");
-                Ok(())
-            })();
-            if let Err(error) = result {
-                userspace_warn!("Import failed: {error:#}");
-            }
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.spawn_file_dialog(async move {
-            let mut pairs = Vec::new();
-            for source_path in source_paths {
-                if kind != DataMenu::Dxf || !is_dxf_path(&source_path) {
-                    continue;
-                }
-                let stem = source_path.file_stem().and_then(|s| s.to_str()).unwrap_or("imported").to_owned();
-                let default_name = format!("{stem}.pidb");
-                let Some(pidb_path) = AsyncFileDialog::new()
-                    .add_filter("ProInspector database", &["pidb"])
-                    .set_file_name(&default_name)
-                    .save_file()
-                    .await
-                else {
-                    continue;
-                };
-                pairs.push((source_path, pidb_path.into_path()));
-            }
-            if pairs.is_empty() { None } else { Some(FileDialogAction::ImportAsPidb(pairs)) }
-        });
-    }
-
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn import_web_csv_block_model(&mut self, mapping: crate::model::formats::csv_block_model::CsvColumnMapping) -> Result<()> {
         let mut files = self.take_web_import_files(DataMenu::CsvBlockModel)?;
@@ -1594,34 +1392,11 @@ impl<'a> App<'a> {
         }
         self.editor.import_csv_preview = None;
         self.editor.import_csv_error = None;
-        let path = self.allocate_browser_source_path(&file.source.name);
-        let metadata_json = serde_json::to_string(&mapping).context("Could not preserve the CSV column mapping")?;
-        self.store_browser_data_with_metadata(
-            crate::app::commands::browser_data::BrowserDataKind::BlockModel,
-            &file.source.name,
-            &path,
-            &file.bytes,
-            Some(metadata_json),
-        );
-        self.open_block_model_input(
-            file,
-            crate::model::block_model::BlockModelSource {
-                path,
-                csv_columns: Some(mapping),
-                generated: false,
-            },
-        )
+        let path = crate::app::browser_source_filename(&file.source.name);
+        self.open_block_model_input(file, crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn choose_open_triangulation_folder(&mut self) {
-        self.spawn_file_dialog(async {
-            let dir = AsyncFileDialog::new().pick_folder().await?.into_path();
-            Some(FileDialogAction::OpenTriangulationFolder(dir))
-        });
-    }
-
-    pub(crate) fn choose_export_pidb_dxf(&mut self, project_runtime_id: u32) {
+    pub(crate) fn choose_export_project_dxf(&mut self, project_runtime_id: u32) {
         self.commit_export_move_if_needed(project_runtime_id);
         if self.workspace.project_index_for_runtime_id(project_runtime_id).is_none() {
             return;
@@ -1640,7 +1415,7 @@ impl<'a> App<'a> {
                 .save_file()
                 .await?
                 .into_path();
-            Some(FileDialogAction::ExportPidbDxf { project_runtime_id, path })
+            Some(FileDialogAction::ExportProjectDxf { project_runtime_id, path })
         });
     }
 
@@ -1670,35 +1445,6 @@ impl<'a> App<'a> {
                 .await?
                 .into_path();
             Some(FileDialogAction::ExportBlockModelCsv { id, path })
-        });
-    }
-
-    pub(crate) fn spawn_save_block_model_dialog(&mut self, id: BlockModelId, close_after: bool) {
-        let Some(model) = self.block_models.iter().find(|model| model.id == id) else {
-            userspace_warn!("The selected block model is no longer loaded");
-            return;
-        };
-        let stem = Path::new(&model.name)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.is_empty())
-            .unwrap_or("block_model");
-        let default_name = format!("{stem}.csv");
-        #[cfg(target_arch = "wasm32")]
-        self.start_browser_export(FileDialogAction::WebDownloadBlockModelCsv {
-            id,
-            file_name: default_name,
-            close_after,
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        self.spawn_file_dialog(async move {
-            let path = AsyncFileDialog::new()
-                .add_filter("CSV block model", &["csv"])
-                .set_file_name(&default_name)
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::SaveBlockModelAs { id, path, close_after })
         });
     }
 
@@ -1735,45 +1481,11 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    pub(crate) fn choose_export_pidb_copy(&mut self, project_runtime_id: u32) {
-        self.commit_export_move_if_needed(project_runtime_id);
-        let Some(project_index) = self.workspace.project_index_for_runtime_id(project_runtime_id) else {
-            return;
-        };
-        let project = &self.workspace.projects[project_index];
-        let default_name = project
-            .path
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .map(|name| name.to_owned())
-            .unwrap_or_else(|| {
-                let stem = Path::new(&project.pidb.metadata.name).file_stem().and_then(|name| name.to_str()).unwrap_or("project");
-                format!("{}.pidb", sanitize_file_stem(stem))
-            });
-        #[cfg(target_arch = "wasm32")]
-        self.start_browser_export(FileDialogAction::WebDownloadPidb {
-            project_runtime_id,
-            file_name: default_name,
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        self.spawn_file_dialog(async move {
-            let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("ProInspector database", &["pidb"])
-                .set_file_name(&default_name)
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::ExportPidbCopy { project_runtime_id, path })
-        });
-    }
-
-    /// Download a portable `.pidb` copy of every open browser project. Each
-    /// project stays as an individual PIDB instead of being hidden inside an
-    /// archive, so any one of the downloads can be reopened directly.
+    /// Download a portable `.omf` copy of the current browser project. This is
+    /// an export and deliberately does not update the save baseline.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn download_all_pidbs(&mut self) -> Result<()> {
-        if self.workspace.projects.is_empty() {
+    pub(crate) fn download_project(&mut self) -> Result<()> {
+        if self.workspace.active_project().is_none() {
             return Ok(());
         }
         if self.has_pending_move_delta() {
@@ -1783,35 +1495,22 @@ impl<'a> App<'a> {
             self.ensure_project_has_no_pending_text_edit(active_index)?;
         }
 
-        let file_names = unique_pidb_download_names(self.workspace.projects.iter().map(|project| project.pidb.metadata.name.as_str()));
-        let snapshots: Vec<_> = self
-            .workspace
-            .projects
-            .iter()
-            .zip(file_names)
-            .map(|(project, file_name)| (file_name, project.pidb.clone()))
-            .collect();
+        let snapshot = self.omf_export_snapshot()?;
+        let file_name = format!("{}.omf", snapshot.name.trim_end_matches(".omf"));
 
         self.spawn_job(
-            "Encoding PIDB downloads…",
+            "Encoding project download…",
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
-                let mut encoded = Vec::with_capacity(snapshots.len());
-                for (file_name, snapshot) in snapshots {
-                    if cancel.is_cancelled() {
-                        anyhow::bail!("Cancelled");
-                    }
-                    encoded.push((file_name, pidb::to_bytes(&snapshot)?));
+                if cancel.is_cancelled() {
+                    anyhow::bail!("Cancelled");
                 }
-                Ok(encoded)
+                let progress = crate::model::progress::Progress::new();
+                Ok((file_name, formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0))?))
             },
             move |_app, result| match result {
-                Ok(downloads) => {
-                    for (file_name, bytes) in downloads {
-                        Self::trigger_browser_download(file_name, bytes, "application/octet-stream", "PIDB");
-                    }
-                }
-                Err(error) => userspace_warn!("PIDB download encoding failed: {error:#}"),
+                Ok((file_name, bytes)) => Self::trigger_browser_download(file_name, bytes, "application/octet-stream", "project"),
+                Err(error) => userspace_warn!("Project download encoding failed: {error:#}"),
             },
         );
         Ok(())
@@ -1826,7 +1525,7 @@ impl<'a> App<'a> {
         };
         let project = &self.workspace.projects[project_index];
         let project_runtime_id = project.runtime_id;
-        let layer_name = project.pidb.document.layer(layer).map(|layer| layer.name.clone()).unwrap_or_else(|| "layer".to_string());
+        let layer_name = project.project.document.layer(layer).map(|layer| layer.name.clone()).unwrap_or_else(|| "layer".to_string());
         let default_name = format!("{}.dxf", sanitize_file_stem(&layer_name));
         #[cfg(target_arch = "wasm32")]
         self.start_browser_export(FileDialogAction::WebDownloadDxf {
@@ -1851,9 +1550,8 @@ impl<'a> App<'a> {
             .triangulations
             .iter()
             .find(|t| t.id == id)
-            .and_then(|t| t.path.file_stem().and_then(|s| s.to_str()))
-            .unwrap_or("triangulation")
-            .to_owned();
+            .map(|triangulation| sanitize_file_stem(&triangulation.name))
+            .unwrap_or_else(|| "triangulation".to_owned());
         #[cfg(target_arch = "wasm32")]
         {
             let (_, extension) = mesh_format_name_and_extension(format);
@@ -1879,70 +1577,14 @@ impl<'a> App<'a> {
         });
     }
 
-    /// Desktop-only: the browser keeps generated triangulations in IndexedDB,
-    /// so it has nothing to "save as" — the equivalent action there is
-    /// downloading a copy, which needs no path from the user.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn spawn_save_triangulation_dialog(&mut self, id: TriangulationId) {
-        let stem = self
-            .triangulations
-            .iter()
-            .find(|t| t.id == id)
-            .and_then(|t| Path::new(&t.name).file_stem().and_then(|s| s.to_str()))
-            .unwrap_or("triangulation")
-            .to_owned();
-        self.spawn_file_dialog(async move {
-            let default_name = format!("{stem}.obj");
-            let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("Wavefront OBJ", &["obj"])
-                .add_filter("STL", &["stl"])
-                .add_filter("PLY", &["ply"])
-                .set_file_name(&default_name)
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::SaveTriangulationAs { id, path })
-        });
-    }
-
-    pub(crate) fn spawn_save_and_close_triangulation_dialog(&mut self, id: TriangulationId) {
-        let stem = self
-            .triangulations
-            .iter()
-            .find(|t| t.id == id)
-            .and_then(|t| Path::new(&t.name).file_stem().and_then(|s| s.to_str()))
-            .unwrap_or("triangulation")
-            .to_owned();
-        #[cfg(target_arch = "wasm32")]
-        self.start_browser_export(FileDialogAction::WebDownloadTriangulation {
-            id,
-            format: MeshFormat::Obj,
-            file_name: format!("{stem}.obj"),
-            close_after: true,
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        self.spawn_file_dialog(async move {
-            let default_name = format!("{stem}.obj");
-            let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("Wavefront OBJ", &["obj"])
-                .add_filter("STL", &["stl"])
-                .add_filter("PLY", &["ply"])
-                .set_file_name(&default_name)
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::SaveAndCloseTriangulationAs { id, path })
-        });
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn spawn_save_pidb_as_dialog(&mut self, project_runtime_id: u32) {
+    pub(crate) fn spawn_save_project_as_dialog(&mut self, project_runtime_id: u32) {
         if self.project_revert_is_pending(project_runtime_id) {
-            userspace_warn!("Wait for the PIDB revert to finish before saving");
+            userspace_warn!("Wait for the project revert to finish before saving");
             return;
         }
-        if self.pidb_save_is_pending(project_runtime_id) {
-            userspace_warn!("Wait for the current PIDB save to finish");
+        if self.project_save_is_pending(project_runtime_id) {
+            userspace_warn!("Wait for the current project save to finish");
             return;
         }
         if self.workspace.active_project().is_some_and(|project| project.runtime_id == project_runtime_id) {
@@ -1953,12 +1595,12 @@ impl<'a> App<'a> {
         }
         self.spawn_file_dialog(async move {
             let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("ProInspector database", &["pidb"])
-                .set_file_name("project.pidb")
+                .add_filter("Project", &["omf"])
+                .set_file_name("project.omf")
                 .save_file()
                 .await?
                 .into_path();
-            Some(FileDialogAction::SavePidbAs { project_runtime_id, path })
+            Some(FileDialogAction::SaveProjectAs { project_runtime_id, path })
         });
     }
 
@@ -1991,179 +1633,21 @@ impl<'a> App<'a> {
         });
     }
 
-    // ── Save helpers used in exit / internal chains ────────────────────────
-
-    /// Open Save As for an unsaved triangulation. Returns false because the
-    /// dialog completes later through `poll_file_dialogs`.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn save_triangulation_as(&mut self, id: TriangulationId) -> Result<bool> {
-        self.triangulations.iter().find(|t| t.id == id).context("The triangulation is no longer loaded")?;
-        self.spawn_save_triangulation_dialog(id);
-        Ok(false)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reveal_pidb(&mut self, path: &Path) -> Result<()> {
-        #[cfg(target_os = "windows")]
-        let mut command = {
-            let mut command = Command::new("explorer");
-            command.arg(format!("/select,{}", path.display()));
-            command
-        };
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut command = Command::new("open");
-            command.arg("-R").arg(path);
-            command
-        };
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let mut command = {
-            let mut command = Command::new("xdg-open");
-            command.arg(path.parent().unwrap_or_else(|| Path::new(".")));
-            command.env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8");
-            command
-        };
-
-        command.spawn().context("Could not open the system file explorer")?;
-        userspace_log!("Revealed PIDB in file explorer: {}", path.display());
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reveal_triangulation(&mut self, id: TriangulationId) -> Result<()> {
-        let triangulation = self
-            .triangulations
-            .iter()
-            .find(|triangulation| triangulation.id == id && triangulation.is_saved)
-            .context("The triangulation has not been saved")?;
-        let path = &triangulation.path;
-
-        #[cfg(target_os = "windows")]
-        let mut command = {
-            let mut command = Command::new("explorer");
-            command.arg(format!("/select,{}", path.display()));
-            command
-        };
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut command = Command::new("open");
-            command.arg("-R").arg(path);
-            command
-        };
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let mut command = {
-            let mut command = Command::new("xdg-open");
-            command.arg(path.parent().unwrap_or_else(|| Path::new(".")));
-            command.env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8");
-            command
-        };
-
-        command.spawn().context("Could not open the system file explorer")?;
-        userspace_log!("Revealed triangulation '{}' in file explorer", triangulation.name);
-        Ok(())
-    }
-
-    /// Open the platform file manager with `path` selected (or its parent
-    /// directory shown, where selection isn't supported).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reveal_in_file_manager(&self, path: &Path) -> Result<()> {
-        #[cfg(target_os = "windows")]
-        let mut command = {
-            let mut command = Command::new("explorer");
-            command.arg(format!("/select,{}", path.display()));
-            command
-        };
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut command = Command::new("open");
-            command.arg("-R").arg(path);
-            command
-        };
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let mut command = {
-            let mut command = Command::new("xdg-open");
-            command.arg(path.parent().unwrap_or_else(|| Path::new(".")));
-            command.env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8");
-            command
-        };
-
-        command.spawn().context("Could not open the system file explorer")?;
-        userspace_log!("Revealed '{}' in file explorer", file_name(path));
-        Ok(())
-    }
-
-    /// Open the platform file manager showing `directory` itself (unlike
-    /// [`Self::reveal_in_file_manager`], which shows the parent with the
-    /// entry selected).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn open_directory_in_file_manager(&self, directory: &Path) -> Result<()> {
-        #[cfg(target_os = "windows")]
-        let mut command = {
-            let mut command = Command::new("explorer");
-            command.arg(directory);
-            command
-        };
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut command = Command::new("open");
-            command.arg(directory);
-            command
-        };
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let mut command = {
-            let mut command = Command::new("xdg-open");
-            command.arg(directory);
-            command.env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8");
-            command
-        };
-
-        command.spawn().context("Could not open the system file explorer")?;
-        userspace_log!("Opened '{}' in file explorer", directory.display());
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reveal_block_model(&mut self, id: BlockModelId) -> Result<()> {
-        let block_model = self.block_models.iter().find(|model| model.id == id).context("The block model is no longer loaded")?;
-        let path = &block_model.source.path;
-
-        #[cfg(target_os = "windows")]
-        let mut command = {
-            let mut command = Command::new("explorer");
-            command.arg(format!("/select,{}", path.display()));
-            command
-        };
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut command = Command::new("open");
-            command.arg("-R").arg(path);
-            command
-        };
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let mut command = {
-            let mut command = Command::new("xdg-open");
-            command.arg(path.parent().unwrap_or_else(|| Path::new(".")));
-            command.env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8");
-            command
-        };
-
-        command.spawn().context("Could not open the system file explorer")?;
-        userspace_log!("Revealed block model in file explorer: {}", path.display());
-        Ok(())
-    }
-
-    /// Save every PIDB whose stored copy is missing or out of date. Returns
-    /// false when Save As is still pending for a never-saved project.
-    pub(crate) fn save_all_dirty_projects(&mut self) -> Result<bool> {
+    /// Save the project when its stored copy is missing or out of date.
+    /// Returns false when Save As is still pending for a never-saved project.
+    pub(crate) fn save_dirty_project(&mut self) -> Result<bool> {
         if self.has_pending_move_delta() {
             self.commit_pending_move();
         }
+        if self.editor.text_editing_enabled {
+            anyhow::bail!("Apply or discard the current text edit before saving the project");
+        }
         let dirty_ids: Vec<u32> = self
             .workspace
-            .projects
-            .iter()
-            .filter(|project| project.has_unsaved_changes() || project_needs_first_browser_save(project))
+            .active_project()
+            .filter(|project| self.project_content_is_dirty(project.runtime_id) || project_needs_first_browser_save(project))
             .map(|project| project.runtime_id)
+            .into_iter()
             .collect();
         for runtime_id in dirty_ids {
             let save_as_required = cfg!(not(target_arch = "wasm32"))
@@ -2175,8 +1659,7 @@ impl<'a> App<'a> {
             self.save_project(runtime_id)?;
             if save_as_required {
                 // A pathless project has opened a native Save As dialog. Its
-                // completion re-enters the deferred-save flow, which then
-                // prompts the next project; never stack multiple dialogs.
+                // completion re-enters the deferred-save flow.
                 return Ok(false);
             }
         }
@@ -2198,24 +1681,32 @@ impl<'a> App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         match crate::app::io::data_path("recovery") {
-            Ok(recovery_dir) => match write_recovery_copies(&self.workspace, &recovery_dir) {
-                Ok(report) if report.written.is_empty() && report.failures.is_empty() => {
-                    log::error!("No unsaved projects; nothing to recover");
-                }
-                Ok(report) => {
-                    for path in &report.written {
-                        log::error!("Recovery copy written: {}", path.display());
-                        userspace_warn!("Recovery copy written: {}", path.display());
-                    }
-                    for failure in &report.failures {
-                        log::error!("Recovery copy failed: {failure}");
-                        userspace_warn!("Recovery copy failed: {failure}");
-                    }
-                    log::error!("Recovery copies are in {}; reopen them after restarting", recovery_dir.display());
-                }
-                Err(error) => {
-                    log::error!("Could not write recovery copies: {error:#}");
-                }
+            Ok(recovery_dir) => match self
+                .workspace
+                .active_project()
+                .map(|project| project.runtime_id)
+                .filter(|runtime_id| self.project_content_is_dirty(*runtime_id))
+            {
+                Some(runtime_id) => match self.omf_export_snapshot() {
+                    Ok(snapshot) => match write_recovery_copy(snapshot, runtime_id, &recovery_dir) {
+                        Ok(report) => {
+                            for path in &report.written {
+                                log::error!("Recovery copy written: {}", path.display());
+                                userspace_warn!("Recovery copy written: {}", path.display());
+                            }
+                            for failure in &report.failures {
+                                log::error!("Recovery copy failed: {failure}");
+                                userspace_warn!("Recovery copy failed: {failure}");
+                            }
+                            log::error!("Recovery copies are in {}; reopen them after restarting", recovery_dir.display());
+                        }
+                        Err(error) => {
+                            log::error!("Could not write recovery copies: {error:#}");
+                        }
+                    },
+                    Err(error) => log::error!("Could not snapshot the dirty project for recovery: {error:#}"),
+                },
+                None => log::error!("No unsaved project content; nothing to recover"),
             },
             Err(error) => {
                 log::error!("No recovery directory available: {error:#}");
@@ -2231,10 +1722,9 @@ impl<'a> App<'a> {
     pub(crate) fn request_exit(&mut self) -> Result<()> {
         self.exit_after_pending_saves = false;
         self.discard_changes_on_deferred_exit = false;
-        let browser_has_open_pidbs = cfg!(target_arch = "wasm32") && !self.workspace.projects.is_empty();
-        if browser_has_open_pidbs || self.has_unsaved_changes_for_exit() {
+        if self.has_unsaved_changes_for_exit() {
             self.editor.exit_confirm_open = true;
-            userspace_log!("User requested exit (PIDB export or unsaved-work confirmation required)");
+            userspace_log!("User requested exit (project export or unsaved-work confirmation required)");
         } else if !self.pending_saves.is_empty() {
             self.exit_after_pending_saves = true;
             self.discard_changes_on_deferred_exit = true;
@@ -2248,46 +1738,13 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn save_and_exit(&mut self) -> Result<()> {
         self.exit_after_pending_saves = true;
         self.discard_changes_on_deferred_exit = false;
-        if self.save_all_dirty_projects()? && self.save_all_unsaved_triangulations()? && self.save_all_unsaved_block_models()? {
+        if self.save_dirty_project()? {
             self.finish_deferred_exit();
         }
         Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save_all_unsaved_triangulations(&mut self) -> Result<bool> {
-        let unsaved: Vec<TriangulationId> = self.triangulations.iter().filter(|tri| !tri.is_saved).map(|tri| tri.id).collect();
-        for id in unsaved {
-            if !self.save_triangulation_as(id)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    /// Browser triangulations go to IndexedDB as they are generated, so exit
-    /// never has to chase a save for them.
-    #[cfg(target_arch = "wasm32")]
-    fn save_all_unsaved_triangulations(&mut self) -> Result<bool> {
-        Ok(true)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save_all_unsaved_block_models(&mut self) -> Result<bool> {
-        if let Some(id) = self.block_models.iter().find(|model| model.source.generated).map(|model| model.id) {
-            self.spawn_save_block_model_dialog(id, false);
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn save_all_unsaved_block_models(&mut self) -> Result<bool> {
-        Ok(true)
     }
 
     pub(crate) fn exit_without_saving(&mut self) {
@@ -2312,16 +1769,11 @@ impl<'a> App<'a> {
         self.editor.exit_confirm_open = false;
     }
 
-    fn has_unsaved_changes_for_exit(&self) -> bool {
-        // A browser triangulation that is still writing to IndexedDB reads as
-        // unsaved, but the write needs no user decision, so it must not hold
-        // the exit confirmation open.
-        let unsaved_triangulations = cfg!(not(target_arch = "wasm32")) && self.triangulations.iter().any(|tri| !tri.is_saved);
-        let unsaved_block_models = self.block_models.iter().any(|model| model.source.generated);
-        self.workspace.projects.iter().any(project_has_unsaved_changes) || unsaved_triangulations || unsaved_block_models || self.editor.text_editing_enabled
+    pub(crate) fn has_unsaved_changes_for_exit(&self) -> bool {
+        self.workspace.active_project().is_some_and(|project| self.project_content_is_dirty(project.runtime_id)) || self.editor.text_editing_enabled
     }
 
-    fn try_finish_deferred_exit(&mut self) {
+    pub(crate) fn try_finish_deferred_exit(&mut self) {
         if !self.exit_after_pending_saves || !self.pending_file_dialogs.is_empty() || !self.pending_saves.is_empty() {
             return;
         }
@@ -2329,11 +1781,7 @@ impl<'a> App<'a> {
             self.finish_deferred_exit();
             return;
         }
-        match self
-            .save_all_dirty_projects()
-            .and_then(|pidbs_done| if pidbs_done { self.save_all_unsaved_triangulations() } else { Ok(false) })
-            .and_then(|triangulations_done| if triangulations_done { self.save_all_unsaved_block_models() } else { Ok(false) })
-        {
+        match self.save_dirty_project() {
             Ok(true) if !self.has_unsaved_changes_for_exit() => self.finish_deferred_exit(),
             Ok(_) => {}
             Err(error) => {
@@ -2354,9 +1802,15 @@ impl<'a> App<'a> {
     pub(crate) fn save_project(&mut self, runtime_id: u32) -> Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
         if self.project_revert_is_pending(runtime_id) {
-            anyhow::bail!("Wait for the PIDB revert to finish before saving");
+            anyhow::bail!("Wait for the project revert to finish before saving");
         }
-        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected .pidb is no longer open")?;
+        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected project is no longer open")?;
+        if !self.workspace.projects[index].lossy_save_warnings.is_empty() && !self.workspace.projects[index].lossy_save_confirmed {
+            self.pending_lossy_save_as = None;
+            self.editor.lossy_save_confirm_open = true;
+            self.redraw_requested = true;
+            return Ok(());
+        }
         if self.workspace.active_index == Some(index) && self.has_pending_move_delta() {
             self.commit_pending_move();
         }
@@ -2368,64 +1822,76 @@ impl<'a> App<'a> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let Some(path) = self.workspace.projects[index].path.clone() else {
-                self.spawn_save_pidb_as_dialog(runtime_id);
+                self.spawn_save_project_as_dialog(runtime_id);
                 return Ok(());
             };
             if self
                 .pending_saves
                 .iter()
-                .any(|save| matches!(save.kind, PendingSaveKind::Pidb { runtime_id: pending, .. } if pending == runtime_id) || save.path == path)
+                .any(|save| matches!(save.kind, PendingSaveKind::Project { runtime_id: pending, .. } if pending == runtime_id) || save.path == path)
             {
                 return Ok(());
             }
-            let project = &self.workspace.projects[index];
-            let snapshot = project.pidb.clone();
-            let snapshot_hash = project.current_content_hash();
-            let snapshot_layer_hashes = project.current_layer_hashes();
-            self.spawn_pidb_write(runtime_id, snapshot_hash, snapshot_layer_hashes, snapshot, path, None);
+            let (snapshot_hash, snapshot_layer_hashes) = {
+                let project = &self.workspace.projects[index];
+                (project.current_content_hash(), project.current_layer_hashes())
+            };
+            let snapshot = self.omf_export_snapshot()?;
+            let asset_token = self.project_asset_save_token();
+            self.spawn_project_write(runtime_id, snapshot_hash, snapshot_layer_hashes, asset_token, snapshot, path, None);
             Ok(())
         }
     }
 
     #[cfg(target_arch = "wasm32")]
     fn save_browser_project(&mut self, runtime_id: u32) -> Result<()> {
-        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected .pidb is no longer open")?;
+        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected project is no longer open")?;
         // Once deletion has been confirmed, it owns this project's storage
         // lifecycle. A concurrent Save must not recreate the IndexedDB record
         // after the delete transaction completes.
-        if self.browser_deletes_pending.contains(&runtime_id) || self.browser_delete_after_save.contains(&runtime_id) {
+        let stored_project_delete_pending = match &self.workspace.projects[index].persistence {
+            crate::model::project::ProjectPersistence::BrowserRecord(project_id) => self.browser_deletes_pending.contains(project_id),
+            _ => false,
+        };
+        if stored_project_delete_pending || self.browser_delete_after_save.contains(&runtime_id) {
             return Ok(());
         }
         if self.browser_saves_pending.contains(&runtime_id) {
             return Ok(());
         }
         self.ensure_project_has_no_pending_text_edit(index)?;
-        let project = &mut self.workspace.projects[index];
-        let project_id = match project.persistence {
-            crate::model::pidb::ProjectPersistence::BrowserRecord(id) => id,
+        let project_id = match self.workspace.projects[index].persistence {
+            crate::model::project::ProjectPersistence::BrowserRecord(id) => id,
             _ => uuid::Uuid::new_v4(),
         };
-        // Browser storage is a serialization boundary exactly like a `.pidb`
-        // on disk, so the ids have to leave the runtime namespace on the way
-        // out. The hashes below are namespace-invariant either way.
-        let snapshot = pidb::portable_pidb(&project.pidb);
-        let snapshot_hash = project.current_content_hash();
-        let snapshot_layer_hashes = project.current_layer_hashes();
-        let record = crate::app::web_storage::BrowserProjectRecord {
-            id: project_id,
-            name: snapshot.metadata.name.clone(),
-            pidb: snapshot,
-            saved_at_ms: js_sys::Date::now() as u64,
+        let (snapshot_hash, snapshot_layer_hashes) = {
+            let project = &self.workspace.projects[index];
+            (project.current_content_hash(), project.current_layer_hashes())
         };
+        let asset_token = self.project_asset_save_token();
+        let snapshot = self.omf_export_snapshot()?;
+        let name = snapshot.name.clone();
         let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
         self.browser_saves_pending.insert(runtime_id);
         wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::app::web_storage::put_project(&record).await;
+            let result = async {
+                let progress = crate::model::progress::Progress::new();
+                let omf_bytes = formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0)).map_err(|error| format!("{error:#}"))?;
+                let record = crate::app::web_storage::BrowserProjectRecord {
+                    id: project_id,
+                    name,
+                    omf_bytes,
+                    saved_at_ms: js_sys::Date::now() as u64,
+                };
+                crate::app::web_storage::put_project(&record).await
+            }
+            .await;
             let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectSaved {
                 runtime_id,
                 project_id,
                 snapshot_hash,
                 snapshot_layer_hashes,
+                asset_token,
                 result,
             });
         });
@@ -2433,19 +1899,21 @@ impl<'a> App<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_pidb_write(
+    fn spawn_project_write(
         &mut self,
         runtime_id: u32,
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
-        snapshot: pidb::PidbFile,
+        asset_token: crate::model::project::SaveToken,
+        snapshot: formats::omf::ProjectSnapshot,
         path: PathBuf,
         save_as_previous_name: Option<String>,
     ) {
-        let kind = PendingSaveKind::Pidb {
+        let kind = PendingSaveKind::Project {
             runtime_id,
             snapshot_hash,
             snapshot_layer_hashes,
+            asset_token,
             close_after: false,
             save_as_previous_name,
         };
@@ -2461,7 +1929,7 @@ impl<'a> App<'a> {
         let window = self.window.clone();
         crate::app::jobs::spawn_io_task(move || {
             let result = crate::app::jobs::run_compute_catching_panic(|| {
-                pidb::save_with_progress(&path, &snapshot, &progress).with_context(|| format!("Failed to save PIDB {}", path.display()))
+                formats::omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0)).with_context(|| format!("Failed to save project {}", path.display()))
             });
             let _ = result_tx.send(result);
             if let Some(window) = window {
@@ -2471,7 +1939,7 @@ impl<'a> App<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_dxf_write(&mut self, snapshot: pidb::PidbFile, layer: Option<LayerId>, path: PathBuf, description: String) {
+    fn spawn_dxf_write(&mut self, snapshot: project::ProjectFile, layer: Option<LayerId>, path: PathBuf, description: String) {
         let kind = PendingSaveKind::DxfExport { description };
         let (ticket, _progress) = self.begin_reported_task(save_label(&kind, &path));
         let (result_tx, result_rx) = mpsc::channel();
@@ -2487,8 +1955,8 @@ impl<'a> App<'a> {
             // The DXF writer builds and writes the whole drawing in one call,
             // so there is nothing to count: the bar stays a marquee.
             let result = crate::app::jobs::run_compute_catching_panic(|| match layer {
-                Some(layer) => pidb::export_layer_to_dxf(&snapshot, layer, &path),
-                None => pidb::export_to_dxf(&snapshot, &path),
+                Some(layer) => formats::dxf::export_layer(&snapshot, layer, &path),
+                None => formats::dxf::export_project(&snapshot, &path),
             });
             let _ = result_tx.send(result);
             if let Some(window) = window {
@@ -2506,16 +1974,16 @@ impl<'a> App<'a> {
                 .or(self.workspace.active_index)
                 == Some(project_index)
         {
-            anyhow::bail!("Apply or discard the current text edit before saving this PIDB");
+            anyhow::bail!("Apply or discard the current text edit before saving this project");
         }
         Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn ensure_pidb_save_path_available(&self, project_index: usize, path: &Path) -> Result<()> {
+    fn ensure_project_save_path_available(&self, project_index: usize, path: &Path) -> Result<()> {
         let runtime_id = self.workspace.projects[project_index].runtime_id;
-        if self.pidb_save_is_pending(runtime_id) {
-            anyhow::bail!("Wait for the current PIDB save to finish");
+        if self.project_save_is_pending(runtime_id) {
+            anyhow::bail!("Wait for the current project save to finish");
         }
         self.ensure_save_path_not_pending(path)?;
         if self
@@ -2525,14 +1993,14 @@ impl<'a> App<'a> {
             .enumerate()
             .any(|(index, project)| index != project_index && project.path.as_deref() == Some(path))
         {
-            anyhow::bail!("Another open PIDB already uses {}", path.display());
+            anyhow::bail!("Another open project already uses {}", path.display());
         }
         Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn save_path_is_pending(&self, path: &Path) -> bool {
-        self.pending_saves.iter().any(|save| save.path == path) || self.pending_pidb_open_paths.contains(path)
+        self.pending_saves.iter().any(|save| save.path == path) || self.pending_project_open_paths.contains(path)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2544,11 +2012,11 @@ impl<'a> App<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn pidb_save_is_pending(&self, runtime_id: u32) -> bool {
+    fn project_save_is_pending(&self, runtime_id: u32) -> bool {
         self.pending_saves.iter().any(|save| {
             matches!(
                 save.kind,
-                PendingSaveKind::Pidb {
+                PendingSaveKind::Project {
                     runtime_id: pending,
                     ..
                 } if pending == runtime_id
@@ -2559,10 +2027,10 @@ impl<'a> App<'a> {
     /// A running file write cannot be cancelled safely. Remember the close
     /// request on that write and finish it only after the result is known.
     #[cfg(not(target_arch = "wasm32"))]
-    fn defer_pidb_close_until_save_finishes(&mut self, runtime_id: u32) -> bool {
+    fn defer_project_close_until_save_finishes(&mut self, runtime_id: u32) -> bool {
         let mut deferred = false;
         for save in &mut self.pending_saves {
-            if let PendingSaveKind::Pidb {
+            if let PendingSaveKind::Project {
                 runtime_id: pending, close_after, ..
             } = &mut save.kind
                 && *pending == runtime_id
@@ -2573,55 +2041,51 @@ impl<'a> App<'a> {
             }
         }
         if deferred {
-            self.editor.pending_close_pidb = None;
+            self.editor.pending_close_project = None;
         }
         deferred
     }
 
-    pub(crate) fn activate_pidb(&mut self, runtime_id: u32) -> Result<()> {
-        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected .pidb is no longer open")?;
-        self.activate_project_index(index);
-        userspace_log!("Activated PIDB runtime id {runtime_id}");
-        Ok(())
-    }
-
-    pub(crate) fn request_close_pidb(&mut self, runtime_id: u32) {
+    pub(crate) fn request_close_project(&mut self, runtime_id: u32) {
+        #[cfg(target_arch = "wasm32")]
+        if !self.browser_project_loads_pending.is_empty() {
+            userspace_warn!("Wait for the current project switch to finish");
+            return;
+        }
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
             return;
         };
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = index;
-            // Deletion is destructive even for a clean project, so the web UI
-            // always asks for confirmation.
-            self.editor.pending_close_pidb = Some(runtime_id);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.defer_pidb_close_until_save_finishes(runtime_id) {
-            userspace_log!("PIDB will close after its current save finishes");
+            if self.project_content_is_dirty(runtime_id) || project_needs_first_browser_save(&self.workspace.projects[index]) || self.editor.text_editing_enabled {
+                self.editor.pending_close_project = Some(runtime_id);
+            } else {
+                self.close_project(runtime_id);
+            }
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.workspace.projects[index].has_unsaved_changes() || self.pending_text_edit_project_index() == Some(index) {
-            self.editor.pending_close_pidb = Some(runtime_id);
+        if self.defer_project_close_until_save_finishes(runtime_id) {
+            userspace_log!("Project will close after its current save finishes");
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.project_content_is_dirty(runtime_id) || self.pending_text_edit_project_index() == Some(index) {
+            self.editor.pending_close_project = Some(runtime_id);
         } else {
-            self.close_pidb(runtime_id);
+            self.close_project(runtime_id);
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn finish_pending_pidb_actions(&mut self) -> Result<()> {
-        let Some(runtime_id) = self.editor.pending_close_pidb else {
+    pub(crate) fn finish_pending_project_actions(&mut self) -> Result<()> {
+        let Some(runtime_id) = self.editor.pending_close_project else {
             return Ok(());
         };
-        if self.pidb_save_is_pending(runtime_id) {
+        if self.project_save_is_pending(runtime_id) {
             return Ok(());
         }
-        if self
-            .workspace
-            .project_index_for_runtime_id(runtime_id)
-            .and_then(|index| self.workspace.projects.get(index))
-            .is_some_and(OpenProject::has_unsaved_changes)
+        if self.project_content_is_dirty(runtime_id)
             || self
                 .workspace
                 .project_index_for_runtime_id(runtime_id)
@@ -2630,42 +2094,22 @@ impl<'a> App<'a> {
             return Ok(());
         }
         #[cfg(target_arch = "wasm32")]
-        let result = self.delete_browser_project(runtime_id);
+        let result = {
+            self.close_project(runtime_id);
+            Ok(())
+        };
         #[cfg(not(target_arch = "wasm32"))]
         let result = {
-            self.close_pidb(runtime_id);
+            self.close_project(runtime_id);
             Ok(())
         };
         result
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn request_discard_pidb_changes(&mut self, runtime_id: u32) {
-        let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
-            return;
-        };
-        if self.pending_saves.iter().any(|save| {
-            matches!(
-                save.kind,
-                PendingSaveKind::Pidb {
-                    runtime_id: pending,
-                    ..
-                } if pending == runtime_id
-            )
-        }) {
-            userspace_warn!("Wait for the PIDB save to finish before discarding changes");
-            return;
-        }
-        let project = &self.workspace.projects[index];
-        if project.path.is_some() && project.has_unsaved_changes() {
-            self.editor.pending_discard_pidb = Some(runtime_id);
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn project_revert_is_pending(&self, runtime_id: u32) -> bool {
         self.pending_jobs.iter().any(|job| {
-            (job.label == PIDB_REVERT_JOB_LABEL || job.label == LAYER_REVERT_JOB_LABEL)
+            (job.label == PROJECT_REVERT_JOB_LABEL || job.label == LAYER_REVERT_JOB_LABEL)
                 && job.keys.iter().any(|key| {
                     matches!(
                         key,
@@ -2678,23 +2122,23 @@ impl<'a> App<'a> {
         })
     }
 
-    /// Revert a PIDB to its last saved state by re-parsing it from disk. The
+    /// Revert a project to its last saved state by re-parsing it from disk. The
     /// reload happens on a job thread; the swap preserves the project's slot,
     /// active status, and loaded-layer set (matched by stable local layer id).
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn discard_pidb_changes(&mut self, runtime_id: u32) -> Result<()> {
-        self.editor.pending_discard_pidb = None;
-        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected .pidb is no longer open")?;
+    pub(crate) fn discard_project_changes(&mut self, runtime_id: u32) -> Result<()> {
+        self.editor.pending_discard_project = None;
+        let index = self.workspace.project_index_for_runtime_id(runtime_id).context("The selected .omf is no longer open")?;
         if self.pending_saves.iter().any(|save| {
             matches!(
                 save.kind,
-                PendingSaveKind::Pidb {
+                PendingSaveKind::Project {
                     runtime_id: pending,
                     ..
                 } if pending == runtime_id
             )
         }) {
-            anyhow::bail!("Wait for the PIDB save to finish before discarding changes");
+            anyhow::bail!("Wait for the project save to finish before discarding changes");
         }
         // Confirmation commits the intent to abandon any current draft. Do
         // this before capturing the job revision; cancelling a new text/move
@@ -2705,70 +2149,41 @@ impl<'a> App<'a> {
         let path = self.workspace.projects[index]
             .path
             .clone()
-            .context("This PIDB has never been saved, so there is nothing to revert to")?;
+            .context("This project has never been saved, so there is nothing to revert to")?;
         // Keyed to the current revision: if the user keeps editing while the
         // file re-parses, the stale revert is dropped instead of clobbering.
-        let document_revision = self.workspace.projects[index].pidb.document.revision();
+        let document_revision = self.workspace.projects[index].project.document.revision();
+        let expected_hash = self.workspace.projects[index].current_content_hash();
 
-        let compute = move |cancel: &crate::app::jobs::CancelFlag| {
+        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let pidb = pidb::load(&path)?;
-            Ok((path, pidb))
+            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            let source_name = file_name(&path);
+            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
+            Ok((path, source_name, bundle))
         };
-        let apply = move |app: &mut App, result: Result<(PathBuf, pidb::PidbFile)>| {
-            let (path, pidb) = match result {
+        let apply = move |app: &mut App, result: Result<(PathBuf, String, formats::omf::ImportBundle)>| {
+            let (path, source_name, bundle) = match result {
                 Ok(loaded) => loaded,
                 Err(error) => {
-                    userspace_warn!("Could not reload PIDB from disk: {error:#}");
+                    userspace_warn!("Could not reload project from disk: {error:#}");
                     return;
                 }
             };
             let Some(index) = app.workspace.project_index_for_runtime_id(runtime_id) else {
                 return;
             };
-            let replacement = match pidb::open_project(Some(path.clone()), pidb) {
-                Ok(project) => project,
-                Err(error) => {
-                    userspace_warn!("Could not reload {}: {error:#}", path.display());
-                    return;
-                }
-            };
-            let was_active = app.workspace.active_index == Some(index);
-            // Project-backed drafts must be resolved while the old namespace
-            // still exists; doing this after the swap can target unrelated
-            // objects that happen to reuse a local id.
-            if was_active {
-                app.clear_editor_transient_state();
-            }
-            app.cancel_jobs(|key| {
-                matches!(
-                    key,
-                    crate::app::jobs::JobKey::Project {
-                        runtime_id: dependency_id,
-                        ..
-                    } if *dependency_id == runtime_id
-                )
-            });
-            app.history.remove_project(runtime_id);
-            let Some(new_runtime_id) = app.workspace.replace_project(index, replacement) else {
+            if app.workspace.projects[index].current_content_hash() != expected_hash {
+                userspace_warn!("Discard was cancelled because the project changed while the OMF was reloading");
                 return;
-            };
-            if was_active {
-                app.history.activate(new_runtime_id);
             }
-            // Old-namespace object ids no longer resolve; drop them from the
-            // selection instead of leaving dangling handles.
-            app.editor.selected_handles.retain(|handle| match handle {
-                crate::model::SceneEntityId::Object(id) => app.workspace.project_index_for_object(*id).is_some(),
-                _ => true,
-            });
-            app.invalidate_geometry();
+            app.apply_opened_omf_bundle(Some(path.clone()), source_name, bundle);
             userspace_log!("Discarded changes: reloaded {}", path.display());
         };
-        self.spawn_job(
-            PIDB_REVERT_JOB_LABEL,
+        self.spawn_job_reporting_progress(
+            PROJECT_REVERT_JOB_LABEL,
             vec![crate::app::jobs::JobKey::Project { runtime_id, document_revision }],
             compute,
             apply,
@@ -2788,23 +2203,23 @@ impl<'a> App<'a> {
         if self.pending_saves.iter().any(|save| {
             matches!(
                 save.kind,
-                PendingSaveKind::Pidb {
+                PendingSaveKind::Project {
                     runtime_id: pending,
                     ..
                 } if pending == project.runtime_id
             )
         }) || self.project_revert_is_pending(project.runtime_id)
         {
-            userspace_warn!("Wait for the PIDB operation to finish before discarding changes");
+            userspace_warn!("Wait for the project operation to finish before discarding changes");
             return;
         }
-        if let Some(layer) = project.pidb.document.layer(layer_id) {
+        if let Some(layer) = project.project.document.layer(layer_id) {
             self.editor.pending_discard_layer = Some((layer_id, layer.name.clone()));
         }
     }
 
     /// Restore one layer from disk while carrying every other dirty layer into
-    /// the freshly parsed project. Rebuilding from the saved PIDB also handles
+    /// the freshly parsed project. Rebuilding from the saved project also handles
     /// newly created target layers correctly: if no saved layer has that local
     /// id, confirming discard removes it.
     #[cfg(not(target_arch = "wasm32"))]
@@ -2815,14 +2230,14 @@ impl<'a> App<'a> {
         if self.pending_saves.iter().any(|save| {
             matches!(
                 save.kind,
-                PendingSaveKind::Pidb {
+                PendingSaveKind::Project {
                     runtime_id: pending,
                     ..
                 } if pending == runtime_id
             )
         }) || self.project_revert_is_pending(runtime_id)
         {
-            anyhow::bail!("Wait for the PIDB operation to finish before discarding changes");
+            anyhow::bail!("Wait for the project operation to finish before discarding changes");
         }
 
         const LOCAL_MASK: u64 = u32::MAX as u64;
@@ -2836,9 +2251,14 @@ impl<'a> App<'a> {
         }
 
         let project = &self.workspace.projects[index];
-        let path = project.path.clone().context("This PIDB has never been saved, so its layers cannot be restored")?;
-        let target_name = project.pidb.document.layer(layer_id).map(|layer| layer.name.clone()).unwrap_or_else(|| "layer".to_owned());
-        let document_revision = project.pidb.document.revision();
+        let path = project.path.clone().context("This project has never been saved, so its layers cannot be restored")?;
+        let target_name = project
+            .project
+            .document
+            .layer(layer_id)
+            .map(|layer| layer.name.clone())
+            .unwrap_or_else(|| "layer".to_owned());
+        let document_revision = project.project.document.revision();
 
         // Convert the current document back to portable ids, then retain only
         // snapshots for other dirty layers. The target is deliberately omitted
@@ -2849,7 +2269,7 @@ impl<'a> App<'a> {
             .map(|dirty| dirty.0 & LOCAL_MASK)
             .filter(|local| *local != target_local_id)
             .collect::<std::collections::HashSet<_>>();
-        let mut portable_current = project.pidb.clone();
+        let mut portable_current = project.project.clone();
         portable_current.document.apply_runtime_namespace(0);
         let preserved_layers: Vec<LayerSnapshot> = portable_current
             .document
@@ -2874,11 +2294,19 @@ impl<'a> App<'a> {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
-            let pidb = pidb::load(&path)?;
-            Ok((path, pidb))
+            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            let source_name = file_name(&path);
+            let progress = crate::model::progress::Progress::new();
+            let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
+            let mut design = project::new_empty(Some(path.clone()));
+            design.metadata.name = bundle.project_name;
+            for imported in bundle.designs {
+                project::merge_document_preserve_ids(&mut design.document, &imported.document);
+            }
+            Ok((path, design))
         };
-        let apply = move |app: &mut App, result: Result<(PathBuf, pidb::PidbFile)>| {
-            let (path, pidb) = match result {
+        let apply = move |app: &mut App, result: Result<(PathBuf, project::ProjectFile)>| {
+            let (path, project) = match result {
                 Ok(loaded) => loaded,
                 Err(error) => {
                     userspace_warn!("Could not reload layer from disk: {error:#}");
@@ -2888,19 +2316,19 @@ impl<'a> App<'a> {
             let Some(index) = app.workspace.project_index_for_runtime_id(runtime_id) else {
                 return;
             };
-            if app.workspace.projects[index].pidb.document.revision() != document_revision {
-                userspace_warn!("Layer discard was cancelled because the project changed while the PIDB was reloading");
+            if app.workspace.projects[index].project.document.revision() != document_revision {
+                userspace_warn!("Layer discard was cancelled because the project changed while the project was reloading");
                 return;
             }
-            let mut replacement = match pidb::open_project(Some(path), pidb) {
+            let mut replacement = match project::open_project(Some(path), project) {
                 Ok(project) => project,
                 Err(error) => {
-                    userspace_warn!("Could not restore layer from PIDB: {error:#}");
+                    userspace_warn!("Could not restore layer from project: {error:#}");
                     return;
                 }
             };
             for (layer_index, layer, objects) in preserved_layers {
-                replacement.pidb.document.replace_layer_snapshot(layer_index, layer, objects);
+                replacement.project.document.replace_layer_snapshot(layer_index, layer, objects);
             }
 
             let was_active = app.workspace.active_index == Some(index);
@@ -2924,7 +2352,7 @@ impl<'a> App<'a> {
                 app.history.activate(new_runtime_id);
                 app.editor.active_layer = active_layer_local_id.and_then(|local_id| {
                     app.workspace.projects[index]
-                        .pidb
+                        .project
                         .document
                         .layers()
                         .iter()
@@ -2944,14 +2372,17 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn save_and_close_pidb(&mut self, runtime_id: u32) -> Result<()> {
-        if self.defer_pidb_close_until_save_finishes(runtime_id) {
+    pub(crate) fn save_and_close_project(&mut self, runtime_id: u32) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.defer_project_close_until_save_finishes(runtime_id) {
             return Ok(());
         }
-        self.editor.pending_close_pidb = Some(runtime_id);
+        self.editor.pending_close_project = Some(runtime_id);
         self.save_project(runtime_id)?;
-        self.finish_pending_pidb_actions()
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.finish_pending_project_actions();
+        #[cfg(target_arch = "wasm32")]
+        Ok(())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2960,35 +2391,44 @@ impl<'a> App<'a> {
             .workspace
             .project_index_for_runtime_id(runtime_id)
             .context("The selected browser project is no longer open")?;
-        if self.browser_deletes_pending.contains(&runtime_id) {
-            self.editor.pending_close_pidb = None;
-            return Ok(());
-        }
         if self.browser_saves_pending.contains(&runtime_id) {
             self.browser_delete_after_save.insert(runtime_id);
-            self.editor.pending_close_pidb = None;
+            self.editor.pending_close_project = None;
             return Ok(());
         }
 
         let persistence = self.workspace.projects[index].persistence.clone();
-        let crate::model::pidb::ProjectPersistence::BrowserRecord(project_id) = persistence else {
-            self.close_pidb(runtime_id);
+        let crate::model::project::ProjectPersistence::BrowserRecord(project_id) = persistence else {
+            self.close_project(runtime_id);
             return Ok(());
         };
+        self.start_browser_project_delete(project_id, Some(runtime_id))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start_browser_project_delete(&mut self, project_id: crate::model::project::ProjectId, runtime_id: Option<u32>) -> Result<()> {
         let proxy = self.web_event_loop_proxy.clone().context("browser event loop is unavailable")?;
-        self.browser_deletes_pending.insert(runtime_id);
-        self.editor.pending_close_pidb = None;
+        if !self.browser_deletes_pending.insert(project_id) {
+            self.editor.pending_close_project = None;
+            return Ok(());
+        }
+        self.editor.pending_close_project = None;
         wasm_bindgen_futures::spawn_local(async move {
             let result = crate::app::web_storage::delete_project(project_id).await;
-            let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectDeleted { runtime_id, result });
+            let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectDeleted { project_id, runtime_id, result });
         });
         Ok(())
     }
 
-    pub(crate) fn close_pidb(&mut self, runtime_id: u32) {
+    pub(crate) fn close_project(&mut self, runtime_id: u32) {
+        #[cfg(target_arch = "wasm32")]
+        if !self.browser_project_loads_pending.is_empty() {
+            userspace_warn!("Wait for the current project switch to finish");
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.defer_pidb_close_until_save_finishes(runtime_id) {
-            userspace_warn!("The PIDB will close after its current save finishes");
+        if self.defer_project_close_until_save_finishes(runtime_id) {
+            userspace_warn!("The project will close after its current save finishes");
             return;
         }
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
@@ -3003,8 +2443,31 @@ impl<'a> App<'a> {
                 } if *dependency_id == runtime_id
             )
         });
-        self.editor.pending_close_pidb = None;
+        self.editor.pending_close_project = None;
         let was_active = self.workspace.active_index == Some(index);
+        if was_active {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.editor.remove_project_after_close {
+                if let Some(path) = self.workspace.projects[index].path.as_ref() {
+                    self.tracked_project_paths.retain(|tracked| tracked != path);
+                }
+                self.editor.remove_project_after_close = false;
+            }
+            #[cfg(target_arch = "wasm32")]
+            if self.editor.remove_project_after_close {
+                self.editor.remove_project_after_close = false;
+                if let Err(error) = self.delete_browser_project(runtime_id) {
+                    userspace_warn!("Could not remove browser project: {error:#}");
+                }
+                return;
+            }
+            self.clear_project_owned_data();
+            self.startup_dialog_dismissed = false;
+            self.persist_session();
+            userspace_log!("Closed project runtime id {runtime_id}");
+            self.invalidate_geometry();
+            return;
+        }
         self.history.remove_project(runtime_id);
         self.workspace.projects.remove(index);
         match self.workspace.active_index {
@@ -3023,7 +2486,7 @@ impl<'a> App<'a> {
             });
         }
         self.persist_session();
-        userspace_log!("Closed PIDB runtime id {runtime_id}");
+        userspace_log!("Closed project runtime id {runtime_id}");
         self.invalidate_geometry();
     }
 
@@ -3045,50 +2508,24 @@ impl<'a> App<'a> {
     }
 }
 
-/// Normalize a browser project name to a portable filename with one `.pidb`
+/// Normalize a browser project name to a portable filename with one `.omf`
 /// extension. The viewport prompt rejects blank input, while the fallback
 /// also keeps this helper safe for programmatic callers.
 #[cfg(target_arch = "wasm32")]
-fn sanitize_pidb_name(name: &str) -> String {
+fn sanitize_project_name(name: &str) -> String {
     let mut stem = name.trim();
-    while stem.len() >= ".pidb".len() {
-        let suffix_start = stem.len() - ".pidb".len();
+    while stem.len() >= ".omf".len() {
+        let suffix_start = stem.len() - ".omf".len();
         let Some(suffix) = stem.get(suffix_start..) else {
             break;
         };
-        if !suffix.eq_ignore_ascii_case(".pidb") {
+        if !suffix.eq_ignore_ascii_case(".omf") {
             break;
         }
         stem = stem.get(..suffix_start).unwrap_or_default().trim_end();
     }
     let stem = if stem.is_empty() { "project".to_owned() } else { sanitize_file_stem(stem) };
-    format!("{stem}.pidb")
-}
-
-/// Produce portable, case-insensitively unique names for a browser batch.
-/// Downloads often land on case-insensitive filesystems, and two open PIDBs
-/// are allowed to have the same metadata name.
-#[cfg(target_arch = "wasm32")]
-fn unique_pidb_download_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut used = HashSet::new();
-    names
-        .into_iter()
-        .map(|name| {
-            let base = sanitize_pidb_name(name);
-            if used.insert(base.to_ascii_lowercase()) {
-                return base;
-            }
-
-            let stem = base.strip_suffix(".pidb").unwrap_or("project");
-            for copy in 2_u32.. {
-                let candidate = format!("{stem} ({copy}).pidb");
-                if used.insert(candidate.to_ascii_lowercase()) {
-                    return candidate;
-                }
-            }
-            unreachable!("the PIDB download suffix counter is unbounded")
-        })
-        .collect()
+    format!("{stem}.omf")
 }
 
 /// Replace characters that are invalid in filenames across Windows, macOS, and

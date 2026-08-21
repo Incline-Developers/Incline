@@ -1,10 +1,10 @@
 use super::*;
-use crate::model::geometry::{clip_polygon_by_xy_edge, signed_area_xy, triangle_xy_area};
+use crate::model::geometry::{clip_polyline_by_xy_edge, signed_area_xy, triangle_xy_area};
 
 impl<'a> App<'a> {
-    /// Cut the triangulation, clipping each triangle against the XY polygon boundary
+    /// Cut the triangulation, clipping each triangle against the XY polyline boundary
     /// using Sutherland-Hodgman. Produces smooth edges instead of centroid-based jagged cuts.
-    pub(crate) fn cut_triangulation_by_polygon(&mut self, tri_id: TriangulationId, polygon_id: ObjectId, mode: TriPolygonClipMode, name: String) -> Result<()> {
+    pub(crate) fn cut_triangulation_by_polyline(&mut self, tri_id: TriangulationId, polyline_id: ObjectId, mode: TriPolylineClipMode, name: String) -> Result<()> {
         let (mesh, tri_name) = {
             let tri = self
                 .triangulations
@@ -14,46 +14,46 @@ impl<'a> App<'a> {
             (tri.mesh.clone(), tri.name.clone())
         };
 
-        let poly_verts: Vec<glam::DVec3> = match self.scene_document.get_object(polygon_id) {
+        let poly_verts: Vec<glam::DVec3> = match self.scene_document.get_object(polyline_id) {
             Some(Object::Polyline { verts, closed: true, .. }) => crate::model::geometry::tessellate_polyline_bulges(verts, true),
-            _ => anyhow::bail!("Selected object is not a closed polygon"),
+            _ => anyhow::bail!("Selected object is not a closed polyline"),
         };
         if poly_verts.len() < 3 {
-            anyhow::bail!("Selected polygon has fewer than 3 boundary points");
+            anyhow::bail!("Selected polyline has fewer than 3 boundary points");
         }
 
-        // Run the clip + mesh/BVH build off the UI thread; the polygon and mesh
+        // Run the clip + mesh/BVH build off the UI thread; the polyline and mesh
         // are snapshotted above so the worker never touches `self`.
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
             // Clipping walks every face; the mesh and BVH build after it are
             // single calls, so they close out the bar.
-            let (new_verts, new_faces) = clip_mesh_by_polygon_xy(&mesh, &poly_verts, mode, &progress.phase(0.0, 0.8));
+            let (new_verts, new_faces) = clip_mesh_by_polyline_xy(&mesh, &poly_verts, mode, &progress.phase(0.0, 0.8));
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
             }
             if new_faces.is_empty() {
                 let retained_region = match mode {
-                    TriPolygonClipMode::KeepInside => "inside",
-                    TriPolygonClipMode::KeepOutside => "outside",
+                    TriPolylineClipMode::KeepInside => "inside",
+                    TriPolylineClipMode::KeepOutside => "outside",
                 };
-                anyhow::bail!("No surface geometry falls {retained_region} the selected polygon");
+                anyhow::bail!("No surface geometry falls {retained_region} the selected polyline");
             }
             let generated = session::build_generated_triangulation(name, new_verts, new_faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)?;
             Ok(crate::model::triangulation::GeneratedTriangulationLog {
                 generated,
-                message: format!("Clipped surface '{tri_name}' by polygon ({})", mode.label().to_ascii_lowercase()),
+                message: format!("Clipped surface '{tri_name}' by polyline ({})", mode.label().to_ascii_lowercase()),
             })
         };
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulationLog>| {
             app.apply_generated_triangulation_job(result);
         };
-        self.spawn_job_reporting_progress("Clipping surface by polygon…", vec![crate::app::jobs::JobKey::Triangulation(tri_id)], compute, apply);
+        self.spawn_job_reporting_progress("Clipping surface by polyline…", vec![crate::app::jobs::JobKey::Triangulation(tri_id)], compute, apply);
         Ok(())
     }
 
     /// Trim a topology to the region a pit shell does not excavate, so the two meshes meet at
-    /// a seam that follows their true 3D contact line (where the shell crosses the terrain) —
-    /// not a fixed design polygon. Topology under parts of the shell that float above the
+    /// a seam that follows their true 3D contact line (where the shell crosses the terrain) -
+    /// not a fixed design polyline. Topology under parts of the shell that float above the
     /// ground is kept. The pit shell mesh may be multi-valued in XY (walls, benches) or a
     /// watertight closed solid; its flat crest cap never forces removal on its own.
     pub(crate) fn cut_topology_by_pit_shell(&mut self, topology_id: TriangulationId, pit_shell_id: TriangulationId, name: String) -> Result<()> {
@@ -224,22 +224,22 @@ impl<'a> App<'a> {
     }
 }
 
-/// Clip a mesh against an XY polygon, retaining either its footprint or its complement.
+/// Clip a mesh against an XY polyline, retaining either its footprint or its complement.
 ///
-/// The polygon is triangulated once with earcut, then each mesh triangle is clipped against
-/// every overlapping polygon triangle using the in-house Sutherland–Hodgman + SAT path
+/// The polyline is triangulated once with earcut, then each mesh triangle is clipped against
+/// every overlapping polyline triangle using the in-house Sutherland–Hodgman + SAT path
 /// (`clip_target_triangle_to_reference_xy`) shared with the pit-shell and include tools.
 /// This avoids the `geo` boolean-op allocation storm on large meshes and lets the per-face
 /// work run in parallel.
-pub(super) fn clip_mesh_by_polygon_xy(
+pub(super) fn clip_mesh_by_polyline_xy(
     mesh: &mesh_data::Triangulation,
-    polygon: &[glam::DVec3],
-    mode: TriPolygonClipMode,
+    polyline: &[glam::DVec3],
+    mode: TriPolylineClipMode,
     progress: &crate::model::progress::Phase,
 ) -> (Vec<mesh_data::Vertex>, Vec<[u32; 3]>) {
     use rayon::prelude::*;
 
-    let prepared = match PreparedClipPolygon::build(polygon) {
+    let prepared = match PreparedClipPolyline::build(polyline) {
         Some(p) => p,
         None => return (Vec::new(), Vec::new()),
     };
@@ -259,43 +259,43 @@ pub(super) fn clip_mesh_by_polygon_xy(
             let mut chunk_faces = Vec::new();
             let mut candidate_stack: Vec<usize> = Vec::new();
             let mut candidate_indices: Vec<usize> = Vec::new();
-            // Scratch buffer reused across (mesh_triangle, polygon_triangle) pairs.
+            // Scratch buffer reused across (mesh_triangle, polyline_triangle) pairs.
             // Cleared before each clip; capacity grows once to the worst-case ~6-gon.
-            let mut overlap_polygon: Vec<glam::DVec3> = Vec::new();
+            let mut overlap_polyline: Vec<glam::DVec3> = Vec::new();
 
             for face in chunk.iter().copied() {
                 let target = [target_vertices[face[0]], target_vertices[face[1]], target_vertices[face[2]]];
 
-                // AABB reject against the polygon's overall XY footprint. For a small
-                // polygon on a large mesh this alone skips ~99% of triangles.
+                // AABB reject against the polyline's overall XY footprint. For a small
+                // polyline on a large mesh this alone skips ~99% of triangles.
                 let (tri_min, tri_max) = triangle_xy_bounds(target);
                 if !prepared.xy_bounds_overlap(tri_min, tri_max) {
-                    if mode == TriPolygonClipMode::KeepOutside {
-                        let polygon: Vec<glam::DVec3> = target.iter().map(|point| glam::DVec3::new(point.x, point.y, point.z)).collect();
-                        emit_convex_polygon_as_fan(&polygon, &mut chunk_vertices, &mut chunk_faces);
+                    if mode == TriPolylineClipMode::KeepOutside {
+                        let polyline: Vec<glam::DVec3> = target.iter().map(|point| glam::DVec3::new(point.x, point.y, point.z)).collect();
+                        emit_convex_polyline_as_fan(&polyline, &mut chunk_vertices, &mut chunk_faces);
                     }
                     continue;
                 }
 
                 match mode {
-                    TriPolygonClipMode::KeepInside => {
+                    TriPolylineClipMode::KeepInside => {
                         prepared
                             .spatial
                             .for_each_xy_bounds_candidate_index_with_stack(tri_min, tri_max, &mut candidate_stack, |index| {
                                 let poly_triangle = prepared.triangles[index];
-                                overlap_polygon.clear();
-                                clip_target_triangle_to_reference_xy_exact_into(target, poly_triangle, &mut overlap_polygon);
-                                if overlap_polygon.len() < 3 {
+                                overlap_polyline.clear();
+                                clip_target_triangle_to_reference_xy_exact_into(target, poly_triangle, &mut overlap_polyline);
+                                if overlap_polyline.len() < 3 {
                                     return;
                                 }
-                                // Each overlap is a convex polygon (≤6 verts: a triangle
+                                // Each overlap is a convex polyline (≤6 verts: a triangle
                                 // clipped by 3 half-planes), so a fan triangulates it
                                 // exactly without earcut. Z is preserved from the mesh
                                 // triangle by the clip, so no per-vertex bary_z either.
-                                emit_convex_polygon_as_fan(&overlap_polygon, &mut chunk_vertices, &mut chunk_faces);
+                                emit_convex_polyline_as_fan(&overlap_polyline, &mut chunk_vertices, &mut chunk_faces);
                             });
                     }
-                    TriPolygonClipMode::KeepOutside => {
+                    TriPolylineClipMode::KeepOutside => {
                         candidate_indices.clear();
                         prepared
                             .spatial
@@ -313,7 +313,7 @@ pub(super) fn clip_mesh_by_polygon_xy(
                             }
                         }
                         for piece in pieces {
-                            emit_convex_polygon_as_fan(&piece, &mut chunk_vertices, &mut chunk_faces);
+                            emit_convex_polyline_as_fan(&piece, &mut chunk_vertices, &mut chunk_faces);
                         }
                     }
                 }
@@ -335,27 +335,27 @@ pub(super) fn clip_mesh_by_polygon_xy(
     (output_vertices, output_faces)
 }
 
-/// Subtract one XY clip triangle from a convex 3D polygon. At each clip edge,
+/// Subtract one XY clip triangle from a convex 3D polyline. At each clip edge,
 /// the portion outside that edge is final output while the inside remainder is
 /// passed to the next edge. The final remainder is the intersection and is
 /// discarded. This partitions the difference into disjoint convex pieces and
 /// interpolates Z at every new boundary point.
-fn subtract_triangle_xy(polygon: &[glam::DVec3], clip_triangle: [mesh_data::Vertex; 3]) -> Vec<Vec<glam::DVec3>> {
-    if polygon.len() < 3 {
+fn subtract_triangle_xy(polyline: &[glam::DVec3], clip_triangle: [mesh_data::Vertex; 3]) -> Vec<Vec<glam::DVec3>> {
+    if polyline.len() < 3 {
         return Vec::new();
     }
     let clip_points = clip_triangle.map(|point| glam::DVec2::new(point.x, point.y));
     let clip_ccw = triangle_xy_area(clip_triangle) > 0.0;
-    let mut remainder = polygon.to_vec();
+    let mut remainder = polyline.to_vec();
     let mut outside = Vec::with_capacity(3);
     for edge_index in 0..3 {
         let edge_a = clip_points[edge_index];
         let edge_b = clip_points[(edge_index + 1) % 3];
-        let piece = clip_polygon_by_xy_edge_exact(&remainder, edge_a, edge_b, !clip_ccw);
+        let piece = clip_polyline_by_xy_edge_exact(&remainder, edge_a, edge_b, !clip_ccw);
         if piece.len() >= 3 && signed_area_xy(&piece).abs() > 1e-18 {
             outside.push(piece);
         }
-        remainder = clip_polygon_by_xy_edge_exact(&remainder, edge_a, edge_b, clip_ccw);
+        remainder = clip_polyline_by_xy_edge_exact(&remainder, edge_a, edge_b, clip_ccw);
         if remainder.len() < 3 {
             break;
         }
@@ -366,8 +366,8 @@ fn subtract_triangle_xy(polygon: &[glam::DVec3], clip_triangle: [mesh_data::Vert
 /// Exact-boundary half-plane clip used only while partitioning a difference.
 /// The general geometry helper deliberately has a tolerance on both sides;
 /// using that for complementary halves would create a thin overlapping strip.
-fn clip_polygon_by_xy_edge_exact(polygon: &[glam::DVec3], edge_a: glam::DVec2, edge_b: glam::DVec2, keep_left: bool) -> Vec<glam::DVec3> {
-    if polygon.is_empty() {
+fn clip_polyline_by_xy_edge_exact(polyline: &[glam::DVec3], edge_a: glam::DVec2, edge_b: glam::DVec2, keep_left: bool) -> Vec<glam::DVec3> {
+    if polyline.is_empty() {
         return Vec::new();
     }
     let signed_distance = |point: glam::DVec3| {
@@ -375,10 +375,10 @@ fn clip_polygon_by_xy_edge_exact(polygon: &[glam::DVec3], edge_a: glam::DVec2, e
         if keep_left { distance } else { -distance }
     };
     let mut output = Vec::new();
-    let mut previous = *polygon.last().expect("polygon is non-empty");
+    let mut previous = *polyline.last().expect("polyline is non-empty");
     let mut previous_distance = signed_distance(previous);
     let mut previous_inside = previous_distance >= 0.0;
-    for &current in polygon {
+    for &current in polyline {
         let current_distance = signed_distance(current);
         let current_inside = current_distance >= 0.0;
         if current_inside != previous_inside {
@@ -398,33 +398,33 @@ fn clip_polygon_by_xy_edge_exact(polygon: &[glam::DVec3], edge_a: glam::DVec2, e
     crate::model::geometry::deduplicate_ring_by(output, |a, b| a.distance_squared(b) <= crate::model::geometry::RING_DEDUP_EPS_SQ)
 }
 
-/// Exact-boundary triangle intersection used by polygon KeepInside. It must
+/// Exact-boundary triangle intersection used by polyline KeepInside. It must
 /// share the same classifier as [`subtract_triangle_xy`] so the inside and
 /// outside results are a true partition even within the general XY tolerance.
 fn clip_target_triangle_to_reference_xy_exact_into(target: [mesh_data::Vertex; 3], reference: [mesh_data::Vertex; 3], output: &mut Vec<glam::DVec3>) {
-    let mut polygon: Vec<glam::DVec3> = target.into_iter().map(|point| glam::DVec3::new(point.x, point.y, point.z)).collect();
+    let mut polyline: Vec<glam::DVec3> = target.into_iter().map(|point| glam::DVec3::new(point.x, point.y, point.z)).collect();
     let clip_ccw = triangle_xy_area(reference) > 0.0;
     for edge_index in 0..3 {
         let edge_a = glam::DVec2::new(reference[edge_index].x, reference[edge_index].y);
         let edge_b = glam::DVec2::new(reference[(edge_index + 1) % 3].x, reference[(edge_index + 1) % 3].y);
-        polygon = clip_polygon_by_xy_edge_exact(&polygon, edge_a, edge_b, clip_ccw);
-        if polygon.len() < 3 {
+        polyline = clip_polyline_by_xy_edge_exact(&polyline, edge_a, edge_b, clip_ccw);
+        if polyline.len() < 3 {
             break;
         }
     }
     output.clear();
-    output.extend(polygon);
+    output.extend(polyline);
 }
 
-/// Push a convex polygon into the mesh buffers as a triangle fan. Degenerate
-/// (zero-area) triangles are dropped, matching `append_surface_clip_polygon`.
-fn emit_convex_polygon_as_fan(polygon: &[glam::DVec3], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
-    if polygon.len() < 3 {
+/// Push a convex polyline into the mesh buffers as a triangle fan. Degenerate
+/// (zero-area) triangles are dropped, matching `append_surface_clip_polyline`.
+fn emit_convex_polyline_as_fan(polyline: &[glam::DVec3], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
+    if polyline.len() < 3 {
         return;
     }
     let base = vertices.len() as u32;
-    vertices.extend(polygon.iter().map(|p| mesh_data::Vertex::new(p.x, p.y, p.z)));
-    for i in 1..(polygon.len() - 1) as u32 {
+    vertices.extend(polyline.iter().map(|p| mesh_data::Vertex::new(p.x, p.y, p.z)));
+    for i in 1..(polyline.len() - 1) as u32 {
         let face = [base, base + i, base + i + 1];
         let a = vertices[face[0] as usize];
         let b = vertices[face[1] as usize];
@@ -437,31 +437,31 @@ fn emit_convex_polygon_as_fan(polygon: &[glam::DVec3], vertices: &mut Vec<mesh_d
     }
 }
 
-/// A closed XY polygon pre-triangulated (via earcut) and indexed by a `TriangleBvh`
+/// A closed XY polyline pre-triangulated (via earcut) and indexed by a `TriangleBvh`
 /// for fast candidate enumeration against many mesh triangles. Built once per
-/// `clip_mesh_by_polygon_xy` call.
+/// `clip_mesh_by_polyline_xy` call.
 ///
-/// Mirrors `PreparedReferenceSurface` but the source is a flat polygon ring instead
-/// of a triangulation, and the polygon triangles' Z is irrelevant (only XY drives
-/// the containment test — Z on the output mesh comes from the target triangle via
+/// Mirrors `PreparedReferenceSurface` but the source is a flat polyline ring instead
+/// of a triangulation, and the polyline triangles' Z is irrelevant (only XY drives
+/// the containment test - Z on the output mesh comes from the target triangle via
 /// `clip_target_triangle_to_reference_xy_into`).
-pub(super) struct PreparedClipPolygon {
+pub(super) struct PreparedClipPolyline {
     pub(super) triangles: Vec<[mesh_data::Vertex; 3]>,
     pub(super) spatial: crate::model::spatial::TriangleBvh,
     pub(super) xy_min: glam::DVec2,
     pub(super) xy_max: glam::DVec2,
 }
 
-impl PreparedClipPolygon {
-    /// Returns `None` if the polygon has fewer than 3 vertices or no XY area.
-    pub(super) fn build(polygon: &[glam::DVec3]) -> Option<Self> {
-        if polygon.len() < 3 {
+impl PreparedClipPolyline {
+    /// Returns `None` if the polyline has fewer than 3 vertices or no XY area.
+    pub(super) fn build(polyline: &[glam::DVec3]) -> Option<Self> {
+        if polyline.len() < 3 {
             return None;
         }
 
         let mut xy_min = glam::DVec2::splat(f64::INFINITY);
         let mut xy_max = glam::DVec2::splat(f64::NEG_INFINITY);
-        let flat: Vec<[f64; 2]> = polygon
+        let flat: Vec<[f64; 2]> = polyline
             .iter()
             .map(|p| {
                 xy_min = xy_min.min(glam::DVec2::new(p.x, p.y));
@@ -488,7 +488,7 @@ impl PreparedClipPolygon {
                 mesh_data::Vertex::new(flat[tri[2]][0], flat[tri[2]][1], 0.0),
             ];
             // Skip zero-area sliver triangles earcut occasionally emits on near-
-            // collinear input — they would never produce overlap with anything.
+            // collinear input - they would never produce overlap with anything.
             if triangle_xy_area(corners).abs() <= 1e-18 {
                 continue;
             }
@@ -512,7 +512,7 @@ impl PreparedClipPolygon {
         })
     }
 
-    /// Cheap broad-phase check: does the supplied XY AABB touch this polygon's
+    /// Cheap broad-phase check: does the supplied XY AABB touch this polyline's
     /// overall footprint (with `XY_TOL` padding)?
     fn xy_bounds_overlap(&self, min: glam::DVec2, max: glam::DVec2) -> bool {
         const TOL: f64 = crate::model::kernel::XY_TOL;
@@ -620,7 +620,7 @@ pub(super) fn clip_mesh_by_surface(
                 continue;
             }
 
-            let polygon: Vec<SurfaceClipVertex> = overlap
+            let polyline: Vec<SurfaceClipVertex> = overlap
                 .into_iter()
                 .map(|point| {
                     let reference_z = bary_z(point.x, point.y, reference_triangle);
@@ -630,8 +630,8 @@ pub(super) fn clip_mesh_by_surface(
                     }
                 })
                 .collect();
-            let clipped = clip_surface_polygon(polygon, side);
-            append_surface_clip_polygon(&clipped, &mut output_vertices, &mut output_faces);
+            let clipped = clip_surface_polyline(polyline, side);
+            append_surface_clip_polyline(&clipped, &mut output_vertices, &mut output_faces);
         }
     }
 
@@ -640,7 +640,7 @@ pub(super) fn clip_mesh_by_surface(
 
 /// Trim a topology to the region the pit shell does not excavate, so a separately rendered
 /// pit shell fills the removed area and the two meshes meet along their true 3D contact
-/// line (where the shell surface crosses the terrain) rather than a fixed design polygon.
+/// line (where the shell surface crosses the terrain) rather than a fixed design polyline.
 ///
 /// `envelope` must be the shell's lower envelope (see `build_pit_shell_lower_envelope`):
 /// a single-valued 2.5D surface giving, at every XY point of the shell's footprint, the
@@ -648,10 +648,10 @@ pub(super) fn clip_mesh_by_surface(
 /// above that envelope. Because the envelope cells tile the plane, each topology triangle
 /// is rebuilt cell by cell: the overlap with an open cell is kept whole, and the overlap
 /// with a covered cell keeps only the part below the cell's plane. Every fragment is a
-/// convex polygon (a triangle–triangle overlap split by one half-plane), so emission is a
-/// simple fan — no polygon booleans or ear-cutting, whose floating-point failure modes make
-/// this construction preferable. Where the shell floats *above* the terrain —
-/// e.g. a flat design crest standing over undulating ground near the rim — the topology is
+/// convex polyline (a triangle–triangle overlap split by one half-plane), so emission is a
+/// simple fan - no polyline booleans or ear-cutting, whose floating-point failure modes make
+/// this construction preferable. Where the shell floats *above* the terrain -
+/// e.g. a flat design crest standing over undulating ground near the rim - the topology is
 /// below the envelope and is **kept**, so the cut is flush with the real contact line
 /// instead of the shell's widest XY extent. Because the lower envelope of a watertight
 /// solid is its floor, a flat crest cap never forces removal on its own. Triangles that
@@ -706,7 +706,7 @@ pub(super) fn clip_topology_to_pit_shell(
                             fragments.push(overlap.into_iter().map(|point| SurfaceClipVertex { point, height_delta: 0.0 }).collect());
                             return;
                         }
-                        let polygon: Vec<SurfaceClipVertex> = overlap
+                        let polyline: Vec<SurfaceClipVertex> = overlap
                             .into_iter()
                             .map(|point| {
                                 let reference_z = bary_z(point.x, point.y, cell);
@@ -716,12 +716,12 @@ pub(super) fn clip_topology_to_pit_shell(
                                 }
                             })
                             .collect();
-                        if polygon.iter().any(|vertex| vertex.height_delta > 1e-9) {
+                        if polyline.iter().any(|vertex| vertex.height_delta > 1e-9) {
                             any_excavated = true;
                         }
                         // Keep the part below the envelope (height_delta <= 0): the shell
                         // floats above the terrain there and removes nothing.
-                        fragments.push(clip_surface_polygon(polygon, TriSurfaceCutSide::CutTop));
+                        fragments.push(clip_surface_polyline(polyline, TriSurfaceCutSide::CutTop));
                     });
 
                 if !saw_candidate || !any_excavated {
@@ -733,7 +733,7 @@ pub(super) fn clip_topology_to_pit_shell(
                 }
 
                 for fragment in &fragments {
-                    append_surface_clip_polygon(fragment, &mut chunk_vertices, &mut chunk_faces);
+                    append_surface_clip_polyline(fragment, &mut chunk_vertices, &mut chunk_faces);
                 }
             }
 
@@ -808,10 +808,10 @@ fn overlap_z_delta(a: [mesh_data::Vertex; 3], b: [mesh_data::Vertex; 3], overlap
 }
 
 /// Prepare a pit shell mesh as input to `build_pit_shell_lower_envelope`. Unlike
-/// `prepare_reference_surface_relaxed`, this keeps vertical and near-vertical wall faces —
+/// `prepare_reference_surface_relaxed`, this keeps vertical and near-vertical wall faces -
 /// they have little or no XY-projected area, but their edges are exactly the boundaries the
 /// envelope arrangement must respect (bench crests, wall toes), and their surfaces define
-/// the envelope over wall bands. Only genuinely degenerate faces (zero area in 3D —
+/// the envelope over wall bands. Only genuinely degenerate faces (zero area in 3D -
 /// duplicate or collinear points) are dropped.
 pub(super) fn prepare_pit_shell_surface(pit_shell: &mesh_data::Triangulation) -> Result<PreparedReferenceSurface> {
     let vertices = pit_shell.vertices();
@@ -870,7 +870,7 @@ pub(super) struct PitShellLowerEnvelope {
 /// Insert the constraint edges the bulk loader rejected as crossing, splitting them at
 /// the intersections. spade's splitting insert asserts internally when the computed
 /// intersection point snaps onto nearby existing geometry that still blocks the
-/// constraint — near-coincident constraint sets do this, e.g. re-running Include over a
+/// constraint - near-coincident constraint sets do this, e.g. re-running Include over a
 /// footprint whose contact ring a previous run already stitched into the topology. The
 /// CDTs built here only classify cells by an interior sample, so a dropped hairline
 /// constraint is harmless; recover from the panic, keep the remaining constraints, and
@@ -915,18 +915,18 @@ pub(super) const ENVELOPE_PADDING: f64 = 1.0e7;
 /// Build the pit shell's lower envelope: the single-valued 2.5D surface giving, at every
 /// XY point of the shell's footprint, the lowest shell surface there. This reduces the
 /// multi-valued shell (walls, benches, watertight solids) to the one surface that decides
-/// excavation — a topology point is excavated exactly when it lies above the lower envelope.
+/// excavation - a topology point is excavated exactly when it lies above the lower envelope.
 ///
 /// The construction is exact, not sampled. Every shell triangle edge is projected to XY and
 /// inserted as a CDT constraint (splitting where edges cross), so no output cell interior
 /// crosses the projected boundary of any shell face. Within one cell the set of covering
-/// shell faces is therefore constant, and — because a valid shell does not self-intersect,
-/// so faces overlapping in XY never cross in 3D — their vertical order is constant too.
+/// shell faces is therefore constant, and - because a valid shell does not self-intersect,
+/// so faces overlapping in XY never cross in 3D - their vertical order is constant too.
 /// One interior sample per cell then identifies the lowest covering face exactly, and that
 /// face's plane supplies the cell's corner elevations. Exactly vertical faces contribute
 /// their edges as constraints (bench crests and wall toes land on cell boundaries, where
 /// the envelope legitimately jumps) but never supply elevations. Cells with no covering
-/// face — outside the shell's (possibly concave) footprint, or in the far padding — are
+/// face - outside the shell's (possibly concave) footprint, or in the far padding - are
 /// kept as open cells so the envelope tiles the whole plane.
 pub(super) fn build_pit_shell_lower_envelope(pit_shell: &PreparedReferenceSurface) -> Result<PitShellLowerEnvelope> {
     use rayon::prelude::*;
@@ -941,7 +941,7 @@ pub(super) fn build_pit_shell_lower_envelope(pit_shell: &PreparedReferenceSurfac
 
     // Dedup projected points exactly (by bit pattern, with -0.0 normalised so it cannot
     // alias 0.0 under spade's positional dedup) and collect each undirected edge once, so
-    // the CDT can be bulk-loaded instead of point-located per triangle corner — the
+    // the CDT can be bulk-loaded instead of point-located per triangle corner - the
     // incremental build dominated the whole cut on large shells. Only edges the bulk
     // loader rejects as conflicting (crossing another constraint in projection, i.e.
     // walls over benches) go through the splitting insert.
@@ -1132,19 +1132,19 @@ pub(super) fn triangle_xy_bounds(triangle: [mesh_data::Vertex; 3]) -> (glam::DVe
 }
 
 pub(super) fn triangle_intersection_xy(subject: [mesh_data::Vertex; 3], clip: [mesh_data::Vertex; 3]) -> Vec<glam::DVec2> {
-    let mut polygon: Vec<glam::DVec2> = subject.iter().map(|point| glam::DVec2::new(point.x, point.y)).collect();
+    let mut polyline: Vec<glam::DVec2> = subject.iter().map(|point| glam::DVec2::new(point.x, point.y)).collect();
     let clip_points = clip.map(|point| glam::DVec2::new(point.x, point.y));
     let clip_ccw = triangle_xy_area(clip) > 0.0;
 
     for edge_index in 0..3 {
         let edge_a = clip_points[edge_index];
         let edge_b = clip_points[(edge_index + 1) % 3];
-        polygon = clip_polygon_by_xy_edge(&polygon, edge_a, edge_b, clip_ccw);
-        if polygon.len() < 3 {
+        polyline = clip_polyline_by_xy_edge(&polyline, edge_a, edge_b, clip_ccw);
+        if polyline.len() < 3 {
             break;
         }
     }
-    polygon
+    polyline
 }
 
 pub(super) fn clip_target_triangle_to_reference_xy(target: [mesh_data::Vertex; 3], reference: [mesh_data::Vertex; 3]) -> Vec<glam::DVec3> {
@@ -1154,8 +1154,8 @@ pub(super) fn clip_target_triangle_to_reference_xy(target: [mesh_data::Vertex; 3
 }
 
 /// In-place variant of `clip_target_triangle_to_reference_xy`: clears `out` and
-/// appends the convex overlap polygon (possibly empty). Lets high-frequency
-/// callers (e.g. `clip_mesh_by_polygon_xy`) reuse one scratch buffer across
+/// appends the convex overlap polyline (possibly empty). Lets high-frequency
+/// callers (e.g. `clip_mesh_by_polyline_xy`) reuse one scratch buffer across
 /// many triangle-pair tests instead of allocating per call.
 pub(super) fn clip_target_triangle_to_reference_xy_into(target: [mesh_data::Vertex; 3], reference: [mesh_data::Vertex; 3], out: &mut Vec<glam::DVec3>) {
     out.clear();
@@ -1166,9 +1166,9 @@ pub(super) fn clip_target_triangle_to_reference_xy_into(target: [mesh_data::Vert
     let reference_points = reference.map(|p| glam::DVec2::new(p.x, p.y));
     let reference_ccw = triangle_xy_area(reference) > 0.0;
     // Sutherland–Hodgman against the 3 reference half-planes. Each iteration
-    // may shrink the polygon; bail early if it empties out.
+    // may shrink the polyline; bail early if it empties out.
     for edge_index in 0..3 {
-        let next = clip_polygon_by_xy_edge(out, reference_points[edge_index], reference_points[(edge_index + 1) % 3], reference_ccw);
+        let next = clip_polyline_by_xy_edge(out, reference_points[edge_index], reference_points[(edge_index + 1) % 3], reference_ccw);
         *out = next;
         if out.len() < 3 {
             out.clear();
@@ -1225,9 +1225,9 @@ fn project_triangle_onto_edge_normal_xy(triangle: [mesh_data::Vertex; 3], edge_a
     (min, max)
 }
 
-pub(super) fn clip_surface_polygon(polygon: Vec<SurfaceClipVertex>, side: TriSurfaceCutSide) -> Vec<SurfaceClipVertex> {
-    if polygon.is_empty() {
-        return polygon;
+pub(super) fn clip_surface_polyline(polyline: Vec<SurfaceClipVertex>, side: TriSurfaceCutSide) -> Vec<SurfaceClipVertex> {
+    if polyline.is_empty() {
+        return polyline;
     }
     let retained = |delta: f64| match side {
         TriSurfaceCutSide::CutTop => delta <= 1e-9,
@@ -1235,9 +1235,9 @@ pub(super) fn clip_surface_polygon(polygon: Vec<SurfaceClipVertex>, side: TriSur
     };
 
     let mut output = Vec::new();
-    let mut previous = *polygon.last().expect("polygon is non-empty");
+    let mut previous = *polyline.last().expect("polyline is non-empty");
     let mut previous_inside = retained(previous.height_delta);
-    for current in polygon {
+    for current in polyline {
         let current_inside = retained(current.height_delta);
         if current_inside != previous_inside {
             let denominator = previous.height_delta - current.height_delta;
@@ -1258,13 +1258,13 @@ pub(super) fn clip_surface_polygon(polygon: Vec<SurfaceClipVertex>, side: TriSur
     output
 }
 
-pub(super) fn append_surface_clip_polygon(polygon: &[SurfaceClipVertex], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
-    if polygon.len() < 3 {
+pub(super) fn append_surface_clip_polyline(polyline: &[SurfaceClipVertex], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
+    if polyline.len() < 3 {
         return;
     }
     let base = vertices.len() as u32;
-    vertices.extend(polygon.iter().map(|vertex| mesh_data::Vertex::new(vertex.point.x, vertex.point.y, vertex.point.z)));
-    for i in 1..polygon.len() - 1 {
+    vertices.extend(polyline.iter().map(|vertex| mesh_data::Vertex::new(vertex.point.x, vertex.point.y, vertex.point.z)));
+    for i in 1..polyline.len() - 1 {
         let face = [base, base + i as u32, base + i as u32 + 1];
         let a = vertices[face[0] as usize];
         let b = vertices[face[1] as usize];

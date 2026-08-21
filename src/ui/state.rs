@@ -17,7 +17,7 @@ use crate::{
     logging::CommandReportSpec,
     model::{
         FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
-        block_model::{BlockModelId, BlockModelSource, ColorStop, FIRST_CUSTOM_COLOR_STOP_ID},
+        block_model::{BlockModelId, ColorStop, FIRST_CUSTOM_COLOR_STOP_ID},
         drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleSource},
         formats::{
             MeshFormat,
@@ -25,6 +25,7 @@ use crate::{
             csv_drill_hole::{CsvDrillFileMapping, CsvDrillPreview},
         },
         point_cloud::PointCloudId,
+        raster::RasterTextureId,
         triangulation::TriangulationId,
     },
 };
@@ -68,13 +69,6 @@ pub(crate) struct MoveToLayerDialog {
     pub(crate) object_ids: Vec<ObjectId>,
     pub(crate) target_layer: Option<LayerId>,
     pub(crate) copy: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct MoveLayerDialog {
-    pub(crate) layer_id: LayerId,
-    /// Runtime id of the open PIDB receiving the layer.
-    pub(crate) target_project: Option<u32>,
 }
 
 impl Default for PreferencesDraft {
@@ -155,7 +149,7 @@ impl EditorState {
     ///
     /// `Graphics::render` compares this itself each frame, so selection and
     /// project transitions rebuild the scene even when the mutation site only
-    /// requested an overlay refresh — the class of stale-geometry bug this
+    /// requested an overlay refresh - the class of stale-geometry bug this
     /// removes cannot depend on callers picking the right invalidation.
     pub(crate) fn render_style_key(&self) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
@@ -187,7 +181,7 @@ pub(crate) enum OffsetMeasure {
     Distance,
     /// The Z component (height).
     Height(HeightMode),
-    /// Same as Distance — kept for naming clarity in the UI.
+    /// Same as Distance - kept for naming clarity in the UI.
     Width,
 }
 
@@ -216,15 +210,15 @@ pub(crate) enum TriSurfaceCutSide {
     CutBottom,
 }
 
-/// Which part of a surface to retain when clipping it with an XY polygon.
+/// Which part of a surface to retain when clipping it with an XY polyline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum TriPolygonClipMode {
+pub(crate) enum TriPolylineClipMode {
     #[default]
     KeepInside,
     KeepOutside,
 }
 
-/// Destination for generated contour polylines in the active PIDB.
+/// Destination for generated contour polylines in the active project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ContourOutputLayer {
     New(String),
@@ -358,7 +352,7 @@ pub(crate) fn fitted_slice_preview_zoom(slice_half_length: f64, viewport_height_
     (world_per_point * logical_height * 0.5).max(1.0e-4)
 }
 
-impl TriPolygonClipMode {
+impl TriPolylineClipMode {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::KeepInside => "Keep inside",
@@ -485,13 +479,13 @@ pub(crate) struct RelimitCandidate {
     pub(crate) is_extension: bool,
 }
 
-/// One segment in a Fuse-into-polygon chain.
+/// One segment in a Fuse-into-polyline chain.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FuseSegment {
     pub(crate) object_id: ObjectId,
     /// When true, the segment's vertices are consumed end→start instead of start→end.
     pub(crate) reversed: bool,
-    /// Vertex at which a closed polygon is opened for insertion into the chain.
+    /// Vertex at which a closed polyline is opened for insertion into the chain.
     pub(crate) start_index: usize,
     pub(crate) closed: bool,
     /// When true, the segment's first ordered vertex was designated as the
@@ -632,6 +626,57 @@ impl CircleDraft {
     }
 }
 
+/// Plane-handle index used for the Move gizmo's view-aligned ring, which
+/// translates in the camera plane instead of a world-axis plane.
+pub(crate) const MOVE_GIZMO_VIEW_PLANE: u8 = 3;
+
+/// One frame's screen-space projection of the Move gizmo. Pixel values are
+/// physical pixels, matching `cursor_screen_px`, so hit tests and drawing share
+/// one source of truth.
+#[derive(Clone, Copy)]
+pub(crate) struct MoveGizmoScreen {
+    pub(crate) center_px: Option<(f32, f32)>,
+    /// Arrow tips for X, Y and Z. Foreshortened with the axis, so an axis
+    /// tilting away from the camera visibly shortens instead of being forced
+    /// out to a fixed length in an unstable direction.
+    pub(crate) axis_tip_px: [Option<(f32, f32)>; 3],
+    /// Screen pixels spanned by one world unit along each axis.
+    pub(crate) axis_px_per_world: [f64; 3],
+    /// Per-axis opacity. An axis pointing at the camera fades out and stops
+    /// being clickable rather than collapsing to a degenerate stub.
+    pub(crate) axis_fade: [f32; 3],
+    /// XY, XZ and YZ plane handles, projected from world-space corners.
+    pub(crate) plane_quad_px: [Option<[(f32, f32); 4]>; 3],
+    /// Per-plane opacity, fading out as the plane turns edge-on.
+    pub(crate) plane_fade: [f32; 3],
+    /// Radius of the view-plane ring drawn around the centre.
+    pub(crate) ring_radius_px: f32,
+    /// Camera-plane world axes for a ring drag, with the screen vector one
+    /// world unit along each produces.
+    pub(crate) view_axes: Option<[DVec3; 2]>,
+    pub(crate) view_basis_px: [(f64, f64); 2],
+    /// Physical pixels per logical point at the time of projection, so hit
+    /// tests can size their slack the same way the gizmo is sized.
+    pub(crate) scale_factor: f32,
+}
+
+impl Default for MoveGizmoScreen {
+    fn default() -> Self {
+        Self {
+            center_px: None,
+            axis_tip_px: [None; 3],
+            axis_px_per_world: [1.0; 3],
+            axis_fade: [0.0; 3],
+            plane_quad_px: [None; 3],
+            plane_fade: [0.0; 3],
+            ring_radius_px: 0.0,
+            view_axes: None,
+            view_basis_px: [(1.0, 0.0), (0.0, 1.0)],
+            scale_factor: 1.0,
+        }
+    }
+}
+
 /// Central mutable editor state.
 ///
 /// Shared between the render pipeline and every UI draw call. Fields are grouped
@@ -708,7 +753,7 @@ pub(crate) struct EditorState {
     /// idle bar can name the task that just ended.
     pub(crate) status_message: Option<StatusBarMessage>,
     /// The most recent task to leave the status bar, shown as "…: Finished" at
-    /// 100% while idle. `None` until the first task completes — the progress bar
+    /// 100% while idle. `None` until the first task completes - the progress bar
     /// is hidden entirely until then.
     pub(crate) last_finished_task: Option<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
@@ -720,11 +765,11 @@ pub(crate) struct EditorState {
     pub(crate) active_layer: Option<LayerId>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
-    /// Browser-only viewport prompt shown before creating a named PIDB.
+    /// Browser-only viewport prompt shown before creating a named project.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) new_pidb_dialog_open: bool,
+    pub(crate) new_project_dialog_open: bool,
     #[cfg(target_arch = "wasm32")]
-    pub(crate) new_pidb_name: String,
+    pub(crate) new_project_name: String,
     pub(crate) new_layer_dialog_open: bool,
     pub(crate) new_layer_name: String,
     /// Active layer rename: (layer_id, name_buffer).
@@ -765,9 +810,9 @@ pub(crate) struct EditorState {
     pub(crate) cursor_screen_px: Option<(f32, f32)>,
 
     // Dialog state (position snapshots)
-    /// When true, show the polygon finish dialog near the cursor.
+    /// When true, show the polyline finish dialog near the cursor.
     pub(crate) poly_finish_dialog: bool,
-    /// Screen position (physical px) where the polygon finish dialog was opened.
+    /// Screen position (physical px) where the polyline finish dialog was opened.
     /// Snapshotted once so the dialog doesn't follow the cursor.
     pub(crate) poly_finish_dialog_px: Option<(f32, f32)>,
     /// When true, show the canvas right-click context menu.
@@ -781,7 +826,6 @@ pub(crate) struct EditorState {
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) set_selection_z_dialog: Option<crate::ui::dialogs::SetSelectionZDialog>,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
-    pub(crate) move_layer_dialog: Option<MoveLayerDialog>,
 
     // Display overrides
     pub(crate) xray_enabled: bool,
@@ -846,11 +890,11 @@ pub(crate) struct EditorState {
     /// Clamp offset vertices to the first visible triangulation they hit along
     /// the requested offset vector.
     pub(crate) offset_collide_with_triangulation: bool,
-    /// Preview polygon vertices in world coordinates.
+    /// Preview polyline vertices in world coordinates.
     pub(crate) offset_preview_world: Vec<DVec3>,
     /// Source vertices matching `offset_preview_world`, used for offset guide connectors.
     pub(crate) offset_source_world: Vec<DVec3>,
-    /// Preview polygon vertices projected to physical-pixel screen
+    /// Preview polyline vertices projected to physical-pixel screen
     /// coordinates this frame. One entry per source vertex; `None` marks a
     /// vertex outside the camera depth range so indexed consumers stay
     /// aligned with `offset_preview_world`.
@@ -861,7 +905,7 @@ pub(crate) struct EditorState {
     /// Preview screen ranges as `(start, end, closed)` so multiple offset
     /// previews are drawn independently.
     pub(crate) offset_preview_ranges: Vec<(usize, usize, bool)>,
-    /// Whether the preview geometry is closed (polygon) or open (polyline).
+    /// Whether the preview geometry is closed (polyline) or open (polyline).
     pub(crate) offset_preview_closed: bool,
 
     // Relimit Line tool
@@ -869,9 +913,9 @@ pub(crate) struct EditorState {
     pub(crate) relimit_source_id: Option<ObjectId>,
     pub(crate) relimit_mode: RelimitMode,
     pub(crate) relimit_value_input: f64,
-    /// Phase 0: tool active, no source selected yet — waiting for canvas click to pick source.
+    /// Phase 0: tool active, no source selected yet - waiting for canvas click to pick source.
     pub(crate) relimit_awaiting_source_pick: bool,
-    /// Phase 1: source selected, dialog closed — waiting for canvas click to pick target line.
+    /// Phase 1: source selected, dialog closed - waiting for canvas click to pick target line.
     pub(crate) relimit_waiting_for_pick: bool,
     /// Phase 2: intersection computed, user confirms which end to move.
     pub(crate) relimit_confirming_end: bool,
@@ -882,7 +926,7 @@ pub(crate) struct EditorState {
     /// Currently active intersection (set from hover zone, used for commit).
     pub(crate) relimit_intersection_3d: Option<DVec3>,
     pub(crate) relimit_hover_end: TrimEnd,
-    /// Phase 2 — preview segment: moving endpoint → intersection, yellow=extension red=reduction.
+    /// Phase 2 - preview segment: moving endpoint → intersection, yellow=extension red=reduction.
     pub(crate) relimit_preview_from_px: Option<(f32, f32)>,
     pub(crate) relimit_preview_to_px: Option<(f32, f32)>,
     pub(crate) relimit_preview_is_extension: bool,
@@ -891,21 +935,21 @@ pub(crate) struct EditorState {
     /// Screen position of the chosen resize endpoint sphere indicator (raw pixels).
     pub(crate) relimit_resize_end_px: Option<(f32, f32)>,
 
-    // Fuse Into Polygon tool
+    // Fuse Into Polyline tool
     pub(crate) fuse_segments: Vec<FuseSegment>,
     /// Line that has been picked but is waiting for the user to click one of its endpoint markers.
     pub(crate) fuse_awaiting_endpoint: Option<ObjectId>,
     /// Selectable vertices for `fuse_awaiting_endpoint`. Open lines expose their
-    /// two endpoints; closed polygons expose every vertex.
+    /// two endpoints; closed polylines expose every vertex.
     pub(crate) fuse_endpoint_markers: Vec<(usize, DVec3)>,
-    /// The open tail of the current chain — where the next segment will attach.
+    /// The open tail of the current chain - where the next segment will attach.
     pub(crate) fuse_chain_tail: Option<DVec3>,
     /// Opposite endpoint offered to close a single open source polyline.
     pub(crate) fuse_close_marker: Option<DVec3>,
     // Split At Points tool
     pub(crate) split_poly_id: Option<ObjectId>,
     pub(crate) split_selected_verts: [Option<usize>; 2],
-    /// One entry per polygon vertex; `None` marks a vertex outside the camera
+    /// One entry per polyline vertex; `None` marks a vertex outside the camera
     /// depth range, keeping `split_selected_verts` indices aligned.
     pub(crate) split_poly_verts_screen_px: Vec<Option<(f32, f32)>>,
 
@@ -914,11 +958,11 @@ pub(crate) struct EditorState {
     pub(crate) chamfer_segments: u32,
     /// Maximum chamfer radius for the currently selected corner (f64::MAX = unlimited).
     pub(crate) chamfer_max_radius: f64,
-    /// Which closed polygon is being chamfered (set on corner click).
+    /// Which closed polyline is being chamfered (set on corner click).
     pub(crate) chamfer_poly_id: Option<ObjectId>,
     /// Which vertex index of `chamfer_poly_id` is the selected corner.
     pub(crate) chamfer_corner_index: Option<usize>,
-    /// Preview of chamfered polygon projected to screen (raw pixels). Computed each frame by
+    /// Preview of chamfered polyline projected to screen (raw pixels). Computed each frame by
     /// the renderer. One entry per preview vertex (`None` = clipped) so segments
     /// between visible neighbours stay adjacent.
     pub(crate) chamfer_preview_screen_px: Vec<Option<(f32, f32)>>,
@@ -942,16 +986,10 @@ pub(crate) struct EditorState {
 
     // Move tool gizmo
     pub(crate) move_vertex_target: Option<(ObjectId, ObjectPoint)>,
-    pub(crate) move_gizmo_center_px: Option<(f32, f32)>,
-    pub(crate) move_gizmo_x_tip_px: Option<(f32, f32)>,
-    pub(crate) move_gizmo_y_tip_px: Option<(f32, f32)>,
-    pub(crate) move_gizmo_z_tip_px: Option<(f32, f32)>,
-    pub(crate) move_gizmo_x_px_per_world: f64,
-    pub(crate) move_gizmo_y_px_per_world: f64,
-    pub(crate) move_gizmo_z_px_per_world: f64,
-    /// XY, XZ and YZ plane-handle quads in physical screen pixels.
-    pub(crate) move_gizmo_plane_handles_px: [Option<[(f32, f32); 4]>; 3],
+    /// Projected Move gizmo for the current frame.
+    pub(crate) move_gizmo: MoveGizmoScreen,
     pub(crate) move_gizmo_hovered_axis: Option<u8>,
+    /// Hovered plane handle: 0 = XY, 1 = XZ, 2 = YZ, `MOVE_GIZMO_VIEW_PLANE` = ring.
     pub(crate) move_gizmo_hovered_plane: Option<u8>,
     pub(crate) gizmo_drag_axis_index: Option<u8>,
     pub(crate) gizmo_drag_plane_index: Option<u8>,
@@ -959,7 +997,7 @@ pub(crate) struct EditorState {
     /// Last delta that was actually applied as a preview (to avoid redundant rebuilds).
     pub(crate) move_panel_last_preview: [f64; 3],
 
-    /// Shared tool-highlight — draws this object in the selection colour regardless of selection.
+    /// Shared tool-highlight - draws this object in the selection colour regardless of selection.
     /// Used by tools for selected targets and canvas hover feedback.
     pub(crate) tool_highlight_id: Option<ObjectId>,
 
@@ -971,16 +1009,21 @@ pub(crate) struct EditorState {
     pub(crate) delete_confirm_open: bool,
     pub(crate) can_undo: bool,
     pub(crate) can_redo: bool,
-    /// Dirty PIDB awaiting save/discard confirmation before it is closed.
-    pub(crate) pending_close_pidb: Option<u32>,
-    /// Dirty PIDB awaiting confirmation before its changes are discarded
+    /// Dirty project awaiting save/discard confirmation before it is closed.
+    pub(crate) pending_close_project: Option<u32>,
+    /// The pending close was started by Remove Project in the explorer. Once
+    /// the close is allowed to proceed, desktop forgets the tracked path and
+    /// the browser deletes the project's persisted record.
+    pub(crate) remove_project_after_close: bool,
+    /// A New/Open action is waiting for a Save/Discard/Cancel choice.
+    pub(crate) replace_project_confirm_open: bool,
+    pub(crate) lossy_save_confirm_open: bool,
+    /// Dirty project awaiting confirmation before its changes are discarded
     /// (reverted to the last saved state on disk).
-    pub(crate) pending_discard_pidb: Option<u32>,
+    pub(crate) pending_discard_project: Option<u32>,
     /// Dirty layer awaiting confirmation before only that layer is restored
-    /// from its owning PIDB on disk: (layer id, display name).
+    /// from its owning project on disk: (layer id, display name).
     pub(crate) pending_discard_layer: Option<(LayerId, String)>,
-    /// Path of the triangulation folder pending "load all" confirmation.
-    pub(crate) confirm_load_all_folder: Option<PathBuf>,
 
     // Create Triangulation workflow
     pub(crate) tri_create_open: bool,
@@ -997,30 +1040,24 @@ pub(crate) struct EditorState {
     pub(crate) tri_hover_handles: HashSet<SceneEntityId>,
     /// Individually confirmed objects for triangulation.
     pub(crate) tri_selected_object_ids: Vec<ObjectId>,
-    /// Confirmed layers — all their objects will be triangulated.
+    /// Confirmed layers - all their objects will be triangulated.
     pub(crate) tri_selected_layer_ids: Vec<LayerId>,
     pub(crate) tri_name_input: String,
     pub(crate) tri_surface_type: TriSurfaceType,
 
-    // Unsaved triangulation close confirmation
-    pub(crate) tri_close_unsaved: Option<TriangulationId>,
-    // Unsaved generated block-model close confirmation
-    pub(crate) block_model_close_unsaved: Option<BlockModelId>,
-    // In-memory point-cloud close confirmation
-    pub(crate) point_cloud_close_unsaved: Option<PointCloudId>,
     /// Active viewport-to-field triangulation picker, if any.
     pub(crate) triangulation_pick_target: Option<TriangulationPickTarget>,
     /// Live description of the valid object under the cursor while a dialog
     /// field is being filled from the viewport.
     pub(crate) viewport_pick_hover_label: Option<String>,
 
-    // Cut Triangulation by Polygon
+    // Cut Triangulation by Polyline
     pub(crate) tri_cut_poly_open: bool,
     pub(crate) tri_cut_poly_awaiting_pick: bool,
     pub(crate) tri_cut_poly_tri_id: Option<TriangulationId>,
     pub(crate) tri_cut_poly_object_id: Option<ObjectId>,
     pub(crate) tri_cut_poly_object_name: String,
-    pub(crate) tri_cut_poly_mode: TriPolygonClipMode,
+    pub(crate) tri_cut_poly_mode: TriPolylineClipMode,
     pub(crate) tri_cut_poly_name_input: String,
     pub(crate) tri_cut_poly_name_auto: bool,
 
@@ -1065,7 +1102,7 @@ pub(crate) struct EditorState {
     pub(crate) tri_contour_use_z_range: bool,
     pub(crate) tri_contour_z_min_input: f64,
     pub(crate) tri_contour_z_max_input: f64,
-    /// `None` creates a new layer; `Some` appends to an existing active-PIDB layer.
+    /// `None` creates a new layer; `Some` appends to an existing active project layer.
     pub(crate) tri_contour_target_layer: Option<LayerId>,
     pub(crate) tri_contour_layer_name_input: String,
     pub(crate) tri_contour_layer_name_auto: bool,
@@ -1145,11 +1182,11 @@ pub(crate) struct EditorState {
 
     // Bezier tool
     pub(crate) bezier_poly_id: Option<ObjectId>,
-    /// Whether the selected source is a closed polygon rather than an open polyline.
+    /// Whether the selected source is a closed polyline rather than an open polyline.
     pub(crate) bezier_poly_closed: bool,
     /// Directed [span start, span end] indices of the path being replaced.
     pub(crate) bezier_selected_verts: [Option<usize>; 2],
-    /// For a closed polygon, replace the longer of the two paths between the
+    /// For a closed polyline, replace the longer of the two paths between the
     /// selected vertices. Open polylines have only one path, so this is ignored.
     pub(crate) bezier_replace_longer: bool,
     /// World-space coordinates of control point 1 (near the first selected vertex).
@@ -1158,7 +1195,7 @@ pub(crate) struct EditorState {
     pub(crate) bezier_cp2: [f64; 3],
     /// Number of line segments used to approximate the bezier curve.
     pub(crate) bezier_segments: u32,
-    /// Screen-space positions of every vertex in the selected polygon (for
+    /// Screen-space positions of every vertex in the selected polyline (for
     /// white dot indicators). One entry per source vertex (`None` = clipped)
     /// so `bezier_selected_verts` indices always address the right vertex.
     pub(crate) bezier_poly_verts_screen_px: Vec<Option<(f32, f32)>>,
@@ -1182,13 +1219,12 @@ pub(crate) struct EditorState {
     pub(crate) data_menu: DataMenu,
     pub(crate) import_source_menu: DataMenu,
     pub(crate) import_source_paths: Vec<PathBuf>,
-    pub(crate) import_dxf_as_pidb: bool,
     pub(crate) import_csv_preview: Option<CsvPreview>,
     pub(crate) import_csv_error: Option<String>,
     pub(crate) import_drill_csv: Vec<(CsvDrillFileMapping, CsvDrillPreview)>,
     pub(crate) export_dxf_layer: bool,
-    /// Runtime id of the open PIDB selected for whole-project export.
-    pub(crate) export_pidb: Option<u32>,
+    /// Runtime id of the open project selected for whole-project export.
+    pub(crate) export_project: Option<u32>,
     pub(crate) export_layer: Option<LayerId>,
     pub(crate) export_triangulation: Option<TriangulationId>,
     pub(crate) export_block_model: Option<BlockModelId>,
@@ -1220,7 +1256,7 @@ impl EditorState {
         self.active_tool = ActiveTool::None;
         #[cfg(target_arch = "wasm32")]
         {
-            self.new_pidb_dialog_open = false;
+            self.new_project_dialog_open = false;
         }
         self.new_layer_dialog_open = false;
         self.renaming_layer = None;
@@ -1240,7 +1276,6 @@ impl EditorState {
         self.move_to_layer_dialog = None;
         self.set_selection_z_dialog = None;
         self.insert_point_at_elevation_dialog = None;
-        self.move_layer_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
         self.batter_angle_points.clear();
@@ -1299,11 +1334,7 @@ impl EditorState {
         self.chamfer_gizmo_drag_start_px = None;
 
         self.move_vertex_target = None;
-        self.move_gizmo_center_px = None;
-        self.move_gizmo_x_tip_px = None;
-        self.move_gizmo_y_tip_px = None;
-        self.move_gizmo_z_tip_px = None;
-        self.move_gizmo_plane_handles_px = [None; 3];
+        self.move_gizmo = MoveGizmoScreen::default();
         self.move_gizmo_hovered_axis = None;
         self.move_gizmo_hovered_plane = None;
         self.gizmo_drag_axis_index = None;
@@ -1438,9 +1469,9 @@ impl EditorState {
             active_layer: None,
             cursor_world: None,
             #[cfg(target_arch = "wasm32")]
-            new_pidb_dialog_open: false,
+            new_project_dialog_open: false,
             #[cfg(target_arch = "wasm32")]
-            new_pidb_name: String::new(),
+            new_project_name: String::new(),
             new_layer_dialog_open: false,
             new_layer_name: "design".to_owned(),
             renaming_layer: None,
@@ -1471,7 +1502,6 @@ impl EditorState {
             move_to_layer_dialog: None,
             set_selection_z_dialog: None,
             insert_point_at_elevation_dialog: None,
-            move_layer_dialog: None,
             xray_enabled: false,
             vertical_exaggeration_dialog_open: false,
             vertical_exaggeration: 1.0,
@@ -1551,14 +1581,7 @@ impl EditorState {
             chamfer_gizmo_drag_start_px: None,
             chamfer_gizmo_drag_start_radius: 0.0,
             move_vertex_target: None,
-            move_gizmo_center_px: None,
-            move_gizmo_x_tip_px: None,
-            move_gizmo_y_tip_px: None,
-            move_gizmo_z_tip_px: None,
-            move_gizmo_x_px_per_world: 1.0,
-            move_gizmo_y_px_per_world: 1.0,
-            move_gizmo_z_px_per_world: 1.0,
-            move_gizmo_plane_handles_px: [None; 3],
+            move_gizmo: MoveGizmoScreen::default(),
             move_gizmo_hovered_axis: None,
             move_gizmo_hovered_plane: None,
             gizmo_drag_axis_index: None,
@@ -1571,10 +1594,12 @@ impl EditorState {
             delete_confirm_open: false,
             can_undo: false,
             can_redo: false,
-            pending_close_pidb: None,
-            pending_discard_pidb: None,
+            pending_close_project: None,
+            remove_project_after_close: false,
+            replace_project_confirm_open: false,
+            lossy_save_confirm_open: false,
+            pending_discard_project: None,
             pending_discard_layer: None,
-            confirm_load_all_folder: None,
             tri_create_open: false,
             tri_create_phase: TriCreatePhase::MainDialog,
             tri_create_failure: None,
@@ -1586,9 +1611,6 @@ impl EditorState {
             tri_selected_layer_ids: Vec::new(),
             tri_name_input: String::new(),
             tri_surface_type: TriSurfaceType::Surface,
-            tri_close_unsaved: None,
-            block_model_close_unsaved: None,
-            point_cloud_close_unsaved: None,
             triangulation_pick_target: None,
             viewport_pick_hover_label: None,
             tri_cut_poly_open: false,
@@ -1596,7 +1618,7 @@ impl EditorState {
             tri_cut_poly_tri_id: None,
             tri_cut_poly_object_id: None,
             tri_cut_poly_object_name: String::new(),
-            tri_cut_poly_mode: TriPolygonClipMode::KeepInside,
+            tri_cut_poly_mode: TriPolylineClipMode::KeepInside,
             tri_cut_poly_name_input: String::new(),
             tri_cut_poly_name_auto: true,
             tri_cut_z_open: false,
@@ -1706,12 +1728,11 @@ impl EditorState {
             data_menu: DataMenu::None,
             import_source_menu: DataMenu::None,
             import_source_paths: Vec::new(),
-            import_dxf_as_pidb: true,
             import_csv_preview: None,
             import_csv_error: None,
             import_drill_csv: Vec::new(),
             export_dxf_layer: false,
-            export_pidb: None,
+            export_project: None,
             export_layer: None,
             export_triangulation: None,
             export_block_model: None,
@@ -1738,19 +1759,6 @@ impl EditorState {
     /// rendered geometry must be rebuilt.
     pub(crate) fn apply_action(&mut self, action: EditorAction) -> bool {
         match action {
-            EditorAction::HideSelection => {
-                let count = self.selected_handles.len();
-                self.hidden_handles.extend(self.selected_handles.iter().copied());
-                crate::logging::report_completed_action(CommandReportSpec::new("Hide Selection", format!("{count} object(s)")), format!("Hid {count} object(s)"));
-                true
-            }
-            EditorAction::RevealAll => {
-                self.hidden_handles.clear();
-                self.frozen_handles.clear();
-                self.translucent_handles.clear();
-                crate::logging::report_completed_action(CommandReportSpec::new("Reveal Objects", "All objects"), "Revealed all objects");
-                true
-            }
             EditorAction::FreezeSelection => {
                 let newly_frozen = std::mem::take(&mut self.selected_handles);
                 let count = newly_frozen.len();
@@ -1789,14 +1797,14 @@ pub(crate) enum ActiveTool {
     MakePoly,
     MakeCircle,
     MakeText,
-    DeleteElement,
+    DeletePoints,
     MeasureDistance,
     MeasureBatterAngle,
     OffsetElement,
     DrapeToTopology,
     RelimitLine,
-    ExplodePolygon,
-    FuseIntoPolygon,
+    ExplodePolyline,
+    FuseIntoPolyline,
     SplitAtPoints,
     Move,
     Chamfer,
@@ -1808,8 +1816,6 @@ pub(crate) enum ActiveTool {
 /// Immediate commands applied to the current selection (or whole drawing).
 #[derive(PartialEq, Clone, Copy)]
 pub(crate) enum EditorAction {
-    RevealAll,
-    HideSelection,
     FreezeSelection,
 }
 
@@ -1874,69 +1880,59 @@ pub(crate) enum UiCommand {
     SetSliceModeEnabled(bool),
     #[cfg(not(target_arch = "wasm32"))]
     SetSlicePreviewDetached(bool),
-    NewPidb,
+    NewProject,
     #[cfg(target_arch = "wasm32")]
-    CreateBrowserPidb {
+    CreateBrowserProject {
         name: String,
     },
-    OpenPidb,
+    OpenProject,
+    #[cfg(not(target_arch = "wasm32"))]
+    ActivateTrackedProject(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    ActivateTrackedProject(crate::model::project::ProjectId),
+    #[cfg(not(target_arch = "wasm32"))]
+    RemoveTrackedProject(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    RemoveTrackedProject(crate::model::project::ProjectId),
     CloseStartupDialog,
     ImportOmfPaths(Vec<PathBuf>),
-    ImportAsPidbPaths(DataMenu, Vec<PathBuf>),
     ImportDxfPathsInto(Vec<PathBuf>),
     ImportTriangulationPaths(Vec<PathBuf>),
     ImportPointCloudPaths(Vec<PathBuf>),
     ImportRasterPaths(Vec<PathBuf>),
-    LoadRaster(PathBuf),
-    UnloadRaster(PathBuf),
-    RemoveRaster(PathBuf),
-    #[cfg(not(target_arch = "wasm32"))]
-    RevealRaster(PathBuf),
-    DrapeRaster(PathBuf),
-    UndrapeRaster(PathBuf),
+    LoadRaster(RasterTextureId),
+    UnloadRaster(RasterTextureId),
+    ToggleRasterVisible(RasterTextureId),
+    RemoveRaster(RasterTextureId),
+    DrapeRaster(RasterTextureId),
+    UndrapeRaster(RasterTextureId),
     ClearActiveTriangulationRaster,
-    LoadPointCloud(PathBuf),
+    LoadPointCloud(PointCloudId),
     ClosePointCloud(PointCloudId),
-    /// Close an in-memory point cloud after the user confirmed the discard.
-    ClosePointCloudForce(PointCloudId),
     TogglePointCloudVisible(PointCloudId),
-    RemovePointCloud(PathBuf),
-    #[cfg(not(target_arch = "wasm32"))]
-    RevealPointCloud(PointCloudId),
+    RemovePointCloud(PointCloudId),
     ChooseImportSourceFiles(DataMenu),
     #[cfg(target_arch = "wasm32")]
     ClearBrowserImportSelection(DataMenu),
-    OpenPidbPaths(Vec<PathBuf>),
     ImportCsvBlockModel {
         path: PathBuf,
         mapping: CsvColumnMapping,
     },
     ExportOmf,
-    ExportPidbDxf(u32),
-    ExportPidbCopy(u32),
+    ExportProjectDxf(u32),
     ExportViewportImage,
     ExportLayerDxf(LayerId),
     ExportTriangulationAs(TriangulationId, MeshFormat),
     ExportBlockModelCsv(BlockModelId),
-    #[cfg(not(target_arch = "wasm32"))]
-    SaveTriangulationAs(TriangulationId),
-    #[cfg(not(target_arch = "wasm32"))]
-    SaveBlockModelAs(BlockModelId),
-    SaveAndCloseTriangulationAs(TriangulationId),
-    SaveAndCloseBlockModelAs(BlockModelId),
-    #[cfg(not(target_arch = "wasm32"))]
-    RevealTriangulation(TriangulationId),
-    #[cfg(not(target_arch = "wasm32"))]
-    RevealBlockModel(BlockModelId),
-    #[cfg(not(target_arch = "wasm32"))]
-    RevealPath(PathBuf),
-    #[cfg(not(target_arch = "wasm32"))]
-    OpenDirectory(PathBuf),
     RequestExit,
-    #[cfg(not(target_arch = "wasm32"))]
     SaveAndExit,
     ExitWithoutSaving,
     CancelExit,
+    SaveAndReplaceProject,
+    DiscardAndReplaceProject,
+    CancelProjectReplacement,
+    ConfirmLossyProjectSave,
+    CancelLossyProjectSave,
     CreateLayer {
         name: String,
     },
@@ -1956,21 +1952,17 @@ pub(crate) enum UiCommand {
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
     OpenPreferences,
-    SaveAllPidbs,
+    SaveProject,
     #[cfg(target_arch = "wasm32")]
-    DownloadAllPidbs,
-    SavePidb(u32),
+    DownloadProject,
     #[cfg(not(target_arch = "wasm32"))]
-    SavePidbAs(u32),
-    ActivatePidb(u32),
-    ClosePidb(u32),
+    SaveProjectAs(u32),
+    CloseProject(u32),
+    SaveAndCloseProject(u32),
+    CloseProjectForce(u32),
+    CancelCloseProject,
     #[cfg(not(target_arch = "wasm32"))]
-    SaveAndClosePidb(u32),
-    ClosePidbForce(u32),
-    #[cfg(not(target_arch = "wasm32"))]
-    RequestDiscardPidbChanges(u32),
-    #[cfg(not(target_arch = "wasm32"))]
-    DiscardPidbChanges(u32),
+    DiscardProjectChanges(u32),
     #[cfg(not(target_arch = "wasm32"))]
     RequestDiscardLayerChanges(LayerId),
     #[cfg(not(target_arch = "wasm32"))]
@@ -1978,11 +1970,6 @@ pub(crate) enum UiCommand {
     RequestDeleteLayer(LayerId),
     DeleteLayer(LayerId),
     DuplicateLayer(LayerId),
-    BeginMoveLayer(LayerId),
-    MoveLayerToPidb {
-        layer_id: LayerId,
-        target_project: u32,
-    },
     RenameLayer {
         layer_id: LayerId,
         new_name: String,
@@ -2000,12 +1987,10 @@ pub(crate) enum UiCommand {
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
     SelectAllObjectsInLayer(LayerId),
-    #[cfg(not(target_arch = "wasm32"))]
-    OpenTriangulationFolder,
     ActivateTriangulation(TriangulationId),
     ToggleTriangulationVisible(TriangulationId),
     CloseTriangulation(TriangulationId),
-    /// Batch variants — produce a single history entry for multi-select changes.
+    /// Batch variants - produce a single history entry for multi-select changes.
     BatchSetObjectColor(Vec<ObjectId>, ObjectColor),
     BatchSetPolylineClosed(Vec<ObjectId>, bool),
     BatchSetObjectFill(Vec<ObjectId>, FillStyle),
@@ -2020,13 +2005,10 @@ pub(crate) enum UiCommand {
     CancelTextEdit,
     SetTriangulationColor(TriangulationId, [f32; 4]),
     CloseCanvasContextMenu,
-    LoadTriangulation(PathBuf),
-    /// Download a triangulation held in browser storage but not in memory.
-    #[cfg(target_arch = "wasm32")]
-    DownloadStoredTriangulation(PathBuf),
-    LoadBlockModel(BlockModelSource),
+    LoadTriangulation(TriangulationId),
+    LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
-    RemoveBlockModel(BlockModelSource),
+    RemoveBlockModel(BlockModelId),
     ToggleBlockModelVisible(BlockModelId),
     SetBlockModelColorVariable {
         id: BlockModelId,
@@ -2041,9 +2023,9 @@ pub(crate) enum UiCommand {
         slice: Option<crate::model::block_model::BlockModelSlice>,
     },
     ImportDrillHole(DrillHoleSource),
-    LoadDrillHole(DrillHoleSource),
+    LoadDrillHole(DrillHoleId),
     CloseDrillHole(DrillHoleId),
-    RemoveDrillHole(DrillHoleSource),
+    RemoveDrillHole(DrillHoleId),
     ToggleDrillHoleVisible(DrillHoleId),
     OpenDrillHoleColorDialog(DrillHoleId),
     SetDrillHoleColorField {
@@ -2085,13 +2067,11 @@ pub(crate) enum UiCommand {
         max: f64,
         name: String,
     },
-    RemoveTriangulation(PathBuf),
-    RemoveTriangulationFolder(PathBuf),
-    #[cfg(not(target_arch = "wasm32"))]
-    RevealPidb(PathBuf),
-    RevealAllTriangulations,
+    RemoveTriangulation(TriangulationId),
+    HideSelection,
+    RevealAllElements,
     ZoomToExtents,
-    /// Dialog "Apply" pressed — begin the canvas side-pick phase.
+    /// Dialog "Apply" pressed - begin the canvas side-pick phase.
     BeginOffsetPick {
         object_ids: Vec<ObjectId>,
         /// Absolute horizontal offset distance (sign determined by cursor).
@@ -2119,7 +2099,7 @@ pub(crate) enum UiCommand {
     OpenRelimitDialog,
     /// Triggers the app to select the first valid polyline and open the batter berm dialog.
     OpenBatterBermDialog,
-    /// Dialog "Apply" pressed — commit all batter berm rings using the current panel state.
+    /// Dialog "Apply" pressed - commit all batter berm rings using the current panel state.
     CommitBatterBerm,
     CancelBatterBerm,
     /// Open the Create Triangulation main dialog.
@@ -2163,31 +2143,17 @@ pub(crate) enum UiCommand {
         cloud_id: PointCloudId,
         params: crate::app::commands::triangulation::TerrainTinParams,
     },
-    /// Load all layers in one open project without changing the editing target.
-    LoadAllLayers(u32),
-    /// Unload all layers in one open project without changing the editing target.
-    UnloadAllLayers(u32),
-    /// Show the "load all in folder?" confirmation dialog for the given folder.
-    ConfirmLoadAllTriangulationsInFolder(PathBuf),
-    /// Actually load every triangulation file in the given folder.
-    LoadAllTriangulationsInFolder(PathBuf),
-    /// Close (unload) every loaded triangulation in the given folder.
-    CloseAllTriangulationsInFolder(PathBuf),
-    /// Close an unsaved triangulation without saving (user confirmed the discard).
-    CloseTriangulationForce(TriangulationId),
-    /// Close an unsaved generated block model without saving.
-    CloseBlockModelForce(BlockModelId),
     /// User confirmed deletion of all selected objects via the confirm dialog.
     ConfirmDeleteSelection,
-    /// Open the "Cut Triangulation by Polygon" dialog.
-    OpenCutTriangulationByPolygon,
-    /// Enter polygon-pick mode for the cut-by-polygon tool.
+    /// Open the "Cut Triangulation by Polyline" dialog.
+    OpenCutTriangulationByPolyline,
+    /// Enter polyline-pick mode for the cut-by-polyline tool.
     BeginCutPolyPick,
-    /// Execute the clip against the polygon boundary in XY.
-    ExecuteCutTriangulationByPolygon {
+    /// Execute the clip against the polyline boundary in XY.
+    ExecuteCutTriangulationByPolyline {
         tri_id: TriangulationId,
-        polygon_id: ObjectId,
-        mode: TriPolygonClipMode,
+        polyline_id: ObjectId,
+        mode: TriPolylineClipMode,
         name: String,
     },
     /// Open the "Cut Triangulation by Z Range" dialog.
@@ -2229,7 +2195,7 @@ pub(crate) enum UiCommand {
     OpenContourTriangulation,
     Undo,
     Redo,
-    /// Execute contour generation and store lines in the requested active-PIDB layer.
+    /// Execute contour generation and store lines in the requested active project layer.
     ExecuteContourTriangulation {
         tri_id: TriangulationId,
         major_interval: f64,
@@ -2262,13 +2228,15 @@ impl UiCommand {
         match self {
             Self::SetActiveTool(_)
             | Self::CloseStartupDialog
+            | Self::CancelCloseProject
             | Self::CancelExit
+            | Self::CancelProjectReplacement
+            | Self::CancelLossyProjectSave
             | Self::CancelOffset
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
             | Self::SetShowConsole(_)
             | Self::OpenPreferences
-            | Self::BeginMoveLayer(_)
             | Self::BeginRenameLayer(_)
             | Self::PreviewMoveDelta(_)
             | Self::CancelChamfer
@@ -2286,8 +2254,7 @@ impl UiCommand {
             | Self::OpenSetSelectionZValueDialog
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenPointCloudTin
-            | Self::ConfirmLoadAllTriangulationsInFolder(_)
-            | Self::OpenCutTriangulationByPolygon
+            | Self::OpenCutTriangulationByPolyline
             | Self::BeginCutPolyPick
             | Self::OpenCutTriangulationByZ
             | Self::OpenCutTriangulationBySurface
@@ -2308,63 +2275,52 @@ impl UiCommand {
             Self::ClearBrowserImportSelection(_) => None,
 
             #[cfg(not(target_arch = "wasm32"))]
-            Self::RequestDiscardPidbChanges(_) | Self::RequestDiscardLayerChanges(_) => None,
+            Self::RequestDiscardLayerChanges(_) => None,
 
             Self::SetFlyModeEnabled(enabled) => report("Fly Mode", if *enabled { "Enabled" } else { "Disabled" }.to_owned()),
             Self::SetSliceModeEnabled(enabled) => report("Slice Mode", if *enabled { "Enabled" } else { "Disabled" }.to_owned()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SetSlicePreviewDetached(detached) => report("Slice Preview", if *detached { "Detached" } else { "Docked" }.to_owned()),
-            Self::NewPidb => report("Create PIDB", "Choose a destination".to_owned()),
+            Self::NewProject => report("Create Project", "Choose a destination".to_owned()),
             #[cfg(target_arch = "wasm32")]
-            Self::CreateBrowserPidb { name } => report("Create PIDB", name.clone()),
-            Self::OpenPidb => report("Open PIDB", "Choose one or more files".to_owned()),
+            Self::CreateBrowserProject { name } => report("Create Project", name.clone()),
+            Self::OpenProject => report("Open Project", "Choose one or more files".to_owned()),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::ActivateTrackedProject(path) => report("Activate Project", path.display().to_string()),
+            #[cfg(target_arch = "wasm32")]
+            Self::ActivateTrackedProject(id) => report("Activate Project", id.to_string()),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::RemoveTrackedProject(path) => report("Remove Project", path.display().to_string()),
+            #[cfg(target_arch = "wasm32")]
+            Self::RemoveTrackedProject(id) => report("Remove Project", id.to_string()),
             Self::ImportOmfPaths(paths) => report("Import OMF", format!("{} file(s)", paths.len())),
-            Self::ImportAsPidbPaths(kind, paths) => report("Import as PIDB", format!("{kind:?} · {} file(s)", paths.len())),
             Self::ImportDxfPathsInto(paths) => report("Import DXF", format!("{} file(s)", paths.len())),
             Self::ImportTriangulationPaths(paths) => report("Import Triangulation", format!("{} file(s)", paths.len())),
             Self::ImportPointCloudPaths(paths) => report("Import Point Cloud", format!("{} file(s)", paths.len())),
             Self::ImportRasterPaths(paths) => report("Import Raster", format!("{} file(s)", paths.len())),
-            Self::LoadRaster(path) => report("Load Raster", path.display().to_string()),
-            Self::UnloadRaster(path) => report("Unload Raster", path.display().to_string()),
-            Self::RemoveRaster(path) => report("Remove Raster", path.display().to_string()),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::RevealRaster(path) => report("Reveal Raster", path.display().to_string()),
-            Self::DrapeRaster(path) => report("Drape Raster", path.display().to_string()),
-            Self::UndrapeRaster(path) => report("Undrape Raster", path.display().to_string()),
+            Self::LoadRaster(id) => report("Load Raster", format!("{id:?}")),
+            Self::UnloadRaster(id) => report("Unload Raster", format!("{id:?}")),
+            Self::ToggleRasterVisible(id) => report("Set Raster Visibility", format!("{id:?}")),
+            Self::RemoveRaster(id) => report("Remove Raster", format!("{id:?}")),
+            Self::DrapeRaster(id) => report("Drape Raster", format!("{id:?}")),
+            Self::UndrapeRaster(id) => report("Undrape Raster", format!("{id:?}")),
             Self::ClearActiveTriangulationRaster => report("Clear Raster", "Removed from active triangulation".to_owned()),
-            Self::LoadPointCloud(path) => report("Load Point Cloud", path.display().to_string()),
+            Self::LoadPointCloud(id) => report("Load Point Cloud", format!("{id:?}")),
             Self::ClosePointCloud(id) => report("Close Point Cloud", format!("{id:?}")),
-            Self::ClosePointCloudForce(id) => report("Discard Point Cloud", format!("{id:?}")),
             Self::TogglePointCloudVisible(id) => report("Set Point Cloud Visibility", format!("{id:?}")),
-            Self::RemovePointCloud(path) => report("Remove Point Cloud", path.display().to_string()),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::RevealPointCloud(id) => report("Reveal Point Cloud", format!("{id:?}")),
-            Self::OpenPidbPaths(paths) => report("Open PIDB", format!("{} file(s)", paths.len())),
+            Self::RemovePointCloud(id) => report("Remove Point Cloud", format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report("Import CSV Block Model", path.display().to_string()),
             Self::ExportOmf => report("Export OMF", "All open Incline data".to_owned()),
-            Self::ExportPidbDxf(id) => report("Export PIDB to DXF", format!("Project {id}")),
-            Self::ExportPidbCopy(id) => report("Export PIDB Copy", format!("Project {id}")),
+            Self::ExportProjectDxf(id) => report("Export Project to DXF", format!("Project {id}")),
             Self::ExportViewportImage => report("Export Viewport Image", "Choose a destination".to_owned()),
             Self::ExportLayerDxf(id) => report("Export Layer to DXF", format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report("Export Triangulation", format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report("Export Block Model CSV", format!("{id:?}")),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::SaveTriangulationAs(id) => report("Save Triangulation", format!("{id:?}")),
-            Self::SaveAndCloseTriangulationAs(id) => report("Save and Close Triangulation", format!("{id:?}")),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::RevealTriangulation(id) => report("Reveal Triangulation", format!("{id:?}")),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::RevealBlockModel(id) => report("Reveal Block Model", format!("{id:?}")),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::RevealPath(path) => report("Reveal File", path.display().to_string()),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::OpenDirectory(path) => report("Open Folder", path.display().to_string()),
             Self::RequestExit => report("Exit Incline", "Checking unsaved work".to_owned()),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::SaveAndExit => report("Save and Exit", "Saving open projects".to_owned()),
+            Self::SaveAndExit => report("Save and Exit", "Saving the current project".to_owned()),
             Self::ExitWithoutSaving => report("Exit Without Saving", "Discarding unsaved changes".to_owned()),
             Self::CreateLayer { name } => report("Create Layer", name.clone()),
-            Self::FinishPolyClose => report("Create Polygon", "Finish closed polygon".to_owned()),
+            Self::FinishPolyClose => report("Create Polyline", "Finish closed polyline".to_owned()),
             Self::CommitStrokeOpen => report("Create Line", "Finish open polyline".to_owned()),
             Self::CommitCircleTypedRadius => report("Create Circle", "Use typed radius".to_owned()),
             Self::ResetView => report("Reset View", "Fit to extents".to_owned()),
@@ -2375,23 +2331,22 @@ impl UiCommand {
             Self::SetShowScaleBar(enabled) => report("Set Scale Bar", if *enabled { "Shown" } else { "Hidden" }.to_owned()),
             Self::SetStandardView(view) => report("Set Standard View", format!("{view:?}")),
             Self::ApplyPreferences(_) => report("Apply Preferences", "Settings updated".to_owned()),
-            Self::SaveAllPidbs => report("Save All PIDBs", "All open projects".to_owned()),
+            Self::SaveProject => report("Save Project", "Current project".to_owned()),
+            Self::SaveAndReplaceProject => report("Save and Replace Project", "Current project".to_owned()),
+            Self::DiscardAndReplaceProject => report("Discard and Replace Project", "Current project".to_owned()),
+            Self::ConfirmLossyProjectSave => report("Confirm OMF Rewrite", "Save despite unsupported content".to_owned()),
             #[cfg(target_arch = "wasm32")]
-            Self::DownloadAllPidbs => report("Download All PIDBs", "All open projects".to_owned()),
-            Self::SavePidb(id) => report("Save PIDB", format!("Project {id}")),
+            Self::DownloadProject => report("Download OMF", "Current project".to_owned()),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SavePidbAs(id) => report("Save PIDB As", format!("Project {id}")),
-            Self::ActivatePidb(id) => report("Set Current PIDB", format!("Project {id}")),
-            Self::ClosePidb(id) | Self::ClosePidbForce(id) => report("Close PIDB", format!("Project {id}")),
+            Self::SaveProjectAs(id) => report("Save Project As", format!("Project {id}")),
+            Self::CloseProject(id) | Self::CloseProjectForce(id) => report("Close Project", format!("Project {id}")),
+            Self::SaveAndCloseProject(id) => report("Save and Close Project", format!("Project {id}")),
             #[cfg(not(target_arch = "wasm32"))]
-            Self::SaveAndClosePidb(id) => report("Save and Close PIDB", format!("Project {id}")),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::DiscardPidbChanges(id) => report("Discard PIDB Changes", format!("Project {id}")),
+            Self::DiscardProjectChanges(id) => report("Discard Project Changes", format!("Project {id}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::DiscardLayerChanges(id) => report("Discard Layer Changes", format!("{id:?}")),
             Self::DeleteLayer(id) => report("Delete Layer", format!("{id:?}")),
             Self::DuplicateLayer(id) => report("Duplicate Layer", format!("{id:?}")),
-            Self::MoveLayerToPidb { layer_id, target_project } => report("Move Layer", format!("{layer_id:?} to project {target_project}")),
             Self::RenameLayer { layer_id, new_name } => report("Rename Layer", format!("{layer_id:?} to “{new_name}”")),
             Self::ApplyChamfer => report("Chamfer", "Apply to selection".to_owned()),
             Self::ApplyBezier => report("Create Bezier Curve", "Apply to selection".to_owned()),
@@ -2399,11 +2354,9 @@ impl UiCommand {
             Self::LoadLayer(id) => report("Set Layer Visibility", format!("{id:?} shown")),
             Self::UnloadLayer(id) => report("Set Layer Visibility", format!("{id:?} hidden")),
             Self::SelectAllObjectsInLayer(id) => report("Select Layer Objects", format!("{id:?}")),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::OpenTriangulationFolder => report("Open Triangulation Folder", "Choose a folder".to_owned()),
             Self::ActivateTriangulation(id) => report("Set Current Triangulation", format!("{id:?}")),
             Self::ToggleTriangulationVisible(id) => report("Set Triangulation Visibility", format!("{id:?}")),
-            Self::CloseTriangulation(id) | Self::CloseTriangulationForce(id) => report("Close Triangulation", format!("{id:?}")),
+            Self::CloseTriangulation(id) => report("Unload Triangulation", format!("{id:?}")),
             Self::BatchSetObjectColor(ids, _) => report("Set Object Colour", format!("{} object(s)", ids.len())),
             Self::BatchSetPolylineClosed(ids, closed) => report("Set Polyline Closed", format!("{} object(s) · {closed}", ids.len())),
             Self::BatchSetObjectFill(ids, _) => report("Set Object Fill", format!("{} object(s)", ids.len())),
@@ -2415,32 +2368,25 @@ impl UiCommand {
             Self::BatchSetZValue(ids, z) => report("Set Elevation", format!("{} object(s) · Z {z}", ids.len())),
             Self::CommitTextEdit(id, _, _, _, _) => report("Edit Text", format!("{id:?}")),
             Self::SetTriangulationColor(id, _) => report("Set Triangulation Colour", format!("{id:?}")),
-            Self::LoadTriangulation(path) => report("Load Triangulation", path.display().to_string()),
-            #[cfg(target_arch = "wasm32")]
-            Self::DownloadStoredTriangulation(path) => report("Download Triangulation", path.display().to_string()),
-            Self::LoadBlockModel(source) => report("Load Block Model", source.path.display().to_string()),
-            Self::CloseBlockModel(id) | Self::CloseBlockModelForce(id) => report("Close Block Model", format!("{id:?}")),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::SaveBlockModelAs(id) => report("Save Block Model As", format!("{id:?}")),
-            Self::SaveAndCloseBlockModelAs(id) => report("Save and Close Block Model", format!("{id:?}")),
-            Self::RemoveBlockModel(source) => report("Remove Block Model", source.path.display().to_string()),
+            Self::LoadTriangulation(id) => report("Load Triangulation", format!("{id:?}")),
+            Self::LoadBlockModel(id) => report("Load Block Model", format!("{id:?}")),
+            Self::CloseBlockModel(id) => report("Unload Block Model", format!("{id:?}")),
+            Self::RemoveBlockModel(id) => report("Remove Block Model", format!("{id:?}")),
             Self::ToggleBlockModelVisible(id) => report("Set Block Model Visibility", format!("{id:?}")),
             Self::SetBlockModelColorVariable { variable, .. } => report("Set Block Model Variable", variable.clone()),
             Self::ImportDrillHole(source) => report("Import Drillholes", source.display_name()),
-            Self::LoadDrillHole(source) => report("Load Drillholes", source.display_name()),
+            Self::LoadDrillHole(id) => report("Load Drillholes", format!("{id:?}")),
             Self::CloseDrillHole(id) => report("Close Drillholes", format!("{id:?}")),
-            Self::RemoveDrillHole(source) => report("Remove Drillholes", source.display_name()),
+            Self::RemoveDrillHole(id) => report("Remove Drillholes", format!("{id:?}")),
             Self::ToggleDrillHoleVisible(id) => report("Set Drillhole Visibility", format!("{id:?}")),
             Self::SetDrillHoleColorField { field, .. } => report("Colour Drillholes", field.clone().unwrap_or_else(|| "Uniform white".to_owned())),
             Self::SetDrillHoleColorPreset { preset, .. } => report("Set Drillhole Colour Preset", preset.label().to_owned()),
             Self::ExecuteCreateBlockModel { name, .. } => report("Create Block Model", name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report("Create Ore Triangulation", name.clone()),
             Self::ExportPlotSheet => report("Export Engineering Drawing", "Choose a destination".to_owned()),
-            Self::RemoveTriangulation(path) => report("Remove Triangulation", path.display().to_string()),
-            Self::RemoveTriangulationFolder(path) => report("Remove Triangulation Folder", path.display().to_string()),
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::RevealPidb(path) => report("Reveal PIDB", path.display().to_string()),
-            Self::RevealAllTriangulations => report("Show All Triangulations", "All triangulations shown".to_owned()),
+            Self::RemoveTriangulation(id) => report("Remove Triangulation", format!("{id:?}")),
+            Self::HideSelection => report("Hide Selection", "Selected scene elements".to_owned()),
+            Self::RevealAllElements => report("Reveal All Elements", "All scene elements shown".to_owned()),
             Self::ZoomToExtents => report("Zoom to Extents", "Preserve view angle".to_owned()),
             Self::BeginOffsetPick { object_ids, .. } => report("Offset", format!("{} object(s)", object_ids.len())),
             Self::RelimitLineResize { source_id, .. } => report("Relimit Line", format!("{source_id:?}")),
@@ -2451,12 +2397,8 @@ impl UiCommand {
             | Self::ExecuteCreateTriangulationWithWeld { name, object_ids, .. }
             | Self::ExecuteCreateTriangulationUpperSurface { name, object_ids, .. } => report("Create Triangulation", format!("{name} · {} object(s)", object_ids.len())),
             Self::ExecutePointCloudTin { cloud_id, .. } => report("Create Point Cloud TIN", format!("{cloud_id:?}")),
-            Self::LoadAllLayers(id) => report("Show Child Layers", format!("Project {id}")),
-            Self::UnloadAllLayers(id) => report("Hide Child Layers", format!("Project {id}")),
-            Self::LoadAllTriangulationsInFolder(path) => report("Load Folder Triangulations", path.display().to_string()),
-            Self::CloseAllTriangulationsInFolder(path) => report("Close Folder Triangulations", path.display().to_string()),
             Self::ConfirmDeleteSelection => report("Delete Selection", "Selected objects".to_owned()),
-            Self::ExecuteCutTriangulationByPolygon { name, .. } => report("Cut Triangulation by Polygon", name.clone()),
+            Self::ExecuteCutTriangulationByPolyline { name, .. } => report("Cut Triangulation by Polyline", name.clone()),
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report("Cut Triangulation by Z", format!("{name} · {z_min} to {z_max}")),
             Self::ExecuteCutTriangulationBySurface { name, .. } => report("Trim Triangulation to Surface", name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report("Cut Topology to Pit Shell", name.clone()),
@@ -2488,12 +2430,14 @@ pub(crate) struct UiLayerEntry {
     pub(crate) dirty: bool,
 }
 
-/// One open .pidb entry shown in the explorer tree.
+/// The one open project shown in the explorer tree.
 #[derive(Clone, Debug)]
 pub(crate) struct UiProjectEntry {
     pub(crate) runtime_id: u32,
     pub(crate) name: String,
     pub(crate) dirty: bool,
+    pub(crate) designs_dirty: bool,
+    pub(crate) lossy_save_warnings: Vec<String>,
     pub(crate) is_active: bool,
     /// Persisted in browser IndexedDB despite having no host filesystem path.
     #[cfg(target_arch = "wasm32")]
@@ -2503,10 +2447,25 @@ pub(crate) struct UiProjectEntry {
     pub(crate) path: Option<PathBuf>,
 }
 
+/// A project remembered by Incline and shown in the explorer's Projects
+/// section. Only the active entry has a decoded [`UiProjectEntry`].
+#[derive(Clone, Debug)]
+pub(crate) struct UiTrackedProjectEntry {
+    pub(crate) name: String,
+    pub(crate) is_active: bool,
+    pub(crate) dirty: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) path: PathBuf,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) id: crate::model::project::ProjectId,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) stored_in_browser: bool,
+}
+
 impl UiProjectEntry {
     /// Whether Save would write anything for this project.
     ///
-    /// On desktop that is exactly "has unsaved edits" — the file it was opened
+    /// On desktop that is exactly "has unsaved edits" - the file it was opened
     /// from is still on disk either way. In the browser an unedited project is
     /// still unsaved work until browser storage holds a copy, so Save has to
     /// stay available for one that has never been stored.
@@ -2522,23 +2481,26 @@ impl UiProjectEntry {
     }
 }
 
-/// One triangulation shown in the explorer tree (individual file or within a folder group).
+/// One project-owned point cloud shown in the explorer tree.
 #[derive(Clone, Debug)]
 pub(crate) struct UiPointCloudEntry {
-    pub(crate) id: Option<PointCloudId>,
+    pub(crate) id: PointCloudId,
     pub(crate) name: String,
-    pub(crate) path: PathBuf,
+    pub(crate) source_name: Option<String>,
     pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
-    pub(crate) is_saved: bool,
+    pub(crate) dirty: bool,
     pub(crate) point_count: usize,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct UiRasterTextureEntry {
+    pub(crate) id: RasterTextureId,
     pub(crate) name: String,
-    pub(crate) path: PathBuf,
+    pub(crate) source_name: Option<String>,
+    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
+    pub(crate) dirty: bool,
     /// Currently draped over at least one triangulation.
     pub(crate) is_draped: bool,
     pub(crate) source_size: [u32; 2],
@@ -2548,36 +2510,36 @@ pub(crate) struct UiRasterTextureEntry {
 
 #[derive(Clone, Debug)]
 pub(crate) struct UiTriangulationEntry {
-    pub(crate) id: Option<TriangulationId>,
+    pub(crate) id: TriangulationId,
     pub(crate) name: String,
+    pub(crate) source_name: Option<String>,
     pub(crate) visible: bool,
     pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
-    pub(crate) is_saved: bool,
-    pub(crate) path: PathBuf,
-    /// The directory this entry was discovered from; `None` for individually-opened files.
-    pub(crate) group: Option<PathBuf>,
+    pub(crate) dirty: bool,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct UiBlockModelEntry {
-    pub(crate) id: Option<BlockModelId>,
+    pub(crate) id: BlockModelId,
     pub(crate) name: String,
+    pub(crate) source_name: Option<String>,
     pub(crate) visible: bool,
     pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
-    pub(crate) source: BlockModelSource,
+    pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
     pub(crate) variable_count: usize,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct UiDrillHoleEntry {
-    pub(crate) id: Option<crate::model::drill_hole::DrillHoleId>,
+    pub(crate) id: crate::model::drill_hole::DrillHoleId,
     pub(crate) name: String,
+    pub(crate) source_name: Option<String>,
     pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
-    pub(crate) source: crate::model::drill_hole::DrillHoleSource,
+    pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,
 }
@@ -2588,15 +2550,21 @@ pub(crate) type TriangulationMenuStyle = (TriangulationId, [f32; 4]);
 /// Flattened snapshot of the project tree, built each frame by the app layer.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct UiProjectView {
+    pub(crate) tracked_projects: Vec<UiTrackedProjectEntry>,
     pub(crate) projects: Vec<UiProjectEntry>,
     pub(crate) triangulations: Vec<UiTriangulationEntry>,
     pub(crate) block_models: Vec<UiBlockModelEntry>,
     pub(crate) drill_holes: Vec<UiDrillHoleEntry>,
     pub(crate) point_clouds: Vec<UiPointCloudEntry>,
     pub(crate) raster_textures: Vec<UiRasterTextureEntry>,
+    pub(crate) triangulations_membership_dirty: bool,
+    pub(crate) block_models_membership_dirty: bool,
+    pub(crate) drill_holes_membership_dirty: bool,
+    pub(crate) point_clouds_membership_dirty: bool,
+    pub(crate) rasters_membership_dirty: bool,
     pub(crate) has_active_project: bool,
     pub(crate) needs_startup_dialog: bool,
-    /// Full filesystem path of the currently active PIDB, if any.
+    /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
@@ -2615,7 +2583,6 @@ pub(crate) enum DataMenu {
     None,
     Omf,
     Dxf,
-    Pidb,
     Obj,
     Stl,
     Ply,

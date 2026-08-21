@@ -86,24 +86,31 @@ fn apply_default_open_once(ctx: &egui::Context, id: egui::Id, default_open: bool
     state.store(ctx);
 }
 
-/// A collapsible explorer section with an icon beside its heading.
+/// A collapsible explorer section heading.
 pub(crate) struct ExplorerHeader {
     id: egui::Id,
-    icon: egui::ImageSource<'static>,
-    title: egui::WidgetText,
+    title: String,
+    dirty: bool,
     default_open: bool,
-    icon_size: egui::Vec2,
 }
 
 impl ExplorerHeader {
-    pub(crate) fn new(id: egui::Id, icon: egui::ImageSource<'static>, title: impl Into<egui::WidgetText>) -> Self {
+    pub(crate) fn new(id: egui::Id, title: impl Into<String>) -> Self {
         Self {
             id,
-            icon,
             title: title.into(),
+            dirty: false,
             default_open: false,
-            icon_size: egui::vec2(20.0, 20.0),
         }
+    }
+
+    /// Mark this section as containing unsaved changes.
+    ///
+    /// The marker is only added to a collapsed header. While the section is
+    /// open, its dirty entry labels provide the more specific indication.
+    pub(crate) fn dirty(mut self, dirty: bool) -> Self {
+        self.dirty = dirty;
+        self
     }
 
     pub(crate) fn default_open(mut self, default_open: bool) -> Self {
@@ -118,27 +125,33 @@ impl ExplorerHeader {
     ) -> (egui::Response, egui::InnerResponse<egui::Response>, Option<egui::InnerResponse<R>>) {
         let Self {
             id,
-            icon,
-            title,
+            mut title,
+            dirty,
             default_open,
-            icon_size,
         } = self;
         apply_default_open_once(ui.ctx(), id, default_open);
+        let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+        if dirty && !state.is_open() {
+            title.push_str(" *");
+        }
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_header_scope")), |ui| {
-            let (toggle_response, header_response, body_response) = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
+            let (toggle_response, header_response, body_response) = state
                 .show_header(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                    let icon = ui.add(egui::Image::new(icon).fit_to_exact_size(icon_size).sense(egui::Sense::click()));
-                    let label = ui.add(egui::Button::new(title).frame(false).sense(egui::Sense::click()));
-                    icon.union(label)
+                    ui.add(egui::Button::new(crate::ui::fonts::bold(&title)).frame(false).sense(egui::Sense::click()))
                 })
-                .body(add_contents);
+                .body(|ui| {
+                    ui.add_space(1.0);
+                    add_contents(ui)
+                });
 
             if header_response.inner.clicked() {
                 let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
                 state.toggle(ui);
                 state.store(ui.ctx());
             }
+
+            ui.add_space(1.0);
 
             (toggle_response, header_response, body_response)
         })

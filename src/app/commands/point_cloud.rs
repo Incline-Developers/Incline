@@ -1,8 +1,7 @@
 //! Point cloud import, load/unload and explorer commands.
 
-use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 #[cfg(not(target_arch = "wasm32"))]
@@ -14,7 +13,10 @@ use crate::app::file_name;
 use crate::model::formats::point_cloud::{PointCloudFormat, read_point_cloud};
 use crate::{
     app::App,
-    model::point_cloud::{LoadedPointCloud, OpenPointCloud, PointCloudId, finite_bounds, prepare_for_render},
+    model::{
+        SceneEntityId,
+        point_cloud::{LoadedPointCloud, OpenPointCloud, PointCloudId, finite_bounds, prepare_for_render},
+    },
     userspace_log, userspace_warn,
 };
 
@@ -31,12 +33,12 @@ impl<'a> App<'a> {
     pub(super) fn add_loaded_point_cloud(&mut self, loaded: LoadedPointCloud, visible: bool, color: [f32; 4], point_size: f32) {
         let id = PointCloudId(self.next_point_cloud_id);
         self.next_point_cloud_id += 1;
-        userspace_log!("Loaded point cloud {} ({} points)", loaded.name, loaded.points.len());
+        let name = crate::model::project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
+        userspace_log!("Loaded point cloud {} ({} points)", name, loaded.points.len());
         self.point_clouds.push(OpenPointCloud {
             id,
-            name: loaded.name,
-            path: loaded.path,
-            is_saved: loaded.is_saved,
+            state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            name,
             points: loaded.points,
             colors: loaded.colors,
             prepared: loaded.prepared,
@@ -45,19 +47,19 @@ impl<'a> App<'a> {
             color,
             point_size,
         });
+        self.touch_active_project_content();
         self.invalidate_topology_bounds_and_redraw();
     }
 
-    /// Decode point-cloud bytes chosen in the browser, or read back out of
-    /// browser storage, under the display name `display_path` already holds.
+    /// Decode point-cloud bytes chosen in the browser into retained project
+    /// data. `display_path` contains a filename only and is used for
+    /// provenance during the import transaction.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn open_point_cloud_input(&mut self, input: crate::model::input::InputFile, display_path: std::path::PathBuf) {
-        let name = input.source.name.clone();
-        if self.point_clouds.iter().any(|cloud| cloud.path == display_path) {
-            return;
-        }
+        let source_name = input.source.name.clone();
+        let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), "Point cloud");
         self.spawn_job_reporting_progress(
-            format!("Loading {name}"),
+            format!("Loading {source_name}"),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
@@ -75,9 +77,8 @@ impl<'a> App<'a> {
                 let colors = data.colors.map(std::sync::Arc::new);
                 progress.set_fraction(1.0);
                 Ok(LoadedPointCloud {
-                    name: input.source.name.clone(),
+                    name,
                     path: display_path,
-                    is_saved: true,
                     points: std::sync::Arc::new(data.points),
                     colors,
                     prepared: std::sync::Arc::new(prepared),
@@ -98,8 +99,7 @@ impl<'a> App<'a> {
         );
     }
 
-    /// Entry point for point-cloud files chosen in the Import menu: register
-    /// the path in the session (so it appears in the explorer) and load it.
+    /// Entry point for point-cloud files chosen in the Import menu.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn import_point_cloud_path(&mut self, path: &Path) -> Result<()> {
         if PointCloudFormat::from_path(path).is_none() {
@@ -108,10 +108,6 @@ impl<'a> App<'a> {
         if !path.is_file() {
             anyhow::bail!("Point cloud file does not exist: {}", path.display());
         }
-        if !self.point_cloud_files.contains(&path.to_path_buf()) {
-            self.point_cloud_files.push(path.to_path_buf());
-        }
-        self.persist_session();
         self.open_point_cloud_path(path.to_path_buf());
         Ok(())
     }
@@ -120,15 +116,13 @@ impl<'a> App<'a> {
     /// `poll_point_cloud_loads`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_point_cloud_path(&mut self, path: PathBuf) {
-        if self.point_clouds.iter().any(|cloud| cloud.path == path) {
-            return;
-        }
         if self.pending_point_cloud_loads.iter().any(|(_, pending, _, _)| *pending == path) {
             return;
         }
 
-        let name = file_name(&path);
-        let (ticket, progress) = self.begin_reported_task(format!("Loading {name}"));
+        let source_name = file_name(&path);
+        let name = crate::model::project::imported_item_name(&path, "Point cloud");
+        let (ticket, progress) = self.begin_reported_task(format!("Loading {source_name}"));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
@@ -152,7 +146,6 @@ impl<'a> App<'a> {
                     Ok(LoadedPointCloud {
                         name,
                         path,
-                        is_saved: true,
                         points: std::sync::Arc::new(data.points),
                         colors,
                         prepared: std::sync::Arc::new(prepared),
@@ -218,44 +211,37 @@ impl<'a> App<'a> {
             return;
         };
         cloud.visible = !cloud.visible;
+        cloud.state.touch();
+        self.touch_active_project_content();
         self.invalidate_topology_bounds_and_redraw();
     }
 
     pub(crate) fn close_point_cloud(&mut self, id: PointCloudId) {
-        self.point_clouds.retain(|cloud| cloud.id != id);
+        if let Some(cloud) = self.point_clouds.iter_mut().find(|cloud| cloud.id == id) {
+            cloud.state.loaded = false;
+        }
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::PointCloud(id));
+        let entity = SceneEntityId::PointCloud(id);
+        self.editor.selected_handles.remove(&entity);
+        self.editor.hidden_handles.remove(&entity);
+        self.editor.frozen_handles.remove(&entity);
+        self.editor.translucent_handles.remove(&entity);
         self.invalidate_topology_bounds_and_redraw();
     }
 
-    pub(crate) fn remove_point_cloud(&mut self, path: &Path) {
-        let pending = std::mem::take(&mut self.pending_point_cloud_loads);
-        for (ticket, pending_path, receiver, console_report) in pending {
-            if pending_path == path {
-                self.cancel_background_task(ticket);
-                if let Some(report) = console_report {
-                    report.cancel();
-                }
-            } else {
-                self.pending_point_cloud_loads.push((ticket, pending_path, receiver, console_report));
-            }
+    pub(crate) fn remove_point_cloud(&mut self, id: PointCloudId) {
+        self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::PointCloud(id));
+        let entity = SceneEntityId::PointCloud(id);
+        self.editor.selected_handles.remove(&entity);
+        self.editor.hidden_handles.remove(&entity);
+        self.editor.frozen_handles.remove(&entity);
+        self.editor.translucent_handles.remove(&entity);
+        let previous_len = self.point_clouds.len();
+        self.point_clouds.retain(|cloud| cloud.id != id);
+        if self.point_clouds.len() != previous_len {
+            self.touch_active_project_content();
+            self.persist_session();
+            self.invalidate_topology_bounds_and_redraw();
         }
-        if let Some(removed_id) = self.point_clouds.iter().find(|cloud| cloud.path == path).map(|cloud| cloud.id) {
-            self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::PointCloud(removed_id));
-        }
-        self.point_clouds.retain(|cloud| cloud.path != path);
-        self.point_cloud_files.retain(|existing| existing != path);
-        self.persist_session();
-        self.invalidate_topology_bounds_and_redraw();
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reveal_point_cloud(&mut self, id: PointCloudId) -> Result<()> {
-        let path = self
-            .point_clouds
-            .iter()
-            .find(|cloud| cloud.id == id)
-            .map(|cloud| cloud.path.clone())
-            .context("The point cloud is no longer loaded")?;
-        self.reveal_in_file_manager(&path)
     }
 }

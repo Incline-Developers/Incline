@@ -184,7 +184,13 @@ fn document_primitive_order(primitive: DocumentPrimitive) -> u8 {
 }
 
 impl<'a> Graphics<'a> {
-    fn draw_drill_holes<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>, drill_holes: &[OpenDrillHoleDataset], xray_enabled: bool) {
+    fn draw_drill_holes<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &std::collections::HashSet<crate::model::SceneEntityId>,
+        xray_enabled: bool,
+    ) {
         if self.drill_hole_gpu.is_empty() {
             return;
         }
@@ -195,7 +201,7 @@ impl<'a> Graphics<'a> {
         });
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         for dataset in drill_holes {
-            if !dataset.visible {
+            if !dataset.state.loaded || !dataset.visible || hidden.contains(&dataset.entity_id()) {
                 continue;
             }
             let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
@@ -330,7 +336,7 @@ impl<'a> Graphics<'a> {
 
     /// Scene-origin-relative AABB of a triangulation mesh, in the same space as
     /// the uploaded surface vertices (`world - scene_origin`, no vertical
-    /// exaggeration — that lives in `view_proj`). Matches `surface_vertex` so a
+    /// exaggeration - that lives in `view_proj`). Matches `surface_vertex` so a
     /// frustum built from `camera_uniform.view_proj` culls it correctly.
     fn mesh_scene_aabb(&self, mesh: &crate::model::formats::mesh_data::Triangulation) -> (glam::Vec3, glam::Vec3) {
         let bounds = mesh.bounds();
@@ -339,7 +345,7 @@ impl<'a> Graphics<'a> {
         (min.as_vec3(), max.as_vec3())
     }
 
-    /// Whether the camera is looking exactly down in orthographic mode — the
+    /// Whether the camera is looking exactly down in orthographic mode - the
     /// only view in which flat plan-view raster images are drawn.
     fn plan_view_active(&self) -> bool {
         !self.projection.is_perspective() && self.camera.forward().z <= -(1.0 - 1.0e-6)
@@ -405,13 +411,13 @@ impl<'a> Graphics<'a> {
 
         // Undraped rasters show as flat plan-view images: drawn before all
         // scene geometry, pinned to the far plane with depth writes off, and
-        // only when the view is exactly top-down orthographic — from any
+        // only when the view is exactly top-down orthographic - from any
         // other angle a heightless image would be misleading.
         if self.plan_view_active() {
             let draped: std::collections::HashSet<_> = triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
             let mut pipeline_bound = false;
             for raster in rasters {
-                if draped.contains(&raster.id) {
+                if draped.contains(&raster.id) || !raster.visible {
                     continue;
                 }
                 let Some((bind_group, vertex_buffer)) = self.raster_gpu.plane(raster.id) else {
@@ -428,13 +434,13 @@ impl<'a> Graphics<'a> {
             }
         }
 
-        // Point splats write depth, so they draw with the opaque geometry —
+        // Point splats write depth, so they draw with the opaque geometry -
         // before the transparent surfaces that must blend over them.
         if !self.point_cloud_gpu.is_empty() {
             let display_now = Instant::now();
             let mut colored_pipeline_active = None;
             for point_cloud in point_clouds {
-                if !point_cloud.visible {
+                if !point_cloud.state.loaded || !point_cloud.visible || editor.hidden_handles.contains(&point_cloud.entity_id()) {
                     continue;
                 }
                 let Some(cached) = self.point_cloud_gpu.get(point_cloud.id) else {
@@ -518,7 +524,7 @@ impl<'a> Graphics<'a> {
         // Ordinarily drillholes are opaque, depth-writing scene assets. In
         // x-ray mode they move to the late overlay pass instead.
         if !editor.xray_enabled {
-            self.draw_drill_holes(&mut render_pass, drill_holes, false);
+            self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, false);
         }
 
         // Opaque document fills and strokes must establish colour and depth
@@ -535,7 +541,7 @@ impl<'a> Graphics<'a> {
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             for triangulation in triangulations {
                 let entity = triangulation.entity_id();
-                if !triangulation.visible || editor.hidden_handles.contains(&entity) {
+                if !triangulation.state.loaded || !triangulation.visible || editor.hidden_handles.contains(&entity) {
                     continue;
                 }
                 let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
@@ -553,7 +559,7 @@ impl<'a> Graphics<'a> {
                 if !debug_chunks {
                     render_pass.set_bind_group(1, &cached.surface_style_bind_group, &[]);
                 }
-                render_pass.set_bind_group(3, self.raster_gpu.bind_group(triangulation.raster_texture), &[]);
+                render_pass.set_bind_group(3, self.raster_gpu.bind_group(cached.raster_texture), &[]);
                 for chunk in &cached.surface_chunks {
                     // Per-chunk frustum cull: chunks are Morton-spatial, so their
                     // AABBs are tight enough for this to reject real geometry.
@@ -572,7 +578,11 @@ impl<'a> Graphics<'a> {
             }
             for block_model in block_models {
                 let entity = block_model.entity_id();
-                if !block_model.visible || editor.hidden_handles.contains(&entity) || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum) {
+                if !block_model.state.loaded
+                    || !block_model.visible
+                    || editor.hidden_handles.contains(&entity)
+                    || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum)
+                {
                     continue;
                 }
                 let Some(cached) = self.block_model_gpu.get(block_model.id) else {
@@ -590,7 +600,7 @@ impl<'a> Graphics<'a> {
                 // Draw chunks nearest-first: the block shader contains
                 // `discard`, so depth writes happen late, but the early depth
                 // *test* still rejects fragments behind already-drawn
-                // geometry — provided nearer chunks were drawn first. Zoomed
+                // geometry - provided nearer chunks were drawn first. Zoomed
                 // in, chunk faces cover most of the viewport and this
                 // ordering turns worst-case overdraw shading into cheap
                 // depth rejections.
@@ -657,7 +667,7 @@ impl<'a> Graphics<'a> {
                 if !debug_chunks {
                     render_pass.set_bind_group(1, &cached.surface_style_bind_group, &[]);
                 }
-                render_pass.set_bind_group(3, self.raster_gpu.bind_group(triangulation.raster_texture), &[]);
+                render_pass.set_bind_group(3, self.raster_gpu.bind_group(cached.raster_texture), &[]);
                 for chunk in &cached.surface_chunks {
                     if !frustum.intersects_aabb(chunk.bounds_min, chunk.bounds_max) {
                         continue;
@@ -740,7 +750,7 @@ impl<'a> Graphics<'a> {
             // X-ray deliberately bypasses scene depth and stays above all
             // composited transparency. Drillholes draw first so design strings
             // and their outlines remain the topmost x-ray content.
-            self.draw_drill_holes(&mut render_pass, drill_holes, true);
+            self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, true);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Fill));
             self.draw_static_document_strokes(&mut render_pass, true);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Stroke));
@@ -770,7 +780,7 @@ impl<'a> Graphics<'a> {
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         for triangulation in triangulations {
             let entity = triangulation.entity_id();
-            if !triangulation.visible || editor.hidden_handles.contains(&entity) {
+            if !triangulation.state.loaded || !triangulation.visible || editor.hidden_handles.contains(&entity) {
                 continue;
             }
             let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
@@ -787,7 +797,11 @@ impl<'a> Graphics<'a> {
         }
         for block_model in block_models {
             let entity = block_model.entity_id();
-            if !block_model.visible || editor.hidden_handles.contains(&entity) || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum) {
+            if !block_model.state.loaded
+                || !block_model.visible
+                || editor.hidden_handles.contains(&entity)
+                || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum)
+            {
                 continue;
             }
             let Some(cached) = self.block_model_gpu.get(block_model.id) else {
@@ -875,7 +889,7 @@ impl<'a> Graphics<'a> {
             .expect("visible volume block model must have a depth bind group");
         // Each model raycasts independently and blends One/OneMinusSrcAlpha
         // into the shared target, so correctness requires back-to-front
-        // ordering — the same convention as the transparent-triangulation
+        // ordering - the same convention as the transparent-triangulation
         // sort above. (Truly interpenetrating volumes would need a merged
         // march; distinct models composited far-to-near is the honest
         // approximation.)

@@ -1,6 +1,6 @@
 use super::{
     cuts::{
-        SurfaceClipVertex, append_surface_clip_polygon, bary_z, clip_surface_polygon, clip_target_triangle_to_reference_xy, point_in_triangle_bary_z,
+        SurfaceClipVertex, append_surface_clip_polyline, bary_z, clip_surface_polyline, clip_target_triangle_to_reference_xy, point_in_triangle_bary_z,
         reference_xy_overlap_area_tolerance, triangle_area_3d, triangle_xy_bounds,
     },
     *,
@@ -56,7 +56,7 @@ impl<'a> App<'a> {
                 skipped_cap_faces: skipped,
             } = included;
 
-            // Build the mesh(es), BVH(s), and edge lists in the worker too —
+            // Build the mesh(es), BVH(s), and edge lists in the worker too -
             // otherwise the freeze just moves to the apply step.
             let generated = if save_as_two {
                 let shape_vertices = vertices.split_off(topology_vertex_count);
@@ -274,7 +274,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
     // footprint, then rebuild the topology cell by cell: faces that never
     // touch a covered cell pass through whole (vertex sharing preserved via
     // the remap), faces fully inside are dropped, and only faces straddling
-    // the boundary are fragmented — each fragment a convex triangle–cell
+    // the boundary are fragmented - each fragment a convex triangle–cell
     // overlap. This replaces the earlier per-face geo boolean difference,
     // whose cost was faces-in-ring-bbox × ring vertices and which stalled for
     // hours once a real multi-kilometre contact ring closed.
@@ -511,7 +511,7 @@ pub(super) fn build_ring_coverage(rings: &[Vec<mesh_data::Vertex>]) -> Result<Ri
     Ok(RingCoverage { triangles, covered, spatial })
 }
 
-/// Even-odd point-in-polygon over one ring, with edges bucketed into
+/// Even-odd point-in-polyline over one ring, with edges bucketed into
 /// horizontal bands so a query touches only the few edges crossing its Y.
 struct RingPip {
     min: glam::DVec2,
@@ -566,7 +566,7 @@ impl RingPip {
 }
 
 /// For every topology face that overlaps a covered (inside-footprint) cell,
-/// the fragments of it lying over uncovered cells — i.e. the part of the face
+/// the fragments of it lying over uncovered cells - i.e. the part of the face
 /// that survives the cut. Faces absent from the result never touch the
 /// footprint and pass through whole; present with no fragments means fully
 /// excavated. Returned sorted by face index.
@@ -613,7 +613,7 @@ fn fragment_topology_faces_by_coverage(
                         continue;
                     }
                     let overlap = clip_target_triangle_to_reference_xy(target, coverage.triangles[index]);
-                    append_xy_polygon_fan(&overlap, &mut fragments);
+                    append_xy_polyline_fan(&overlap, &mut fragments);
                 }
                 affected.push((face_index_base + offset, fragments));
             }
@@ -629,14 +629,14 @@ fn fragment_topology_faces_by_coverage(
     affected
 }
 
-fn append_xy_polygon_fan(polygon: &[glam::DVec3], output: &mut Vec<[mesh_data::Vertex; 3]>) {
-    if polygon.len() < 3 {
+fn append_xy_polyline_fan(polyline: &[glam::DVec3], output: &mut Vec<[mesh_data::Vertex; 3]>) {
+    if polyline.len() < 3 {
         return;
     }
-    let a = polygon[0];
-    for i in 1..polygon.len() - 1 {
-        let b = polygon[i];
-        let c = polygon[i + 1];
+    let a = polyline[0];
+    for i in 1..polyline.len() - 1 {
+        let b = polyline[i];
+        let c = polyline[i + 1];
         if (b - a).cross(c - a).length_squared() > 1e-20 {
             output.push([
                 mesh_data::Vertex::new(a.x, a.y, a.z),
@@ -995,20 +995,20 @@ pub(super) struct ClosureCapInfo {
 /// (keep its upper surface, CutBottom), and mask the flat closure cap on the
 /// removed side so it never contributes geometry.
 ///
-/// Classification is primarily **topology-invariant** — it reads the solid's own
+/// Classification is primarily **topology-invariant** - it reads the solid's own
 /// structure, not its position relative to the target topology. For open shell
 /// surfaces the free crest/toe rim decides (rim above the surface mean ⇒ pit).
 /// For closed solids the decisive signal is flat-cap asymmetry, split by closure
 /// type. A *frustum* (a real horizontal flat cap at both z extremes) is decided
 /// by batter geometry: the walls widen toward the ground opening, so the *larger*
 /// cap is the closure and the *smaller* is the design surface. A pit's opening
-/// (`z_max`) is wider than its floor (`z_min`) — remove the top, keep the floor
-/// (`CutTop`); a stockpile's base (`z_min`) is wider than its crest (`z_max`) —
+/// (`z_max`) is wider than its floor (`z_min`) - remove the top, keep the floor
+/// (`CutTop`); a stockpile's base (`z_min`) is wider than its crest (`z_max`) -
 /// remove the base, keep the crest (`CutBottom`). A solid with a flat cap at only
-/// *one* extreme (its closure crest follows terrain, or tents to an apex — ~0
+/// *one* extreme (its closure crest follows terrain, or tents to an apex - ~0
 /// flat area) keeps that sole cap as the design surface. Both branches are
 /// topology-invariant, so they stay correct when the target topology has already
-/// been excavated by a prior include — the previous position-vs-topology score
+/// been excavated by a prior include - the previous position-vs-topology score
 /// read the lowered post-excavation reference and flipped a real pit into a
 /// stockpile. When the two caps are nearly equal (a vertical-walled box,
 /// ambiguous from caps alone) the cap signal abstains and falls through.
@@ -1062,7 +1062,7 @@ pub(super) fn closure_cap_info(
         }
     }
 
-    // Decision precedence — topology-invariant signals first, so the result is
+    // Decision precedence - topology-invariant signals first, so the result is
     // unaffected by a target topology already excavated by a prior include.
     //
     // 1. Open-rim elevation (open shell surfaces): a free crest/toe rim's
@@ -1075,10 +1075,10 @@ pub(super) fn closure_cap_info(
     //    - Frustum (a flat cap at both extremes): battered walls widen toward the
     //      ground opening, so the *larger* cap is the closure to remove and the
     //      *smaller* is the design surface. A pit's opening (z_max) > its floor
-    //      (z_min) — remove the top, keep the floor (CutTop). A stockpile's base
-    //      (z_min) > its crest (z_max) — remove the base, keep the crest.
+    //      (z_min) - remove the top, keep the floor (CutTop). A stockpile's base
+    //      (z_min) > its crest (z_max) - remove the base, keep the crest.
     //    - Sole flat cap (the other extreme is tilted/tented, ~0 flat area): that
-    //      one cap is the design surface — keep it, cut the other side.
+    //      one cap is the design surface - keep it, cut the other side.
     //    Either way the result is independent of the target topology, so a second
     //    pit included into already-excavated ground still reads as a pit.
     //    Symmetric cap pairs (vertical-walled box helpers) abstain and fall
@@ -1105,7 +1105,7 @@ pub(super) fn closure_cap_info(
         max_area > min_area
     } else if cap_asymmetric {
         // Only one extreme carries a flat cap (the other is tilted/tented); that
-        // sole flat cap is the design surface — keep it, cut the other side.
+        // sole flat cap is the design surface - keep it, cut the other side.
         min_area > max_area
     } else {
         let topology_vertices = topology.vertices();
@@ -1131,7 +1131,7 @@ pub(super) fn closure_cap_info(
 
 /// Per-non-cap-face 3D area × (centroid z − topology z), summed in parallel.
 /// Negative ⇒ the solid's bulk is below the topology (pit). Last-resort
-/// classifier only — it reads the current topology reference, so it flips a
+/// classifier only - it reads the current topology reference, so it flips a
 /// real pit to stockpile when the topology has already been excavated by a
 /// prior include. The topology-invariant flat-cap signal in `closure_cap_info`
 /// handles that case; this is reached only when the cap and rim signals are
@@ -1187,7 +1187,7 @@ fn topology_height_score(
 /// Whether the mesh's open rim (edges used by exactly one face) sits above
 /// its area-weighted mean surface elevation. `None` when the mesh is closed,
 /// the rim is too short to be a real crest/toe (shorter than the square root
-/// of the surface area — stray cracks in an otherwise closed solid), or the
+/// of the surface area - stray cracks in an otherwise closed solid), or the
 /// elevation difference is within noise.
 fn open_rim_above_surface(vertices: &[mesh_data::Vertex], faces: &[[usize; 3]]) -> Option<bool> {
     let mut edge_counts: HashMap<(usize, usize), usize> = HashMap::new();
@@ -1255,7 +1255,7 @@ pub(super) type GapBridge<'a> = &'a dyn Fn(mesh_data::Vertex, mesh_data::Vertex)
 pub(super) fn rings_from_boundary_segments_bridged(segments: &[[mesh_data::Vertex; 2]], gap_bridge: Option<GapBridge<'_>>) -> Result<Vec<Vec<mesh_data::Vertex>>> {
     let tolerance_sq = 1e-8;
     let mut grid = BoundaryNodeGrid::new(tolerance_sq);
-    // Segments shared by adjacent clip polygons appear an even number of
+    // Segments shared by adjacent clip polylines appear an even number of
     // times and cancel; only odd-count edges lie on the cut boundary.
     let mut edge_counts: HashMap<(usize, usize), usize> = HashMap::new();
     for segment in segments {
@@ -1268,7 +1268,7 @@ pub(super) fn rings_from_boundary_segments_bridged(segments: &[[mesh_data::Verte
     let mut edges: Vec<(usize, usize)> = edge_counts.into_iter().filter(|(_, count)| count % 2 == 1).map(|(edge, _)| edge).collect();
     edges.sort_unstable();
     stitch_contour_gaps(&grid.nodes, &mut edges, segments);
-    // Close any large open flank left by the distance-capped stitch — tracing
+    // Close any large open flank left by the distance-capped stitch - tracing
     // the real boundary across the gap when a bridger is supplied, otherwise a
     // straight chord. Adds nodes to `grid`, so it must precede the read-only
     // ring walk below.
@@ -1336,7 +1336,7 @@ pub(super) fn rings_from_boundary_segments_bridged(segments: &[[mesh_data::Verte
 
 /// Extract the true cut boundary between two dead-ends of a broken contour
 /// flank by marching squares on the contact against the topology's UPPER
-/// envelope (max-z sheet) — the single-valued reference that stays clean where
+/// envelope (max-z sheet) - the single-valued reference that stays clean where
 /// the per-triangle clip drops out over near-coincident doubled survey sheets.
 /// The boundary is the zero set of the signed cut depth (topo above design for
 /// a pit / design above topo for a stockpile; a surveyed-out hole reads as deep
@@ -1554,7 +1554,7 @@ pub(super) fn trace_contact_contour(
 ///
 /// Real topologies break the contour in two ways: numeric near-misses just
 /// over the node-snap tolerance, and overlapping survey sheets that end
-/// partway around the shape — the contact line jumps from one sheet to the
+/// partway around the shape - the contact line jumps from one sheet to the
 /// other, leaving a gap the size of the sheet separation (metres). Without
 /// stitching, one gap discards the entire multi-kilometre contour and the cut
 /// silently keeps every topology face. Pairs are joined closest-first and
@@ -1618,11 +1618,11 @@ fn stitch_contour_gaps(nodes: &[mesh_data::Vertex], edges: &mut Vec<(usize, usiz
 /// stitch. The stitch bridges numeric near-misses and small sheet-overlap
 /// jumps, but a contact running through a large region of overlapping/doubled
 /// topology sheets (a pushback cutting into a prior excavation) loses a whole
-/// flank — leaving one near-complete loop broken by a single multi-kilometre
+/// flank - leaving one near-complete loop broken by a single multi-kilometre
 /// gap. Discarding it (only closed cycles survive) silently keeps every
 /// topology face and cuts nothing, so we always close it: `gap_bridge` traces
 /// the real boundary across the gap when it can, otherwise a straight chord
-/// (which tracks the true boundary closely only when the flank is near-linear —
+/// (which tracks the true boundary closely only when the flank is near-linear -
 /// the tracer is what fixes a bulging flank). Only components with exactly two
 /// dead-ends and a substantial share of the contour are closed, so a stray
 /// short arc is never fused shut.
@@ -1870,7 +1870,7 @@ pub(super) fn clip_shape_to_topology(
 
 /// Surface-face geometry of the shape, emitted against the coarse cell
 /// coverage instead of one piece per covering topology triangle (which put
-/// the whole pit floor at LiDAR resolution — millions of slivers for a
+/// the whole pit floor at LiDAR resolution - millions of slivers for a
 /// few-hundred-face design). Within a cell the footprint membership and
 /// topology presence are uniform, and the shape-vs-topology sign can only
 /// flip across a contact ring edge (a cell constraint), so height samples at
@@ -1932,10 +1932,10 @@ fn clip_shape_faces_by_cells(
                         // surface and replaces the topology unconditionally.
                         // A local topo dip that drops the topology below the
                         // shell must not punch a hole through the continuous
-                        // pit/stockpile surface — the shell fills the dip, it
-                        // does not expose it. (Surveyed-out holes — covered
-                        // cells with no topology — are handled identically.)
-                        append_shape_polygon(&piece, &mut vertices, &mut output_faces);
+                        // pit/stockpile surface - the shell fills the dip, it
+                        // does not expose it. (Surveyed-out holes - covered
+                        // cells with no topology - are handled identically.)
+                        append_shape_polyline(&piece, &mut vertices, &mut output_faces);
                         continue;
                     }
                     if !coverage.present[index] {
@@ -1961,7 +1961,7 @@ fn clip_shape_faces_by_cells(
                         continue;
                     }
                     if !any_discarded {
-                        append_shape_polygon(&piece, &mut vertices, &mut output_faces);
+                        append_shape_polyline(&piece, &mut vertices, &mut output_faces);
                         continue;
                     }
                     // The contact crosses this piece (it can wander off the
@@ -2000,7 +2000,7 @@ fn clip_shape_faces_by_cells(
 }
 
 /// The shape-vs-topology height difference at `point`, folded to the worst
-/// case across every covering topology sheet for the cut side — a piece
+/// case across every covering topology sheet for the cut side - a piece
 /// counts as retained only when it is on the retained side of ALL sheets, so
 /// doubled survey sheets don't duplicate it. `None` when no topology covers
 /// the point.
@@ -2036,7 +2036,7 @@ fn worst_height_delta(point: glam::DVec3, context: &ShapeClipContext<'_>, candid
 /// index parity in [`topology_boundary_edges`] reports every hairline
 /// interior crack and T-junction of the previous contact band as "boundary".
 /// Topology presence does not flip across a zero-width crack, so as CDT
-/// constraints those edges are pure noise — tens of thousands of
+/// constraints those edges are pure noise - tens of thousands of
 /// near-coincident segments along the old contact ring that drive the
 /// constraint-splitting insert into pathological splitting (the re-include
 /// hang) and spade's internal assert. Probing both sides keeps true rims
@@ -2115,7 +2115,7 @@ fn topology_boundary_edges(topology: &mesh_data::Triangulation) -> Vec<[usize; 2
 
 /// Partition the plane by the topology's boundary edges (same CDT scheme as
 /// [`build_ring_coverage`]) and classify each cell by whether the topology
-/// covers it — presence only changes across a boundary edge, so a single
+/// covers it - presence only changes across a boundary edge, so a single
 /// point query per cell is exact.
 /// The plane partitioned by a CDT constrained on BOTH discontinuity sets the
 /// shape emission cares about: the contact ring edges (where the shape crosses
@@ -2341,7 +2341,7 @@ pub(super) fn clip_surface_shape_triangle_to_topology(
                 return;
             }
 
-            let polygon = overlap
+            let polyline = overlap
                 .into_iter()
                 .map(|point| {
                     let reference_z = bary_z(point.x, point.y, reference);
@@ -2351,27 +2351,27 @@ pub(super) fn clip_surface_shape_triangle_to_topology(
                     }
                 })
                 .collect::<Vec<_>>();
-            let clipped = clip_surface_polygon(polygon, context.side);
+            let clipped = clip_surface_polyline(polyline, context.side);
             collect_topology_segments(&clipped, &mut output.topology_segments);
             // In the contact pass geometry is not emitted: one piece per
             // covering topology triangle would put the whole pit floor at
             // LiDAR resolution. Surface faces are re-emitted against the
             // coarse cell coverage once the contact rings are known.
             if context.emit_surface_pieces {
-                append_surface_clip_polygon(&clipped, &mut output.vertices, &mut output.faces);
+                append_surface_clip_polyline(&clipped, &mut output.vertices, &mut output.faces);
             } else if clipped.len() >= 3 {
                 output.surface_retained = true;
             }
         });
 }
 
-fn append_shape_polygon(polygon: &[glam::DVec3], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
-    if polygon.len() < 3 {
+fn append_shape_polyline(polyline: &[glam::DVec3], vertices: &mut Vec<mesh_data::Vertex>, faces: &mut Vec<[u32; 3]>) {
+    if polyline.len() < 3 {
         return;
     }
     let base = vertices.len() as u32;
-    vertices.extend(polygon.iter().map(|point| mesh_data::Vertex::new(point.x, point.y, point.z)));
-    for i in 1..polygon.len() - 1 {
+    vertices.extend(polyline.iter().map(|point| mesh_data::Vertex::new(point.x, point.y, point.z)));
+    for i in 1..polyline.len() - 1 {
         let face = [base, base + i as u32, base + i as u32 + 1];
         let a = vertices[face[0] as usize];
         let b = vertices[face[1] as usize];
@@ -2436,7 +2436,7 @@ pub(super) fn clip_vertical_shape_triangle_to_topology(
     }
     events.sort_unstable_by(|left, right| left.0.total_cmp(&right.0));
     let mut active = vec![false; references.len()];
-    let vertical_polygon = triangle
+    let vertical_polyline = triangle
         .into_iter()
         .map(|vertex| VerticalClipVertex {
             t: vertical_t(origin, axis, axis_len_sq, vertex),
@@ -2496,12 +2496,12 @@ pub(super) fn clip_vertical_shape_triangle_to_topology(
                         .expect("active topology interval is non-empty");
                     let governing = references[governing_index];
 
-                    let polygon = clip_vertical_polygon_t_min(&vertical_polygon, t_min);
-                    let polygon = clip_vertical_polygon_t_max(&polygon, t_max);
-                    if polygon.len() < 3 {
+                    let polyline = clip_vertical_polyline_t_min(&vertical_polyline, t_min);
+                    let polyline = clip_vertical_polyline_t_max(&polyline, t_max);
+                    if polyline.len() < 3 {
                         continue;
                     }
-                    let surface_polygon = polygon
+                    let surface_polyline = polyline
                         .into_iter()
                         .map(|vertex| {
                             let xy = origin + axis * vertex.t;
@@ -2512,9 +2512,9 @@ pub(super) fn clip_vertical_shape_triangle_to_topology(
                             }
                         })
                         .collect::<Vec<_>>();
-                    let clipped = clip_surface_polygon(surface_polygon, context.side);
+                    let clipped = clip_surface_polyline(surface_polyline, context.side);
                     collect_topology_segments(&clipped, &mut output.topology_segments);
-                    append_surface_clip_polygon(&clipped, &mut output.vertices, &mut output.faces);
+                    append_surface_clip_polyline(&clipped, &mut output.vertices, &mut output.faces);
                 }
             }
         }
@@ -2594,16 +2594,16 @@ pub(super) fn segment_triangle_interval_xy(origin: glam::DVec2, axis: glam::DVec
     Some((t_min, t_max))
 }
 
-pub(super) fn clip_vertical_polygon_t_min(polygon: &[VerticalClipVertex], t_min: f64) -> Vec<VerticalClipVertex> {
-    clip_vertical_polygon_by_t(polygon, t_min, true)
+pub(super) fn clip_vertical_polyline_t_min(polyline: &[VerticalClipVertex], t_min: f64) -> Vec<VerticalClipVertex> {
+    clip_vertical_polyline_by_t(polyline, t_min, true)
 }
 
-pub(super) fn clip_vertical_polygon_t_max(polygon: &[VerticalClipVertex], t_max: f64) -> Vec<VerticalClipVertex> {
-    clip_vertical_polygon_by_t(polygon, t_max, false)
+pub(super) fn clip_vertical_polyline_t_max(polyline: &[VerticalClipVertex], t_max: f64) -> Vec<VerticalClipVertex> {
+    clip_vertical_polyline_by_t(polyline, t_max, false)
 }
 
-pub(super) fn clip_vertical_polygon_by_t(polygon: &[VerticalClipVertex], t_plane: f64, keep_greater: bool) -> Vec<VerticalClipVertex> {
-    if polygon.is_empty() {
+pub(super) fn clip_vertical_polyline_by_t(polyline: &[VerticalClipVertex], t_plane: f64, keep_greater: bool) -> Vec<VerticalClipVertex> {
+    if polyline.is_empty() {
         return Vec::new();
     }
     let retained = |vertex: VerticalClipVertex| {
@@ -2611,9 +2611,9 @@ pub(super) fn clip_vertical_polygon_by_t(polygon: &[VerticalClipVertex], t_plane
     };
 
     let mut output = Vec::new();
-    let mut previous = *polygon.last().expect("polygon is non-empty");
+    let mut previous = *polyline.last().expect("polyline is non-empty");
     let mut previous_inside = retained(previous);
-    for &current in polygon {
+    for &current in polyline {
         let current_inside = retained(current);
         if current_inside != previous_inside {
             let denom = current.t - previous.t;
@@ -2634,23 +2634,23 @@ pub(super) fn clip_vertical_polygon_by_t(polygon: &[VerticalClipVertex], t_plane
     output
 }
 
-pub(super) fn collect_topology_segments(polygon: &[SurfaceClipVertex], segments: &mut Vec<[mesh_data::Vertex; 2]>) {
-    if polygon.len() < 2 {
+pub(super) fn collect_topology_segments(polyline: &[SurfaceClipVertex], segments: &mut Vec<[mesh_data::Vertex; 2]>) {
+    if polyline.len() < 2 {
         return;
     }
-    // A polygon lying entirely ON the topology (a coplanar contact patch —
+    // A polyline lying entirely ON the topology (a coplanar contact patch -
     // e.g. a berm skirt at exactly a previously included floor RL) is a tie:
     // the shape neither cuts nor clears the surface there, so it contributes
     // no contact boundary. Emitting its edges would leave the boundary to
     // parity cancellation between floating-point-noise copies of the same
     // segments, which produces near-degenerate cut rings; the real boundary
-    // is emitted by the neighbouring polygons that do cross the surface.
-    if polygon.iter().all(|vertex| vertex.height_delta.abs() <= 1e-8) {
+    // is emitted by the neighbouring polylines that do cross the surface.
+    if polyline.iter().all(|vertex| vertex.height_delta.abs() <= 1e-8) {
         return;
     }
-    for index in 0..polygon.len() {
-        let a = polygon[index];
-        let b = polygon[(index + 1) % polygon.len()];
+    for index in 0..polyline.len() {
+        let a = polyline[index];
+        let b = polyline[(index + 1) % polyline.len()];
         if a.height_delta.abs() > 1e-8 || b.height_delta.abs() > 1e-8 {
             continue;
         }

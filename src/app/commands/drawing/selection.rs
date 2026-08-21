@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, PICK_THRESHOLD_PX},
+    app::{App, MOVE_VERTEX_PICK_PX, PICK_THRESHOLD_PX},
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, ObjectPoint, SceneEntityId},
     rendering::pick,
@@ -26,7 +26,7 @@ impl<'a> App<'a> {
         self.editor.selected_handles.clear();
         let handles = self.workspace.active_project().map_or_else(Vec::new, |project| {
             project
-                .pidb
+                .project
                 .document
                 .objects()
                 .iter()
@@ -39,6 +39,9 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
+    /// Delete Points acts on points only: a polyline vertex under the cursor, or
+    /// a standalone point object. Polylines and other entities are never picked
+    /// here, so the tool can't delete a whole element.
     pub(crate) fn delete_at_cursor(&mut self) {
         if !self.editing_ready() {
             return;
@@ -54,6 +57,9 @@ impl<'a> App<'a> {
         let Some((SceneEntityId::Object(object_id), world)) = picked else {
             return;
         };
+        if !self.scene_document.get_object(object_id).is_some_and(is_point_object) {
+            return;
+        }
         if !self.activate_project_for_object(object_id) {
             return;
         }
@@ -71,11 +77,17 @@ impl<'a> App<'a> {
             ActiveTool::Move if self.editor.move_gizmo_hovered_axis.is_none() && self.editor.move_gizmo_hovered_plane.is_none() && self.gizmo_drag.is_none() => {
                 self.move_vertex_hit().map(|hit| (hit.object_id, hit.screen_px))
             }
-            ActiveTool::DeleteElement => self.delete_polyline_vertex_hit().map(|hit| (hit.object_id, hit.screen_px)),
+            ActiveTool::DeletePoints => self.delete_polyline_vertex_hit().map(|hit| (hit.object_id, hit.screen_px)),
             _ => None,
         };
         let hover_px = vertex_hit.map(|(_, screen_px)| screen_px);
-        let hovered_object = vertex_hit.map(|(object_id, _)| object_id).or_else(|| self.pick_hovered_object());
+        // Delete Points only ever acts on point objects, so don't highlight
+        // whole elements it can't delete.
+        let point_objects_only = self.editor.active_tool == ActiveTool::DeletePoints;
+        let hovered_object = vertex_hit.map(|(object_id, _)| object_id).or_else(|| {
+            self.pick_hovered_object()
+                .filter(|&id| !point_objects_only || self.scene_document.get_object(id).is_some_and(is_point_object))
+        });
 
         if self.editor.tool_hover_vertex_px != hover_px {
             self.editor.tool_hover_vertex_px = hover_px;
@@ -122,7 +134,7 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return false;
         };
-        self.history.execute(&mut project.pidb.document, Command::Replace { before, after });
+        self.history.execute(&mut project.project.document, Command::Replace { before, after });
         self.editor.tool_hover_vertex_px = None;
         self.editor.selected_handles.clear();
         self.editor.selected_handles.insert(SceneEntityId::Object(hit.object_id));
@@ -183,7 +195,7 @@ impl<'a> App<'a> {
         if deleted > 0
             && let Some(project) = self.workspace.active_project_mut()
         {
-            self.history.execute(&mut project.pidb.document, Command::Batch(batch));
+            self.history.execute(&mut project.project.document, Command::Batch(batch));
         }
         if deleted > 0 {
             self.editor.selected_handles.clear();
@@ -230,13 +242,13 @@ impl<'a> App<'a> {
         };
         let mut copies: Vec<Object> = Vec::with_capacity(originals.len());
         for obj in &originals {
-            let new_id = project.pidb.document.allocate_object_id();
+            let new_id = project.project.document.allocate_object_id();
             copies.push(obj.with_id_and_layer(new_id, obj.layer()));
         }
         let new_ids: Vec<SceneEntityId> = copies.iter().map(|o| SceneEntityId::Object(o.id())).collect();
         let count = copies.len();
         let batch = Command::Batch(copies.into_iter().map(Command::AddObject).collect());
-        self.history.execute(&mut project.pidb.document, batch);
+        self.history.execute(&mut project.project.document, batch);
         self.editor.selected_handles.clear();
         for id in new_ids {
             self.editor.selected_handles.insert(id);
@@ -263,7 +275,6 @@ impl<'a> App<'a> {
             return false;
         }
         self.editor.move_vertex_target = Some((hit.object_id, hit.point));
-        self.editor.active_layer = self.active_document().get_object(hit.object_id).map(Object::layer);
         self.editor.selected_handles.clear();
         self.editor.selected_handles.insert(SceneEntityId::Object(hit.object_id));
         self.editor.move_panel_delta = [0.0; 3];
@@ -276,6 +287,9 @@ impl<'a> App<'a> {
         self.refresh_snap_index();
         let graphics = self.graphics.as_ref()?;
         let cursor_px = self.editor.cursor_screen_px?;
+        // Cursor positions are physical pixels; the marker the user aims at is
+        // sized in logical ones, so scale the radius to match what is drawn.
+        let scale_factor = self.window.as_ref().map_or(1.0, |window| window.scale_factor() as f32);
         let (object_id, point, world) = pick::pick_nearest_vertex_indexed(
             &self.scene_document,
             &self.snap_index,
@@ -284,7 +298,7 @@ impl<'a> App<'a> {
             &graphics.view_proj(),
             graphics.screen_size_pub(),
             cursor_px,
-            PICK_THRESHOLD_PX * 2.0,
+            MOVE_VERTEX_PICK_PX * scale_factor,
             pick::VertexPickFilter::AnyEditable,
         )?;
         let screen_pos = pick::world_to_screen(&graphics.view_proj(), world, graphics.screen_size_pub())?;
@@ -294,6 +308,10 @@ impl<'a> App<'a> {
             screen_px: (screen_pos.x as f32, screen_pos.y as f32),
         })
     }
+}
+
+fn is_point_object(object: &Object) -> bool {
+    matches!(object, Object::Point { .. })
 }
 
 fn without_polyline_vertex(object: &Object, vertex_index: usize) -> Option<Object> {

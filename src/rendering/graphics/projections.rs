@@ -1,6 +1,7 @@
 //! World-to-screen projection updates for UI/tool overlays.
 
 use super::*;
+use crate::ui::state::MoveGizmoScreen;
 
 pub(crate) type ScreenSegmentPx = ((f32, f32), (f32, f32));
 
@@ -29,27 +30,35 @@ fn nearest_screen_segment(cursor: (f32, f32), segments: impl IntoIterator<Item =
         .map(|(index, segment, _)| (index, segment))
 }
 
-fn move_gizmo_plane_quad(center: (f32, f32), first_tip: Option<(f32, f32)>, second_tip: Option<(f32, f32)>) -> Option<[(f32, f32); 4]> {
-    let direction = |tip: (f32, f32)| {
-        let delta = (tip.0 - center.0, tip.1 - center.1);
-        let length = (delta.0 * delta.0 + delta.1 * delta.1).sqrt();
-        (length > 1.0e-4).then_some((delta.0 / length, delta.1 / length))
-    };
-    let first = direction(first_tip?)?;
-    let second = direction(second_tip?)?;
-    // Do not offer a plane handle when that plane projects edge-on.
-    if (first.0 * second.1 - first.1 * second.0).abs() < 0.18 {
-        return None;
+/// Screen length of a Move gizmo axis that lies square to the camera, in
+/// logical points. Every other part of the gizmo is sized from this.
+const GIZMO_LENGTH_POINTS: f64 = 80.0;
+/// Ring radius as a fraction of the axis length, matching Blender's
+/// view-aligned translate handle.
+const GIZMO_RING_RATIO: f32 = 0.2;
+/// Distance along the diagonal between two axes at which their plane handle
+/// sits, and the handle's half-extent, both as fractions of the axis length.
+const GIZMO_PLANE_OFFSET: f64 = 0.8;
+const GIZMO_PLANE_HALF_EXTENT: f64 = 0.1;
+/// Foreshortening below which an axis handle is hidden, and above which it is
+/// fully opaque. An axis pointing at the camera projects to nothing useful, so
+/// it fades out instead of collapsing into a stub pointing in a direction that
+/// flips with sub-pixel camera movement.
+const GIZMO_AXIS_FADE_MIN: f32 = 0.2;
+const GIZMO_AXIS_FADE_FULL: f32 = 0.44;
+/// The same for plane handles, which stay useful until they are nearly
+/// edge-on: measured as how squarely the plane faces the camera.
+const GIZMO_PLANE_FADE_MIN: f32 = 0.175;
+const GIZMO_PLANE_FADE_FULL: f32 = 0.25;
+
+fn fade_ramp(value: f32, min: f32, max: f32) -> f32 {
+    if value <= min {
+        0.0
+    } else if value >= max {
+        1.0
+    } else {
+        (value - min) / (max - min)
     }
-    let point = |first_distance: f32, second_distance: f32| {
-        (
-            center.0 + first.0 * first_distance + second.0 * second_distance,
-            center.1 + first.1 * first_distance + second.1 * second_distance,
-        )
-    };
-    const INNER: f32 = 12.0;
-    const OUTER: f32 = 28.0;
-    Some([point(INNER, INNER), point(OUTER, INNER), point(OUTER, OUTER), point(INNER, OUTER)])
 }
 
 pub(crate) fn projected_relimit_candidate_nearest_cursor(
@@ -74,7 +83,102 @@ pub(crate) fn projected_relimit_candidate_nearest_cursor(
     nearest_screen_segment(cursor, projected)
 }
 
+/// Project the Move gizmo around `center`, Blender-style: fixed on-screen
+/// size, each axis foreshortened by its own angle to the camera, and
+/// handles faded out as they turn towards the view direction.
+fn build_move_gizmo(center: DVec3, forward: DVec3, camera_up_hint: DVec3, length_px: f32, project: impl Fn(DVec3) -> Option<(f32, f32)>) -> MoveGizmoScreen {
+    let Some(center_px) = project(center) else {
+        return MoveGizmoScreen::default();
+    };
+
+    // Camera-plane basis: the reference for "unforeshortened" screen size,
+    // and the drag basis for the view-aligned ring.
+    let up_hint = if forward.cross(camera_up_hint).length_squared() > 1.0e-9 {
+        camera_up_hint
+    } else {
+        DVec3::X
+    };
+    let right = forward.cross(up_hint).normalize();
+    let camera_up = right.cross(forward).normalize();
+    let screen_vector = |direction: DVec3| -> Option<(f64, f64)> {
+        let tip = project(center + direction)?;
+        Some((f64::from(tip.0 - center_px.0), f64::from(tip.1 - center_px.1)))
+    };
+    let right_px = screen_vector(right).unwrap_or((1.0, 0.0));
+    let up_px = screen_vector(camera_up).unwrap_or((0.0, -1.0));
+    let px_per_world = right_px.0.hypot(right_px.1).max(up_px.0.hypot(up_px.1));
+    if px_per_world.partial_cmp(&1.0e-9) != Some(std::cmp::Ordering::Greater) {
+        return MoveGizmoScreen::default();
+    }
+    let world_length = f64::from(length_px) / px_per_world;
+
+    let mut gizmo = MoveGizmoScreen {
+        center_px: Some(center_px),
+        scale_factor: (f64::from(length_px) / GIZMO_LENGTH_POINTS) as f32,
+        ring_radius_px: length_px * GIZMO_RING_RATIO,
+        view_axes: Some([right, camera_up]),
+        view_basis_px: [right_px, up_px],
+        ..MoveGizmoScreen::default()
+    };
+
+    let axes = [DVec3::X, DVec3::Y, DVec3::Z];
+    // How much of its full screen length each axis keeps: 1 when square to
+    // the camera, 0 when aimed at it.
+    let mut projected_ratio = [0.0f32; 3];
+    for (index, axis) in axes.into_iter().enumerate() {
+        let tip = project(center + axis * world_length);
+        gizmo.axis_tip_px[index] = tip;
+        let span = tip.map_or(0.0, |tip| f64::from(tip.0 - center_px.0).hypot(f64::from(tip.1 - center_px.1)));
+        projected_ratio[index] = (span / f64::from(length_px)).clamp(0.0, 1.0) as f32;
+        gizmo.axis_fade[index] = fade_ramp(projected_ratio[index], GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
+        gizmo.axis_px_per_world[index] = (span / world_length).max(1.0e-6);
+    }
+
+    // Plane handles are small diamonds on the diagonal between their two
+    // axes, built in world space so perspective shapes them correctly.
+    let offset = GIZMO_PLANE_OFFSET * world_length;
+    let half_extent = GIZMO_PLANE_HALF_EXTENT * world_length;
+    for (index, [first, second]) in [[0usize, 1], [0, 2], [1, 2]].into_iter().enumerate() {
+        let normal = 3 - first - second;
+        // A plane stops being usable as it turns edge-on, which is exactly
+        // when its normal turns square to the view.
+        let facing = (1.0 - projected_ratio[normal] * projected_ratio[normal]).max(0.0).sqrt();
+        gizmo.plane_fade[index] = fade_ramp(facing, GIZMO_PLANE_FADE_MIN, GIZMO_PLANE_FADE_FULL);
+        if gizmo.plane_fade[index] <= 0.0 {
+            continue;
+        }
+        let diagonal = (axes[first] + axes[second]).normalize();
+        let across = (axes[second] - axes[first]).normalize();
+        let handle_center = center + diagonal * offset;
+        let corners = [
+            project(handle_center - diagonal * half_extent),
+            project(handle_center + across * half_extent),
+            project(handle_center + diagonal * half_extent),
+            project(handle_center - across * half_extent),
+        ];
+        gizmo.plane_quad_px[index] = match corners {
+            [Some(a), Some(b), Some(c), Some(d)] => Some([a, b, c, d]),
+            _ => None,
+        };
+    }
+
+    gizmo
+}
+
 impl<'a> Graphics<'a> {
+    /// Project the Move gizmo around `center` using the live camera.
+    fn project_move_gizmo(&self, center: DVec3) -> MoveGizmoScreen {
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        build_move_gizmo(
+            center,
+            self.camera.forward(),
+            self.camera.up(),
+            (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
+            |world| crate::rendering::pick::world_to_screen(&view_proj, world, screen).map(|p| (p.x as f32, p.y as f32)),
+        )
+    }
+
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document) {
         if let Some(failure) = &editor.tri_create_failure {
             let vp = self.view_proj();
@@ -186,62 +290,12 @@ impl<'a> Graphics<'a> {
                 }
             }
             if count > 0 {
-                let c = sum / count as f64;
-                let vp = self.view_proj();
-                let sz = self.screen_size();
-                const GIZMO_PX: f64 = 70.0;
-                let project = |w: DVec3| -> Option<(f32, f32)> { crate::rendering::pick::world_to_screen(&vp, w, sz).map(|s| (s.x as f32, s.y as f32)) };
-                let raw_px = |axis: DVec3| -> f64 {
-                    if let (Some(c_px), Some(t_px)) = (project(c), project(c + axis)) {
-                        let dx = (t_px.0 - c_px.0) as f64;
-                        let dy = (t_px.1 - c_px.1) as f64;
-                        (dx * dx + dy * dy).sqrt()
-                    } else {
-                        1.0
-                    }
-                };
-                let tip_px = |axis: DVec3| -> Option<(f32, f32)> {
-                    let c_px = project(c)?;
-                    let t_px = project(c + axis)?;
-                    let dx = (t_px.0 - c_px.0) as f64;
-                    let dy = (t_px.1 - c_px.1) as f64;
-                    let len = (dx * dx + dy * dy).sqrt();
-                    if len < 1e-4 {
-                        return None;
-                    }
-                    let nx = (dx / len * GIZMO_PX) as f32;
-                    let ny = (dy / len * GIZMO_PX) as f32;
-                    Some((c_px.0 + nx, c_px.1 + ny))
-                };
-                editor.move_gizmo_center_px = project(c);
-                editor.move_gizmo_x_tip_px = tip_px(DVec3::X);
-                editor.move_gizmo_y_tip_px = tip_px(DVec3::Y);
-                editor.move_gizmo_z_tip_px = tip_px(DVec3::Z);
-                editor.move_gizmo_plane_handles_px = if let Some(center_px) = editor.move_gizmo_center_px {
-                    [
-                        move_gizmo_plane_quad(center_px, editor.move_gizmo_x_tip_px, editor.move_gizmo_y_tip_px),
-                        move_gizmo_plane_quad(center_px, editor.move_gizmo_x_tip_px, editor.move_gizmo_z_tip_px),
-                        move_gizmo_plane_quad(center_px, editor.move_gizmo_y_tip_px, editor.move_gizmo_z_tip_px),
-                    ]
-                } else {
-                    [None; 3]
-                };
-                editor.move_gizmo_x_px_per_world = raw_px(DVec3::X).max(0.001);
-                editor.move_gizmo_y_px_per_world = raw_px(DVec3::Y).max(0.001);
-                editor.move_gizmo_z_px_per_world = raw_px(DVec3::Z).max(0.001);
+                editor.move_gizmo = self.project_move_gizmo(sum / count as f64);
             } else {
-                editor.move_gizmo_center_px = None;
-                editor.move_gizmo_x_tip_px = None;
-                editor.move_gizmo_y_tip_px = None;
-                editor.move_gizmo_z_tip_px = None;
-                editor.move_gizmo_plane_handles_px = [None; 3];
+                editor.move_gizmo = MoveGizmoScreen::default();
             }
         } else {
-            editor.move_gizmo_center_px = None;
-            editor.move_gizmo_x_tip_px = None;
-            editor.move_gizmo_y_tip_px = None;
-            editor.move_gizmo_z_tip_px = None;
-            editor.move_gizmo_plane_handles_px = [None; 3];
+            editor.move_gizmo = MoveGizmoScreen::default();
         }
 
         if editor.active_tool == ActiveTool::Chamfer {

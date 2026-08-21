@@ -59,7 +59,7 @@ impl<'a> App<'a> {
                 vec![(0, verts[0].pos), (verts.len() - 1, verts[verts.len() - 1].pos)]
             }
             Some(Object::Polyline { closed: true, .. }) => {
-                userspace_warn!("Fuse: clicked object {object_id:?} is a closed polygon, fuse only works on open polylines");
+                userspace_warn!("Fuse: clicked object {object_id:?} is a closed polyline, fuse only works on open polylines");
                 return;
             }
             Some(Object::Polyline { verts, .. }) => {
@@ -78,7 +78,7 @@ impl<'a> App<'a> {
 
         // If this line already has an endpoint sitting exactly where the chain
         // currently ends (e.g. it was drawn/snapped to share a vertex with the
-        // previous line), skip asking the user to click that endpoint too —
+        // previous line), skip asking the user to click that endpoint too -
         // just join there. This compares full 3D position (not just plan-view
         // XY), since a genuine shared vertex matches in elevation too.
         if let Some(tail) = self.editor.fuse_chain_tail {
@@ -139,8 +139,8 @@ impl<'a> App<'a> {
                 .map_or(join_point, |(_, point)| *point)
         };
         // The chosen endpoint is the designated join with the chain tail. If
-        // it sits on the tail — or merely looks like it does at the current
-        // zoom (unsnapped digitising, import rounding) — weld: commit drops
+        // it sits on the tail - or merely looks like it does at the current
+        // zoom (unsnapped digitising, import rounding) - weld: commit drops
         // the duplicate instead of keeping a doubled point plus a micro edge.
         // Endpoints clearly apart stay, becoming a deliberate bridging edge.
         let weld_start = !first_segment
@@ -227,7 +227,7 @@ impl<'a> App<'a> {
 
     fn close_single_fuse_source(&mut self) {
         let Some(segment) = self.editor.fuse_segments.first() else {
-            userspace_warn!("Fuse: no source line to close into a polygon");
+            userspace_warn!("Fuse: no source line to close into a polyline");
             return;
         };
         let Some(before) = self.active_document().get_object(segment.object_id).cloned() else {
@@ -241,7 +241,7 @@ impl<'a> App<'a> {
         let mut after = before.clone();
         if let Object::Polyline { verts, closed, .. } = &mut after {
             // A line that already ends on (or visually on) its own start
-            // would close into a polygon with a doubled vertex — weld it.
+            // would close into a polyline with a doubled vertex - weld it.
             if verts.len() > 2
                 && verts
                     .first()
@@ -251,13 +251,13 @@ impl<'a> App<'a> {
                 verts.pop();
             }
             if verts.len() < 3 {
-                userspace_warn!("Fuse: line needs at least 3 distinct vertices to close into a polygon (has {})", verts.len());
+                userspace_warn!("Fuse: line needs at least 3 distinct vertices to close into a polyline (has {})", verts.len());
                 return;
             }
             *closed = true;
         }
         if let Some(project) = self.workspace.active_project_mut() {
-            self.history.execute(&mut project.pidb.document, Command::Replace { before, after });
+            self.history.execute(&mut project.project.document, Command::Replace { before, after });
         }
         self.finish_fuse_state();
     }
@@ -316,14 +316,14 @@ impl<'a> App<'a> {
         let fill = self.editor.tool_hatch.to_fill_style();
 
         let vertex_count = all_verts.len();
-        // The two ends of the freshly fused line — `far_end` is the free end of
+        // The two ends of the freshly fused line - `far_end` is the free end of
         // the segment that was just joined on (where the chain should continue
         // from), `near_end` is the opposite free end.
         let far_end = all_verts.last().map(|v| v.pos);
         let near_end = all_verts.first().map(|v| v.pos);
         let mut new_id = None;
         if let Some(project) = self.workspace.active_project_mut() {
-            let doc = &mut project.pidb.document;
+            let doc = &mut project.project.document;
             let id = doc.allocate_object_id();
             new_id = Some(id);
             let mut commands = vec![Command::AddObject(Object::Polyline {
@@ -341,7 +341,7 @@ impl<'a> App<'a> {
                 }
             }
             self.history.execute(doc, Command::Batch(commands));
-            let shape = if closed { "polygon" } else { "polyline" };
+            let shape = if closed { "closed polyline" } else { "open polyline" };
             let source_count = self.editor.fuse_segments.len();
             crate::logging::report_completed_action(
                 CommandReportSpec::new("Fuse Lines", format!("{source_count} source line(s)")),
@@ -387,7 +387,7 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
-    /// If exactly one polyline/polygon is currently selected, pre-fill the fuse
+    /// If exactly one polyline is currently selected, pre-fill the fuse
     /// awaiting-endpoint state so the user doesn't have to click the line again.
     pub(crate) fn fuse_init_from_selection(&mut self) {
         let mut selected_object_ids = self.editor.selected_handles.iter().filter_map(|h| match h {

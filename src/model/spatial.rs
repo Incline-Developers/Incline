@@ -5,7 +5,7 @@ use glam::{DMat4, DVec2, DVec3};
 use crate::model::{
     Document, FillStyle, Object, PolyVertex,
     formats::mesh_data,
-    geometry::{polyline_bulge_bounds, tessellate_polyline_bulges, text_bounds_corners},
+    geometry::{polyline_bulge_bounds, text_bounds_corners, triangulate_polyline_fill},
 };
 
 /// BVH over document objects, built once when the scene document changes.
@@ -13,24 +13,24 @@ use crate::model::{
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ObjectSnapIndex {
     bboxes: Vec<(DVec3, DVec3)>,
-    /// Ray-test geometry for closed solid fills, aligned with document object
-    /// indices. Tessellation and plane projection are paid once per document
-    /// revision when this index is rebuilt, rather than on every snap poll.
-    filled_polygons: Vec<Option<FilledPolygon>>,
+    /// Ray-test meshes for closed solid fills, aligned with document object
+    /// indices. Boundary tessellation and triangulation are paid once per
+    /// document revision rather than on every snap poll.
+    filled_polylines: Vec<Option<FilledPolyline>>,
     order: Vec<u32>,
     nodes: Vec<Node>,
 }
 
 impl ObjectSnapIndex {
     pub(crate) fn build(document: &Document) -> Self {
-        let filled_polygons: Vec<Option<FilledPolygon>> = document.objects().iter().map(FilledPolygon::from_object).collect();
+        let filled_polylines: Vec<Option<FilledPolyline>> = document.objects().iter().map(FilledPolyline::from_object).collect();
         let bboxes: Vec<(DVec3, DVec3)> = document
             .objects()
             .iter()
             .enumerate()
             .map(|(index, object)| {
                 let bounds = object_bbox(object);
-                filled_polygons[index].as_ref().map_or(bounds, |polygon| union_bounds(bounds, polygon.bounds))
+                filled_polylines[index].as_ref().map_or(bounds, |polyline| union_bounds(bounds, polyline.bounds))
             })
             .collect();
         let order: Vec<u32> = bboxes
@@ -41,7 +41,7 @@ impl ObjectSnapIndex {
         let n = order.len();
         let mut index = Self {
             bboxes,
-            filled_polygons,
+            filled_polylines,
             order,
             nodes: Vec::new(),
         };
@@ -75,11 +75,11 @@ impl ObjectSnapIndex {
         result
     }
 
-    /// Find the nearest cached solid-polygon hit along a ray. The BVH rejects
+    /// Find the nearest cached solid-polyline hit along a ray. The BVH rejects
     /// distant objects before `eligible` is called, so visibility/opacity
-    /// checks and polygon tests scale with ray-local candidates rather than
+    /// checks and polyline tests scale with ray-local candidates rather than
     /// every object in the document.
-    pub(crate) fn nearest_filled_polygon_hit(&self, origin: DVec3, direction: DVec3, mut eligible: impl FnMut(usize) -> bool) -> Option<DVec3> {
+    pub(crate) fn nearest_filled_polyline_hit(&self, origin: DVec3, direction: DVec3, mut eligible: impl FnMut(usize) -> bool) -> Option<DVec3> {
         if self.nodes.is_empty() || !origin.is_finite() || !direction.is_finite() || direction.length_squared() <= f64::EPSILON {
             return None;
         }
@@ -100,7 +100,7 @@ impl ObjectSnapIndex {
             let range = node.start as usize..(node.start + node.count) as usize;
             for &object_index in &self.order[range] {
                 let object_index = object_index as usize;
-                let Some(Some(polygon)) = self.filled_polygons.get(object_index) else {
+                let Some(Some(polyline)) = self.filled_polylines.get(object_index) else {
                     continue;
                 };
                 let Some(&(min, max)) = self.bboxes.get(object_index) else {
@@ -109,7 +109,7 @@ impl ObjectSnapIndex {
                 if !ray_box(origin, direction, min, max, nearest_distance) || !eligible(object_index) {
                     continue;
                 }
-                let Some(distance) = polygon.ray_distance(origin, direction) else {
+                let Some(distance) = polyline.ray_distance(origin, direction) else {
                     continue;
                 };
                 if distance < nearest_distance {
@@ -171,16 +171,12 @@ impl ObjectSnapIndex {
 }
 
 #[derive(Clone, Debug)]
-struct FilledPolygon {
-    centroid: DVec3,
-    axis_u: DVec3,
-    axis_v: DVec3,
-    normal: DVec3,
-    points_2d: Vec<DVec2>,
+struct FilledPolyline {
+    triangles: Vec<[DVec3; 3]>,
     bounds: (DVec3, DVec3),
 }
 
-impl FilledPolygon {
+impl FilledPolyline {
     fn from_object(object: &Object) -> Option<Self> {
         let Object::Polyline {
             verts,
@@ -195,72 +191,28 @@ impl FilledPolygon {
     }
 
     fn from_vertices(verts: &[PolyVertex]) -> Option<Self> {
-        let points = tessellate_polyline_bulges(verts, true);
-        if points.len() < 3 {
-            return None;
-        }
-        let centroid = points.iter().copied().sum::<DVec3>() / points.len() as f64;
-        let mut normal = DVec3::ZERO;
-        for (current, next) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)).take(points.len()) {
-            normal.x += (current.y - next.y) * (current.z + next.z);
-            normal.y += (current.z - next.z) * (current.x + next.x);
-            normal.z += (current.x - next.x) * (current.y + next.y);
-        }
-        let normal = normal.try_normalize().unwrap_or(DVec3::Z);
-        let up_hint = if normal.z.abs() < 0.9 { DVec3::Z } else { DVec3::Y };
-        let axis_u = up_hint.cross(normal).normalize_or(DVec3::X);
-        let axis_v = normal.cross(axis_u).normalize_or(DVec3::Y);
-        let points_2d: Vec<DVec2> = points
-            .into_iter()
-            .map(|point| {
-                let delta = point - centroid;
-                DVec2::new(delta.dot(axis_u), delta.dot(axis_v))
-            })
+        let mesh = triangulate_polyline_fill(verts)?;
+        let bounds = points_bbox(&mesh.vertices);
+        let triangles = mesh
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|triangle| triangle.map(|index| mesh.vertices[index as usize]))
             .collect();
-        let bounds = points_2d.iter().fold((DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)), |(min, max), point| {
-            let world = centroid + point.x * axis_u + point.y * axis_v;
-            (min.min(world), max.max(world))
-        });
-        Some(Self {
-            centroid,
-            axis_u,
-            axis_v,
-            normal,
-            points_2d,
-            bounds,
-        })
+        Some(Self { triangles, bounds })
     }
 
     fn ray_distance(&self, origin: DVec3, direction: DVec3) -> Option<f64> {
-        let denominator = direction.dot(self.normal);
-        if denominator.abs() <= 1.0e-12 {
-            return None;
-        }
-        let distance = (self.centroid - origin).dot(self.normal) / denominator;
-        if distance < 0.0 {
-            return None;
-        }
-        let point = origin + direction * distance;
-        let delta = point - self.centroid;
-        let local = DVec2::new(delta.dot(self.axis_u), delta.dot(self.axis_v));
-        point_in_polygon(local, &self.points_2d).then_some(distance)
+        self.triangles
+            .iter()
+            .filter_map(|triangle| ray_triangle(origin, direction, *triangle))
+            .min_by(f64::total_cmp)
     }
 }
 
 fn union_bounds(a: (DVec3, DVec3), b: (DVec3, DVec3)) -> (DVec3, DVec3) {
     (a.0.min(b.0), a.1.max(b.1))
-}
-
-fn point_in_polygon(point: DVec2, polygon: &[DVec2]) -> bool {
-    let mut inside = false;
-    let mut previous = polygon[polygon.len() - 1];
-    for &current in polygon {
-        if ((current.y > point.y) != (previous.y > point.y)) && point.x < (previous.x - current.x) * (point.y - current.y) / (previous.y - current.y) + current.x {
-            inside = !inside;
-        }
-        previous = current;
-    }
-    inside
 }
 
 fn object_bbox(object: &Object) -> (DVec3, DVec3) {
@@ -314,7 +266,7 @@ pub(crate) struct TriangleHit {
     pub(crate) point: DVec3,
 }
 
-/// BVH node for document objects — world-space DVec3 bounds, used by ObjectSnapIndex.
+/// BVH node for document objects - world-space DVec3 bounds, used by ObjectSnapIndex.
 #[derive(Clone, Copy, Debug)]
 struct Node {
     min: DVec3,
@@ -366,7 +318,7 @@ impl TriangleBvh {
         let b = mesh.bounds();
         let origin = DVec3::new((b.min.x + b.max.x) * 0.5, (b.min.y + b.max.y) * 0.5, (b.min.z + b.max.z) * 0.5);
         // Temporary f32 vertex cache for centroid/bounds computation during build.
-        // Freed once the BVH is constructed — not stored in the struct.
+        // Freed once the BVH is constructed - not stored in the struct.
         let build_vertices: Vec<[f32; 3]> = mesh
             .vertices()
             .iter()

@@ -40,25 +40,6 @@ pub(crate) fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Compare explorer file entries that may belong to a displayed folder.
-/// Folder groups always precede loose files; folders and their contents are
-/// naturally ordered by the names the explorer displays. The full path is a
-/// deterministic tie-breaker and keeps same-named folders contiguous.
-pub(crate) fn grouped_file_cmp(a_group: Option<&std::path::Path>, a_name: &str, b_group: Option<&std::path::Path>, b_name: &str) -> Ordering {
-    match (a_group, b_group) {
-        (Some(a), Some(b)) => natural_cmp(path_display_name(a), path_display_name(b))
-            .then_with(|| a.cmp(b))
-            .then_with(|| natural_cmp(a_name, b_name)),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => natural_cmp(a_name, b_name),
-    }
-}
-
-fn path_display_name(path: &std::path::Path) -> &str {
-    path.file_name().and_then(|name| name.to_str()).unwrap_or("")
-}
-
 fn fold_char(c: char) -> char {
     c.to_ascii_lowercase()
 }

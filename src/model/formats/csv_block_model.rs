@@ -412,31 +412,6 @@ pub(crate) fn write<W: Write>(model: &BlockModelData, blocks: &BlockBoundsSource
     Ok(())
 }
 
-/// Mapping for a CSV emitted by [`write`], suitable for reopening a generated
-/// model after Save As without asking the user to map its columns again.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn export_mapping(model: &BlockModelData) -> CsvColumnMapping {
-    let mut roles = vec![
-        CsvColumnRole::X,
-        CsvColumnRole::Y,
-        CsvColumnRole::Z,
-        CsvColumnRole::Dx,
-        CsvColumnRole::Dy,
-        CsvColumnRole::Dz,
-    ];
-    roles.extend(
-        model
-            .color_variables()
-            .into_iter()
-            .filter(|variable| !variable.special)
-            .map(|variable| match variable.physical_type.as_str() {
-                "namedbyte" | "namedshort" => CsvColumnRole::Category,
-                _ => CsvColumnRole::Value,
-            }),
-    );
-    CsvColumnMapping { roles }
-}
-
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn to_bytes(model: &BlockModelData, blocks: &BlockBoundsSource, renderable: &RenderableBlockIndices) -> Result<Vec<u8>, CsvBlockModelError> {
     let mut bytes = Vec::new();

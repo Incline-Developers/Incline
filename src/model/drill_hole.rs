@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::model::formats::csv_drill_hole::CsvDrillFileMapping;
+use crate::model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState};
 
 pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
@@ -20,8 +20,8 @@ pub(crate) enum DrillHoleSource {
     Csv {
         name: String,
         files: Vec<CsvDrillFileMapping>,
-        /// Browser-storage explorer identity. Native bundles use their first
-        /// mapped file path directly.
+        /// Filename-only browser identity. Native imports use their first
+        /// mapped file path while the project retains the decoded dataset.
         #[serde(default)]
         browser_path: Option<PathBuf>,
     },
@@ -31,17 +31,6 @@ pub(crate) enum DrillHoleSource {
 }
 
 impl DrillHoleSource {
-    pub(crate) fn primary_path(&self) -> &std::path::Path {
-        match self {
-            Self::LegacyDhd { path } => path,
-            Self::Csv { files, browser_path, .. } => browser_path
-                .as_deref()
-                .or_else(|| files.first().map(|file| file.path.as_path()))
-                .unwrap_or_else(|| std::path::Path::new("")),
-            Self::Omf { path, .. } => path,
-        }
-    }
-
     pub(crate) fn display_name(&self) -> String {
         match self {
             Self::LegacyDhd { path } => path.file_name().and_then(|name| name.to_str()).unwrap_or("unsupported drillhole source").to_owned(),
@@ -135,7 +124,7 @@ impl DrillHoleDataset {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum DrillColorPreset {
     Rainbow,
     Grayscale,
@@ -178,19 +167,19 @@ impl DrillColorPreset {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillColorStop {
     pub(crate) t: f32,
     pub(crate) color: [f32; 3],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillCategoryColor {
     pub(crate) value: String,
     pub(crate) color: [f32; 3],
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillColorState {
     pub(crate) active_field: Option<String>,
     pub(crate) preset: DrillColorPreset,
@@ -222,11 +211,17 @@ pub(crate) struct LoadedDrillHoleDataset {
 #[derive(Clone, Debug)]
 pub(crate) struct OpenDrillHoleDataset {
     pub(crate) id: DrillHoleId,
+    pub(crate) state: ProjectItemState,
     pub(crate) name: String,
-    pub(crate) source: DrillHoleSource,
     pub(crate) dataset: Arc<DrillHoleDataset>,
     pub(crate) visible: bool,
     pub(crate) color: DrillColorState,
+}
+
+impl OpenDrillHoleDataset {
+    pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
+        crate::model::SceneEntityId::DrillHole(self.id)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

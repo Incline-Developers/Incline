@@ -27,6 +27,7 @@ struct MenuState {
     dark_mode: bool,
     show_console: bool,
     can_save: bool,
+    has_project: bool,
     can_create_terrain_tin: bool,
     can_create_block_model: bool,
     can_create_ore_triangulation: bool,
@@ -36,11 +37,12 @@ struct MenuState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(isize)]
 pub(crate) enum MacMenuAction {
-    SaveAllPidbs = 1,
-    NewPidb,
-    OpenPidb,
+    SaveProject = 1,
+    SaveProjectAs,
+    CloseProject,
+    NewProject,
+    OpenProject,
     OpenImport,
-    OpenTriangulationFolder,
     OpenExport,
     ExportViewportImage,
     OpenPlotDialog,
@@ -54,7 +56,7 @@ pub(crate) enum MacMenuAction {
     OpenInsertPointAtElevation,
     OpenSetSelectionZ,
     OpenCreateTriangulation,
-    OpenCutTriangulationByPolygon,
+    OpenCutTriangulationByPolyline,
     OpenCutTriangulationByZ,
     OpenCutTriangulationBySurface,
     OpenCutTopologyByPitShell,
@@ -68,11 +70,12 @@ pub(crate) enum MacMenuAction {
 impl MacMenuAction {
     fn from_tag(tag: isize) -> Option<Self> {
         Some(match tag {
-            value if value == Self::SaveAllPidbs as isize => Self::SaveAllPidbs,
-            value if value == Self::NewPidb as isize => Self::NewPidb,
-            value if value == Self::OpenPidb as isize => Self::OpenPidb,
+            value if value == Self::SaveProject as isize => Self::SaveProject,
+            value if value == Self::SaveProjectAs as isize => Self::SaveProjectAs,
+            value if value == Self::CloseProject as isize => Self::CloseProject,
+            value if value == Self::NewProject as isize => Self::NewProject,
+            value if value == Self::OpenProject as isize => Self::OpenProject,
             value if value == Self::OpenImport as isize => Self::OpenImport,
-            value if value == Self::OpenTriangulationFolder as isize => Self::OpenTriangulationFolder,
             value if value == Self::OpenExport as isize => Self::OpenExport,
             value if value == Self::ExportViewportImage as isize => Self::ExportViewportImage,
             value if value == Self::OpenPlotDialog as isize => Self::OpenPlotDialog,
@@ -86,7 +89,7 @@ impl MacMenuAction {
             value if value == Self::OpenInsertPointAtElevation as isize => Self::OpenInsertPointAtElevation,
             value if value == Self::OpenSetSelectionZ as isize => Self::OpenSetSelectionZ,
             value if value == Self::OpenCreateTriangulation as isize => Self::OpenCreateTriangulation,
-            value if value == Self::OpenCutTriangulationByPolygon as isize => Self::OpenCutTriangulationByPolygon,
+            value if value == Self::OpenCutTriangulationByPolyline as isize => Self::OpenCutTriangulationByPolyline,
             value if value == Self::OpenCutTriangulationByZ as isize => Self::OpenCutTriangulationByZ,
             value if value == Self::OpenCutTriangulationBySurface as isize => Self::OpenCutTriangulationBySurface,
             value if value == Self::OpenCutTopologyByPitShell as isize => Self::OpenCutTopologyByPitShell,
@@ -223,13 +226,14 @@ pub(crate) fn install_menu_bar() {
 
     let file_menu = menu("File", mtm);
     file_menu.setAutoenablesItems(false);
-    add_action(&file_menu, "New PIDB…", "n", MacMenuAction::NewPidb, &target, mtm);
-    add_action(&file_menu, "Open PIDBs…", "o", MacMenuAction::OpenPidb, &target, mtm);
+    add_action(&file_menu, "New project…", "n", MacMenuAction::NewProject, &target, mtm);
+    add_action(&file_menu, "Open project…", "o", MacMenuAction::OpenProject, &target, mtm);
     add_separator(&file_menu, mtm);
-    add_action(&file_menu, "Save All", "s", MacMenuAction::SaveAllPidbs, &target, mtm);
+    add_action(&file_menu, "Save Project", "s", MacMenuAction::SaveProject, &target, mtm);
+    add_action(&file_menu, "Save Project As…", "S", MacMenuAction::SaveProjectAs, &target, mtm);
+    add_action(&file_menu, "Close Project", "w", MacMenuAction::CloseProject, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, "Import…", "", MacMenuAction::OpenImport, &target, mtm);
-    add_action(&file_menu, "Add Triangulation Folder…", "", MacMenuAction::OpenTriangulationFolder, &target, mtm);
     add_action(&file_menu, "Export…", "", MacMenuAction::OpenExport, &target, mtm);
     add_action(&file_menu, "Export Viewport Image…", "", MacMenuAction::ExportViewportImage, &target, mtm);
     add_action(&file_menu, "Export Engineering Drawing…", "", MacMenuAction::OpenPlotDialog, &target, mtm);
@@ -263,9 +267,9 @@ pub(crate) fn install_menu_bar() {
     add_separator(&triangulation_menu, mtm);
     add_action(
         &triangulation_menu,
-        "Clip Surface by Polygon…",
+        "Clip Surface by Polyline…",
         "",
-        MacMenuAction::OpenCutTriangulationByPolygon,
+        MacMenuAction::OpenCutTriangulationByPolyline,
         &target,
         mtm,
     );
@@ -349,6 +353,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         dark_mode: editor.dark_mode,
         show_console: editor.show_console,
         can_save: project.projects.iter().any(|entry| entry.dirty),
+        has_project: project.projects.iter().any(|entry| entry.is_active),
         can_create_terrain_tin: project.point_clouds.iter().any(|cloud| cloud.is_loaded),
         can_create_block_model: project.drill_holes.iter().any(|dataset| dataset.is_loaded),
         can_create_ore_triangulation: !project.block_models.is_empty(),
@@ -370,7 +375,9 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_checked(&root, MacMenuAction::ToggleScaleBar, state.show_scale_bar);
     set_checked(&root, MacMenuAction::ToggleDarkMode, state.dark_mode);
     set_checked(&root, MacMenuAction::ToggleConsole, state.show_console);
-    set_enabled(&root, MacMenuAction::SaveAllPidbs, state.can_save);
+    set_enabled(&root, MacMenuAction::SaveProject, state.can_save);
+    set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
+    set_enabled(&root, MacMenuAction::CloseProject, state.has_project);
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);

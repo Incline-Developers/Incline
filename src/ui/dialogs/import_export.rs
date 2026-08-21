@@ -145,7 +145,6 @@ fn draw_import_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
             });
             egui::CollapsingHeader::new("CAD").default_open(true).show(ui, |ui| {
                 draw_entry(ui, editor, "Drawing Exchange Format (.dxf)", DataMenu::Dxf);
-                draw_entry(ui, editor, "ProInspector database (.pidb)", DataMenu::Pidb);
             });
             egui::CollapsingHeader::new("Triangulations").default_open(true).show(ui, |ui| {
                 draw_entry(ui, editor, "Wavefront OBJ (.obj)", DataMenu::Obj);
@@ -180,7 +179,6 @@ fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
             });
             egui::CollapsingHeader::new("CAD").default_open(true).show(ui, |ui| {
                 draw_entry(ui, editor, "Drawing Exchange Format (.dxf)", DataMenu::Dxf);
-                draw_entry(ui, editor, "ProInspector database (.pidb)", DataMenu::Pidb);
             });
             egui::CollapsingHeader::new("Triangulations").default_open(true).show(ui, |ui| {
                 draw_entry(ui, editor, "Wavefront OBJ (.obj)", DataMenu::Obj);
@@ -200,14 +198,10 @@ fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
         DataMenu::Omf => {
             ui.heading("Import Open Mining Format");
-            draw_import_source_picker(ui, editor, commands, "OMF project", "No .omf chosen");
+            draw_import_source_picker(ui, editor, commands, "Project", "No .omf chosen");
             ui.small("Imports every supported OMF element: designs and line sets, surfaces, block models, drillholes, point sets, and raster textures.");
         }
         DataMenu::Dxf => draw_import_dxf(ui, editor, project, commands),
-        DataMenu::Pidb => {
-            ui.heading("Open PIDB");
-            draw_import_source_picker(ui, editor, commands, "PIDB file", "No .pidb chosen");
-        }
         DataMenu::Obj => draw_import_mesh(ui, editor, commands, "Import Wavefront OBJ"),
         DataMenu::Stl => draw_import_mesh(ui, editor, commands, "Import STL"),
         DataMenu::Ply => draw_import_mesh(ui, editor, commands, "Import PLY"),
@@ -225,7 +219,6 @@ fn draw_export_details(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     ui.push_id(editor.data_menu, |ui| match editor.data_menu {
         DataMenu::Omf => draw_export_omf(ui, project),
         DataMenu::Dxf => draw_export_dxf(ui, editor, project),
-        DataMenu::Pidb => draw_export_pidb(ui, editor, project),
         DataMenu::Obj => draw_export_mesh(ui, editor, project, "Export Wavefront OBJ"),
         DataMenu::Stl => draw_export_mesh(ui, editor, project, "Export STL"),
         DataMenu::Ply => draw_export_mesh(ui, editor, project, "Export PLY"),
@@ -243,7 +236,7 @@ fn draw_export_omf(ui: &mut egui::Ui, project: &UiProjectView) {
     let point_clouds = project.point_clouds.iter().filter(|entry| entry.is_loaded).count();
     let rasters = project.raster_textures.iter().filter(|entry| entry.is_loaded).count();
     ui.label(format!(
-        "Exports all open data in one OMF project: {designs} design database(s), {triangulations} triangulation(s), {block_models} block model(s), {drill_holes} drillhole dataset(s), {point_clouds} point cloud(s), and {rasters} raster(s)."
+        "Exports all open data in one project: {designs} design document, {triangulations} triangulation(s), {block_models} block model(s), {drill_holes} drillhole dataset(s), {point_clouds} point cloud(s), and {rasters} raster(s)."
     ));
     ui.small("Incline styling and exact design/drillhole semantics are retained as OMF metadata alongside native OMF geometry and attributes.");
 }
@@ -251,10 +244,7 @@ fn draw_export_omf(ui: &mut egui::Ui, project: &UiProjectView) {
 fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     ui.heading("Import DXF");
     draw_import_source_picker(ui, editor, commands, "Source file", "No .dxf chosen");
-    MenuFieldBool::new("Import as New PIDB", &mut editor.import_dxf_as_pidb).show(ui);
-    if !editor.import_dxf_as_pidb {
-        active_project_label(ui, "Add to PIDB:", project);
-    }
+    active_project_label(ui, "Add to project:", project);
 }
 
 fn draw_import_mesh(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, heading: &str) {
@@ -465,15 +455,9 @@ fn draw_export_dxf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
         ensure_export_layer(editor, project);
         layer_combo(ui, "dxf_export_layer", "Layer:", project, &mut editor.export_layer);
     } else {
-        ensure_export_pidb(editor, project);
-        pidb_combo(ui, "dxf_export_pidb", "PIDB:", project, &mut editor.export_pidb);
+        ensure_export_project(editor, project);
+        project_combo(ui, "dxf_export_project", "Project:", project, &mut editor.export_project);
     }
-}
-
-fn draw_export_pidb(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
-    ui.heading("Export PIDB");
-    ensure_export_pidb(editor, project);
-    pidb_combo(ui, "pidb_export_pidb", "PIDB:", project, &mut editor.export_pidb);
 }
 
 fn draw_export_mesh(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, heading: &str) {
@@ -489,25 +473,25 @@ fn draw_export_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, proj
     ui.small("Exports block centroids as x/y/z, block sizes as dx/dy/dz, followed by resource columns.");
 }
 
-/// Imports that merge into an existing project target the active PIDB.
+/// Imports that merge into an existing project target the active project.
 fn active_project_label(ui: &mut egui::Ui, field_label: &str, project: &UiProjectView) {
     let name = project
         .projects
         .iter()
         .find(|entry| entry.is_active)
         .map(|entry| entry.name.as_str())
-        .unwrap_or("No active PIDB");
+        .unwrap_or("No active project");
     ui.horizontal(|ui| {
         ui.label(field_label);
         ui.label(name);
     });
 }
 
-fn pidb_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<u32>) {
+fn project_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<u32>) {
     let selected_label = selected
         .and_then(|runtime_id| project.projects.iter().find(|entry| entry.runtime_id == runtime_id))
         .map(|entry| entry.name.as_str())
-        .unwrap_or("Choose a PIDB");
+        .unwrap_or("Choose a project");
     let options = project.projects.iter().map(|entry| (Some(entry.runtime_id), entry.name.clone().into()));
     MenuFieldCombo::new(id, field_label, selected, selected_label, options).width(FIELD_WIDTH).show(ui);
 }
@@ -526,7 +510,7 @@ fn layer_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, fi
 
 fn triangulation_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<TriangulationId>) {
     let label = selected
-        .and_then(|id| project.triangulations.iter().find(|entry| entry.id == Some(id) && entry.is_loaded))
+        .and_then(|id| project.triangulations.iter().find(|entry| entry.id == id && entry.is_loaded))
         .map(|entry| entry.name.as_str())
         .unwrap_or("Choose a loaded triangulation");
     MenuFieldCombo::new(
@@ -538,7 +522,7 @@ fn triangulation_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::D
             .triangulations
             .iter()
             .filter(|entry| entry.is_loaded)
-            .map(|entry| (entry.id, entry.name.clone().into())),
+            .map(|entry| (Some(entry.id), entry.name.clone().into())),
     )
     .width(FIELD_WIDTH)
     .show(ui);
@@ -546,7 +530,7 @@ fn triangulation_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::D
 
 fn block_model_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, field_label: &str, project: &UiProjectView, selected: &mut Option<BlockModelId>) {
     let label = selected
-        .and_then(|id| project.block_models.iter().find(|entry| entry.id == Some(id) && entry.is_loaded))
+        .and_then(|id| project.block_models.iter().find(|entry| entry.id == id && entry.is_loaded))
         .map(|entry| entry.name.as_str())
         .unwrap_or("Choose a loaded block model");
     MenuFieldCombo::new(
@@ -558,7 +542,7 @@ fn block_model_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Deb
             .block_models
             .iter()
             .filter(|entry| entry.is_loaded)
-            .filter_map(|entry| entry.id.map(|id| (Some(id), entry.name.clone().into()))),
+            .map(|entry| (Some(entry.id), entry.name.clone().into())),
     )
     .width(FIELD_WIDTH)
     .show(ui);
@@ -578,9 +562,6 @@ fn reset_import_defaults(editor: &mut EditorState, _project: &UiProjectView) {
         editor.import_source_paths.clear();
     }
     match editor.data_menu {
-        DataMenu::Dxf => {
-            editor.import_dxf_as_pidb = true;
-        }
         DataMenu::CsvBlockModel => {
             editor.import_csv_preview = None;
             editor.import_csv_error = None;
@@ -598,10 +579,7 @@ fn reset_export_defaults(editor: &mut EditorState, project: &UiProjectView) {
         DataMenu::Dxf => {
             editor.export_dxf_layer = false;
             editor.export_layer = first_loaded_layer(project);
-            editor.export_pidb = active_pidb(project);
-        }
-        DataMenu::Pidb => {
-            editor.export_pidb = active_pidb(project);
+            editor.export_project = active_project(project);
         }
         DataMenu::Obj | DataMenu::Stl | DataMenu::Ply => {
             editor.export_triangulation = first_loaded_triangulation(project);
@@ -619,9 +597,9 @@ fn ensure_export_layer(editor: &mut EditorState, project: &UiProjectView) {
     }
 }
 
-fn ensure_export_pidb(editor: &mut EditorState, project: &UiProjectView) {
-    if !has_pidb(project, editor.export_pidb) {
-        editor.export_pidb = active_pidb(project);
+fn ensure_export_project(editor: &mut EditorState, project: &UiProjectView) {
+    if !has_project(project, editor.export_project) {
+        editor.export_project = active_project(project);
     }
 }
 
@@ -641,9 +619,7 @@ fn import_command(editor: &EditorState) -> Option<UiCommand> {
     let source_paths = selected_import_source_paths(editor);
     match editor.data_menu {
         DataMenu::Omf => (!source_paths.is_empty()).then(|| UiCommand::ImportOmfPaths(source_paths.to_vec())),
-        DataMenu::Dxf if editor.import_dxf_as_pidb => (!source_paths.is_empty()).then(|| UiCommand::ImportAsPidbPaths(DataMenu::Dxf, source_paths.to_vec())),
         DataMenu::Dxf => (!source_paths.is_empty()).then(|| UiCommand::ImportDxfPathsInto(source_paths.to_vec())),
-        DataMenu::Pidb => (!source_paths.is_empty()).then(|| UiCommand::OpenPidbPaths(source_paths.to_vec())),
         DataMenu::Obj | DataMenu::Stl | DataMenu::Ply => (!source_paths.is_empty()).then(|| UiCommand::ImportTriangulationPaths(source_paths.to_vec())),
         DataMenu::Las | DataMenu::Xyz | DataMenu::Pcd => (!source_paths.is_empty()).then(|| UiCommand::ImportPointCloudPaths(source_paths.to_vec())),
         DataMenu::Geotiff => (!source_paths.is_empty()).then(|| UiCommand::ImportRasterPaths(source_paths.to_vec())),
@@ -688,8 +664,7 @@ fn export_command(editor: &EditorState) -> Option<UiCommand> {
     match editor.data_menu {
         DataMenu::Omf => Some(UiCommand::ExportOmf),
         DataMenu::Dxf if editor.export_dxf_layer => editor.export_layer.map(UiCommand::ExportLayerDxf),
-        DataMenu::Dxf => editor.export_pidb.map(UiCommand::ExportPidbDxf),
-        DataMenu::Pidb => editor.export_pidb.map(UiCommand::ExportPidbCopy),
+        DataMenu::Dxf => editor.export_project.map(UiCommand::ExportProjectDxf),
         DataMenu::Obj | DataMenu::Stl | DataMenu::Ply => {
             let format = mesh_format(editor.data_menu)?;
             editor.export_triangulation.map(|id| UiCommand::ExportTriangulationAs(id, format))
@@ -713,7 +688,6 @@ fn is_import_menu(data_menu: DataMenu) -> bool {
         data_menu,
         DataMenu::Omf
             | DataMenu::Dxf
-            | DataMenu::Pidb
             | DataMenu::Obj
             | DataMenu::Stl
             | DataMenu::Ply
@@ -729,7 +703,7 @@ fn is_import_menu(data_menu: DataMenu) -> bool {
 fn is_export_menu(data_menu: DataMenu) -> bool {
     matches!(
         data_menu,
-        DataMenu::Omf | DataMenu::Dxf | DataMenu::Pidb | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel
+        DataMenu::Omf | DataMenu::Dxf | DataMenu::Obj | DataMenu::Stl | DataMenu::Ply | DataMenu::CsvBlockModel
     )
 }
 
@@ -741,16 +715,16 @@ fn first_loaded_layer(project: &UiProjectView) -> Option<LayerId> {
         .and_then(|entry| entry.layers.iter().find(|layer| layer.is_loaded).map(|layer| layer.id))
 }
 
-fn active_pidb(project: &UiProjectView) -> Option<u32> {
+fn active_project(project: &UiProjectView) -> Option<u32> {
     project.projects.iter().find(|entry| entry.is_active).map(|entry| entry.runtime_id)
 }
 
 fn first_loaded_triangulation(project: &UiProjectView) -> Option<TriangulationId> {
-    project.triangulations.iter().find(|entry| entry.is_loaded).and_then(|entry| entry.id)
+    project.triangulations.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
 }
 
 fn first_loaded_block_model(project: &UiProjectView) -> Option<BlockModelId> {
-    project.block_models.iter().find(|entry| entry.is_loaded).and_then(|entry| entry.id)
+    project.block_models.iter().find(|entry| entry.is_loaded).map(|entry| entry.id)
 }
 
 fn has_loaded_layer(project: &UiProjectView, selected: Option<LayerId>) -> bool {
@@ -762,14 +736,14 @@ fn has_loaded_layer(project: &UiProjectView, selected: Option<LayerId>) -> bool 
     })
 }
 
-fn has_pidb(project: &UiProjectView, selected: Option<u32>) -> bool {
+fn has_project(project: &UiProjectView, selected: Option<u32>) -> bool {
     selected.is_some_and(|runtime_id| project.projects.iter().any(|entry| entry.runtime_id == runtime_id))
 }
 
 fn has_loaded_triangulation(project: &UiProjectView, selected: Option<TriangulationId>) -> bool {
-    selected.is_some_and(|id| project.triangulations.iter().any(|entry| entry.is_loaded && entry.id == Some(id)))
+    selected.is_some_and(|id| project.triangulations.iter().any(|entry| entry.is_loaded && entry.id == id))
 }
 
 fn has_loaded_block_model(project: &UiProjectView, selected: Option<BlockModelId>) -> bool {
-    selected.is_some_and(|id| project.block_models.iter().any(|entry| entry.is_loaded && entry.id == Some(id)))
+    selected.is_some_and(|id| project.block_models.iter().any(|entry| entry.is_loaded && entry.id == id))
 }

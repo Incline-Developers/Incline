@@ -34,7 +34,7 @@ impl Frustum {
     }
 
     /// `false` only when the AABB is provably entirely on the outside of at
-    /// least one plane — conservative, so it never culls a chunk that's
+    /// least one plane - conservative, so it never culls a chunk that's
     /// actually (even partially) visible.
     pub(crate) fn intersects_aabb(&self, min: Vec3, max: Vec3) -> bool {
         self.planes.iter().all(|plane| aabb_inside_plane(plane, min, max))
@@ -43,7 +43,7 @@ impl Frustum {
     /// Like [`intersects_aabb`] but ignores the near/far planes, testing only
     /// the four lateral (left/right/top/bottom) planes. Used to decide whether
     /// geometry is within the camera's field of view regardless of how deep it
-    /// sits — so a distant model that is well outside the view sideways can be
+    /// sits - so a distant model that is well outside the view sideways can be
     /// excluded from depth-range fitting without depending on the current
     /// (chicken-and-egg) near/far planes.
     pub(crate) fn intersects_aabb_lateral(&self, min: Vec3, max: Vec3) -> bool {

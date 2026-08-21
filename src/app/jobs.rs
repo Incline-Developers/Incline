@@ -55,7 +55,7 @@ pub(crate) enum JobKey {
 
 /// Shared cancellation signal for one background job. Compute closures should
 /// poll [`CancelFlag::is_cancelled`] at convenient points in long loops and
-/// return early (any error is fine — the result is discarded anyway).
+/// return early (any error is fine - the result is discarded anyway).
 #[derive(Clone, Default)]
 pub(crate) struct CancelFlag(Arc<AtomicBool>);
 
@@ -184,7 +184,7 @@ impl<'a> App<'a> {
                 .projects
                 .iter()
                 .find(|project| project.runtime_id == runtime_id)
-                .is_some_and(|project| project.pidb.document.revision() == document_revision),
+                .is_some_and(|project| project.project.document.revision() == document_revision),
             JobKey::Anonymous => true,
         })
     }
@@ -193,7 +193,7 @@ impl<'a> App<'a> {
     /// runs on the UI thread with the result. Increments the shared progress
     /// counter (progress cursor + status bar) for the job's lifetime.
     ///
-    /// `compute` must capture only owned data / `Arc`s — never `&self`, and
+    /// `compute` must capture only owned data / `Arc`s - never `&self`, and
     /// should poll the passed [`CancelFlag`] in long loops. `apply` runs later
     /// with `&mut App`, so it must re-resolve anything by stable id: sources
     /// may have been edited or removed while the job ran.

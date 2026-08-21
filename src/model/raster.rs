@@ -1,11 +1,7 @@
 //! Georeferenced display rasters used as triangulation surface textures.
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::io::BufReader;
-#[cfg(target_arch = "wasm32")]
-use std::io::Cursor;
 use std::{
-    io::{Read, Seek},
+    io::{Cursor, Read, Seek},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -17,6 +13,8 @@ use tiff::{
     tags::Tag,
 };
 
+use crate::model::project::{ProjectItemState, imported_item_name};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RasterTextureId(pub(crate) u64);
 
@@ -27,6 +25,9 @@ pub(crate) struct LoadedRasterTexture {
     pub(crate) path: PathBuf,
     pub(crate) source_size: [u32; 2],
     pub(crate) preview_size: [u32; 2],
+    /// Full-resolution project payload, retained independently of the bounded
+    /// render preview so saving never depends on the source file.
+    pub(crate) full_rgba: Arc<Vec<u8>>,
     pub(crate) rgba: Arc<Vec<u8>>,
     /// Affine map from world XY to normalized texture UV:
     /// `u = a*x + b*y + c`, `v = d*x + e*y + f`.
@@ -38,14 +39,47 @@ pub(crate) struct LoadedRasterTexture {
 #[derive(Clone, Debug)]
 pub(crate) struct OpenRasterTexture {
     pub(crate) id: RasterTextureId,
+    pub(crate) state: ProjectItemState,
     pub(crate) name: String,
-    pub(crate) path: PathBuf,
+    /// Hidden rasters stay loaded and keep their drape; they just stop drawing.
+    pub(crate) visible: bool,
     pub(crate) source_size: [u32; 2],
     pub(crate) preview_size: [u32; 2],
+    pub(crate) full_rgba: Arc<Vec<u8>>,
     pub(crate) rgba: Arc<Vec<u8>>,
     pub(crate) world_to_uv: [f64; 6],
     pub(crate) projection: String,
     pub(crate) driver_name: String,
+}
+
+/// Build a bounded render preview from retained full-resolution RGBA pixels.
+/// Project persistence always keeps `source`; this derived buffer may be
+/// recreated whenever a project is opened or a runtime cache is reloaded.
+pub(crate) fn downscale_rgba(source: &[u8], source_size: [u32; 2], preview_size: [u32; 2]) -> Result<Vec<u8>> {
+    let [source_width, source_height] = source_size;
+    let [preview_width, preview_height] = preview_size;
+    if source_width == 0 || source_height == 0 || preview_width == 0 || preview_height == 0 {
+        anyhow::bail!("Raster dimensions must be non-zero");
+    }
+    let expected = usize::try_from(u64::from(source_width) * u64::from(source_height) * 4).context("Raster dimensions exceed addressable memory")?;
+    if source.len() != expected {
+        anyhow::bail!("Raster pixel buffer has {} bytes; expected {expected}", source.len());
+    }
+    if source_size == preview_size {
+        return Ok(source.to_vec());
+    }
+    let output_len = usize::try_from(u64::from(preview_width) * u64::from(preview_height) * 4).context("Raster preview dimensions exceed addressable memory")?;
+    let mut output = vec![0; output_len];
+    for y in 0..preview_height {
+        let source_y = ((u64::from(y) * u64::from(source_height)) / u64::from(preview_height)).min(u64::from(source_height - 1)) as usize;
+        for x in 0..preview_width {
+            let source_x = ((u64::from(x) * u64::from(source_width)) / u64::from(preview_width)).min(u64::from(source_width - 1)) as usize;
+            let source_index = (source_y * source_width as usize + source_x) * 4;
+            let output_index = (y as usize * preview_width as usize + x as usize) * 4;
+            output[output_index..output_index + 4].copy_from_slice(&source[source_index..source_index + 4]);
+        }
+    }
+    Ok(output)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -310,13 +344,23 @@ fn chunk_pixel_rgba(samples: &[u8], layout: PixelLayout, pixel: usize) -> [u8; 4
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode_raster(path: &Path, max_preview_dimension: u32) -> Result<LoadedRasterTexture> {
-    let file = std::fs::File::open(path).with_context(|| format!("Failed to open raster {}", path.display()))?;
-    decode_raster_reader(BufReader::new(file), path, max_preview_dimension)
+    let bytes = std::fs::read(path).with_context(|| format!("Failed to open raster {}", path.display()))?;
+    decode_retained_raster(&bytes, path, max_preview_dimension)
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn decode_raster_bytes(source_name: &str, bytes: &[u8], max_preview_dimension: u32) -> Result<LoadedRasterTexture> {
-    decode_raster_reader(Cursor::new(bytes), Path::new(source_name), max_preview_dimension)
+    decode_retained_raster(bytes, Path::new(source_name), max_preview_dimension)
+}
+
+fn decode_retained_raster(bytes: &[u8], path: &Path, max_preview_dimension: u32) -> Result<LoadedRasterTexture> {
+    let mut full = decode_raster_reader(Cursor::new(bytes), path, u32::MAX)?;
+    if full.source_size[0].max(full.source_size[1]) > max_preview_dimension.max(1) {
+        let preview = decode_raster_reader(Cursor::new(bytes), path, max_preview_dimension)?;
+        full.preview_size = preview.preview_size;
+        full.rgba = preview.rgba;
+    }
+    Ok(full)
 }
 
 fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dimension: u32) -> Result<LoadedRasterTexture> {
@@ -455,12 +499,14 @@ fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dime
         RasterDecodeMode::FloatRgb { .. } => finish_float_rgb(float_sums, &counts),
     };
 
+    let rgba = Arc::new(rgba);
     Ok(LoadedRasterTexture {
-        name: path.file_name().and_then(|value| value.to_str()).unwrap_or("Raster").to_owned(),
+        name: imported_item_name(path, "Raster"),
         path: path.to_owned(),
         source_size: [source_width, source_height],
         preview_size: [preview_width, preview_height],
-        rgba: Arc::new(rgba),
+        full_rgba: Arc::clone(&rgba),
+        rgba,
         world_to_uv,
         projection,
         driver_name: "GeoTIFF".to_owned(),

@@ -160,6 +160,16 @@ impl<'a> App<'a> {
                     // redraws generated directly by the compositor during resize.
                     self.redraw_requested = false;
                     let project = self.project_view();
+                    if let Some(window) = &self.window {
+                        let title = project.projects.first().map_or_else(
+                            || crate::APP_NAME.to_owned(),
+                            |entry| {
+                                let name = entry.name.trim_end_matches(".omf");
+                                format!("{}: {}{}", crate::APP_NAME, name, if entry.dirty { " *" } else { "" })
+                            },
+                        );
+                        window.set_title(&title);
+                    }
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
                     let completing_topology_load = self.topology_uploads_pending();
@@ -219,7 +229,7 @@ impl<'a> App<'a> {
                                         &self.raster_textures,
                                     );
                                 }
-                                // Keep move panel preview in sync — apply whenever the panel delta
+                                // Keep move panel preview in sync - apply whenever the panel delta
                                 // differs from the last applied preview (catches typed values that
                                 // don't always trigger changed() on every frame).
                                 if self.editor.active_tool == ActiveTool::Move
@@ -239,7 +249,7 @@ impl<'a> App<'a> {
                                     self.editor.move_panel_last_preview = [f64::NAN; 3];
                                     self.cancel_move_delta();
                                 }
-                                let hover_highlight_active = matches!(self.editor.active_tool, ActiveTool::ExplodePolygon | ActiveTool::Move | ActiveTool::DeleteElement)
+                                let hover_highlight_active = matches!(self.editor.active_tool, ActiveTool::ExplodePolyline | ActiveTool::Move | ActiveTool::DeletePoints)
                                     || (self.editor.active_tool == ActiveTool::RelimitLine && (self.editor.relimit_awaiting_source_pick || self.editor.relimit_waiting_for_pick));
                                 if !hover_highlight_active
                                     && self.editor.tool_highlight_id.is_some()
@@ -270,13 +280,14 @@ impl<'a> App<'a> {
                                     self.invalidate_overlay();
                                 }
                                 // Cancel fuse state when switching away from the fuse tool.
-                                if self.editor.active_tool != ActiveTool::FuseIntoPolygon && (self.editor.fuse_awaiting_endpoint.is_some() || !self.editor.fuse_segments.is_empty())
+                                if self.editor.active_tool != ActiveTool::FuseIntoPolyline
+                                    && (self.editor.fuse_awaiting_endpoint.is_some() || !self.editor.fuse_segments.is_empty())
                                 {
                                     self.cancel_fuse();
                                 }
                                 // Auto-initiate fuse from an existing selection when the fuse
-                                // tool is first activated with exactly one selected line/polygon.
-                                if self.editor.active_tool == ActiveTool::FuseIntoPolygon && self.editor.fuse_awaiting_endpoint.is_none() && self.editor.fuse_segments.is_empty() {
+                                // tool is first activated with exactly one selected line/polyline.
+                                if self.editor.active_tool == ActiveTool::FuseIntoPolyline && self.editor.fuse_awaiting_endpoint.is_none() && self.editor.fuse_segments.is_empty() {
                                     self.fuse_init_from_selection();
                                 }
                                 if self.editor.active_tool == ActiveTool::SplitAtPoints && self.editor.split_poly_id.is_none() {
@@ -393,8 +404,9 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::Move
                         && let Some(cursor_px) = self.editor.cursor_screen_px
                     {
-                        let hovered_plane = hit_gizmo_plane(&self.editor, cursor_px).map(|(idx, _)| idx);
-                        let hovered_axis = hovered_plane.is_none().then(|| hit_gizmo_axis(&self.editor, cursor_px).map(|(idx, _)| idx)).flatten();
+                        let hit = hit_gizmo_handle(&self.editor, cursor_px);
+                        let hovered_plane = hit.as_ref().and_then(GizmoHandleHit::plane_index);
+                        let hovered_axis = hit.as_ref().and_then(GizmoHandleHit::axis_index);
                         if self.editor.move_gizmo_hovered_axis != hovered_axis || self.editor.move_gizmo_hovered_plane != hovered_plane {
                             self.editor.move_gizmo_hovered_axis = hovered_axis;
                             self.editor.move_gizmo_hovered_plane = hovered_plane;
@@ -420,7 +432,7 @@ impl<'a> App<'a> {
                                 crate::app::PICK_THRESHOLD_PX * 2.5,
                             );
                             let hover_px = nearest.and_then(|(oid, _vi, world)| {
-                                let is_closed_polygon = self.scene_document.get_object(oid).is_some_and(|o| {
+                                let is_closed_polyline = self.scene_document.get_object(oid).is_some_and(|o| {
                                     matches!(
                                         o,
                                         crate::model::Object::Polyline {
@@ -430,7 +442,7 @@ impl<'a> App<'a> {
                                         } if verts.len() >= 3
                                     )
                                 });
-                                if !is_closed_polygon {
+                                if !is_closed_polyline {
                                     return None;
                                 }
                                 crate::rendering::pick::world_to_screen(&vp, world, screen).map(|s| (s.x as f32, s.y as f32))
@@ -442,8 +454,8 @@ impl<'a> App<'a> {
                         }
                     }
                     let hover_pick_due = snap_poll_due
-                        && (matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeleteElement)
-                            || self.editor.active_tool == ActiveTool::ExplodePolygon
+                        && (matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
+                            || self.editor.active_tool == ActiveTool::ExplodePolyline
                             || self.editor.relimit_awaiting_source_pick
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
@@ -452,9 +464,9 @@ impl<'a> App<'a> {
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
-                    if matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeleteElement) && hover_pick_due {
+                    if matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints) && hover_pick_due {
                         self.update_move_delete_hover();
-                    } else if !matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeleteElement) && self.editor.tool_hover_vertex_px.is_some() {
+                    } else if !matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints) && self.editor.tool_hover_vertex_px.is_some() {
                         self.editor.tool_hover_vertex_px = None;
                         self.invalidate_overlay();
                     }
@@ -543,7 +555,7 @@ impl<'a> App<'a> {
                         self.update_relimit_hover_line();
                     }
                     self.update_offset_preview();
-                    if self.editor.active_tool == ActiveTool::ExplodePolygon && hover_pick_due {
+                    if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
                     if (self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick) && hover_pick_due {
@@ -560,7 +572,7 @@ impl<'a> App<'a> {
                         || self.editor.active_tool == ActiveTool::Move
                         || self.editor.active_tool == ActiveTool::MeasureDistance
                         || self.editor.active_tool == ActiveTool::MeasureBatterAngle
-                        || self.editor.active_tool == ActiveTool::DeleteElement
+                        || self.editor.active_tool == ActiveTool::DeletePoints
                         || self.editor.active_tool == ActiveTool::Chamfer
                         || self.editor.active_tool == ActiveTool::Bezier
                         || self.editor.slice_pending_start.is_some()
@@ -776,19 +788,21 @@ impl<'a> App<'a> {
                 ActiveTool::MeasureDistance => self.measure_distance_click(),
                 ActiveTool::MeasureBatterAngle => self.measure_batter_angle_click(),
                 ActiveTool::VerticalSlice => self.slice_line_click(),
-                ActiveTool::DeleteElement => {
+                ActiveTool::DeletePoints => {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
                 ActiveTool::None => self.begin_select_or_drag(),
                 ActiveTool::Move => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
-                        if let Some((plane_idx, axes)) = hit_gizmo_plane(&self.editor, cursor_px) {
-                            self.begin_gizmo_plane_drag(plane_idx, axes, cursor_px);
-                        } else if let Some((axis_idx, axis)) = hit_gizmo_axis(&self.editor, cursor_px) {
-                            self.begin_gizmo_drag(axis_idx, axis, cursor_px);
-                        } else if !self.pick_move_vertex_target() {
-                            self.begin_select_or_drag();
+                        match hit_gizmo_handle(&self.editor, cursor_px) {
+                            Some(GizmoHandleHit::Plane(plane_idx, axes)) => self.begin_gizmo_plane_drag(plane_idx, axes, cursor_px),
+                            Some(GizmoHandleHit::Axis(axis_idx, axis)) => self.begin_gizmo_drag(axis_idx, axis, cursor_px),
+                            None => {
+                                if !self.pick_move_vertex_target() {
+                                    self.begin_select_or_drag();
+                                }
+                            }
                         }
                     } else {
                         self.begin_select_or_drag();
@@ -815,8 +829,8 @@ impl<'a> App<'a> {
                         }
                     }
                 }
-                ActiveTool::ExplodePolygon => self.explode_at_cursor(),
-                ActiveTool::FuseIntoPolygon => self.fuse_click(),
+                ActiveTool::ExplodePolyline => self.explode_at_cursor(),
+                ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
                 ActiveTool::RelimitLine => self.relimit_line_click(),
                 ActiveTool::OffsetElement => {
@@ -910,9 +924,10 @@ impl<'a> App<'a> {
             } else if is_quick_press && self.editor.active_tool == ActiveTool::None && !self.editor.tri_create_open {
                 let frozen = &self.editor.frozen_handles;
                 let picked = self.graphics.as_ref().and_then(|g| {
-                    g.pick_at_cursor(
+                    g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
                         &self.triangulations,
+                        &self.drill_holes,
                         &self.editor.hidden_handles,
                         frozen,
                         self.editor.xray_enabled,
@@ -921,15 +936,6 @@ impl<'a> App<'a> {
                 if let Some((handle, world)) = picked {
                     if let crate::model::SceneEntityId::Object(id) = handle {
                         self.activate_project_for_object(id);
-                        let Some(layer) = self
-                            .workspace
-                            .active_document()
-                            .and_then(|document| document.get_object(id))
-                            .map(crate::model::Object::layer)
-                        else {
-                            return;
-                        };
-                        self.editor.active_layer = Some(layer);
                     }
                     if !self.editor.selected_handles.contains(&handle) {
                         self.editor.on_canvas_pick(handle, world, crate::ui::state::SelectionMode::Replace);
@@ -937,7 +943,7 @@ impl<'a> App<'a> {
                     }
                     self.active_triangulation = match handle {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
-                        crate::model::SceneEntityId::Object(_) | crate::model::SceneEntityId::BlockModel(_) => None,
+                        _ => None,
                     };
                     self.editor.canvas_context_line_weight_input = None;
                     self.editor.canvas_context_menu_open = true;
@@ -966,7 +972,7 @@ impl<'a> App<'a> {
                 KeyCode::KeyZ => self.apply_history_step(true),
                 KeyCode::KeyY => self.apply_history_step(false),
                 KeyCode::KeyS => {
-                    if let Err(error) = self.save_all_dirty_projects() {
+                    if let Err(error) = self.save_dirty_project() {
                         userspace_error!("Couldn't save: {}", error);
                     }
                 }
@@ -1137,7 +1143,7 @@ impl<'a> App<'a> {
                 } else if self.editor.relimit_confirming_end || self.editor.relimit_waiting_for_pick || self.editor.relimit_awaiting_source_pick || self.editor.relimit_dialog_open
                 {
                     self.cancel_relimit();
-                } else if self.editor.active_tool == ActiveTool::FuseIntoPolygon {
+                } else if self.editor.active_tool == ActiveTool::FuseIntoPolyline {
                     self.cancel_fuse();
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
@@ -1152,7 +1158,7 @@ impl<'a> App<'a> {
                     self.cancel_chamfer();
                 } else if self.editor.active_tool == ActiveTool::Bezier {
                     self.cancel_bezier();
-                } else if self.editor.active_tool == ActiveTool::ExplodePolygon {
+                } else if self.editor.active_tool == ActiveTool::ExplodePolyline {
                     self.editor.tool_highlight_id = None;
                     self.editor.active_tool = ActiveTool::None;
                     self.invalidate_geometry();
@@ -1246,7 +1252,7 @@ impl<'a> App<'a> {
             self.cancel_offset();
         } else if self.editor.relimit_confirming_end || self.editor.relimit_waiting_for_pick || self.editor.relimit_awaiting_source_pick || self.editor.relimit_dialog_open {
             self.cancel_relimit();
-        } else if self.editor.active_tool == ActiveTool::FuseIntoPolygon {
+        } else if self.editor.active_tool == ActiveTool::FuseIntoPolyline {
             self.cancel_fuse();
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
@@ -1257,7 +1263,7 @@ impl<'a> App<'a> {
             self.editor.gizmo_drag_plane_index = None;
             self.cancel_move_delta();
             self.editor.active_tool = ActiveTool::None;
-        } else if self.editor.active_tool == ActiveTool::ExplodePolygon {
+        } else if self.editor.active_tool == ActiveTool::ExplodePolyline {
             self.editor.tool_highlight_id = None;
             self.editor.active_tool = ActiveTool::None;
             self.invalidate_geometry();
@@ -1403,41 +1409,97 @@ fn is_left_mouse_release(event: &WindowEvent) -> bool {
     )
 }
 
-fn hit_gizmo_axis(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32)) -> Option<(u8, glam::DVec3)> {
-    const THRESHOLD_PX: f32 = 12.0;
-    let center = editor.move_gizmo_center_px?;
-    let axes = [
-        (editor.move_gizmo_x_tip_px, glam::DVec3::X, 0u8),
-        (editor.move_gizmo_y_tip_px, glam::DVec3::Y, 1u8),
-        (editor.move_gizmo_z_tip_px, glam::DVec3::Z, 2u8),
-    ];
-    let dist_to_segment = |p: (f32, f32), a: (f32, f32), b: (f32, f32)| -> f32 {
-        let px = p.0 - a.0;
-        let py = p.1 - a.1;
-        let bx = b.0 - a.0;
-        let by = b.1 - a.1;
-        let len2 = bx * bx + by * by;
-        if len2 < 1e-8 {
-            return (px * px + py * py).sqrt();
-        }
-        let t = ((px * bx + py * by) / len2).clamp(0.0, 1.0);
-        let rx = px - t * bx;
-        let ry = py - t * by;
-        (rx * rx + ry * ry).sqrt()
-    };
+/// Cursor slack around a gizmo handle, in logical points.
+const GIZMO_HIT_POINTS: f32 = 9.0;
 
-    axes.into_iter().find_map(|(tip, axis, idx)| {
-        let tip = tip?;
-        (dist_to_segment(cursor_px, center, tip) < THRESHOLD_PX).then_some((idx, axis))
-    })
+/// Which Move gizmo handle the cursor is over.
+enum GizmoHandleHit {
+    Axis(u8, glam::DVec3),
+    /// A plane handle, or the view-aligned ring as `MOVE_GIZMO_VIEW_PLANE`.
+    Plane(u8, [glam::DVec3; 2]),
 }
 
-fn hit_gizmo_plane(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32)) -> Option<(u8, [glam::DVec3; 2])> {
-    let axes = [[glam::DVec3::X, glam::DVec3::Y], [glam::DVec3::X, glam::DVec3::Z], [glam::DVec3::Y, glam::DVec3::Z]];
-    editor.move_gizmo_plane_handles_px.iter().enumerate().find_map(|(index, quad)| {
+impl GizmoHandleHit {
+    fn axis_index(&self) -> Option<u8> {
+        match *self {
+            GizmoHandleHit::Axis(index, _) => Some(index),
+            GizmoHandleHit::Plane(..) => None,
+        }
+    }
+
+    fn plane_index(&self) -> Option<u8> {
+        match *self {
+            GizmoHandleHit::Plane(index, _) => Some(index),
+            GizmoHandleHit::Axis(..) => None,
+        }
+    }
+}
+
+fn point_to_segment_distance(point: (f32, f32), start: (f32, f32), end: (f32, f32)) -> f32 {
+    let px = point.0 - start.0;
+    let py = point.1 - start.1;
+    let bx = end.0 - start.0;
+    let by = end.1 - start.1;
+    let length_sq = bx * bx + by * by;
+    if length_sq < 1e-8 {
+        return px.hypot(py);
+    }
+    let t = ((px * bx + py * by) / length_sq).clamp(0.0, 1.0);
+    (px - t * bx).hypot(py - t * by)
+}
+
+/// Handle under the cursor, preferring the smaller targets: plane handles,
+/// then axis arrows, then the ring the arrows pass through.
+fn hit_gizmo_handle(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32)) -> Option<GizmoHandleHit> {
+    let gizmo = &editor.move_gizmo;
+    let center = gizmo.center_px?;
+    let threshold = GIZMO_HIT_POINTS * gizmo.scale_factor.max(1.0);
+
+    let plane_axes = [[glam::DVec3::X, glam::DVec3::Y], [glam::DVec3::X, glam::DVec3::Z], [glam::DVec3::Y, glam::DVec3::Z]];
+    let plane = gizmo.plane_quad_px.iter().enumerate().find_map(|(index, quad)| {
         let quad = quad.as_ref()?;
-        point_in_convex_quad(cursor_px, quad).then_some((index as u8, axes[index]))
-    })
+        (gizmo.plane_fade[index] > 0.0 && point_in_convex_quad(cursor_px, quad)).then_some(GizmoHandleHit::Plane(index as u8, plane_axes[index]))
+    });
+    if plane.is_some() {
+        return plane;
+    }
+
+    let mut best: Option<(u8, glam::DVec3, f32)> = None;
+    for (index, axis) in [glam::DVec3::X, glam::DVec3::Y, glam::DVec3::Z].into_iter().enumerate() {
+        // A faded-out axis is not clickable: its screen direction is unreliable
+        // and the user cannot see what they would be grabbing.
+        if gizmo.axis_fade[index] <= 0.0 {
+            continue;
+        }
+        let Some(tip) = gizmo.axis_tip_px[index] else {
+            continue;
+        };
+        // Arrows are drawn from the ring outwards, so start the hit segment
+        // there and leave the ring itself grabbable.
+        let start = gizmo_axis_start_px(center, tip, gizmo.ring_radius_px);
+        let distance = point_to_segment_distance(cursor_px, start, tip);
+        if distance < threshold && best.is_none_or(|(_, _, best_distance)| distance < best_distance) {
+            best = Some((index as u8, axis, distance));
+        }
+    }
+    if let Some((index, axis, _)) = best {
+        return Some(GizmoHandleHit::Axis(index, axis));
+    }
+
+    let view_axes = gizmo.view_axes?;
+    let distance = (cursor_px.0 - center.0).hypot(cursor_px.1 - center.1);
+    ((distance - gizmo.ring_radius_px).abs() < threshold * 0.7).then_some(GizmoHandleHit::Plane(crate::ui::state::MOVE_GIZMO_VIEW_PLANE, view_axes))
+}
+
+/// Point on the ring where an axis arrow starts, given its projected tip.
+fn gizmo_axis_start_px(center: (f32, f32), tip: (f32, f32), ring_radius_px: f32) -> (f32, f32) {
+    let dx = tip.0 - center.0;
+    let dy = tip.1 - center.1;
+    let length = dx.hypot(dy);
+    if length <= ring_radius_px {
+        return center;
+    }
+    (center.0 + dx / length * ring_radius_px, center.1 + dy / length * ring_radius_px)
 }
 
 fn point_in_convex_quad(point: (f32, f32), quad: &[(f32, f32); 4]) -> bool {

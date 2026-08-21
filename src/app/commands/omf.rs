@@ -1,6 +1,5 @@
 //! Whole-project Open Mining Format import/export commands.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,15 +9,15 @@ use anyhow::Result;
 use crate::{
     app::App,
     model::{
-        formats::omf::{self, ExportSnapshot, ImportBundle},
-        pidb,
+        formats::omf::{self, ImportBundle, ProjectSnapshot},
+        project,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },
     userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
-    fn omf_export_snapshot(&mut self) -> Result<ExportSnapshot> {
+    pub(super) fn omf_export_snapshot(&mut self) -> Result<ProjectSnapshot> {
         if self.has_pending_move_delta() {
             self.commit_pending_move();
         }
@@ -28,12 +27,12 @@ impl<'a> App<'a> {
         let name = self
             .workspace
             .active_project()
-            .map(|project| project.pidb.metadata.name.trim_end_matches(".pidb").to_owned())
+            .map(|project| project.project.metadata.name.trim_end_matches(".omf").to_owned())
             .filter(|name| !name.trim().is_empty())
             .unwrap_or_else(|| "Incline project".to_owned());
-        let snapshot = ExportSnapshot {
+        let snapshot = ProjectSnapshot {
             name,
-            designs: self.workspace.projects.iter().map(|project| project.pidb.clone()).collect(),
+            designs: self.workspace.active_project().map(|project| project.project.clone()),
             triangulations: self.triangulations.clone(),
             block_models: self.block_models.clone(),
             drill_holes: self.drill_holes.clone(),
@@ -46,13 +45,163 @@ impl<'a> App<'a> {
         Ok(snapshot)
     }
 
+    /// Install a decoded OMF as the single native project. Unlike OMF merge,
+    /// this establishes the file as the clean persistence baseline and
+    /// replaces every item owned by the previous project.
+    pub(crate) fn apply_opened_omf_bundle(&mut self, path: Option<PathBuf>, source_name: String, bundle: ImportBundle) {
+        let should_fit = !self.scene_has_renderables();
+        let lossy_save_warnings = bundle.warnings.clone();
+        for warning in &lossy_save_warnings {
+            userspace_warn!("{source_name}: {warning}");
+        }
+        let ImportBundle {
+            project_name,
+            coordinate_reference_system,
+            units,
+            origin: _,
+            designs,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            warnings: _,
+        } = bundle;
+
+        let mut design = project::new_empty(path.clone());
+        if !project_name.trim().is_empty() {
+            design.metadata.name = project_name.clone();
+        }
+        design.metadata.coordinate_reference_system = coordinate_reference_system;
+        design.metadata.units = units;
+        for imported in designs {
+            project::merge_document_preserve_ids(&mut design.document, &imported.document);
+        }
+        let opened = match path.clone() {
+            Some(path) => project::open_project(Some(path), design),
+            #[cfg(target_arch = "wasm32")]
+            None => project::open_imported_project(source_name.clone(), design),
+            #[cfg(not(target_arch = "wasm32"))]
+            None => project::open_project(None, design),
+        };
+        let opened = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                userspace_warn!("Could not open project {source_name}: {error:#}");
+                return;
+            }
+        };
+        self.set_active_project(opened);
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.lossy_save_warnings = lossy_save_warnings;
+            project.lossy_save_confirmed = false;
+            project.loaded_layers.extend(project.project.document.layers().iter().map(|layer| layer.id));
+            self.editor.active_layer = project.project.document.layers().first().map(|layer| layer.id);
+        }
+
+        let mut raster_id_map = std::collections::HashMap::new();
+        for imported in rasters {
+            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_raster_texture_id, self.raster_textures.iter().map(|item| item.id.0));
+            let preferred_id = imported.preferred_id;
+            let source_name = imported.source_name;
+            let source_format = imported.source_format;
+            self.add_loaded_raster(imported.loaded);
+            if let Some(open) = self.raster_textures.last_mut() {
+                open.id = crate::model::raster::RasterTextureId(target_id);
+                open.state.set_provenance(source_name, source_format);
+                open.visible = imported.visible;
+            }
+            if let Some(preferred_id) = preferred_id {
+                raster_id_map.insert(preferred_id, crate::model::raster::RasterTextureId(target_id));
+            }
+        }
+
+        for imported in triangulations {
+            let preferred_id = imported.preferred_id;
+            let source_name = imported.source_name;
+            let source_format = imported.source_format;
+            let raster_texture = imported.raster_texture_id.and_then(|id| raster_id_map.get(&id).copied());
+            let LoadedTriangulation {
+                mut name,
+                path: _,
+                mesh,
+                spatial,
+                edges,
+                surface_face_order,
+            } = imported.loaded;
+            name = project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
+            let id = TriangulationId(allocate_item_id(
+                preferred_id,
+                &mut self.next_triangulation_id,
+                self.triangulations.iter().map(|item| item.id.0),
+            ));
+            self.triangulations.push(OpenTriangulation {
+                id,
+                state: crate::model::project::ProjectItemState::dirty_with_format(source_name, source_format),
+                name,
+                mesh,
+                spatial,
+                edges,
+                surface_face_order,
+                visible: imported.visible,
+                color: imported.color,
+                line_color: imported.line_color,
+                line_weight: imported.line_weight,
+                raster_texture,
+                raster_opacity: imported.raster_opacity,
+            });
+            self.touch_active_project_content();
+            self.active_triangulation.get_or_insert(id);
+        }
+        for imported in block_models {
+            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_block_model_id, self.block_models.iter().map(|item| item.id.0));
+            self.add_loaded_block_model(imported.loaded);
+            if let Some(open) = self.block_models.last_mut() {
+                open.id = crate::model::block_model::BlockModelId(target_id);
+                open.state.set_provenance(imported.source_name, imported.source_format);
+                open.visible = imported.visible;
+                open.color = imported.color;
+                open.slice = imported.slice;
+                open.color_transfer = imported.color_transfer;
+                open.hide_empty_color_values = imported.hide_empty_color_values;
+            }
+        }
+        for imported in drill_holes {
+            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_drill_hole_id, self.drill_holes.iter().map(|item| item.id.0));
+            self.add_loaded_drill_holes(imported.loaded);
+            if let Some(open) = self.drill_holes.last_mut() {
+                open.id = crate::model::drill_hole::DrillHoleId(target_id);
+                open.state.set_provenance(imported.source_name, imported.source_format);
+                open.visible = imported.visible;
+                open.color = imported.color;
+            }
+        }
+        for imported in point_clouds {
+            let target_id = allocate_item_id(imported.preferred_id, &mut self.next_point_cloud_id, self.point_clouds.iter().map(|item| item.id.0));
+            self.add_loaded_point_cloud(imported.loaded, imported.visible, imported.color, imported.point_size);
+            if let Some(open) = self.point_clouds.last_mut() {
+                open.id = crate::model::point_cloud::PointCloudId(target_id);
+                open.state.set_provenance(imported.source_name, imported.source_format);
+            }
+        }
+
+        self.mark_all_project_content_saved();
+
+        userspace_log!("Opened project '{project_name}' from {source_name}");
+        self.invalidate_geometry();
+        if should_fit {
+            self.fit_view_to_extents();
+        }
+        self.persist_session();
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn import_omf_paths(&mut self, paths: Vec<PathBuf>) {
         if paths.is_empty() {
             return;
         }
         self.spawn_job_reporting_progress(
-            "Importing OMF project…",
+            "Importing project…",
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 let total = paths.len().max(1) as f32;
@@ -79,7 +228,7 @@ impl<'a> App<'a> {
     pub(crate) fn import_web_omf_sources(&mut self) -> Result<()> {
         let files = self.take_web_import_files(crate::ui::state::DataMenu::Omf)?;
         self.spawn_job_reporting_progress(
-            "Importing OMF project…",
+            "Importing project…",
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 let total = files.len().max(1) as f32;
@@ -103,19 +252,34 @@ impl<'a> App<'a> {
     }
 
     fn apply_omf_bundles(&mut self, bundles: Vec<(String, ImportBundle)>) {
+        if self.workspace.active_project().is_none() {
+            userspace_warn!("Create or open a project before merging data");
+            return;
+        }
         let should_fit = !self.scene_has_renderables();
         let mut imported_items = 0usize;
-        let mut first_project_index = None;
         for (source_name, bundle) in bundles {
+            let target_is_empty = self
+                .workspace
+                .active_project()
+                .is_some_and(|project| project.project.document.layers().is_empty() && project.project.document.objects().is_empty())
+                && self.triangulations.is_empty()
+                && self.block_models.is_empty()
+                && self.drill_holes.is_empty()
+                && self.point_clouds.is_empty()
+                && self.raster_textures.is_empty();
             let count = bundle.item_count();
             if count == 0 {
-                userspace_warn!("OMF project '{source_name}' contains no supported data elements");
+                userspace_warn!("Project '{source_name}' contains no supported data elements");
             }
             for warning in &bundle.warnings {
                 userspace_warn!("{source_name}: {warning}");
             }
             let ImportBundle {
                 project_name,
+                coordinate_reference_system,
+                units,
+                origin,
                 designs,
                 triangulations,
                 block_models,
@@ -125,34 +289,69 @@ impl<'a> App<'a> {
                 warnings: _,
             } = bundle;
 
+            if let Some(project) = self.workspace.active_project_mut() {
+                let target_crs = project.project.metadata.coordinate_reference_system.trim();
+                let source_crs = coordinate_reference_system.trim();
+                if target_is_empty && target_crs.is_empty() {
+                    project.project.metadata.coordinate_reference_system = coordinate_reference_system.clone();
+                } else if !target_crs.is_empty() && !source_crs.is_empty() && target_crs != source_crs {
+                    userspace_warn!(
+                        "{source_name}: coordinate reference system '{source_crs}' differs from project CRS '{target_crs}'; coordinates were merged without reprojection"
+                    );
+                }
+                let target_units = project.project.metadata.units.trim();
+                let source_units = units.trim();
+                if target_is_empty && target_units.is_empty() {
+                    project.project.metadata.units = units.clone();
+                } else if !target_units.is_empty() && !source_units.is_empty() && !target_units.eq_ignore_ascii_case(source_units) {
+                    userspace_warn!("{source_name}: units '{source_units}' differ from project units '{target_units}'; coordinates were merged without conversion");
+                }
+            }
+            if origin.iter().any(|value| *value != 0.0) {
+                userspace_log!("{source_name}: applied project origin {:?} before merge", origin);
+            }
+
             for design in designs {
-                match pidb::open_project(None, design) {
-                    Ok(project) => {
-                        let index = self.workspace.add_inactive(project);
-                        let layer_ids = self.workspace.projects[index].pidb.document.layers().iter().map(|layer| layer.id).collect::<Vec<_>>();
-                        self.workspace.projects[index].loaded_layers.extend(layer_ids);
-                        first_project_index.get_or_insert(index);
+                if let Some(project) = self.workspace.active_project_mut() {
+                    project::merge_document_unique_layers(&mut project.project.document, &design.document);
+                    project.loaded_layers.extend(project.project.document.layers().iter().map(|layer| layer.id));
+                }
+            }
+
+            // Install rasters first so triangulation drape relationships can
+            // be remapped from source IDs to newly allocated destination IDs.
+            let mut raster_id_map = std::collections::HashMap::new();
+            for mut raster in rasters {
+                let preferred_id = raster.preferred_id;
+                let visible = raster.visible;
+                raster.loaded.name = project::unique_item_name(raster.loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
+                self.add_loaded_raster(raster.loaded);
+                if let Some(open) = self.raster_textures.last_mut() {
+                    open.state.set_provenance(raster.source_name, raster.source_format);
+                    open.visible = visible;
+                    if let Some(preferred_id) = preferred_id {
+                        raster_id_map.insert(preferred_id, open.id);
                     }
-                    Err(error) => userspace_warn!("Could not import an OMF design database from {source_name}: {error:#}"),
                 }
             }
 
             for imported in triangulations {
+                let raster_texture = imported.raster_texture_id.and_then(|id| raster_id_map.get(&id).copied());
                 let LoadedTriangulation {
-                    name,
-                    path,
+                    mut name,
+                    path: _,
                     mesh,
                     spatial,
                     edges,
                     surface_face_order,
                 } = imported.loaded;
+                name = project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
                 let id = TriangulationId(self.next_triangulation_id);
                 self.next_triangulation_id += 1;
                 self.triangulations.push(OpenTriangulation {
                     id,
+                    state: crate::model::project::ProjectItemState::dirty_with_format(imported.source_name, imported.source_format),
                     name,
-                    path,
-                    is_saved: false,
                     mesh,
                     spatial,
                     edges,
@@ -161,42 +360,50 @@ impl<'a> App<'a> {
                     color: imported.color,
                     line_color: imported.line_color,
                     line_weight: imported.line_weight,
-                    raster_texture: None,
+                    raster_texture,
                     raster_opacity: imported.raster_opacity,
                 });
+                self.touch_active_project_content();
                 if self.active_triangulation.is_none() {
                     self.active_triangulation = Some(id);
                 }
             }
 
             for imported in block_models {
-                self.add_loaded_block_model(imported.loaded);
+                let mut loaded = imported.loaded;
+                loaded.name = project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
+                self.add_loaded_block_model(loaded);
                 if let Some(open) = self.block_models.last_mut() {
+                    open.state.set_provenance(imported.source_name, imported.source_format);
+                    open.visible = imported.visible;
+                    open.color = imported.color;
+                    open.slice = imported.slice;
+                    open.color_transfer = imported.color_transfer;
+                    open.hide_empty_color_values = imported.hide_empty_color_values;
+                }
+            }
+            for imported in drill_holes {
+                let mut loaded = imported.loaded;
+                loaded.name = project::unique_item_name(loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
+                self.add_loaded_drill_holes(loaded);
+                if let Some(open) = self.drill_holes.last_mut() {
+                    open.state.set_provenance(imported.source_name, imported.source_format);
                     open.visible = imported.visible;
                     open.color = imported.color;
                 }
             }
-            for imported in drill_holes {
-                self.add_loaded_drill_holes(imported.loaded);
-                if let Some(open) = self.drill_holes.last_mut() {
-                    open.visible = imported.visible;
+            for imported in point_clouds {
+                let mut loaded = imported.loaded;
+                loaded.name = project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
+                self.add_loaded_point_cloud(loaded, imported.visible, imported.color, imported.point_size);
+                if let Some(open) = self.point_clouds.last_mut() {
+                    open.state.set_provenance(imported.source_name, imported.source_format);
                 }
             }
-            for imported in point_clouds {
-                self.add_loaded_point_cloud(imported.loaded, imported.visible, imported.color, imported.point_size);
-            }
-            for raster in rasters {
-                self.add_loaded_raster(raster);
-            }
             imported_items += count;
-            userspace_log!("Imported OMF project '{project_name}' from {source_name}: {count} top-level dataset(s)");
+            userspace_log!("Imported project '{project_name}' from {source_name}: {count} top-level dataset(s)");
         }
 
-        if self.workspace.active_index.is_none()
-            && let Some(index) = first_project_index
-        {
-            self.activate_project_index(index);
-        }
         if imported_items > 0 {
             self.invalidate_geometry();
             if should_fit {
@@ -212,7 +419,7 @@ impl<'a> App<'a> {
         #[cfg(target_arch = "wasm32")]
         {
             self.spawn_job_reporting_progress(
-                "Encoding OMF project…",
+                "Encoding project…",
                 vec![crate::app::jobs::JobKey::Anonymous],
                 move |cancel, progress| {
                     if cancel.is_cancelled() {
@@ -221,7 +428,7 @@ impl<'a> App<'a> {
                     omf::to_bytes(snapshot, &progress.phase(0.0, 1.0))
                 },
                 move |_app, result| match result {
-                    Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "OMF project"),
+                    Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),
                     Err(error) => userspace_warn!("OMF export failed: {error:#}"),
                 },
             );
@@ -241,7 +448,7 @@ impl<'a> App<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn export_omf_snapshot(&mut self, snapshot: ExportSnapshot, mut path: PathBuf) {
+    pub(super) fn export_omf_snapshot(&mut self, snapshot: ProjectSnapshot, mut path: PathBuf) {
         if path.extension().is_none() {
             path.set_extension("omf");
         }
@@ -256,11 +463,25 @@ impl<'a> App<'a> {
                 omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))
             },
             move |_app, result| match result {
-                Ok(()) => userspace_log!("Exported OMF project to {}", display_path.display()),
+                Ok(()) => userspace_log!("Exported project to {}", display_path.display()),
                 Err(error) => userspace_warn!("OMF export failed: {error:#}"),
             },
         );
     }
+}
+
+fn allocate_item_id(preferred: Option<u64>, next: &mut u64, used: impl Iterator<Item = u64>) -> u64 {
+    let used = used.collect::<std::collections::HashSet<_>>();
+    if let Some(preferred) = preferred.filter(|id| !used.contains(id)) {
+        *next = (*next).max(preferred.saturating_add(1));
+        return preferred;
+    }
+    while used.contains(next) {
+        *next = next.saturating_add(1);
+    }
+    let id = *next;
+    *next = next.saturating_add(1);
+    id
 }
 
 fn safe_stem(name: &str) -> String {

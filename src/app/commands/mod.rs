@@ -1,7 +1,5 @@
 pub(crate) mod block_model;
-#[cfg(target_arch = "wasm32")]
-pub(crate) mod browser_data; // Persists browser imports (point clouds, block models, rasters)
-pub(crate) mod drawing; // Handles finishing polygons, creating points, etc commands
+pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
@@ -19,7 +17,7 @@ use anyhow::Result;
 
 use crate::{
     app::App,
-    ui::state::{MoveLayerDialog, TriCreatePhase, UiCommand},
+    ui::state::{TriCreatePhase, UiCommand},
     userspace_error, userspace_warn,
 };
 
@@ -32,21 +30,21 @@ impl<'a> App<'a> {
             .workspace
             .active_project()
             .into_iter()
-            .flat_map(|project| project.pidb.document.layers())
+            .flat_map(|project| project.project.document.layers())
             .map(|layer| layer.id)
             .collect();
         let changed = self.workspace.active_project_mut().is_some_and(|project| {
             if undo {
-                self.history.undo(&mut project.pidb.document)
+                self.history.undo(&mut project.project.document)
             } else {
-                self.history.redo(&mut project.pidb.document)
+                self.history.redo(&mut project.project.document)
             }
         });
         if !changed {
             return;
         }
         if let Some(project) = self.workspace.active_project_mut() {
-            let layers_after: std::collections::HashSet<_> = project.pidb.document.layers().iter().map(|layer| layer.id).collect();
+            let layers_after: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
             project.loaded_layers.retain(|layer_id| layers_after.contains(layer_id));
             project.loaded_layers.extend(layers_after.difference(&layers_before).copied());
         }
@@ -80,6 +78,24 @@ impl<'a> App<'a> {
     /// `commands::*` modules). This is a thin router; the work lives in those
     /// per-domain `impl` blocks.
     pub(crate) fn handle_ui_command(&mut self, command: UiCommand) -> Result<()> {
+        let requires_project = matches!(
+            &command,
+            UiCommand::ImportOmfPaths(_)
+                | UiCommand::ImportDxfPathsInto(_)
+                | UiCommand::ImportTriangulationPaths(_)
+                | UiCommand::ImportPointCloudPaths(_)
+                | UiCommand::ImportRasterPaths(_)
+                | UiCommand::ChooseImportSourceFiles(_)
+                | UiCommand::ImportCsvBlockModel { .. }
+                | UiCommand::ImportDrillHole(_)
+                | UiCommand::CreateLayer { .. }
+                | UiCommand::OpenCreateTriangulation
+                | UiCommand::OpenCreateBlockModel(_)
+                | UiCommand::OpenCreateOreTriangulation
+        );
+        if requires_project && !self.workspace.has_active_project() {
+            anyhow::bail!("Create or open a project before importing, drawing, or generating data");
+        }
         match command {
             UiCommand::SetActiveTool(tool) => {
                 self.set_active_tool_from_toolbar(tool);
@@ -97,25 +113,18 @@ impl<'a> App<'a> {
                 self.set_slice_mode_enabled(enabled);
                 Ok(())
             }
-            UiCommand::NewPidb => {
-                self.choose_new_pidb();
+            UiCommand::NewProject => {
+                self.choose_new_project();
                 Ok(())
             }
             #[cfg(target_arch = "wasm32")]
-            UiCommand::CreateBrowserPidb { name } => self.create_browser_pidb(name),
-            UiCommand::OpenPidb => {
-                self.choose_open_pidb();
+            UiCommand::CreateBrowserProject { name } => self.create_browser_project(name),
+            UiCommand::OpenProject => {
+                self.choose_open_project();
                 Ok(())
             }
-            UiCommand::OpenPidbPaths(paths) => {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let _ = paths;
-                    self.open_web_pidb_sources()
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                self.execute_file_dialog_action(file::FileDialogAction::OpenPidb(paths))
-            }
+            UiCommand::ActivateTrackedProject(project) => self.activate_tracked_project(project),
+            UiCommand::RemoveTrackedProject(project) => self.remove_tracked_project(project),
             UiCommand::CloseStartupDialog => {
                 self.startup_dialog_dismissed = true;
                 Ok(())
@@ -131,10 +140,6 @@ impl<'a> App<'a> {
                     self.import_omf_paths(paths);
                     Ok(())
                 }
-            }
-            UiCommand::ImportAsPidbPaths(kind, paths) => {
-                self.choose_import_as_pidb_paths(kind, paths);
-                Ok(())
             }
             UiCommand::ImportDxfPathsInto(paths) => self.import_dxf_paths_into(paths),
             UiCommand::ImportTriangulationPaths(paths) => {
@@ -164,50 +169,43 @@ impl<'a> App<'a> {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.execute_file_dialog_action(file::FileDialogAction::ImportRaster(paths))
             }
-            UiCommand::LoadRaster(path) => {
-                #[cfg(target_arch = "wasm32")]
-                self.load_browser_data(browser_data::BrowserDataKind::Raster, &path);
-                #[cfg(not(target_arch = "wasm32"))]
-                self.open_raster_path(path);
+            UiCommand::LoadRaster(id) => {
+                if let Some(raster) = self.raster_textures.iter_mut().find(|raster| raster.id == id) {
+                    raster.state.loaded = true;
+                    self.redraw_requested = true;
+                } else {
+                    userspace_warn!("That raster no longer belongs to the active project");
+                }
                 Ok(())
             }
-            UiCommand::UnloadRaster(path) => {
-                self.unload_raster(&path);
+            UiCommand::UnloadRaster(id) => {
+                self.unload_raster(id);
                 Ok(())
             }
-            UiCommand::RemoveRaster(path) => {
-                // In the browser the record is the raster's only home, so
-                // removing the entry has to delete it from storage too.
-                #[cfg(target_arch = "wasm32")]
-                self.delete_browser_data(browser_data::BrowserDataKind::Raster, &path);
-                self.remove_raster(&path);
+            UiCommand::ToggleRasterVisible(id) => {
+                self.toggle_raster_visible(id);
                 Ok(())
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::RevealRaster(path) => self.reveal_in_file_manager(&path),
-            UiCommand::DrapeRaster(path) => self.drape_raster_over_surfaces(&path),
-            UiCommand::UndrapeRaster(path) => {
-                self.undrape_raster(&path);
+            UiCommand::RemoveRaster(id) => {
+                self.remove_raster(id);
+                Ok(())
+            }
+            UiCommand::DrapeRaster(id) => self.drape_raster_over_surfaces(id),
+            UiCommand::UndrapeRaster(id) => {
+                self.undrape_raster(id);
                 Ok(())
             }
             UiCommand::ClearActiveTriangulationRaster => self.clear_active_triangulation_raster(),
-            UiCommand::LoadPointCloud(path) => {
-                #[cfg(target_arch = "wasm32")]
-                self.load_browser_data(browser_data::BrowserDataKind::PointCloud, &path);
-                #[cfg(not(target_arch = "wasm32"))]
-                self.open_point_cloud_path(path);
+            UiCommand::LoadPointCloud(id) => {
+                if let Some(cloud) = self.point_clouds.iter_mut().find(|cloud| cloud.id == id) {
+                    cloud.state.loaded = true;
+                    self.invalidate_topology_bounds_and_redraw();
+                } else {
+                    userspace_warn!("That point cloud no longer belongs to the active project");
+                }
                 Ok(())
             }
             UiCommand::ClosePointCloud(id) => {
-                if self.point_clouds.iter().any(|cloud| cloud.id == id && !cloud.is_saved) {
-                    self.editor.point_cloud_close_unsaved = Some(id);
-                    return Ok(());
-                }
-                self.close_point_cloud(id);
-                Ok(())
-            }
-            UiCommand::ClosePointCloudForce(id) => {
-                self.editor.point_cloud_close_unsaved = None;
                 self.close_point_cloud(id);
                 Ok(())
             }
@@ -215,14 +213,10 @@ impl<'a> App<'a> {
                 self.toggle_point_cloud_visible(id);
                 Ok(())
             }
-            UiCommand::RemovePointCloud(path) => {
-                #[cfg(target_arch = "wasm32")]
-                self.delete_browser_data(browser_data::BrowserDataKind::PointCloud, &path);
-                self.remove_point_cloud(&path);
+            UiCommand::RemovePointCloud(id) => {
+                self.remove_point_cloud(id);
                 Ok(())
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::RevealPointCloud(id) => self.reveal_point_cloud(id),
             UiCommand::ChooseImportSourceFiles(kind) => {
                 self.choose_import_source_files(kind);
                 Ok(())
@@ -239,24 +233,11 @@ impl<'a> App<'a> {
                     self.import_web_csv_block_model(mapping)
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                self.import_block_model_source(crate::model::block_model::BlockModelSource {
-                    path,
-                    csv_columns: Some(mapping),
-                    generated: false,
-                })
+                self.import_block_model_source(crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
             }
             UiCommand::ExportOmf => self.choose_export_omf(),
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::OpenTriangulationFolder => {
-                self.choose_open_triangulation_folder();
-                Ok(())
-            }
-            UiCommand::ExportPidbDxf(runtime_id) => {
-                self.choose_export_pidb_dxf(runtime_id);
-                Ok(())
-            }
-            UiCommand::ExportPidbCopy(runtime_id) => {
-                self.choose_export_pidb_copy(runtime_id);
+            UiCommand::ExportProjectDxf(runtime_id) => {
+                self.choose_export_project_dxf(runtime_id);
                 Ok(())
             }
             UiCommand::ExportViewportImage => {
@@ -275,47 +256,53 @@ impl<'a> App<'a> {
                 self.choose_export_block_model_csv(id);
                 Ok(())
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::SaveTriangulationAs(id) => {
-                self.spawn_save_triangulation_dialog(id);
+            UiCommand::HideSelection => {
+                self.hide_selected_elements();
                 Ok(())
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::SaveBlockModelAs(id) => {
-                self.spawn_save_block_model_dialog(id, false);
-                Ok(())
-            }
-            UiCommand::SaveAndCloseTriangulationAs(id) => {
-                self.spawn_save_and_close_triangulation_dialog(id);
-                Ok(())
-            }
-            UiCommand::SaveAndCloseBlockModelAs(id) => {
-                self.spawn_save_block_model_dialog(id, true);
-                #[cfg(target_arch = "wasm32")]
-                {
-                    self.editor.block_model_close_unsaved = None;
+            UiCommand::RevealAllElements => {
+                if let Some(document) = self.workspace.active_document_mut() {
+                    document.reveal_all_objects();
                 }
-                Ok(())
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::RevealTriangulation(id) => self.reveal_triangulation(id),
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::RevealBlockModel(id) => self.reveal_block_model(id),
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::RevealPidb(path) => self.reveal_pidb(&path),
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::RevealPath(path) => self.reveal_in_file_manager(&path),
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::OpenDirectory(path) => self.open_directory_in_file_manager(&path),
-            UiCommand::RevealAllTriangulations => {
+                let mut asset_changed = false;
                 for tri in &mut self.triangulations {
-                    tri.visible = true;
+                    if !tri.visible {
+                        tri.visible = true;
+                        tri.state.touch();
+                        asset_changed = true;
+                    }
                 }
+                for model in &mut self.block_models {
+                    if !model.visible {
+                        model.visible = true;
+                        model.state.touch();
+                        asset_changed = true;
+                    }
+                }
+                for dataset in &mut self.drill_holes {
+                    if !dataset.visible {
+                        dataset.visible = true;
+                        dataset.state.touch();
+                        asset_changed = true;
+                    }
+                }
+                for cloud in &mut self.point_clouds {
+                    if !cloud.visible {
+                        cloud.visible = true;
+                        cloud.state.touch();
+                        asset_changed = true;
+                    }
+                }
+                if asset_changed {
+                    self.touch_active_project_content();
+                }
+                self.editor.hidden_handles.clear();
+                self.editor.frozen_handles.clear();
+                self.editor.translucent_handles.clear();
                 self.invalidate_geometry();
                 Ok(())
             }
             UiCommand::RequestExit => self.request_exit(),
-            #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SaveAndExit => self.save_and_exit(),
             UiCommand::ExitWithoutSaving => {
                 self.exit_without_saving();
@@ -331,7 +318,7 @@ impl<'a> App<'a> {
                 let layer_name = self
                     .workspace
                     .active_project()
-                    .and_then(|project| project.pidb.document.layer(layer_id))
+                    .and_then(|project| project.project.document.layer(layer_id))
                     .map(|layer| layer.name.clone());
                 self.editor.pending_delete_layer = layer_name.map(|name| (layer_id, name));
                 Ok(())
@@ -345,25 +332,12 @@ impl<'a> App<'a> {
                 self.duplicate_layer(layer_id);
                 Ok(())
             }
-            UiCommand::BeginMoveLayer(layer_id) => {
-                self.activate_project_for_layer(layer_id);
-                let source_id = self.workspace.active_project().map(|project| project.runtime_id);
-                let target_project = self
-                    .workspace
-                    .projects
-                    .iter()
-                    .map(|project| project.runtime_id)
-                    .find(|runtime_id| Some(*runtime_id) != source_id);
-                self.editor.move_layer_dialog = Some(MoveLayerDialog { layer_id, target_project });
-                Ok(())
-            }
-            UiCommand::MoveLayerToPidb { layer_id, target_project } => self.move_layer_to_pidb(layer_id, target_project),
             UiCommand::BeginRenameLayer(layer_id) => {
                 self.activate_project_for_layer(layer_id);
                 let current_name = self
                     .workspace
                     .active_project()
-                    .and_then(|p| p.pidb.document.layer(layer_id))
+                    .and_then(|p| p.project.document.layer(layer_id))
                     .map(|l| l.name.clone())
                     .unwrap_or_default();
                 self.editor.renaming_layer = Some((layer_id, current_name));
@@ -373,7 +347,7 @@ impl<'a> App<'a> {
                 self.activate_project_for_layer(layer_id);
                 let Some((before, is_loaded)) = self.workspace.active_project().and_then(|project| {
                     project
-                        .pidb
+                        .project
                         .document
                         .layer(layer_id)
                         .map(|layer| (layer.name.clone(), project.loaded_layers.contains(&layer_id)))
@@ -386,7 +360,7 @@ impl<'a> App<'a> {
                         self.editor.active_layer = Some(layer_id);
                         if let Some(project) = self.workspace.active_project_mut() {
                             self.history.execute(
-                                &mut project.pidb.document,
+                                &mut project.project.document,
                                 crate::model::Command::RenameLayer {
                                     id: layer_id,
                                     before,
@@ -400,7 +374,7 @@ impl<'a> App<'a> {
                             self.editor.active_layer = None;
                         }
                         if let Some(project) = self.workspace.active_project_mut() {
-                            project.pidb.document.rename_layer(layer_id, new_name);
+                            project.project.document.rename_layer(layer_id, new_name);
                         }
                     }
                 }
@@ -420,47 +394,50 @@ impl<'a> App<'a> {
                 self.select_all_objects_in_layer(layer);
                 Ok(())
             }
-            UiCommand::LoadAllLayers(runtime_id) => {
-                self.load_all_layers(runtime_id);
+            UiCommand::SaveProject => self.save_dirty_project().map(|_| ()),
+            UiCommand::SaveAndReplaceProject => self.save_and_continue_project_replacement(),
+            UiCommand::DiscardAndReplaceProject => self.discard_and_continue_project_replacement(),
+            UiCommand::CancelProjectReplacement => {
+                self.cancel_project_replacement();
                 Ok(())
             }
-            UiCommand::UnloadAllLayers(runtime_id) => {
-                self.unload_all_layers(runtime_id);
+            UiCommand::ConfirmLossyProjectSave => self.confirm_lossy_project_save(),
+            UiCommand::CancelLossyProjectSave => {
+                self.cancel_lossy_project_save();
                 Ok(())
             }
-            UiCommand::SaveAllPidbs => self.save_all_dirty_projects().map(|_| ()),
             #[cfg(target_arch = "wasm32")]
-            UiCommand::DownloadAllPidbs => self.download_all_pidbs(),
-            UiCommand::SavePidb(runtime_id) => self.save_project(runtime_id),
+            UiCommand::DownloadProject => self.download_project(),
             #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::SavePidbAs(runtime_id) => {
-                self.spawn_save_pidb_as_dialog(runtime_id);
+            UiCommand::SaveProjectAs(runtime_id) => {
+                self.spawn_save_project_as_dialog(runtime_id);
                 Ok(())
             }
-            UiCommand::ActivatePidb(runtime_id) => self.activate_pidb(runtime_id),
-            UiCommand::ClosePidb(runtime_id) => {
-                self.request_close_pidb(runtime_id);
+            UiCommand::CloseProject(runtime_id) => {
+                self.editor.remove_project_after_close = false;
+                self.request_close_project(runtime_id);
                 Ok(())
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::SaveAndClosePidb(runtime_id) => self.save_and_close_pidb(runtime_id),
-            UiCommand::ClosePidbForce(runtime_id) => {
+            UiCommand::SaveAndCloseProject(runtime_id) => self.save_and_close_project(runtime_id),
+            UiCommand::CloseProjectForce(runtime_id) => {
                 #[cfg(target_arch = "wasm32")]
-                let result = self.delete_browser_project(runtime_id);
+                let result = {
+                    self.close_project(runtime_id);
+                    Ok(())
+                };
                 #[cfg(not(target_arch = "wasm32"))]
                 let result = {
-                    self.close_pidb(runtime_id);
+                    self.close_project(runtime_id);
                     Ok(())
                 };
                 result
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::RequestDiscardPidbChanges(runtime_id) => {
-                self.request_discard_pidb_changes(runtime_id);
+            UiCommand::CancelCloseProject => {
+                self.cancel_close_project();
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::DiscardPidbChanges(runtime_id) => self.discard_pidb_changes(runtime_id),
+            UiCommand::DiscardProjectChanges(runtime_id) => self.discard_project_changes(runtime_id),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::RequestDiscardLayerChanges(layer_id) => {
                 self.request_discard_layer_changes(layer_id);
@@ -468,41 +445,30 @@ impl<'a> App<'a> {
             }
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::DiscardLayerChanges(layer_id) => self.discard_layer_changes(layer_id),
-            UiCommand::LoadTriangulation(path) => {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    self.load_browser_triangulation(&path);
-                    Ok(())
+            UiCommand::LoadTriangulation(id) => {
+                if let Some(triangulation) = self.triangulations.iter_mut().find(|triangulation| triangulation.id == id) {
+                    triangulation.state.loaded = true;
+                    self.invalidate_topology_bounds_and_redraw();
+                } else {
+                    userspace_warn!("That triangulation no longer belongs to the active project");
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                self.open_triangulation_path(&path)
+                Ok(())
             }
-            UiCommand::LoadBlockModel(source) => {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    self.load_browser_data(browser_data::BrowserDataKind::BlockModel, &source.path);
-                    Ok(())
+            UiCommand::LoadBlockModel(id) => {
+                if let Some(model) = self.block_models.iter_mut().find(|model| model.id == id) {
+                    model.state.loaded = true;
+                    self.invalidate_topology_bounds_and_redraw();
+                } else {
+                    userspace_warn!("That block model no longer belongs to the active project");
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                self.open_block_model_source(source)
+                Ok(())
             }
             UiCommand::CloseBlockModel(id) => {
-                if self.block_models.iter().any(|model| model.id == id && model.source.generated) {
-                    self.editor.block_model_close_unsaved = Some(id);
-                    return Ok(());
-                }
                 self.close_block_model(id);
                 Ok(())
             }
-            UiCommand::CloseBlockModelForce(id) => {
-                self.editor.block_model_close_unsaved = None;
-                self.close_block_model(id);
-                Ok(())
-            }
-            UiCommand::RemoveBlockModel(source) => {
-                #[cfg(target_arch = "wasm32")]
-                self.delete_browser_data(browser_data::BrowserDataKind::BlockModel, &source.path);
-                self.remove_block_model(source);
+            UiCommand::RemoveBlockModel(id) => {
+                self.remove_block_model(id);
                 Ok(())
             }
             UiCommand::ToggleBlockModelVisible(id) => {
@@ -531,25 +497,21 @@ impl<'a> App<'a> {
                     self.import_web_drill_hole_source(source)
                 }
             }
-            UiCommand::LoadDrillHole(source) => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.open_drill_hole_source(source)
+            UiCommand::LoadDrillHole(id) => {
+                if let Some(dataset) = self.drill_holes.iter_mut().find(|dataset| dataset.id == id) {
+                    dataset.state.loaded = true;
+                    self.invalidate_topology_bounds_and_redraw();
+                } else {
+                    userspace_warn!("That drillhole dataset no longer belongs to the active project");
                 }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    self.load_browser_data(browser_data::BrowserDataKind::DrillHole, source.primary_path());
-                    Ok(())
-                }
+                Ok(())
             }
             UiCommand::CloseDrillHole(id) => {
                 self.close_drill_hole(id);
                 Ok(())
             }
-            UiCommand::RemoveDrillHole(source) => {
-                #[cfg(target_arch = "wasm32")]
-                self.delete_browser_data(browser_data::BrowserDataKind::DrillHole, source.primary_path());
-                self.remove_drill_hole(source);
+            UiCommand::RemoveDrillHole(id) => {
+                self.remove_drill_hole(id);
                 Ok(())
             }
             UiCommand::ToggleDrillHoleVisible(id) => {
@@ -691,22 +653,8 @@ impl<'a> App<'a> {
                 self.editor.preferences_open = true;
                 Ok(())
             }
-            UiCommand::RemoveTriangulation(path) => {
-                // On the browser, "remove" is a deletion from IndexedDB —
-                // there is no tracked file to stop tracking.
-                #[cfg(target_arch = "wasm32")]
-                self.delete_browser_triangulation(&path);
-                #[cfg(not(target_arch = "wasm32"))]
-                self.remove_triangulation(path);
-                Ok(())
-            }
-            #[cfg(target_arch = "wasm32")]
-            UiCommand::DownloadStoredTriangulation(path) => {
-                self.download_stored_browser_triangulation(&path);
-                Ok(())
-            }
-            UiCommand::RemoveTriangulationFolder(dir) => {
-                self.remove_triangulation_folder(dir);
+            UiCommand::RemoveTriangulation(id) => {
+                self.remove_triangulation(id);
                 Ok(())
             }
             UiCommand::ActivateTriangulation(id) => {
@@ -718,28 +666,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CloseTriangulation(id) => {
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(tri) = self.triangulations.iter().find(|t| t.id == id)
-                    && !tri.is_saved
-                {
-                    self.editor.tri_close_unsaved = Some(id);
-                    return Ok(());
-                }
-                // On the browser, unloading is reversible only once the mesh
-                // has reached IndexedDB — until then there is nothing to load
-                // it back from, so wait rather than prompt.
-                #[cfg(target_arch = "wasm32")]
-                if let Some(tri) = self.triangulations.iter().find(|t| t.id == id)
-                    && !tri.is_saved
-                {
-                    userspace_warn!("Wait for '{}' to finish saving to browser storage before unloading it", tri.name);
-                    return Ok(());
-                }
-                self.close_triangulation(id);
-                Ok(())
-            }
-            UiCommand::CloseTriangulationForce(id) => {
-                self.editor.tri_close_unsaved = None;
                 self.close_triangulation(id);
                 Ok(())
             }
@@ -821,7 +747,7 @@ impl<'a> App<'a> {
                     .iter()
                     .filter_map(|&handle| match handle {
                         crate::model::SceneEntityId::Object(id) => Some(id),
-                        crate::model::SceneEntityId::Triangulation(_) | crate::model::SceneEntityId::BlockModel(_) => None,
+                        _ => None,
                     })
                     .collect();
 
@@ -889,16 +815,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ExecutePointCloudTin { cloud_id, params } => self.run_point_cloud_tin(cloud_id, params),
-            UiCommand::ConfirmLoadAllTriangulationsInFolder(path) => {
-                self.editor.confirm_load_all_folder = Some(path);
-                Ok(())
-            }
-            UiCommand::LoadAllTriangulationsInFolder(path) => self.load_all_triangulations_in_folder(path),
-            UiCommand::CloseAllTriangulationsInFolder(path) => {
-                self.close_all_triangulations_in_folder(path);
-                Ok(())
-            }
-            UiCommand::OpenCutTriangulationByPolygon => {
+            UiCommand::OpenCutTriangulationByPolyline => {
                 self.editor.tri_cut_poly_open = true;
                 self.editor.tri_cut_poly_name_auto = true;
                 self.editor.tri_cut_poly_awaiting_pick = false;
@@ -907,7 +824,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_poly_tri_id = self.active_triangulation;
                 self.editor.tri_cut_poly_object_id = None;
                 self.editor.tri_cut_poly_object_name = String::new();
-                self.editor.tri_cut_poly_mode = crate::ui::state::TriPolygonClipMode::KeepInside;
+                self.editor.tri_cut_poly_mode = crate::ui::state::TriPolylineClipMode::KeepInside;
                 self.editor.tri_cut_poly_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
@@ -925,8 +842,8 @@ impl<'a> App<'a> {
                 self.invalidate_geometry();
                 Ok(())
             }
-            UiCommand::ExecuteCutTriangulationByPolygon { tri_id, polygon_id, mode, name } => {
-                let result = self.cut_triangulation_by_polygon(tri_id, polygon_id, mode, name);
+            UiCommand::ExecuteCutTriangulationByPolyline { tri_id, polyline_id, mode, name } => {
+                let result = self.cut_triangulation_by_polyline(tri_id, polyline_id, mode, name);
                 if result.is_ok() {
                     self.editor.tri_cut_poly_open = false;
                     self.editor.tool_highlight_id = None;
@@ -1125,6 +1042,65 @@ impl<'a> App<'a> {
                 self.apply_history_step(false);
                 Ok(())
             }
+        }
+    }
+
+    fn hide_selected_elements(&mut self) {
+        let selected = self.editor.selected_handles.clone();
+        let object_ids = selected
+            .iter()
+            .filter_map(|handle| match handle {
+                crate::model::SceneEntityId::Object(id) => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        if let Some(document) = self.workspace.active_document_mut() {
+            for id in object_ids {
+                changed |= document.set_object_hidden(id, true);
+            }
+        }
+
+        let mut asset_changed = false;
+        for triangulation in &mut self.triangulations {
+            if selected.contains(&triangulation.entity_id()) && triangulation.visible {
+                triangulation.visible = false;
+                triangulation.state.touch();
+                asset_changed = true;
+            }
+        }
+        for model in &mut self.block_models {
+            if selected.contains(&model.entity_id()) && model.visible {
+                model.visible = false;
+                model.state.touch();
+                asset_changed = true;
+            }
+        }
+        for dataset in &mut self.drill_holes {
+            if selected.contains(&dataset.entity_id()) && dataset.visible {
+                dataset.visible = false;
+                dataset.state.touch();
+                asset_changed = true;
+            }
+        }
+        for cloud in &mut self.point_clouds {
+            if selected.contains(&cloud.entity_id()) && cloud.visible {
+                cloud.visible = false;
+                cloud.state.touch();
+                asset_changed = true;
+            }
+        }
+        if asset_changed {
+            self.touch_active_project_content();
+        }
+        changed |= asset_changed;
+
+        // Persisted visibility now owns ordinary Hide Selection. Remove any
+        // matching legacy transient overrides so save/reopen has one source of
+        // truth for the same action.
+        self.editor.hidden_handles.retain(|handle| !selected.contains(handle));
+        if changed {
+            self.invalidate_geometry();
         }
     }
 }

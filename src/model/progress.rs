@@ -8,7 +8,7 @@
 //! Work whose size is known ahead of time reports item counts
 //! ([`Progress::set_items`]) and drives an exact percentage. Work that runs in
 //! stages of differing cost splits the bar into [`Phase`]s, each reporting
-//! exactly within its own slice — the percentage is then exact inside a stage
+//! exactly within its own slice - the percentage is then exact inside a stage
 //! and approximate between stages, which is the best a staged pipeline can do.
 //! Work that can't measure itself at all stays indeterminate and the status bar
 //! shows a marquee.
@@ -59,16 +59,6 @@ impl Progress {
         }))
     }
 
-    /// Drop back to a marquee: the work can no longer say how far along it is.
-    ///
-    /// The only caller is the native file save, so this is unused on the web
-    /// build.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    pub(crate) fn set_indeterminate(&self) {
-        self.0.total.store(0, Ordering::Relaxed);
-        self.0.fraction.store(INDETERMINATE, Ordering::Relaxed);
-    }
-
     /// Report a bare percentage, with no item counts behind it.
     pub(crate) fn set_fraction(&self, fraction: f32) {
         self.0.total.store(0, Ordering::Relaxed);
@@ -97,7 +87,7 @@ impl Progress {
 
     /// Latest report, or `None` while the work is indeterminate. The three
     /// fields are stored separately, so a sample taken mid-report can pair a
-    /// fraction with the previous counts — a one-frame cosmetic skew that no
+    /// fraction with the previous counts - a one-frame cosmetic skew that no
     /// consumer of a progress bar can act on.
     pub(crate) fn snapshot(&self) -> Option<ProgressSnapshot> {
         let fraction = self.0.fraction.load(Ordering::Relaxed);

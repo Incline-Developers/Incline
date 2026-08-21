@@ -2,7 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [package]
 name = "Incline"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
 description = "A free open-source mine design application"
 repository = "https://github.com/Incline-Developers/Incline"

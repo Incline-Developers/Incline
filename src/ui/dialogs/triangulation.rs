@@ -4,7 +4,7 @@ use crate::{
     model::{Document, Object, ObjectId, SceneEntityId, point_cloud::PointCloudId, triangulation::TriangulationId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
-        state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolygonClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
+        state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
         widgets::menu::{DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
     },
 };
@@ -22,15 +22,25 @@ fn tri_reset_state(editor: &mut EditorState) {
     editor.selected_handles.clear();
 }
 
-/// Returns a human-readable label for an object (type + layer name).
-fn object_label(obj: &Object, document: &Document) -> String {
-    let layer_name = document.layer(obj.layer()).map(|l| l.name.as_str()).unwrap_or("?");
-    match obj {
-        Object::Point { .. } => format!("Point on '{layer_name}'"),
-        Object::Polyline { closed: true, .. } => format!("Polygon on '{layer_name}'"),
-        Object::Polyline { closed: false, .. } => format!("String on '{layer_name}'"),
-        Object::Text { content, .. } => format!("Text \"{content}\" on '{layer_name}'"),
+/// Compact summary of a viewport selection, grouped by object kind
+/// ("5 polylines, 2 strings"). Preferred over per-item chip lists.
+fn selection_summary(object_ids: &[ObjectId], document: &Document) -> String {
+    let (mut points, mut polylines, mut strings, mut texts) = (0usize, 0usize, 0usize, 0usize);
+    for &oid in object_ids {
+        match document.get_object(oid) {
+            Some(Object::Point { .. }) => points += 1,
+            Some(Object::Polyline { closed: true, .. }) => polylines += 1,
+            Some(Object::Polyline { closed: false, .. }) => strings += 1,
+            Some(Object::Text { .. }) => texts += 1,
+            None => {}
+        }
     }
+    let parts: Vec<String> = [(polylines, "polyline"), (strings, "string"), (points, "point"), (texts, "text object")]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, noun)| format!("{count} {noun}{}", if count == 1 { "" } else { "s" }))
+        .collect();
+    if parts.is_empty() { format!("{} objects", object_ids.len()) } else { parts.join(", ") }
 }
 
 fn tri_surface_type_label(surface_type: TriSurfaceType) -> &'static str {
@@ -215,35 +225,37 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
         tool_help_panel(ui, "Click objects in the viewport to select/deselect. Drag to box-select.");
         ui.add_space(4.0);
 
-        // --- Selection list ---
-        let mut remove_object: Option<ObjectId> = None;
-        let mut hover_handles: std::collections::HashSet<SceneEntityId> = std::collections::HashSet::new();
+        // --- Selection summary ---
+        let has_selection = !editor.tri_selected_object_ids.is_empty();
+        let mut clear_selection = false;
+        let mut hover_selection = false;
 
-        egui::ScrollArea::vertical().max_height(160.0).id_salt("tri_sel_list").show(ui, |ui| {
-            for &oid in &editor.tri_selected_object_ids {
-                let label = document.get_object(oid).map(|o| object_label(o, document)).unwrap_or_else(|| format!("Object #{}", oid.0));
-                ui.horizontal(|ui| {
-                    let resp = ui.selectable_label(false, &label);
-                    if resp.hovered() {
-                        hover_handles.insert(SceneEntityId::Object(oid));
-                    }
-                    if ui.button(egui::RichText::new("✖").color(egui::Color32::RED)).clicked() {
-                        remove_object = Some(oid);
+        if has_selection {
+            let summary = format!("{} selected", selection_summary(&editor.tri_selected_object_ids, document));
+            ui.horizontal(|ui| {
+                hover_selection = ui.label(summary).hovered();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Clear").clicked() {
+                        clear_selection = true;
                     }
                 });
-            }
-        });
-
-        editor.tri_hover_handles = hover_handles;
-
-        if let Some(oid) = remove_object {
-            editor.tri_selected_object_ids.retain(|&o| o != oid);
-            editor.selected_handles.remove(&SceneEntityId::Object(oid));
+            });
+        } else {
+            ui.colored_label(egui::Color32::GRAY, "No objects selected yet.");
         }
 
-        let has_selection = !editor.tri_selected_object_ids.is_empty();
-        if !has_selection {
-            ui.colored_label(egui::Color32::GRAY, "No objects selected yet.");
+        // Hovering the summary highlights the whole selection in the viewport.
+        editor.tri_hover_handles = if hover_selection {
+            editor.tri_selected_object_ids.iter().map(|&oid| SceneEntityId::Object(oid)).collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
+        if clear_selection {
+            for oid in editor.tri_selected_object_ids.drain(..) {
+                editor.selected_handles.remove(&SceneEntityId::Object(oid));
+            }
+            editor.tri_hover_handles.clear();
         }
 
         ui.add_space(4.0);
@@ -405,14 +417,14 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
     // While awaiting a viewport pick, show a small floating prompt instead of the full dialog.
     if editor.tri_cut_poly_awaiting_pick {
         let mut open = true;
-        DragableMenu::new("Pick Polygon")
+        DragableMenu::new("Pick Polyline")
             .open(&mut open)
             .min_width(280.0)
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui.ctx(), |ui| {
-                ui.label("Click a closed polygon in the viewport.");
+                ui.label("Click a closed polyline in the viewport.");
                 ui.add_space(6.0);
-                viewport_pick_status(ui, editor, "Move the cursor over a closed polygon.");
+                viewport_pick_status(ui, editor, "Move the cursor over a closed polyline.");
                 ui.add_space(6.0);
                 if ui.button("Cancel Pick").clicked() {
                     editor.tri_cut_poly_awaiting_pick = false;
@@ -430,17 +442,22 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
     }
 
     let mut open = true;
-    DragableMenu::new("Clip Surface by Polygon")
+    DragableMenu::new("Clip Surface by Polyline")
         .open(&mut open)
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui.ctx(), |ui| {
-            let loaded: Vec<(TriangulationId, &str)> = project.triangulations.iter().filter_map(|t| t.id.map(|id| (id, t.name.as_str()))).collect();
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
             let tri_label = editor
                 .tri_cut_poly_tri_id
                 .and_then(|id| loaded.iter().find(|(lid, _)| *lid == id).map(|(_, n)| *n))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let old_tri_id = editor.tri_cut_poly_tri_id;
             if triangulation_picker_field(
                 ui,
@@ -469,17 +486,17 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
 
             ui.add_space(4.0);
 
-            // Polygon picker — viewport click, not a list
-            MenuField::new("Boundary polygon")
+            // Polyline picker - viewport click, not a list
+            MenuField::new("Boundary polyline")
                 .help_text(
-                    "A closed polygon whose XY boundary defines the clipping area. Use Pick to \
+                    "A closed polyline whose XY boundary defines the clipping area. Use Pick to \
                      select it in the viewport.",
                 )
                 .show(ui, |ui, row_height| {
                     let poly_label = if editor.tri_cut_poly_object_id.is_some() {
                         editor.tri_cut_poly_object_name.as_str()
                     } else {
-                        "— none picked —"
+                        "None picked"
                     };
                     let width = picker_control_width(ui);
                     ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -488,7 +505,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                             .on_hover_text(poly_label);
                         if ui
                             .add_sized([PICK_BUTTON_WIDTH, row_height], egui::Button::new("Pick"))
-                            .on_hover_text("Choose the boundary by clicking a closed polygon in the viewport")
+                            .on_hover_text("Choose the boundary by clicking a closed polyline in the viewport")
                             .clicked()
                         {
                             commands.push(UiCommand::BeginCutPolyPick);
@@ -501,30 +518,30 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
 
             MenuField::new("Result")
                 .help_text(
-                    "Keep inside discards surface outside the polygon. Keep outside cuts a \
-                     polygon-shaped hole from the surface.",
+                    "Keep inside discards surface outside the polyline. Keep outside cuts a \
+                     polyline-shaped hole from the surface.",
                 )
                 .show(ui, |ui, row_height| {
                     let (response, clicked) = centered_choice_buttons(
                         ui,
                         row_height,
                         [
-                            (TriPolygonClipMode::KeepInside.label(), editor.tri_cut_poly_mode == TriPolygonClipMode::KeepInside),
-                            (TriPolygonClipMode::KeepOutside.label(), editor.tri_cut_poly_mode == TriPolygonClipMode::KeepOutside),
+                            (TriPolylineClipMode::KeepInside.label(), editor.tri_cut_poly_mode == TriPolylineClipMode::KeepInside),
+                            (TriPolylineClipMode::KeepOutside.label(), editor.tri_cut_poly_mode == TriPolylineClipMode::KeepOutside),
                         ],
                     );
                     if clicked == Some(0) {
-                        editor.tri_cut_poly_mode = TriPolygonClipMode::KeepInside;
+                        editor.tri_cut_poly_mode = TriPolylineClipMode::KeepInside;
                     } else if clicked == Some(1) {
-                        editor.tri_cut_poly_mode = TriPolygonClipMode::KeepOutside;
+                        editor.tri_cut_poly_mode = TriPolylineClipMode::KeepOutside;
                     }
                     response
                 });
             tool_help_panel(
                 ui,
                 match editor.tri_cut_poly_mode {
-                    TriPolygonClipMode::KeepInside => "Keeps only the surface within the polygon boundary.",
-                    TriPolygonClipMode::KeepOutside => "Removes the surface within the polygon boundary and keeps the rest.",
+                    TriPolylineClipMode::KeepInside => "Keeps only the surface within the polyline boundary.",
+                    TriPolylineClipMode::KeepOutside => "Removes the surface within the polyline boundary and keeps the rest.",
                 },
             );
 
@@ -553,9 +570,9 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                 if ui.add_enabled(can_run, egui::Button::new("Clip")).clicked()
                     && let (Some(tri_id), Some(poly_id)) = (editor.tri_cut_poly_tri_id, editor.tri_cut_poly_object_id)
                 {
-                    commands.push(UiCommand::ExecuteCutTriangulationByPolygon {
+                    commands.push(UiCommand::ExecuteCutTriangulationByPolyline {
                         tri_id,
-                        polygon_id: poly_id,
+                        polyline_id: poly_id,
                         mode: editor.tri_cut_poly_mode,
                         name: editor.tri_cut_poly_name_input.trim().to_owned(),
                     });
@@ -582,11 +599,16 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
-            let loaded: Vec<(TriangulationId, &str)> = project.triangulations.iter().filter_map(|t| t.id.map(|id| (id, t.name.as_str()))).collect();
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
             let tri_label = editor
                 .tri_cut_z_tri_id
                 .and_then(|id| loaded.iter().find(|(lid, _)| *lid == id).map(|(_, n)| *n))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let old_tri_id = editor.tri_cut_z_tri_id;
             if triangulation_picker_field(
                 ui,
@@ -695,14 +717,19 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
-            let loaded: Vec<(TriangulationId, &str)> = project.triangulations.iter().filter_map(|entry| entry.id.map(|id| (id, entry.name.as_str()))).collect();
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
 
             // Match the other topology tools: the reference topology comes
             // first, followed by the surface that will be changed.
             let reference_label = editor
                 .tri_cut_surface_reference_id
                 .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let target_id = editor.tri_cut_surface_target_id;
             if triangulation_picker_field(
                 ui,
@@ -719,7 +746,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
             let target_label = editor
                 .tri_cut_surface_target_id
                 .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let old_target = editor.tri_cut_surface_target_id;
             let reference_id = editor.tri_cut_surface_reference_id;
             if triangulation_picker_field(
@@ -829,12 +856,17 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
-            let loaded: Vec<(TriangulationId, &str)> = project.triangulations.iter().filter_map(|entry| entry.id.map(|id| (id, entry.name.as_str()))).collect();
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
 
             let topology_label = editor
                 .tri_cut_pitshell_topology_id
                 .and_then(|id| loaded.iter().find(|(lid, _)| *lid == id).map(|(_, n)| *n))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let old_topology_id = editor.tri_cut_pitshell_topology_id;
             if triangulation_picker_field(
                 ui,
@@ -866,7 +898,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             let pitshell_label = editor
                 .tri_cut_pitshell_pitshell_id
                 .and_then(|id| loaded.iter().find(|(lid, _)| *lid == id).map(|(_, n)| *n))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             if triangulation_picker_field(
                 ui,
                 "cut_pitshell_shell",
@@ -941,12 +973,17 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
         .min_width(PICKER_DIALOG_MIN_WIDTH)
         .max_width(PICKER_DIALOG_MAX_WIDTH)
         .show(ui.ctx(), |ui| {
-            let loaded: Vec<(TriangulationId, &str)> = project.triangulations.iter().filter_map(|entry| entry.id.map(|id| (id, entry.name.as_str()))).collect();
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
 
             let topology_label = editor
                 .tri_include_solid_topology_id
                 .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let old_topology = editor.tri_include_solid_topology_id;
             if triangulation_picker_field(
                 ui,
@@ -977,7 +1014,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             let shape_label = editor
                 .tri_include_solid_shape_id
                 .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let topology_id = editor.tri_include_solid_topology_id;
             if triangulation_picker_field(
                 ui,
@@ -1053,12 +1090,13 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             let loaded: Vec<(TriangulationId, &str)> = project
                 .triangulations
                 .iter()
-                .filter_map(|t| t.id.map(|id| (id, t.name.as_str())))
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
                 .collect();
             let tri_label = editor
                 .tri_contour_tri_id
                 .and_then(|id| loaded.iter().find(|(lid, _)| *lid == id).map(|(_, n)| *n))
-                .unwrap_or("— select —");
+                .unwrap_or("Select…");
             let old_tri_id = editor.tri_contour_tri_id;
             if triangulation_picker_field_with_width(
                 ui,
@@ -1198,7 +1236,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             )
             .help_text(
                 "Create a new layer for the contours or append them to an existing layer in the \
-                 active PIDB.",
+                 active project.",
             )
             .width(control_width)
             .show(ui);
@@ -1299,13 +1337,14 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
         let loaded: Vec<(PointCloudId, &str, usize)> = project
             .point_clouds
             .iter()
-            .filter_map(|cloud| cloud.id.map(|id| (id, cloud.name.as_str(), cloud.point_count)))
+            .filter(|cloud| cloud.is_loaded)
+            .map(|cloud| (cloud.id, cloud.name.as_str(), cloud.point_count))
             .collect();
         if loaded.is_empty() {
             tool_help_panel(ui, "No point clouds are loaded. Import one via File ▸ Import first.");
         }
         let selected = editor.point_cloud_tin_cloud_id.and_then(|id| loaded.iter().find(|(lid, ..)| *lid == id).copied());
-        let cloud_label = selected.map(|(_, name, _)| name).unwrap_or("— select —");
+        let cloud_label = selected.map(|(_, name, _)| name).unwrap_or("Select…");
         MenuFieldCombo::new(
             "point_cloud_tin_cloud",
             "Point cloud",

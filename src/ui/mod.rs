@@ -298,25 +298,25 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
     match editor.active_tool {
         ActiveTool::Move if editor.selected_handles.is_empty() => Some("Select an item"),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some("Choose offset side"),
-        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some("Select a line or polygon"),
+        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some("Select a line or polyline"),
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some("Select designs"),
         ActiveTool::DrapeToTopology => Some("Select topologies"),
         ActiveTool::RelimitLine if editor.relimit_confirming_end => Some("Choose relimit side"),
         ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => Some("Select line to relimit to"),
         ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => Some("Select line to relimit"),
-        ActiveTool::FuseIntoPolygon if editor.fuse_awaiting_endpoint.is_some() => Some("Select the endpoint to join"),
-        ActiveTool::FuseIntoPolygon if !editor.fuse_segments.is_empty() => Some("Select the next line to fuse"),
-        ActiveTool::FuseIntoPolygon => Some("Select a line to fuse"),
-        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => Some("Select a polygon or open line"),
+        ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => Some("Select the endpoint to join"),
+        ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => Some("Select the next line to fuse"),
+        ActiveTool::FuseIntoPolyline => Some("Select a line to fuse"),
+        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => Some("Select a polyline or open line"),
         ActiveTool::SplitAtPoints if editor.split_selected_verts[0].is_none() => Some("Select a split point"),
         ActiveTool::SplitAtPoints if editor.split_selected_verts[1].is_none() => Some("Select second split point"),
-        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => Some("Select a polygon vertex"),
-        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => Some("Select a polyline or polygon"),
+        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => Some("Select a polyline vertex"),
+        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => Some("Select a polyline"),
         ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => Some("Click first vertex"),
         ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => Some("Click second vertex"),
-        ActiveTool::ExplodePolygon => Some("Select a polygon"),
-        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => Some("Select a polygon"),
-        ActiveTool::DeleteElement => Some("Select an item"),
+        ActiveTool::ExplodePolyline => Some("Select a polyline"),
+        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => Some("Select a polyline"),
+        ActiveTool::DeletePoints => Some("Select a point"),
         _ => None,
     }
     .map(str::to_string)
@@ -541,62 +541,9 @@ fn draw_ui(
         }
     }
 
-    // Move tool: draw 3-axis gizmo
-    if editor.active_tool == ActiveTool::Move
-        && !editor.selected_handles.is_empty()
-        && let Some(center_px) = editor.move_gizmo_center_px
-    {
-        let ppp = root_ui.ctx().pixels_per_point();
-        let center = egui::pos2(center_px.0 / ppp, center_px.1 / ppp);
-        let painter = root_ui.painter();
-        let planes = [
-            (egui::Color32::from_rgb(220, 190, 45), "XY"),
-            (egui::Color32::from_rgb(210, 65, 190), "XZ"),
-            (egui::Color32::from_rgb(45, 190, 205), "YZ"),
-        ];
-        for (plane_idx, (color, label)) in planes.into_iter().enumerate() {
-            let Some(quad_px) = editor.move_gizmo_plane_handles_px[plane_idx] else {
-                continue;
-            };
-            let points = quad_px.map(|point| egui::pos2(point.0 / ppp, point.1 / ppp)).to_vec();
-            let is_active = editor.move_gizmo_hovered_plane == Some(plane_idx as u8) || editor.gizmo_drag_plane_index == Some(plane_idx as u8);
-            let fill = if is_active {
-                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 120)
-            } else {
-                egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 75)
-            };
-            let stroke_color = if is_active { egui::Color32::WHITE } else { color };
-            painter.add(egui::Shape::convex_polygon(
-                points.clone(),
-                fill,
-                egui::Stroke::new(if is_active { 2.0 } else { 1.0 }, stroke_color),
-            ));
-            let label_position = points.iter().fold(egui::Pos2::ZERO, |sum, point| sum + point.to_vec2()) / points.len() as f32;
-            painter.text(label_position, egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(9.0), stroke_color);
-        }
-        let axes = [
-            (editor.move_gizmo_x_tip_px, egui::Color32::from_rgb(220, 50, 50), 0u8, "X"),
-            (editor.move_gizmo_y_tip_px, egui::Color32::from_rgb(50, 200, 50), 1u8, "Y"),
-            (editor.move_gizmo_z_tip_px, egui::Color32::from_rgb(50, 100, 220), 2u8, "Z"),
-        ];
-        for (tip_opt, color, axis_idx, label) in axes {
-            let is_active = editor.move_gizmo_hovered_axis == Some(axis_idx) || editor.gizmo_drag_axis_index == Some(axis_idx);
-            let draw_color = if is_active { egui::Color32::WHITE } else { color };
-            let width = if is_active { 3.0 } else { 2.0 };
-            if let Some(tip_px) = tip_opt {
-                let tip = egui::pos2(tip_px.0 / ppp, tip_px.1 / ppp);
-                painter.line_segment([center, tip], egui::Stroke::new(width, draw_color));
-                painter.circle_filled(tip, 5.0, draw_color);
-                painter.text(
-                    egui::pos2(tip.x + 4.0, tip.y - 8.0),
-                    egui::Align2::LEFT_TOP,
-                    label,
-                    egui::FontId::proportional(12.0),
-                    draw_color,
-                );
-            }
-        }
-        painter.circle_filled(center, 4.0, egui::Color32::WHITE);
+    // Move tool: Blender-style translate gizmo
+    if editor.active_tool == ActiveTool::Move && !editor.selected_handles.is_empty() {
+        draw_move_gizmo(root_ui, editor);
     }
 
     // Move tool: numeric delta panel
@@ -697,7 +644,7 @@ fn draw_ui(
         dialogs::editing::draw_chamfer_panel(root_ui, editor, commands, canvas_rect);
     }
 
-    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeleteElement)
+    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
         && let Some(hover_px) = editor.tool_hover_vertex_px
     {
         let ppp = root_ui.ctx().pixels_per_point();
@@ -741,7 +688,7 @@ fn draw_ui(
             }
         }
 
-        // All polygon vertices as white dots
+        // All polyline vertices as white dots
         for &(x, y) in editor.bezier_poly_verts_screen_px.iter().flatten() {
             painter.circle_filled(egui::pos2(x / ppp, y / ppp), 5.0, egui::Color32::WHITE);
         }
@@ -813,17 +760,16 @@ fn draw_ui(
 
     // --- Startup & global dialogs ---
     #[cfg(target_arch = "wasm32")]
-    let naming_browser_pidb = editor.new_pidb_dialog_open;
+    let naming_browser_project = editor.new_project_dialog_open;
     #[cfg(not(target_arch = "wasm32"))]
-    let naming_browser_pidb = false;
-    if project.needs_startup_dialog && !naming_browser_pidb {
-        dialogs::editing::draw_select_pidb_dialog(root_ui, editor, commands);
+    let naming_browser_project = false;
+    if project.needs_startup_dialog && !naming_browser_project {
+        dialogs::editing::draw_select_project_dialog(root_ui, editor, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_set_selection_z_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
-    dialogs::editing::draw_move_layer_dialog(root_ui, editor, project, commands);
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open
@@ -836,10 +782,10 @@ fn draw_ui(
 
     geometry_dirty |= draw_circle_radius_input(root_ui, editor, commands, canvas_rect);
 
-    // Browser PIDB creation
+    // Browser project creation
     #[cfg(target_arch = "wasm32")]
-    if editor.new_pidb_dialog_open {
-        crate::ui::dialogs::editing::draw_create_pidb_dialog(root_ui, commands, editor, canvas_rect);
+    if editor.new_project_dialog_open {
+        crate::ui::dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, canvas_rect);
     }
 
     // Create Layer
@@ -958,9 +904,9 @@ fn draw_ui(
         dialogs::editing::draw_text_edit_dialog(root_ui, commands, editor, &mut geometry_dirty, canvas_rect);
     }
 
-    // Polygon finish (MakePoly)
+    // Polyline finish (MakePoly)
     if editor.poly_finish_dialog {
-        dialogs::editing::draw_finish_polygon_dialog(root_ui, commands, editor, canvas_rect);
+        dialogs::editing::draw_finish_polyline_dialog(root_ui, commands, editor, canvas_rect);
     }
 
     // --- Canvas overlays ---
@@ -1006,6 +952,14 @@ fn draw_global_dialogs(
         dialogs::confirmations::draw_exit_confirm_dialog(root_ui, commands, editor);
     }
 
+    if editor.replace_project_confirm_open {
+        dialogs::confirmations::draw_replace_project_dialog(root_ui, commands, editor);
+    }
+
+    if editor.lossy_save_confirm_open {
+        dialogs::confirmations::draw_lossy_save_dialog(root_ui, commands, editor, project);
+    }
+
     // Delete selection confirmation
     if editor.delete_confirm_open {
         dialogs::confirmations::draw_delete_confirm_dialog(root_ui, commands, editor);
@@ -1016,41 +970,21 @@ fn draw_global_dialogs(
         dialogs::confirmations::draw_delete_layer_confirm_dialog(root_ui, commands, editor);
     }
 
-    // Dirty PIDB close confirmation
-    if editor.pending_close_pidb.is_some() {
-        dialogs::confirmations::draw_close_pidb_dialog(root_ui, commands, editor, project);
+    // Dirty project close confirmation
+    if editor.pending_close_project.is_some() {
+        dialogs::confirmations::draw_close_project_dialog(root_ui, commands, editor, project);
     }
 
-    // Dirty PIDB discard-changes confirmation
-    if editor.pending_discard_pidb.is_some() {
+    // Dirty project discard-changes confirmation
+    if editor.pending_discard_project.is_some() {
         #[cfg(not(target_arch = "wasm32"))]
-        dialogs::confirmations::draw_discard_pidb_dialog(root_ui, commands, editor, project);
+        dialogs::confirmations::draw_discard_project_dialog(root_ui, commands, editor, project);
     }
 
     // Dirty layer discard-changes confirmation
     if editor.pending_discard_layer.is_some() {
         #[cfg(not(target_arch = "wasm32"))]
         dialogs::confirmations::draw_discard_layer_dialog(root_ui, commands, editor);
-    }
-
-    // Load-all triangulations folder confirmation
-    if editor.confirm_load_all_folder.is_some() {
-        dialogs::confirmations::draw_confirm_load_all_folder_dialog(root_ui, commands, editor);
-    }
-
-    // Close unsaved triangulation confirmation
-    if editor.tri_close_unsaved.is_some() {
-        dialogs::confirmations::draw_close_unsaved_tri_dialog(root_ui, commands, editor);
-    }
-
-    // Close unsaved generated block-model confirmation
-    if editor.block_model_close_unsaved.is_some() {
-        dialogs::confirmations::draw_close_unsaved_block_model_dialog(root_ui, commands, editor);
-    }
-
-    // Close in-memory point-cloud confirmation
-    if editor.point_cloud_close_unsaved.is_some() {
-        dialogs::confirmations::draw_close_unsaved_point_cloud_dialog(root_ui, commands, editor);
     }
 
     // Create Triangulation (always mark geometry dirty while open)
@@ -1150,10 +1084,111 @@ fn dashed_line_segments(start: egui::Pos2, end: egui::Pos2, dash: f32, gap: f32)
     segments
 }
 
+/// Axis colours taken from Blender's default theme, so the gizmo reads the same
+/// way: X red, Y green, Z blue.
+const GIZMO_AXIS_COLORS: [egui::Color32; 3] = [
+    egui::Color32::from_rgb(255, 51, 82),
+    egui::Color32::from_rgb(139, 220, 0),
+    egui::Color32::from_rgb(40, 144, 255),
+];
+/// Opacity of an idle handle; a hovered or dragged one goes fully opaque.
+const GIZMO_IDLE_ALPHA: f32 = 0.6;
+const GIZMO_HEAD_LENGTH: f32 = 13.0;
+const GIZMO_HEAD_HALF_WIDTH: f32 = 4.5;
+
+fn gizmo_color(color: egui::Color32, alpha: f32) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (alpha.clamp(0.0, 1.0) * 255.0) as u8)
+}
+
+/// Draw the Move tool's translate gizmo: three foreshortened axis arrows, a
+/// plane handle per axis pair, and a view-aligned ring at the centre. Handles
+/// fade out as they turn towards the camera, so facing an axis head-on thins
+/// the gizmo down instead of scattering it.
+fn draw_move_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
+    let gizmo = &editor.move_gizmo;
+    let Some(center_px) = gizmo.center_px else {
+        return;
+    };
+    let ppp = root_ui.ctx().pixels_per_point();
+    let to_pos = |point: (f32, f32)| egui::pos2(point.0 / ppp, point.1 / ppp);
+    let center = to_pos(center_px);
+    let ring_radius = gizmo.ring_radius_px / ppp;
+    let painter = root_ui.painter();
+
+    // Plane handles sit under the arrows and take the colour of the axis they
+    // are normal to, as in Blender.
+    for (index, normal_axis) in [2usize, 1, 0].into_iter().enumerate() {
+        let fade = gizmo.plane_fade[index];
+        let Some(quad) = gizmo.plane_quad_px[index] else {
+            continue;
+        };
+        if fade <= 0.0 {
+            continue;
+        }
+        let is_active = editor.move_gizmo_hovered_plane == Some(index as u8) || editor.gizmo_drag_plane_index == Some(index as u8);
+        let color = if is_active { egui::Color32::WHITE } else { GIZMO_AXIS_COLORS[normal_axis] };
+        let alpha = if is_active { fade } else { fade * GIZMO_IDLE_ALPHA };
+        let points = quad.map(to_pos).to_vec();
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            gizmo_color(color, alpha * 0.5),
+            egui::Stroke::new(if is_active { 2.0 } else { 1.0 }, gizmo_color(color, alpha)),
+        ));
+    }
+
+    // View-aligned ring: drags translate in the camera plane.
+    let ring_active = editor.move_gizmo_hovered_plane == Some(state::MOVE_GIZMO_VIEW_PLANE) || editor.gizmo_drag_plane_index == Some(state::MOVE_GIZMO_VIEW_PLANE);
+    let ring_alpha = if ring_active { 1.0 } else { GIZMO_IDLE_ALPHA };
+    painter.circle_stroke(
+        center,
+        ring_radius,
+        egui::Stroke::new(if ring_active { 2.5 } else { 1.8 }, gizmo_color(egui::Color32::WHITE, ring_alpha)),
+    );
+
+    for (index, axis_color) in GIZMO_AXIS_COLORS.into_iter().enumerate() {
+        let fade = gizmo.axis_fade[index];
+        let Some(tip_px) = gizmo.axis_tip_px[index] else {
+            continue;
+        };
+        if fade <= 0.0 {
+            continue;
+        }
+        let tip = to_pos(tip_px);
+        let delta = tip - center;
+        let length = delta.length();
+        // Nothing legible is left once the arrow no longer clears the ring.
+        if length <= ring_radius + 2.0 {
+            continue;
+        }
+        let direction = delta / length;
+        let perpendicular = egui::vec2(-direction.y, direction.x);
+        let start = center + direction * ring_radius;
+        let head_length = GIZMO_HEAD_LENGTH.min(length - ring_radius);
+        let head_base = tip - direction * head_length;
+
+        let is_active = editor.move_gizmo_hovered_axis == Some(index as u8) || editor.gizmo_drag_axis_index == Some(index as u8);
+        let color = if is_active { egui::Color32::WHITE } else { axis_color };
+        let alpha = if is_active { fade } else { fade * GIZMO_IDLE_ALPHA };
+        let drawn = gizmo_color(color, alpha);
+        if head_base.distance(start) > 0.5 {
+            painter.line_segment([start, head_base], egui::Stroke::new(if is_active { 3.0 } else { 2.0 }, drawn));
+        }
+        let half_width = GIZMO_HEAD_HALF_WIDTH * if is_active { 1.15 } else { 1.0 };
+        painter.add(egui::Shape::convex_polygon(
+            vec![tip, head_base + perpendicular * half_width, head_base - perpendicular * half_width],
+            drawn,
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
 /// Build an `egui::Visuals` set with selection styling applied to the given theme.
 fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visuals {
     let mut visuals = if dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
     visuals.selection.bg_fill = selection_color.gamma_multiply(0.35);
     visuals.selection.stroke.color = selection_color;
+    // Incline's UI is flat: no drop shadows on windows, popups, or menus.
+    visuals.window_shadow = egui::epaint::Shadow::NONE;
+    visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals
 }

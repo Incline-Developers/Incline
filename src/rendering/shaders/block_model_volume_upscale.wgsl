@@ -3,7 +3,7 @@
 // of a full-size target (so the scale can change per frame without
 // reallocating the texture); this pass stretches that sub-rect back to full
 // screen. Nearest sampling keeps it cheap and avoids bleeding in the cleared
-// region past the sub-rect edge — blocky during motion is acceptable.
+// region past the sub-rect edge - blocky during motion is acceptable.
 
 struct Params {
     // xy: the sub-rect actually rendered this frame, in pixels.

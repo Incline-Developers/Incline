@@ -287,7 +287,7 @@ impl CameraUniform {
 
     /// Interaction-quality knobs packed into the otherwise-unused `viewport.zw`
     /// so no new bind group is needed. `lod_boost` (`z`) divides the volume
-    /// raycaster's LOD footprint threshold — `> 1` coarsens bricks sooner (and
+    /// raycaster's LOD footprint threshold - `> 1` coarsens bricks sooner (and
     /// also caps its per-ray step count). `render_scale` (`w`, `0..=1`) is the
     /// fraction of full resolution the raycast is drawn at before upscaling.
     /// Both revert to `1.0` (full quality) when the camera settles.

@@ -66,7 +66,7 @@ impl<'a> App<'a> {
         };
         let color = crate::model::ObjectColor::Fixed(self.editor.tool_line_color);
         let created = if let Some(project) = self.workspace.active_project_mut() {
-            let doc = &mut project.pidb.document;
+            let doc = &mut project.project.document;
             let id = doc.allocate_object_id();
             self.history.execute(doc, Command::AddObject(Object::Point { id, layer, pos: world, color }));
             true
@@ -198,7 +198,7 @@ impl<'a> App<'a> {
         );
     }
 
-    /// Finish an in-progress MakePoly stroke as a closed polygon.
+    /// Finish an in-progress MakePoly stroke as a closed polyline.
     pub(crate) fn finish_poly_closed(&mut self) {
         if self.editor.active_tool != ActiveTool::MakePoly {
             return;
@@ -217,7 +217,7 @@ impl<'a> App<'a> {
             self.editor.pending_stroke.pop();
         }
         if self.editor.pending_stroke.len() < 3 {
-            // A two-vertex stroke cannot form a polygon. This can happen when
+            // A two-vertex stroke cannot form a polyline. This can happen when
             // the user clicks the first vertex to close it, so finish it as
             // the only valid shape instead of leaving the stroke pending.
             self.commit_stroke_open();
@@ -236,8 +236,8 @@ impl<'a> App<'a> {
         self.editor.poly_finish_dialog_px = None;
         self.invalidate_geometry();
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Create Polygon", format!("{vertex_count} vertices")),
-            format!("Created closed polygon with {vertex_count} vertices"),
+            CommandReportSpec::new("Create Polyline", format!("{vertex_count} vertices")),
+            format!("Created closed polyline with {vertex_count} vertices"),
         );
     }
 
@@ -254,7 +254,7 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
-    /// Commit the current polygon stroke as an open polyline if it has enough vertices.
+    /// Commit the current stroke as an open polyline if it has enough vertices.
     pub(crate) fn commit_stroke_open(&mut self) {
         if self.editor.active_tool == ActiveTool::MakePoly
             && self.editor.pending_stroke.len() >= 2
@@ -328,7 +328,7 @@ impl<'a> App<'a> {
         let line_weight = self.editor.tool_line_weight;
         let fill = self.editor.tool_hatch.to_fill_style();
         if let Some(project) = self.workspace.active_project_mut() {
-            let doc = &mut project.pidb.document;
+            let doc = &mut project.project.document;
             let id = doc.allocate_object_id();
             self.history.execute(
                 doc,

@@ -3,7 +3,10 @@ use std::{cell::RefCell, collections::HashSet, path::PathBuf, sync::Arc};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::model::formats::{block_model_data::BlockModelData, csv_block_model::CsvColumnMapping};
+use crate::model::{
+    formats::{block_model_data::BlockModelData, csv_block_model::CsvColumnMapping},
+    project::ProjectItemState,
+};
 
 pub(crate) const MIN_COLOR_STOPS: usize = 2;
 pub(crate) const MAX_COLOR_STOPS: usize = 12;
@@ -20,11 +23,6 @@ pub(crate) struct BlockModelSource {
     /// with the session so custom coordinate/size headers can be reopened.
     #[serde(default)]
     pub(crate) csv_columns: Option<CsvColumnMapping>,
-    /// Runtime-generated models have no backing file, are marked unsaved, and
-    /// are not restored as session sources. Save As converts one into a normal
-    /// CSV-backed model.
-    #[serde(default)]
-    pub(crate) generated: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -288,7 +286,7 @@ pub(crate) struct LoadedBlockModel {
 #[derive(Clone, Debug)]
 pub(crate) struct UniformBlockGrid {
     pub(crate) origin: DVec3,
-    /// `1 / cell` (the cell size is not stored — nothing reads it), so the
+    /// `1 / cell` (the cell size is not stored - nothing reads it), so the
     /// per-block coordinate lookup in the culling hot loop multiplies
     /// instead of dividing.
     inv_cell: DVec3,
@@ -471,7 +469,7 @@ pub(crate) fn detect_uniform_grid(blocks: &[BlockBounds]) -> Option<UniformBlock
     })
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct ColorStop {
     /// Stable runtime identity used by egui widgets. Rendering only reads
     /// `t` and `color`.
@@ -490,7 +488,7 @@ impl PartialEq for ColorStop {
 
 /// A colour ramp driving grade colouring. Stops are always kept sorted
 /// ascending by `t`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ColorTransferFunction {
     pub(crate) stops: Vec<ColorStop>,
 }
@@ -527,7 +525,7 @@ impl Default for ColorTransferFunction {
 /// coordinates (the frame of `metadata.lower`/`upper` and every block's
 /// bounds). Blocks outside the box are removed, boundary blocks are clipped
 /// to it, and the volume raycaster shortens its march to the cropped extent.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct BlockModelSlice {
     pub(crate) min: DVec3,
     pub(crate) max: DVec3,
@@ -550,8 +548,8 @@ impl BlockModelSlice {
 #[derive(Clone, Debug)]
 pub(crate) struct OpenBlockModel {
     pub(crate) id: BlockModelId,
+    pub(crate) state: ProjectItemState,
     pub(crate) name: String,
-    pub(crate) source: BlockModelSource,
     pub(crate) model: BlockModelData,
     pub(crate) blocks: Arc<BlockBoundsSource>,
     pub(crate) renderable_block_indices: Arc<RenderableBlockIndices>,
@@ -766,14 +764,14 @@ impl OpenBlockModel {
         min.cmple(max).all().then_some((min, max))
     }
 
-    /// The model's extent in its local grid frame — the frame block bounds,
+    /// The model's extent in its local grid frame - the frame block bounds,
     /// schemas, and [`Self::slice`] are expressed in.
     pub(crate) fn local_bounds(&self) -> (DVec3, DVec3) {
         (self.model.metadata.lower, self.model.metadata.upper)
     }
 
     /// The slice clamped to the model's local bounds, or `None` when there is
-    /// no slice or it crops nothing — so renderers can compare/act on "does
+    /// no slice or it crops nothing - so renderers can compare/act on "does
     /// this actually cut anything" directly.
     pub(crate) fn active_slice(&self) -> Option<BlockModelSlice> {
         let (lower, upper) = self.local_bounds();

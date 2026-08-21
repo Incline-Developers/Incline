@@ -5,9 +5,9 @@
 //! operation (contouring, string imports) drops tens of thousands of dense
 //! polylines into the document. This cache claims those polylines, groups them
 //! into per-layer chunks with their own GPU buffers, and re-tessellates only
-//! the chunks whose members actually changed. Everything else — points, text,
-//! filled polygons, and any polyline the editor is currently styling
-//! (selection, highlight, translucency) — stays on the per-rebuild path.
+//! the chunks whose members actually changed. Everything else - points, text,
+//! filled polylines, and any polyline the editor is currently styling
+//! (selection, highlight, translucency) - stays on the per-rebuild path.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -48,7 +48,7 @@ pub(crate) struct StaticStrokeChunk {
     pub(crate) vertices: Vec<StrokeVertex>,
     pub(crate) indices: Vec<u32>,
     /// Per-member pick records with ranges into this chunk's buffers (fill
-    /// ranges are always empty — filled polylines are ineligible).
+    /// ranges are always empty - filled polylines are ineligible).
     pub(crate) records: Vec<PickRecord>,
     /// Union of member pick bounds, used to reject this entire CPU stream on
     /// cursor queries that land elsewhere.

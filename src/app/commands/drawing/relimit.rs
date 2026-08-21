@@ -230,7 +230,7 @@ impl<'a> App<'a> {
         }
 
         let changed = if let Some(project) = self.workspace.active_project_mut() {
-            self.history.execute(&mut project.pidb.document, Command::Replace { before, after });
+            self.history.execute(&mut project.project.document, Command::Replace { before, after });
             true
         } else {
             false
@@ -266,7 +266,7 @@ impl<'a> App<'a> {
         }
 
         let changed = if let Some(project) = self.workspace.active_project_mut() {
-            self.history.execute(&mut project.pidb.document, Command::Replace { before, after });
+            self.history.execute(&mut project.project.document, Command::Replace { before, after });
             true
         } else {
             false
@@ -305,8 +305,8 @@ impl<'a> App<'a> {
 
 /// Intersect the *infinite* line through `a`,`b` with the *segment* `c`–`d`.
 /// Returns the parameter `t` along `a`→`b` (any value), but only when the hit
-/// lies on (or within `XY_TOL` metres of) the actual `c`–`d` segment — so a
-/// polygon edge is never extended to an arbitrary off-edge point, while a
+/// lies on (or within `XY_TOL` metres of) the actual `c`–`d` segment - so a
+/// polyline edge is never extended to an arbitrary off-edge point, while a
 /// touch point that drifted off the end by floating-point noise (e.g. from a
 /// prior relimit) still resolves.
 fn line_line_intersect_t(a: glam::DVec2, b: glam::DVec2, c: glam::DVec2, d: glam::DVec2) -> Option<f64> {

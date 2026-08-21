@@ -10,7 +10,7 @@ use crate::{
 impl<'a> App<'a> {
     pub(crate) fn split_at_points_click(&mut self) {
         if self.editor.split_poly_id.is_none() {
-            self.pick_split_polygon();
+            self.pick_split_polyline();
         } else if self.editor.split_selected_verts[0].is_none() || self.editor.split_selected_verts[1].is_none() {
             self.pick_split_vertex();
         }
@@ -25,7 +25,7 @@ impl<'a> App<'a> {
                 SceneEntityId::Object(id) => Some(*id),
                 _ => None,
             })
-            .find(|id| self.is_valid_split_polygon(*id));
+            .find(|id| self.is_valid_split_polyline(*id));
 
         if let Some(id) = selected {
             self.editor.split_poly_id = Some(id);
@@ -34,7 +34,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn pick_split_polygon(&mut self) {
+    fn pick_split_polyline(&mut self) {
         let frozen = &self.editor.frozen_handles;
         let picked = self
             .graphics
@@ -44,7 +44,7 @@ impl<'a> App<'a> {
         let Some((SceneEntityId::Object(object_id), _)) = picked else {
             return;
         };
-        if !self.activate_project_for_object(object_id) || !self.is_valid_split_polygon(object_id) {
+        if !self.activate_project_for_object(object_id) || !self.is_valid_split_polyline(object_id) {
             return;
         }
 
@@ -131,7 +131,7 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
-        let doc = &mut project.pidb.document;
+        let doc = &mut project.project.document;
         let Some(source) = doc.get_object(object_id).cloned() else {
             return;
         };
@@ -152,7 +152,7 @@ impl<'a> App<'a> {
             let Some(second) = second else {
                 return;
             };
-            split_closed_ring(verts, first, second).ok_or("Split At Points: choose two non-adjacent polygon vertices")
+            split_closed_ring(verts, first, second).ok_or("Split At Points: choose two non-adjacent polyline vertices")
         } else {
             split_open_line(verts, first).ok_or("Split At Points: choose an interior vertex of the open line")
         };
@@ -215,7 +215,7 @@ impl<'a> App<'a> {
         self.editor.split_poly_verts_screen_px.clear();
     }
 
-    fn is_valid_split_polygon(&self, object_id: ObjectId) -> bool {
+    fn is_valid_split_polyline(&self, object_id: ObjectId) -> bool {
         self.scene_document.get_object(object_id).is_some_and(|object| {
             matches!(
                 object,

@@ -10,10 +10,10 @@ pub(crate) mod geometry;
 pub(crate) mod input;
 pub(crate) mod kernel;
 pub(crate) mod kriging;
-pub(crate) mod pidb;
 pub(crate) mod plot;
 pub(crate) mod point_cloud;
 pub(crate) mod progress;
+pub(crate) mod project;
 pub(crate) mod raster;
 pub(crate) mod spatial;
 pub(crate) mod triangulation;
@@ -35,6 +35,8 @@ pub(crate) enum SceneEntityId {
     Object(ObjectId),
     Triangulation(triangulation::TriangulationId),
     BlockModel(block_model::BlockModelId),
+    DrillHole(drill_hole::DrillHoleId),
+    PointCloud(point_cloud::PointCloudId),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -94,7 +96,7 @@ impl PolyVertex {
 }
 
 /// A drawable design element. `Polyline` with `closed == true` represents a
-/// polygon; vertices carry bulges so arcs/circles are preserved.
+/// polyline; vertices carry bulges so arcs/circles are preserved.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Object {
@@ -137,12 +139,13 @@ impl Object {
         }
     }
 
-    /// Short human-readable variant name, for diagnostics/logging.
+    /// Short human-readable variant name, for diagnostics/logging. A two-vertex
+    /// polyline is a plain line and is named as one.
     pub(crate) fn kind_name(&self) -> &'static str {
         match self {
             Object::Point { .. } => "Point",
-            Object::Polyline { closed: true, .. } => "Polygon",
-            Object::Polyline { closed: false, .. } => "Polyline",
+            Object::Polyline { verts, .. } if verts.len() == 2 => "Line",
+            Object::Polyline { .. } => "Polyline",
             Object::Text { .. } => "Text",
         }
     }
@@ -352,6 +355,11 @@ impl Object {
 pub(crate) struct Document {
     layers: Vec<Layer>,
     objects: Vec<Object>,
+    /// Project-persistent visibility overrides for individual design objects.
+    /// Layers have their own visibility flag; this set covers object-level
+    /// Hide Selection without changing the object's geometry or styling.
+    #[serde(default)]
+    hidden_objects: std::collections::HashSet<ObjectId>,
     #[serde(skip)]
     object_index: HashMap<ObjectId, usize>,
     next_layer_id: u64,
@@ -378,11 +386,43 @@ impl Document {
         &self.objects
     }
 
-    /// Convert impossible imported two-vertex polygons into open polylines.
+    pub(crate) fn is_object_hidden(&self, id: ObjectId) -> bool {
+        self.hidden_objects.contains(&id)
+    }
+
+    pub(crate) fn hidden_object_ids(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.hidden_objects.iter().copied()
+    }
+
+    /// Persist an individual object's visibility. Returns whether it changed.
+    pub(crate) fn set_object_hidden(&mut self, id: ObjectId, hidden: bool) -> bool {
+        if self.get_object(id).is_none() {
+            return false;
+        }
+        let changed = if hidden { self.hidden_objects.insert(id) } else { self.hidden_objects.remove(&id) };
+        if changed {
+            self.touch_object(id);
+        }
+        changed
+    }
+
+    /// Reveal every individually hidden design object.
+    pub(crate) fn reveal_all_objects(&mut self) -> bool {
+        if self.hidden_objects.is_empty() {
+            return false;
+        }
+        let changed = std::mem::take(&mut self.hidden_objects);
+        self.touch();
+        let revision = self.revision;
+        self.object_revisions.extend(changed.into_iter().map(|id| (id, revision)));
+        true
+    }
+
+    /// Convert impossible imported two-vertex closed polylines into open ones.
     ///
     /// Some external design formats encode ordinary two-point strings as
-    /// closed polygons. Importers use this before constructing a PIDB so the
-    /// resulting document satisfies the three-vertex polygon invariant.
+    /// closed polylines. Importers use this before constructing a project so the
+    /// resulting document satisfies the three-vertex polyline invariant.
     pub(crate) fn repair_degenerate_closed_polylines(&mut self) -> usize {
         let mut repaired = 0;
         for object in &mut self.objects {
@@ -412,7 +452,7 @@ impl Document {
         let mut layer_ids = std::collections::HashSet::with_capacity(self.layers.len());
         for layer in &self.layers {
             if layer.id.0 > LOCAL_MASK {
-                bail!("layer '{}' has id {} outside the 32-bit PIDB id range", layer.name, layer.id.0);
+                bail!("layer '{}' has id {} outside the 32-bit project id range", layer.name, layer.id.0);
             }
             if !layer_ids.insert(layer.id) {
                 bail!("duplicate layer id {} ('{}')", layer.id.0, layer.name);
@@ -429,7 +469,7 @@ impl Document {
         for object in &self.objects {
             let id = object.id();
             if id.0 > LOCAL_MASK {
-                bail!("{} object has id {} outside the 32-bit PIDB id range", object.kind_name(), id.0);
+                bail!("{} object has id {} outside the 32-bit project id range", object.kind_name(), id.0);
             }
             if !object_ids.insert(id) {
                 bail!("duplicate object id {}", id.0);
@@ -438,6 +478,11 @@ impl Document {
                 bail!("{} object {} references missing layer {}", object.kind_name(), id.0, object.layer().0);
             }
             object.validate_geometry().map_err(|error| anyhow::anyhow!("object {}: {error}", id.0))?;
+        }
+        for id in &self.hidden_objects {
+            if !object_ids.contains(id) {
+                bail!("hidden object id {} does not reference a design object", id.0);
+            }
         }
         Ok(())
     }
@@ -566,6 +611,7 @@ impl Document {
         let index = self.object_position(id)?;
         self.object_index.remove(&id);
         self.object_revisions.remove(&id);
+        self.hidden_objects.remove(&id);
         let object = self.objects.remove(index);
         for shifted_index in index..self.objects.len() {
             self.object_index.insert(self.objects[shifted_index].id(), shifted_index);
@@ -590,6 +636,7 @@ impl Document {
         self.objects.retain(|object| !ids.contains(&object.id()));
         for id in positions.keys() {
             self.object_revisions.remove(id);
+            self.hidden_objects.remove(id);
         }
         self.rebuild_object_index();
         self.touch();
@@ -699,7 +746,7 @@ impl Document {
             .unwrap_or_else(|| self.add_layer("0".to_string(), Some(7), [1.0, 1.0, 1.0, 1.0], true, 0.0))
     }
 
-    /// Assign every layer and object a runtime namespace. PIDB ids are local
+    /// Assign every layer and object a runtime namespace. Project ids are local
     /// to a file; namespacing makes them safe to combine in one scene.
     pub(crate) fn apply_runtime_namespace(&mut self, namespace: u32) {
         self.apply_runtime_namespace_inner(namespace);
@@ -719,6 +766,7 @@ impl Document {
             .iter()
             .map(|object| object.with_id_and_layer(ObjectId(runtime_id(object.id().0)), LayerId(runtime_id(object.layer().0))))
             .collect();
+        self.hidden_objects = self.hidden_objects.iter().map(|id| ObjectId(runtime_id(id.0))).collect();
         self.rebuild_object_index();
         // Ids changed identity: restamp everything at the current revision so
         // stale pre-namespace entries cannot alias new ids.
@@ -793,7 +841,7 @@ impl Document {
     }
 
     /// Revision at which `id` was last mutated (0 for objects untouched since
-    /// load — a fresh cache treats those uniformly).
+    /// load - a fresh cache treats those uniformly).
     pub(crate) fn object_revision(&self, id: ObjectId) -> u64 {
         self.object_revisions.get(&id).copied().unwrap_or(0)
     }
@@ -810,7 +858,7 @@ impl Document {
     /// Namespace-invariant content fingerprint used for dirty tracking.
     ///
     /// Per-object hashes are cached in `cache` keyed by object revision, so
-    /// after an edit only the touched objects re-hash — unlike serializing
+    /// after an edit only the touched objects re-hash - unlike serializing
     /// the whole document to JSON, which interactive drags used to repeat on
     /// every pointer event. Ids are masked to their 32-bit local half so the
     /// fingerprint is identical before and after runtime namespacing.
@@ -819,11 +867,9 @@ impl Document {
         const LOCAL_MASK: u64 = u32::MAX as u64;
 
         let mut hasher = DefaultHasher::new();
-        // These counters are serialized too. Masking keeps the savepoint
-        // stable after a project receives its runtime namespace, while still
-        // detecting an allocated-but-not-yet-inserted id.
-        (self.next_layer_id & LOCAL_MASK).hash(&mut hasher);
-        (self.next_object_id & LOCAL_MASK).hash(&mut hasher);
+        // Allocation counters are derived from retained IDs when an OMF opens
+        // and are not user-visible project content. Excluding them lets undo
+        // back to an identical design clear the dirty star.
         self.layers.len().hash(&mut hasher);
         for layer in &self.layers {
             (layer.id.0 & LOCAL_MASK).hash(&mut hasher);
@@ -848,6 +894,7 @@ impl Document {
                 }
             };
             object_hash.hash(&mut hasher);
+            self.hidden_objects.contains(&id).hash(&mut hasher);
         }
         // Prune deleted objects once stale entries dominate the cache.
         if cache.len() > self.objects.len().saturating_mul(2).max(64) {
@@ -889,6 +936,7 @@ impl Document {
             };
             if let Some(hasher) = hashers.get_mut(&(object.layer().0 & LOCAL_MASK)) {
                 object_hash.hash(hasher);
+                self.hidden_objects.contains(&id).hash(hasher);
             }
         }
         hashers.into_iter().map(|(id, hasher)| (id, hasher.finish())).collect()
@@ -1060,11 +1108,9 @@ struct ProjectHistory {
     redo: Vec<HistoryEntry>,
 }
 
-/// Per-project undo/redo histories with a high global retained-memory cap.
-/// Switching PIDBs changes the active stack instead of deleting it.
+/// Undo/redo history for the one open project.
 pub(crate) struct History {
-    projects: HashMap<u32, ProjectHistory>,
-    active_project: Option<u32>,
+    project: ProjectHistory,
     retained_bytes: usize,
     next_sequence: u64,
     max_retained_bytes: usize,
@@ -1073,8 +1119,7 @@ pub(crate) struct History {
 impl Default for History {
     fn default() -> Self {
         Self {
-            projects: HashMap::new(),
-            active_project: None,
+            project: ProjectHistory::default(),
             retained_bytes: 0,
             next_sequence: 0,
             // Large enough for production geometry edits, but finite so a
@@ -1089,41 +1134,18 @@ impl History {
         Self::default()
     }
 
-    pub(crate) fn activate(&mut self, runtime_id: u32) {
-        self.active_project = Some(runtime_id);
-        self.projects.entry(runtime_id).or_default();
-    }
+    pub(crate) fn activate(&mut self, _runtime_id: u32) {}
 
-    pub(crate) fn deactivate(&mut self) {
-        self.active_project = None;
-    }
+    pub(crate) fn deactivate(&mut self) {}
 
-    pub(crate) fn remove_project(&mut self, runtime_id: u32) {
-        if let Some(history) = self.projects.remove(&runtime_id) {
-            self.retained_bytes = self
-                .retained_bytes
-                .saturating_sub(history.undo.iter().chain(&history.redo).map(|entry| entry.estimated_bytes).sum::<usize>());
-        }
-        if self.active_project == Some(runtime_id) {
-            self.active_project = None;
-        }
+    pub(crate) fn remove_project(&mut self, _runtime_id: u32) {
+        self.clear();
     }
 
     pub(crate) fn clear(&mut self) {
-        let Some(runtime_id) = self.active_project else {
-            return;
-        };
-        self.clear_project(runtime_id);
-    }
-
-    pub(crate) fn clear_project(&mut self, runtime_id: u32) {
-        if let Some(history) = self.projects.get_mut(&runtime_id) {
-            self.retained_bytes = self
-                .retained_bytes
-                .saturating_sub(history.undo.iter().chain(&history.redo).map(|entry| entry.estimated_bytes).sum::<usize>());
-            history.undo.clear();
-            history.redo.clear();
-        }
+        self.retained_bytes = 0;
+        self.project.undo.clear();
+        self.project.redo.clear();
     }
 
     pub(crate) fn execute(&mut self, doc: &mut Document, mut command: Command) {
@@ -1131,30 +1153,24 @@ impl History {
         self.push_applied(command);
     }
 
-    /// Apply and record a command against a specific project, even when a
-    /// background job completes after the user has activated another project.
-    pub(crate) fn execute_for(&mut self, runtime_id: u32, doc: &mut Document, mut command: Command) {
+    /// Apply and record a command produced by a project-scoped background job.
+    /// The caller validates the open-project runtime token before invoking it.
+    pub(crate) fn execute_for(&mut self, _runtime_id: u32, doc: &mut Document, mut command: Command) {
         command.apply(doc);
-        self.push_applied_for(runtime_id, command);
+        self.push_applied(command);
     }
 
     /// Record a command whose effect is already applied to the document
     /// (e.g. an interactive drag-move committed on mouse release).
     pub(crate) fn push_applied(&mut self, command: Command) {
-        let Some(runtime_id) = self.active_project else {
-            return;
-        };
-        self.push_applied_for(runtime_id, command);
-    }
-
-    fn push_applied_for(&mut self, runtime_id: u32, command: Command) {
-        let history = self.projects.entry(runtime_id).or_default();
-        self.retained_bytes = self.retained_bytes.saturating_sub(history.redo.iter().map(|entry| entry.estimated_bytes).sum::<usize>());
-        history.redo.clear();
+        self.retained_bytes = self
+            .retained_bytes
+            .saturating_sub(self.project.redo.iter().map(|entry| entry.estimated_bytes).sum::<usize>());
+        self.project.redo.clear();
         let estimated_bytes = command.estimated_bytes();
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
-        history.undo.push(HistoryEntry {
+        self.project.undo.push(HistoryEntry {
             command,
             estimated_bytes,
             sequence,
@@ -1165,13 +1181,10 @@ impl History {
 
     /// Revert the most recent command. Returns `true` if something was undone.
     pub(crate) fn undo(&mut self, doc: &mut Document) -> bool {
-        let Some(history) = self.active_project.and_then(|runtime_id| self.projects.get_mut(&runtime_id)) else {
-            return false;
-        };
-        match history.undo.pop() {
+        match self.project.undo.pop() {
             Some(entry) => {
                 entry.command.revert(doc);
-                history.redo.push(entry);
+                self.project.redo.push(entry);
                 true
             }
             None => false,
@@ -1179,26 +1192,19 @@ impl History {
     }
 
     pub(crate) fn can_undo(&self) -> bool {
-        self.active_project
-            .and_then(|runtime_id| self.projects.get(&runtime_id))
-            .is_some_and(|history| !history.undo.is_empty())
+        !self.project.undo.is_empty()
     }
 
     pub(crate) fn can_redo(&self) -> bool {
-        self.active_project
-            .and_then(|runtime_id| self.projects.get(&runtime_id))
-            .is_some_and(|history| !history.redo.is_empty())
+        !self.project.redo.is_empty()
     }
 
     /// Re-apply the most recently undone command. Returns `true` on success.
     pub(crate) fn redo(&mut self, doc: &mut Document) -> bool {
-        let Some(history) = self.active_project.and_then(|runtime_id| self.projects.get_mut(&runtime_id)) else {
-            return false;
-        };
-        match history.redo.pop() {
+        match self.project.redo.pop() {
             Some(mut entry) => {
                 entry.command.apply(doc);
-                history.undo.push(entry);
+                self.project.undo.push(entry);
                 true
             }
             None => false,
@@ -1207,33 +1213,29 @@ impl History {
 
     fn enforce_memory_budget(&mut self) {
         while self.retained_bytes > self.max_retained_bytes {
-            let oldest = self
-                .projects
-                .iter()
-                .flat_map(|(&runtime_id, history)| {
-                    history
-                        .undo
-                        .iter()
-                        .enumerate()
-                        .map(move |(index, entry)| (entry.sequence, runtime_id, true, index))
-                        .chain(history.redo.iter().enumerate().map(move |(index, entry)| (entry.sequence, runtime_id, false, index)))
-                })
-                .min_by_key(|(sequence, _, _, _)| *sequence);
-            let Some((_, runtime_id, from_undo, index)) = oldest else {
+            let oldest_undo = self.project.undo.iter().enumerate().min_by_key(|(_, entry)| entry.sequence);
+            let oldest_redo = self.project.redo.iter().enumerate().min_by_key(|(_, entry)| entry.sequence);
+            let oldest = match (oldest_undo, oldest_redo) {
+                (Some((undo_index, undo)), Some((_redo_index, redo))) if undo.sequence <= redo.sequence => Some((true, undo_index)),
+                (Some(_), Some((redo_index, _))) => Some((false, redo_index)),
+                (Some((undo_index, _)), None) => Some((true, undo_index)),
+                (None, Some((redo_index, _))) => Some((false, redo_index)),
+                (None, None) => None,
+            };
+            let Some((from_undo, index)) = oldest else {
                 self.retained_bytes = 0;
                 break;
             };
-            let history = self.projects.get_mut(&runtime_id).expect("history disappeared");
             if from_undo {
-                let entry = history.undo.remove(index);
+                let entry = self.project.undo.remove(index);
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
             } else {
                 // Redo entries form a dependency chain (the last item must be
                 // replayed first). Evicting a middle/last predecessor would
-                // make the remaining redo commands invalid, so discard that
-                // project's complete redo branch together.
-                let bytes = history.redo.iter().map(|entry| entry.estimated_bytes).sum::<usize>();
-                history.redo.clear();
+                // make the remaining redo commands invalid, so discard the
+                // complete redo branch together.
+                let bytes = self.project.redo.iter().map(|entry| entry.estimated_bytes).sum::<usize>();
+                self.project.redo.clear();
                 self.retained_bytes = self.retained_bytes.saturating_sub(bytes);
             }
         }

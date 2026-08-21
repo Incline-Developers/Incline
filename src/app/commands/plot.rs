@@ -212,7 +212,7 @@ impl<'a> App<'a> {
         if let Some(project) = self.workspace.active_project() {
             entries.extend(
                 project
-                    .pidb
+                    .project
                     .document
                     .layers()
                     .iter()
@@ -258,8 +258,8 @@ impl PlotSheetOutcome {
 
 /// Compose the sheet around the rendered map and write it out.
 ///
-/// This is the expensive half of an export — a paper-sized canvas, glyph
-/// rasterisation and PNG deflate, tens of megapixels at print resolution — so
+/// This is the expensive half of an export - a paper-sized canvas, glyph
+/// rasterisation and PNG deflate, tens of megapixels at print resolution - so
 /// it owns everything it needs and runs on a worker wherever the platform
 /// allows one.
 fn finish_plot_sheet(

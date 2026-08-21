@@ -24,7 +24,7 @@ struct BlockVolume {
     // cycle (0..63, x = phase & 7, y = phase >> 3); w: beam lookup enabled.
     lod: vec4<f32>,
     // xyz: cell counts; w: bitmask of axes whose planes are uniformly spaced
-    // (1 = x, 2 = y, 4 = z) — those axes resolve plane positions and cell
+    // (1 = x, 2 = y, 4 = z) - those axes resolve plane positions and cell
     // indices arithmetically instead of via storage-buffer searches.
     dims: vec4<u32>,
     // xyz: brick counts per axis; w: brick edge length in cells.
@@ -42,7 +42,7 @@ struct BlockVolume {
     plane_inv_step: vec4<f32>,
     // xyz: super-brick (SUPER_FACTOR^3 bricks) counts per axis; w: index of
     // the first super-brick aggregate in `brick_aggregates` (they live in the
-    // buffer's tail — the bind group is at the 8-storage-buffer limit), or 0
+    // buffer's tail - the bind group is at the 8-storage-buffer limit), or 0
     // when the level-1 LOD is disabled.
     super_dims: vec4<u32>,
     stops: array<ColorStop, 12>,
@@ -62,7 +62,7 @@ var<storage, read> z_planes: PlaneBuffer;
 
 // Bounded cell-payload pool: `BRICK_SIZE^3` 16-bit payloads per *slot*,
 // packed two-per-`u32` (so `BRICK_SIZE^3 / 2` words per slot; read through
-// `fetch_cell_payload`). Which brick occupies which slot is dynamic — the CPU
+// `fetch_cell_payload`). Which brick occupies which slot is dynamic - the CPU
 // streams bricks in by camera proximity and `brick_info` maps a brick to its
 // slot (or marks it non-resident, in which case the march renders it from its
 // aggregate). For models whose mixed bricks all fit the pool this is filled
@@ -98,8 +98,8 @@ var<storage, read> brick_aggregates: BrickAggregates;
 
 // One entry per *occupied* brick, indexed by ordinal. Bit 31
 // (`UNIFORM_BRICK_FLAG`): every real cell in the brick resolves to the same
-// appearance — one ramp RGBA, or invisible (empty / alpha below the epsilon)
-// — so its aggregate reproduces per-cell output exactly and it never needs
+// appearance - one ramp RGBA, or invisible (empty / alpha below the epsilon)
+// - so its aggregate reproduces per-cell output exactly and it never needs
 // pool residency. Bit 30 (`MIXED_VISIBILITY_BRICK_FLAG`): the active filter
 // leaves both visible and invisible cells in the brick, so an aggregate would
 // turn sparse cells into a brick-shaped silhouette and distance LOD is
@@ -164,7 +164,7 @@ const MOTION_MAX_STEPS: u32 = 512u;
 // below the threshold), remaining bricks integrate from their aggregates
 // even at full detail: whatever lies behind several translucent layers
 // contributes at most this fraction of the final colour, so per-cell
-// structure there is visually indistinguishable — and without this floor an
+// structure there is visually indistinguishable - and without this floor an
 // orthographic zoomed-in view (whose pixel footprint never grows along the
 // ray) marches every translucent ray cell-by-cell through the model's full
 // depth.
@@ -237,7 +237,7 @@ fn intersect_aabb(origin: vec3<f32>, dir: vec3<f32>) -> vec2<f32> {
 }
 
 // Plane positions. Uniform axes (dims.w bitmask) compute the lattice value
-// arithmetically — regular grids never touch the plane storage buffers in
+// arithmetically - regular grids never touch the plane storage buffers in
 // the march. The arithmetic form is used consistently for both plane
 // positions and cell lookup on such axes, so the two can never disagree.
 fn x_plane(index: u32) -> f32 {
@@ -332,7 +332,7 @@ fn brick_of(i: u32, j: u32, k: u32) -> u32 {
 // Resolved appearance of the cell at (i, j, k) for rim highlights: rgb plus
 // opacity in `w` (0 = empty or below the visibility epsilon).
 // Handles every brick kind: empty bricks are invisible; uniform bricks
-// resolve from their aggregate (exact — it *is* the cell colour); resident
+// resolve from their aggregate (exact - it *is* the cell colour); resident
 // mixed bricks resolve the actual payload; non-resident mixed bricks fall
 // back to their aggregate colour (approximate, transient until streamed in).
 fn face_appearance(i: u32, j: u32, k: u32) -> vec4<f32> {
@@ -479,7 +479,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Rim highlights cost extra neighbour resolutions at every boundary
     // crossing. During interaction the frame is rendered at reduced
     // resolution and upscaled, so the subtle Fresnel rims are not resolvable
-    // anyway — skip them and get the frame out faster.
+    // anyway - skip them and get the frame out faster.
     let enable_rims = render_scale >= 1.0 && volume.bounds_min.w > 0.5;
     // Rotate the sampled pixel through the tile across feedback cycles so a
     // brick projecting onto only a sliver of the tile is still requested
@@ -497,13 +497,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
         p = local_near + local_dir * t;
 
-        // Brick-granular fast path — taken for every brick except resident
+        // Brick-granular fast path - taken for every brick except resident
         // mixed bricks at full detail. One iteration handles the whole brick:
         //  - empty brick: contributes nothing, skipped in one step;
         //  - uniform brick (every cell one appearance): its aggregate IS the
         //    cell appearance, so one Beer–Lambert exp over the span is *exact*
         //    (multiplicative transmittance; internal same-colour crossings
-        //    never highlight) — uniform bricks therefore never need cells;
+        //    never highlight) - uniform bricks therefore never need cells;
         //  - `coarse` (cells project below 1/lod-factor of a pixel): per-cell
         //    detail is invisible, integrate the aggregate as an approximation;
         //  - non-resident mixed brick: cells not streamed in yet, integrate
@@ -538,11 +538,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 aggregate = brick_aggregates.values[ordinal];
             }
             // Whether this region kind would emit an exit-face rim at full
-            // detail (empty and uniform bricks only — see the rim block).
+            // detail (empty and uniform bricks only - see the rim block).
             var rims_allowed = ordinal == EMPTY_BRICK || brick_uniform;
             // Level-1 super-brick LOD. An invisible super region (w == 0)
             // implies every child brick is empty or uniform-invisible, so
-            // stepping it whole — rim check at its exit face included — is
+            // stepping it whole - rim check at its exit face included - is
             // exactly what per-brick stepping would produce, just in one
             // iteration. A visible region integrates from its own aggregate
             // once the footprint/transmittance is a factor SUPER_LOD_FACTOR
@@ -662,7 +662,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 continue;
             }
 
-            // Rim highlight at the brick's exit face — only for empty/uniform
+            // Rim highlight at the brick's exit face - only for empty/uniform
             // bricks at full detail, where it reproduces exactly what per-cell
             // stepping would emit at this crossing (interior crossings of such
             // bricks never highlight, so the face is the only candidate).
@@ -766,7 +766,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         // material boundaries visible structure instead of the volume
         // reading as uniform fog (see Phase 7 of the rendering plan). The
         // `t + step_t < t_exit` guard skips crossings that land at/behind the
-        // march end (opaque occluder or volume exit) — those boundaries are
+        // march end (opaque occluder or volume exit) - those boundaries are
         // not visible from this pixel.
         if (enable_rims && (1.0 - transmittance) < volume.options.z && t + step_t < t_exit) {
             var boundary_normal = vec3<f32>(0.0);
@@ -900,7 +900,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
     // Early termination by the opacity cutoff leaves `alpha_out` at ~cutoff
     // (e.g. 0.95) even though the ray stopped *inside* an effectively opaque
-    // medium — blending that over the scene would bleed 5% of the background
+    // medium - blending that over the scene would bleed 5% of the background
     // through solid models. Snap to fully opaque, unpremultiplying so the
     // colour keeps its accumulated mix (the residual energy would have been
     // more of the same). Rays that genuinely exit the volume (t >= t_exit)
@@ -983,7 +983,7 @@ fn fs_beam(@builtin(position) frag_coord: vec4<f32>) -> @location(0) f32 {
 
         // The tile's rays fan out to ~6 px around the centre (4 px half-tile
         // plus margin); convert that world radius into a brick-count
-        // dilation radius. Bail conservatively when it exceeds one brick —
+        // dilation radius. Bail conservatively when it exceeds one brick -
         // that only happens far away / zoomed out, where the pre-pass gains
         // nothing anyway.
         let tile_radius = 6.0 * (fp_base + fp_slope * t);

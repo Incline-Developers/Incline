@@ -1,8 +1,8 @@
 //! Suballocator for point-cloud vertex data.
 //!
-//! Every full spatial chunk of a cloud shares an identical LOD prefix layout —
+//! Every full spatial chunk of a cloud shares an identical LOD prefix layout -
 //! `level_counts` depends only on the chunk's point count, not on which points
-//! the density-aware ordering picked — so a given capacity level always requests
+//! the density-aware ordering picked - so a given capacity level always requests
 //! the same number of bytes. That makes fixed-size slot pools a perfect fit:
 //! residency changes hand slots back and forth with no fragmentation, and new
 //! GPU buffers are created once per *block* (hundreds to thousands of slots)

@@ -12,7 +12,10 @@ use wgpu::util::DeviceExt;
 
 pub(crate) use crate::model::point_cloud::{PointInstance, PointPosition};
 use crate::{
-    model::point_cloud::{OpenPointCloud, POINT_CLOUD_LOD_LEVELS, PointCloudId, PreparedPointCloud},
+    model::{
+        SceneEntityId,
+        point_cloud::{OpenPointCloud, POINT_CLOUD_LOD_LEVELS, PointCloudId, PreparedPointCloud},
+    },
     rendering::{
         graphics::frustum::Frustum,
         scene::point_buffer_arena::{PointBufferArena, PointSlot},
@@ -73,6 +76,7 @@ pub(crate) struct CachedPointCloudGpu {
     scene_origin: DVec3,
     prepared: Arc<PreparedPointCloud>,
     visible: bool,
+    selected: bool,
 }
 
 #[derive(Default)]
@@ -88,7 +92,7 @@ pub(crate) struct PointCloudGpuCache {
 /// resident and are not charged or retransferred when a chunk refines. This is
 /// the sole per-frame streaming throttle: because chunks suballocate from the
 /// arena, uploading no longer creates GPU buffers, so a chunk-count cap is
-/// unnecessary — the byte budget alone bounds both transfer volume and command
+/// unnecessary - the byte budget alone bounds both transfer volume and command
 /// count (a frame of bootstraps is at most this budget / a bootstrap prefix).
 /// The frame-time tail scales with it, so it is kept modest; the load-in
 /// latency win comes from refining straight to the requested level.
@@ -138,14 +142,46 @@ impl PointCloudGpuCache {
 
     /// Nearest depth-writing point splat covering `screen_point` at the LOD
     /// used by the most recent render pass.
-    pub(crate) fn nearest_depth_at_screen(&self, view_proj: &DMat4, screen: (f32, f32), screen_point: DVec2) -> Option<f64> {
-        let mut nearest = f64::NEG_INFINITY;
+    pub(crate) fn nearest_depth_at_screen(&self, view_proj: &DMat4, screen: (f32, f32), screen_point: DVec2, hidden: &HashSet<SceneEntityId>) -> Option<f64> {
+        self.nearest_hit_at_screen(view_proj, screen, screen_point, 0.0, hidden, &HashSet::new())
+            .map(|(_, _, depth)| depth)
+    }
+
+    /// Nearest visible point-cloud splat under the cursor, including a small
+    /// interaction tolerance beyond the rendered billboard.
+    pub(crate) fn nearest_visible_entity_at_screen(
+        &self,
+        view_proj: &DMat4,
+        screen: (f32, f32),
+        screen_point: DVec2,
+        threshold_px: f32,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Option<(SceneEntityId, DVec3)> {
+        self.nearest_hit_at_screen(view_proj, screen, screen_point, f64::from(threshold_px), hidden, frozen)
+            .map(|(entity, world, _)| (entity, world))
+    }
+
+    fn nearest_hit_at_screen(
+        &self,
+        view_proj: &DMat4,
+        screen: (f32, f32),
+        screen_point: DVec2,
+        padding_px: f64,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Option<(SceneEntityId, DVec3, f64)> {
+        let mut nearest = None;
         let inverse = view_proj.inverse();
         let billboard_axes = (
             inverse.x_axis.truncate().try_normalize().unwrap_or(DVec3::X),
             inverse.y_axis.truncate().try_normalize().unwrap_or(DVec3::Y),
         );
-        for cached in self.clouds.values().filter(|cached| cached.visible) {
+        for (&id, cached) in self.clouds.iter().filter(|(_, cached)| cached.visible) {
+            let entity = SceneEntityId::PointCloud(id);
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
             for (chunk_index, chunk) in cached.chunks.iter().enumerate().filter_map(|(index, chunk)| chunk.as_ref().map(|chunk| (index, chunk))) {
                 let Some(prepared) = cached.prepared.chunks.get(chunk_index) else {
                     continue;
@@ -155,7 +191,7 @@ impl PointCloudGpuCache {
                     let bounds_min = cached.prepared.origin + group.bounds_min.as_dvec3();
                     let bounds_max = cached.prepared.origin + group.bounds_max.as_dvec3();
                     let group_half_extent = projected_world_splat_half_extent(view_proj, screen, (bounds_min + bounds_max) * 0.5, f64::from(cached.point_size), billboard_axes);
-                    if !projected_bounds_overlap(view_proj, screen, screen_point, group_half_extent.max_element(), bounds_min, bounds_max) {
+                    if !projected_bounds_overlap(view_proj, screen, screen_point, group_half_extent.max_element() + padding_px, bounds_min, bounds_max) {
                         continue;
                     }
                     let end = (group.end as usize).min(count);
@@ -168,18 +204,21 @@ impl PointCloudGpuCache {
                             continue;
                         };
                         let half_extent = projected_world_splat_half_extent(view_proj, screen, world, f64::from(cached.point_size), billboard_axes);
-                        if (projected.x - screen_point.x).abs() > half_extent.x || (projected.y - screen_point.y).abs() > half_extent.y {
+                        if (projected.x - screen_point.x).abs() > half_extent.x + padding_px || (projected.y - screen_point.y).abs() > half_extent.y + padding_px {
                             continue;
                         }
                         let clip = *view_proj * world.extend(1.0);
                         if clip.w.abs() > f64::EPSILON {
-                            nearest = nearest.max(clip.z / clip.w);
+                            let depth = clip.z / clip.w;
+                            if nearest.as_ref().is_none_or(|(_, _, nearest_depth)| depth > *nearest_depth) {
+                                nearest = Some((entity, world, depth));
+                            }
                         }
                     }
                 }
             }
         }
-        nearest.is_finite().then_some(nearest)
+        nearest
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -193,9 +232,10 @@ impl PointCloudGpuCache {
         view_proj: Mat4,
         camera_scene: Vec3,
         point_clouds: &[OpenPointCloud],
+        editor: &crate::ui::state::EditorState,
         style_layout: &wgpu::BindGroupLayout,
     ) {
-        let loaded: HashSet<_> = point_clouds.iter().map(|cloud| cloud.id).collect();
+        let loaded: HashSet<_> = point_clouds.iter().filter(|cloud| cloud.state.loaded).map(|cloud| cloud.id).collect();
         // Return the slots of any unloaded cloud to the arena before dropping
         // its cache entry, so their regions can back future clouds.
         {
@@ -218,7 +258,11 @@ impl PointCloudGpuCache {
         self.rejected_chunks.retain(|key| loaded.contains(&key.cloud));
 
         for cloud in point_clouds {
+            if !cloud.state.loaded {
+                continue;
+            }
             let point_size = cloud.point_size.max(1.0e-6);
+            let selected = editor.selected_handles.contains(&cloud.entity_id());
             let replace = self.clouds.get(&cloud.id).is_some_and(|cached| !Arc::ptr_eq(&cached.prepared, &cloud.prepared));
             if replace {
                 // Return the stale entry's slots before dropping it, otherwise
@@ -232,18 +276,19 @@ impl PointCloudGpuCache {
 
             if let Some(cached) = self.clouds.get_mut(&cloud.id) {
                 cached.visible = cloud.visible;
-                if cached.color != cloud.color || cached.point_size != point_size || cached.scene_origin != scene_origin {
-                    let style = style_uniform(cloud, point_size, scene_origin);
+                if cached.color != cloud.color || cached.point_size != point_size || cached.scene_origin != scene_origin || cached.selected != selected {
+                    let style = style_uniform(cloud, point_size, scene_origin, selected);
                     queue.write_buffer(&cached.style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.color = cloud.color;
                     cached.point_size = point_size;
                     cached.scene_origin = scene_origin;
                     cached.origin_scene = (cloud.prepared.origin - scene_origin).as_vec3();
+                    cached.selected = selected;
                 }
                 continue;
             }
 
-            let style = style_uniform(cloud, point_size, scene_origin);
+            let style = style_uniform(cloud, point_size, scene_origin, selected);
             let style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Point Cloud Style Uniform"),
                 contents: bytemuck::bytes_of(&style),
@@ -270,6 +315,7 @@ impl PointCloudGpuCache {
                     prepared: Arc::clone(&cloud.prepared),
                     chunks: std::iter::repeat_with(|| None).take(cloud.prepared.chunks.len()).collect(),
                     visible: cloud.visible,
+                    selected,
                 },
             );
         }
@@ -525,11 +571,11 @@ fn projected_bounds_overlap(view_proj: &DMat4, screen: (f32, f32), point: DVec2,
     projected_any && point.x >= projected_min.x - padding && point.x <= projected_max.x + padding && point.y >= projected_min.y - padding && point.y <= projected_max.y + padding
 }
 
-fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3) -> PointCloudStyleUniform {
+fn style_uniform(cloud: &OpenPointCloud, point_size: f32, scene_origin: DVec3, selected: bool) -> PointCloudStyleUniform {
     let origin = (cloud.prepared.origin - scene_origin).as_vec3();
     PointCloudStyleUniform {
-        color: cloud.color,
-        options: [point_size, 0.0, 0.0, 0.0],
+        color: if selected { crate::ui::SELECTION_COLOR_F32 } else { cloud.color },
+        options: [point_size, if selected { 1.0 } else { 0.0 }, 0.0, 0.0],
         origin: [origin.x, origin.y, origin.z, 0.0],
     }
 }

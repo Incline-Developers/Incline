@@ -12,14 +12,14 @@ impl<'a> App<'a> {
     /// Dispatch a canvas click for the Bezier tool.
     pub(crate) fn bezier_click(&mut self) {
         if self.editor.bezier_poly_id.is_none() {
-            self.pick_bezier_polygon();
+            self.pick_bezier_polyline();
         } else if self.editor.bezier_selected_verts[0].is_none() || self.editor.bezier_selected_verts[1].is_none() {
             self.pick_bezier_vertex();
         }
         // Both verts selected: user interacts through the panel/gizmo only
     }
 
-    fn pick_bezier_polygon(&mut self) {
+    fn pick_bezier_polyline(&mut self) {
         let frozen = &self.editor.frozen_handles;
         let picked = self
             .graphics
@@ -131,7 +131,7 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
-        let doc = &mut project.pidb.document;
+        let doc = &mut project.project.document;
         let Some(obj) = doc.get_object(oid) else {
             return;
         };
@@ -203,7 +203,7 @@ pub(crate) fn bezier_eval(p0: DVec3, p1: DVec3, p2: DVec3, p3: DVec3, t: f64) ->
     u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3
 }
 
-/// Pick one of the two directed paths between vertices of a closed polygon.
+/// Pick one of the two directed paths between vertices of a closed polyline.
 /// Length is measured along the actual source geometry, including bulged arcs.
 fn choose_closed_span(verts: &[PolyVertex], first: usize, second: usize, longer: bool) -> (usize, usize) {
     let forward = directed_span_length(verts, true, first, second);
@@ -247,7 +247,7 @@ pub(crate) fn directed_span_points(verts: &[PolyVertex], closed: bool, start: us
     Vec::new()
 }
 
-/// Replace a directed span of either a closed polygon or an open polyline.
+/// Replace a directed span of either a closed or an open polyline.
 /// Open spans are stored in ascending index order because they have no
 /// complementary route between their two anchors.
 pub(crate) fn replace_polyline_span_with_bezier(
@@ -260,7 +260,7 @@ pub(crate) fn replace_polyline_span_with_bezier(
     segments: usize,
 ) -> Option<Vec<PolyVertex>> {
     if closed {
-        return replace_polygon_span_with_bezier(verts, start_index, end_index, cp1, cp2, segments);
+        return replace_closed_span_with_bezier(verts, start_index, end_index, cp1, cp2, segments);
     }
 
     if verts.len() < 2 || start_index >= verts.len() || end_index >= verts.len() || start_index >= end_index || segments == 0 {
@@ -286,7 +286,7 @@ pub(crate) fn replace_polyline_span_with_bezier(
 /// bulge and every bulge on the complementary span remain unchanged. A span
 /// which crosses index zero may rotate the returned ring so the retained end
 /// vertex remains the first element.
-pub(crate) fn replace_polygon_span_with_bezier(verts: &[PolyVertex], start_index: usize, end_index: usize, cp1: DVec3, cp2: DVec3, segments: usize) -> Option<Vec<PolyVertex>> {
+pub(crate) fn replace_closed_span_with_bezier(verts: &[PolyVertex], start_index: usize, end_index: usize, cp1: DVec3, cp2: DVec3, segments: usize) -> Option<Vec<PolyVertex>> {
     let vertex_count = verts.len();
     if vertex_count < 2 || start_index >= vertex_count || end_index >= vertex_count || start_index == end_index || segments == 0 {
         return None;

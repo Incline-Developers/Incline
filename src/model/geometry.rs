@@ -114,7 +114,7 @@ impl Transform {
 }
 
 // -------------------------------------------------------------------------
-// Geometric polygon/polyline offset
+// Geometric polyline offset
 // -------------------------------------------------------------------------
 
 const BULGE_MIN_SEGMENTS: usize = 16;
@@ -144,6 +144,133 @@ pub(crate) fn tessellate_polyline_bulges(verts: &[PolyVertex], closed: bool) -> 
     }
 
     points
+}
+
+/// Indexed triangle surface spanning a closed polyline. The projected 2D ring
+/// determines topology only; every output vertex retains its original 3D
+/// position so a non-planar boundary is never flattened for display.
+pub(crate) struct PolylineFillMesh {
+    pub(crate) vertices: Vec<DVec3>,
+    pub(crate) indices: Vec<u32>,
+}
+
+/// Return a stable local frame for projecting a 3D polyline to 2D.
+///
+/// Newell's normal handles vertical and tilted rings. Computing it relative to
+/// the centroid keeps large mine-grid coordinates out of the products.
+pub(crate) fn polyline_plane_frame_points(points: &[DVec3]) -> (DVec3, DVec3, DVec3) {
+    let n = points.len();
+    if n == 0 {
+        return (DVec3::ZERO, DVec3::X, DVec3::Y);
+    }
+    let centroid = points.iter().copied().sum::<DVec3>() / n as f64;
+
+    let mut normal = DVec3::ZERO;
+    for index in 0..n {
+        let current = points[index] - centroid;
+        let next = points[(index + 1) % n] - centroid;
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
+    }
+    let normal = normal.try_normalize().unwrap_or(DVec3::Z);
+    let up_hint = if normal.z.abs() < 0.9 { DVec3::Z } else { DVec3::Y };
+    let axis_u = up_hint.cross(normal).normalize_or(DVec3::X);
+    let axis_v = normal.cross(axis_u).normalize_or(DVec3::Y);
+    (centroid, axis_u, axis_v)
+}
+
+/// Triangulate a closed polyline without moving its boundary onto the
+/// projection plane. A constrained Delaunay triangulation is used instead of
+/// an unconstrained polyline tessellator so projected-collinear boundary points
+/// remain part of the mesh even when their elevations are not collinear.
+pub(crate) fn triangulate_polyline_fill(verts: &[PolyVertex]) -> Option<PolylineFillMesh> {
+    use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation as _};
+
+    let mut vertices = tessellate_polyline_bulges(verts, true);
+    vertices.dedup();
+    if vertices.len() > 1 && vertices.first() == vertices.last() {
+        vertices.pop();
+    }
+    if vertices.len() < 3 || vertices.len() > u32::MAX as usize {
+        return None;
+    }
+
+    let (centroid, axis_u, axis_v) = polyline_plane_frame_points(&vertices);
+    let projected: Vec<DVec2> = vertices
+        .iter()
+        .map(|point| {
+            let delta = *point - centroid;
+            DVec2::new(delta.dot(axis_u), delta.dot(axis_v))
+        })
+        .collect();
+    if projected.iter().any(|point| !point.is_finite()) {
+        return None;
+    }
+
+    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
+    let mut handles = Vec::with_capacity(projected.len());
+    let mut input_index_by_handle: Vec<Option<usize>> = Vec::new();
+    for (input_index, point) in projected.iter().enumerate() {
+        let handle = cdt.insert(Point2::new(point.x, point.y)).ok()?;
+        if handle.index() >= input_index_by_handle.len() {
+            input_index_by_handle.resize(handle.index() + 1, None);
+        }
+        // Two distinct 3D boundary positions at the same projected position
+        // cannot bound a single-valued surface in this projection.
+        if input_index_by_handle[handle.index()].replace(input_index).is_some() {
+            return None;
+        }
+        handles.push(handle);
+    }
+
+    for index in 0..handles.len() {
+        let from = handles[index];
+        let to = handles[(index + 1) % handles.len()];
+        if !cdt.can_add_constraint(from, to) {
+            return None;
+        }
+        cdt.add_constraint(from, to);
+    }
+
+    let mut indices = Vec::with_capacity(vertices.len().saturating_sub(2) * 3);
+    for face in cdt.inner_faces() {
+        let corners = face.vertices();
+        let center = corners
+            .iter()
+            .map(|corner| {
+                let point = corner.position();
+                DVec2::new(point.x, point.y)
+            })
+            .sum::<DVec2>()
+            / 3.0;
+        if matches!(
+            crate::model::kernel::point_in_polyline(center, projected.iter().copied()),
+            crate::model::kernel::PolyContainment::Outside
+        ) {
+            continue;
+        }
+        for corner in corners {
+            let input_index = input_index_by_handle.get(corner.fix().index()).copied().flatten()?;
+            indices.push(input_index as u32);
+        }
+    }
+    if indices.is_empty() || !indices.len().is_multiple_of(3) {
+        return None;
+    }
+
+    // Every sampled boundary point must participate in the surface. This is
+    // what prevents a 2D triangulator from silently cutting across a raised or
+    // lowered point that happens to be collinear in projection.
+    let mut referenced = vec![false; vertices.len()];
+    for &index in &indices {
+        referenced[index as usize] = true;
+    }
+    if referenced.iter().any(|used| !used) {
+        return None;
+    }
+
+    Some(PolylineFillMesh { vertices, indices })
 }
 
 /// Expand one bulged XY segment, including both endpoints. Elevation follows
@@ -282,7 +409,7 @@ fn intersect_offset_edges(a: DVec2, r: DVec2, b: DVec2, s: DVec2) -> Option<DVec
 /// distance, the corner is bevelled instead to prevent self-intersecting output.
 const MITER_LIMIT: f64 = 4.0;
 
-/// Offset each edge of a polyline/polygon perpendicular to itself in the XY plane,
+/// Offset each edge of a polyline perpendicular to itself in the XY plane,
 /// then intersect adjacent offset edges to find the new vertices.
 ///
 /// `signed_horiz_dist > 0` offsets to the **left** of each directed edge (CCW = inward).
@@ -322,7 +449,7 @@ pub(crate) fn geometric_offset(verts: &[DVec3], closed: bool, signed_horiz_dist:
             let a = offset_starts[prev];
             let b = offset_starts[i];
             // Apply mitre limit: if the corner extension exceeds MITER_LIMIT × offset
-            // the polygon would self-intersect (tight inward corner); bevel instead.
+            // the polyline would self-intersect (tight inward corner); bevel instead.
             let max_ext = MITER_LIMIT * signed_horiz_dist.abs();
             let intersection = intersect_offset_edges(a, dirs[prev], b, dirs[i])
                 .filter(|&pt| signed_horiz_dist.abs() < 1e-10 || (pt - verts[i].truncate()).length() <= max_ext)
@@ -365,7 +492,7 @@ pub(crate) fn geometric_offset(verts: &[DVec3], closed: bool, signed_horiz_dist:
 
 /// Project each vertex of a polyline outward (perpendicular, XY) by the horizontal
 /// distance implied by *its own* elevation and a fixed batter angle, so every output
-/// vertex lands flat at `target_rl` — as if a batter wall of that angle were cut from
+/// vertex lands flat at `target_rl` - as if a batter wall of that angle were cut from
 /// the string down (or up) to the target level at each point along its length.
 ///
 /// Unlike `geometric_offset` (uniform per-edge XY offset + uniform Z shift), the
@@ -433,7 +560,7 @@ pub(crate) fn points_coincident(a: DVec3, b: DVec3) -> bool {
     crate::model::kernel::points_coincident_3d(a, b)
 }
 
-/// Minimal 2.5D point abstraction for the polygon algorithms shared across
+/// Minimal 2.5D point abstraction for the polyline algorithms shared across
 /// the drawing and triangulation tools: they operate in the XY plane but must
 /// carry each point's full payload (e.g. Z) through clipping unchanged.
 pub(crate) trait XyPoint: Copy {
@@ -488,7 +615,7 @@ impl XyPoint for crate::model::formats::mesh_data::Vertex {
     }
 }
 
-/// Signed area of a polygon (XY plane only). Positive = CCW, negative = CW.
+/// Signed area of a polyline (XY plane only). Positive = CCW, negative = CW.
 pub(crate) fn signed_area_xy<P: XyPoint>(verts: &[P]) -> f64 {
     let n = verts.len();
     let mut area = 0.0_f64;
@@ -521,12 +648,12 @@ pub(crate) fn deduplicate_ring_by<P: Copy>(mut ring: Vec<P>, close: impl Fn(P, P
     ring
 }
 
-/// One Sutherland–Hodgman pass: clip `polygon` against the half-plane on the
+/// One Sutherland–Hodgman pass: clip `polyline` against the half-plane on the
 /// interior side of the directed edge `edge_a -> edge_b` (`clip_ccw` gives the
-/// winding of the clip polygon the edge belongs to). Non-XY components of the
+/// winding of the clip polyline the edge belongs to). Non-XY components of the
 /// points are carried through interpolation.
-pub(crate) fn clip_polygon_by_xy_edge<P: XyPoint>(polygon: &[P], edge_a: DVec2, edge_b: DVec2, clip_ccw: bool) -> Vec<P> {
-    if polygon.is_empty() {
+pub(crate) fn clip_polyline_by_xy_edge<P: XyPoint>(polyline: &[P], edge_a: DVec2, edge_b: DVec2, clip_ccw: bool) -> Vec<P> {
+    if polyline.is_empty() {
         return Vec::new();
     }
     // Signed distance in metres (scale-independent of edge length), so the
@@ -538,10 +665,10 @@ pub(crate) fn clip_polygon_by_xy_edge<P: XyPoint>(polygon: &[P], edge_a: DVec2, 
     const INSIDE_TOL: f64 = crate::model::kernel::XY_TOL;
 
     let mut output = Vec::new();
-    let mut previous = *polygon.last().expect("polygon is non-empty");
+    let mut previous = *polyline.last().expect("polyline is non-empty");
     let mut previous_distance = signed_distance(previous);
     let mut previous_inside = previous_distance >= -INSIDE_TOL;
-    for &current in polygon {
+    for &current in polyline {
         let current_distance = signed_distance(current);
         let current_inside = current_distance >= -INSIDE_TOL;
         if current_inside != previous_inside {
@@ -562,8 +689,8 @@ pub(crate) fn clip_polygon_by_xy_edge<P: XyPoint>(polygon: &[P], edge_a: DVec2, 
 }
 
 /// Return which sign of `horiz_dist` places the offset on the cursor's side.
-/// Returns `1.0` or `-1.0`. For closed polygons uses a point-in-polygon test
-/// so the result correctly tracks inside vs outside regardless of polygon size.
+/// Returns `1.0` or `-1.0`. For closed polylines uses a point-in-polyline test
+/// so the result correctly tracks inside vs outside regardless of polyline size.
 pub(crate) fn offset_side_from_cursor(verts: &[DVec3], closed: bool, cursor_xy: DVec2, abs_dist: f64) -> f64 {
     if verts.len() < 2 || abs_dist < 1e-10 {
         return 1.0;
@@ -572,8 +699,8 @@ pub(crate) fn offset_side_from_cursor(verts: &[DVec3], closed: bool, cursor_xy: 
     if closed && verts.len() >= 3 {
         // geometric_offset positive d = left of each edge = inward for CCW, outward for CW.
         let area = signed_area_xy(verts);
-        let positive_is_outward = area < 0.0; // CW polygon: left normal points outward
-        let cursor_inside = point_in_polygon_xy(cursor_xy, verts);
+        let positive_is_outward = area < 0.0; // CW polyline: left normal points outward
+        let cursor_inside = point_in_polyline_xy(cursor_xy, verts);
         // cursor inside → want inward; cursor outside → want outward.
         let want_outward = !cursor_inside;
         if want_outward == positive_is_outward { 1.0 } else { -1.0 }
@@ -589,12 +716,12 @@ pub(crate) fn offset_side_from_cursor(verts: &[DVec3], closed: bool, cursor_xy: 
     }
 }
 
-/// Point-in-polygon test on the XY plane. Points on the boundary (within
-/// `kernel::XY_TOL`) count as inside; use [`crate::model::kernel::point_in_polygon`]
+/// Point-in-polyline test on the XY plane. Points on the boundary (within
+/// `kernel::XY_TOL`) count as inside; use [`crate::model::kernel::point_in_polyline`]
 /// directly when the boundary case needs explicit handling.
-pub(crate) fn point_in_polygon_xy(point: DVec2, verts: &[DVec3]) -> bool {
+pub(crate) fn point_in_polyline_xy(point: DVec2, verts: &[DVec3]) -> bool {
     !matches!(
-        crate::model::kernel::point_in_polygon(point, verts.iter().map(|v| v.truncate())),
+        crate::model::kernel::point_in_polyline(point, verts.iter().map(|v| v.truncate())),
         crate::model::kernel::PolyContainment::Outside
     )
 }
@@ -608,11 +735,11 @@ fn seg_seg_intersection_2d(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<(DV
     }
 }
 
-/// Remove self-intersections from a closed polygon offset result (XY plane).
+/// Remove self-intersections from a closed polyline offset result (XY plane).
 ///
 /// When an inward offset is too large for a sharp corner the adjacent edges
 /// fold back and cross, creating a small loop. Keeps the loop with the
-/// greatest XY area (the polygon body); see `split_self_intersection_loops`
+/// greatest XY area (the polyline body); see `split_self_intersection_loops`
 /// for callers that want the discarded lobes too.
 pub(crate) fn remove_self_intersections(verts: Vec<DVec3>) -> Vec<DVec3> {
     if verts.len() < 4 {
@@ -625,11 +752,11 @@ pub(crate) fn remove_self_intersections(verts: Vec<DVec3>) -> Vec<DVec3> {
 /// XY area first, in a single sweep.
 ///
 /// All pairwise edge crossings are collected once (`kernel::segment_segment`
-/// `Crossing`s only — endpoint touches don't split), inserted along their
+/// `Crossing`s only - endpoint touches don't split), inserted along their
 /// edges, then loops are peeled with a stack: when the ring returns to a
 /// crossing it has already passed, the vertices in between form one loop.
-/// Interleaved (non-nested) crossing pairs — which offset fold-backs don't
-/// produce — degrade gracefully: the orphaned occurrence stays a pass-through
+/// Interleaved (non-nested) crossing pairs - which offset fold-backs don't
+/// produce - degrade gracefully: the orphaned occurrence stays a pass-through
 /// vertex. Each crossing keeps the Z interpolated on its own edge.
 pub(crate) fn split_self_intersection_loops(verts: Vec<DVec3>) -> Vec<Vec<DVec3>> {
     let n = verts.len();

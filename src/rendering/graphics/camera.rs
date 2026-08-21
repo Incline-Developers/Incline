@@ -337,6 +337,47 @@ impl<'a> Graphics<'a> {
         hit.filter(|(_, world)| !self.nonselectable_asset_occludes(*world, hidden, &view_proj, screen))
     }
 
+    /// Pick across every selectable scene family. The legacy picker remains
+    /// available to editing tools that intentionally accept only design
+    /// objects and triangulations.
+    pub(crate) fn pick_scene_entity_at_cursor(
+        &self,
+        threshold_px: f32,
+        triangulations: &[OpenTriangulation],
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        xray_enabled: bool,
+    ) -> Option<(SceneEntityId, DVec3)> {
+        let document_or_surface = self.pick_at_cursor(threshold_px, triangulations, hidden, frozen, xray_enabled);
+        // X-ray explicitly gives document geometry priority through opaque
+        // assets. Assets remain pickable where no document geometry is hit.
+        if xray_enabled && document_or_surface.is_some() {
+            return document_or_surface;
+        }
+
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        let (ray_origin, ray_direction) = self.cursor_model_ray();
+        let drill_hole = SceneQuery::nearest_drill_hole_entity(drill_holes, hidden, frozen, ray_origin, ray_direction, &view_proj, screen, threshold_px);
+        let block_model = self.block_model_gpu.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen);
+        let point_cloud = self.point_cloud_gpu.nearest_visible_entity_at_screen(
+            &view_proj,
+            screen,
+            DVec2::new(f64::from(self.camera_controller.mouse_loc.0), f64::from(self.camera_controller.mouse_loc.1)),
+            threshold_px,
+            hidden,
+            frozen,
+        );
+
+        document_or_surface
+            .into_iter()
+            .chain(drill_hole)
+            .chain(block_model)
+            .chain(point_cloud)
+            .min_by(|(_, a), (_, b)| (*a - ray_origin).dot(ray_direction).total_cmp(&(*b - ray_origin).dot(ray_direction)))
+    }
+
     /// Pick only loaded triangulations. Dialog field pickers use this path so
     /// design strings drawn over a surface do not steal the click intended for
     /// the surface selector.
@@ -366,7 +407,7 @@ impl<'a> Graphics<'a> {
                 (clip.w.abs() > f64::EPSILON).then_some(clip.z / clip.w)
             });
         let point_depth = crate::rendering::pick::world_to_screen(view_proj, candidate, screen)
-            .and_then(|screen_point| self.point_cloud_gpu.nearest_depth_at_screen(view_proj, screen, screen_point));
+            .and_then(|screen_point| self.point_cloud_gpu.nearest_depth_at_screen(view_proj, screen, screen_point, hidden));
         block_depth
             .into_iter()
             .chain(point_depth)
@@ -476,7 +517,7 @@ impl<'a> Graphics<'a> {
         snap_index: &crate::model::spatial::ObjectSnapIndex,
     ) {
         // Prefer snapping to a nearby document vertex so the orbit pivot lands
-        // on actual geometry (lines, polygons, points) when one is close.
+        // on actual geometry (lines, polylines, points) when one is close.
         let view_proj = self.view_proj();
         let screen = self.screen_size();
         let snap_pt = SceneQuery::snap(
@@ -498,7 +539,7 @@ impl<'a> Graphics<'a> {
         } else {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
-            let drill_hole_hit = SceneQuery::nearest_drill_hole(drill_holes, ray_origin, direction, &view_proj, screen);
+            let drill_hole_hit = SceneQuery::nearest_drill_hole_entity(drill_holes, hidden, frozen, ray_origin, direction, &view_proj, screen, 0.0).map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
             triangulation_hit
                 .into_iter()
@@ -506,7 +547,7 @@ impl<'a> Graphics<'a> {
                 .chain(block_model_hit)
                 .min_by(|a, b| (*a - ray_origin).dot(direction).total_cmp(&(*b - ray_origin).dot(direction)))
                 .unwrap_or_else(|| {
-                    // No asset surface hit — try picking any document object
+                    // No asset surface hit - try picking any document object
                     // near the cursor so the pivot lands on visible geometry rather than
                     // at the (possibly stale) camera-target depth.
                     self.pick_at_cursor(SNAP_THRESHOLD_PX, triangulations, hidden, frozen, false)
@@ -628,7 +669,7 @@ impl<'a> Graphics<'a> {
     }
 
     /// Frame all visible content while keeping the current camera orientation
-    /// (orbit/tilt unchanged) — only position, target and zoom are adjusted.
+    /// (orbit/tilt unchanged) - only position, target and zoom are adjusted.
     /// No-op when there is nothing visible to frame.
     pub(crate) fn zoom_to_extents(
         &mut self,
@@ -729,7 +770,7 @@ impl<'a> Graphics<'a> {
         // field of view. A model that sits far off to the side (a second block
         // model loaded thousands of metres away) must not stretch the range:
         // in an angled view its depth along the forward axis is enormous, and
-        // the resulting near/far span destroys depth precision — the volume
+        // the resulting near/far span destroys depth precision - the volume
         // raycaster then reconstructs sample points from a ray origin millions
         // of units away and floating-point cancellation fills the visible model
         // with black speckle. The lateral frustum planes do not depend on the

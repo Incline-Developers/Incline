@@ -22,7 +22,7 @@ impl<'a> App<'a> {
             return;
         }
         self.editor.tool_highlight_id = None;
-        self.explode_polygon(object_id);
+        self.explode_polyline(object_id);
     }
 
     /// Update the hover highlight for the Explode tool on cursor move.
@@ -50,7 +50,7 @@ impl<'a> App<'a> {
         }
     }
 
-    pub(crate) fn explode_polygon(&mut self, object_id: ObjectId) {
+    pub(crate) fn explode_polyline(&mut self, object_id: ObjectId) {
         if !self.activate_project_for_object(object_id) {
             return;
         }
@@ -81,7 +81,7 @@ impl<'a> App<'a> {
         let mut batch_cmds = vec![Command::delete_object(source)];
 
         if let Some(project) = self.workspace.active_project_mut() {
-            let doc = &mut project.pidb.document;
+            let doc = &mut project.project.document;
             for i in 0..edge_count {
                 let a = verts[i];
                 let b = verts[(i + 1) % verts.len()];
@@ -103,8 +103,8 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         self.editor.tool_highlight_id = None;
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Explode Polygon", format!("{edge_count} line(s)")),
-            format!("Exploded polygon into {edge_count} line segments"),
+            CommandReportSpec::new("Explode Polyline", format!("{edge_count} line(s)")),
+            format!("Exploded polyline into {edge_count} line segments"),
         );
         self.invalidate_geometry();
     }

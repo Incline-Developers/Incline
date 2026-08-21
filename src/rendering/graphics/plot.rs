@@ -3,8 +3,8 @@
 //! A plot needs the scene drawn at an exact engineering scale into a
 //! paper-sized image, which is both larger than the window and framed by the
 //! plot rather than the interactive camera. The render targets are therefore
-//! built at the requested size and swapped in around one scene pass — the same
-//! technique the slice preview uses — then read back as RGBA pixels for
+//! built at the requested size and swapped in around one scene pass - the same
+//! technique the slice preview uses - then read back as RGBA pixels for
 //! [`crate::model::plot`] to compose the sheet around.
 
 use std::sync::Arc;

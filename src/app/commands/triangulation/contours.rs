@@ -4,7 +4,7 @@ use super::{cuts::lerp_at_z, *};
 
 impl<'a> App<'a> {
     /// Generate contour polylines from a triangulation and store them in a new
-    /// or existing layer in the active PIDB project. Major contours (multiples
+    /// or existing layer in the active project. Major contours (multiples
     /// of `major_interval`) use `major_color`; all others use `minor_color`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn generate_contour_triangulation(
@@ -21,7 +21,7 @@ impl<'a> App<'a> {
             anyhow::bail!("Intervals must be positive finite numbers");
         }
         if minor_interval < 1e-6 {
-            anyhow::bail!("Minor contour interval is too small (minimum 0.000001) — this would generate an unbounded number of contour levels");
+            anyhow::bail!("Minor contour interval is too small (minimum 0.000001); this would generate an unbounded number of contour levels");
         }
         if major_interval < minor_interval {
             anyhow::bail!("Major interval must be >= minor interval");
@@ -64,18 +64,21 @@ impl<'a> App<'a> {
             );
         }
 
-        let active_project = self.workspace.active_project().ok_or_else(|| anyhow::anyhow!("No active PIDB to store the contours in"))?;
+        let active_project = self
+            .workspace
+            .active_project()
+            .ok_or_else(|| anyhow::anyhow!("No active project to store the contours in"))?;
         match &output_layer {
             ContourOutputLayer::New(name) => {
                 if name.trim().is_empty() {
                     anyhow::bail!("Enter a name for the new contour layer");
                 }
-                if active_project.pidb.document.layer_id_by_name(name).is_some() {
+                if active_project.project.document.layer_id_by_name(name).is_some() {
                     anyhow::bail!("A layer named '{name}' already exists; select it as the output layer or choose a different name");
                 }
             }
             ContourOutputLayer::Existing(layer_id) => {
-                if active_project.pidb.document.layer(*layer_id).is_none() {
+                if active_project.project.document.layer(*layer_id).is_none() {
                     anyhow::bail!("The selected contour output layer no longer exists");
                 }
             }
@@ -104,15 +107,15 @@ impl<'a> App<'a> {
             };
             let (layer_id, layer_name, create_layer) = match output_layer {
                 ContourOutputLayer::New(layer_name) => {
-                    if project.pidb.document.layer_id_by_name(&layer_name).is_some() {
+                    if project.project.document.layer_id_by_name(&layer_name).is_some() {
                         userspace_warn!("Contours for '{apply_tri_name}' were discarded: layer '{layer_name}' now exists");
                         return;
                     }
-                    let layer_id = project.pidb.document.allocate_layer_id();
+                    let layer_id = project.project.document.allocate_layer_id();
                     (layer_id, layer_name, true)
                 }
                 ContourOutputLayer::Existing(layer_id) => {
-                    let Some(layer_name) = project.pidb.document.layer(layer_id).map(|layer| layer.name.clone()) else {
+                    let Some(layer_name) = project.project.document.layer(layer_id).map(|layer| layer.name.clone()) else {
                         userspace_warn!("Contours for '{apply_tri_name}' were discarded: the selected output layer was deleted");
                         return;
                     };
@@ -122,7 +125,7 @@ impl<'a> App<'a> {
             let objects: Vec<Object> = polylines
                 .into_iter()
                 .map(|(verts, color)| Object::Polyline {
-                    id: project.pidb.document.allocate_object_id(),
+                    id: project.project.document.allocate_object_id(),
                     layer: layer_id,
                     verts: verts.into_iter().map(crate::model::PolyVertex::straight).collect(),
                     closed: false,
@@ -145,7 +148,7 @@ impl<'a> App<'a> {
             } else {
                 crate::model::Command::Batch(objects.into_iter().map(crate::model::Command::AddObject).collect())
             };
-            app.history.execute_for(project_runtime_id, &mut project.pidb.document, command);
+            app.history.execute_for(project_runtime_id, &mut project.project.document, command);
             project.loaded_layers.insert(layer_id);
             if project_is_active {
                 app.editor.active_layer = Some(layer_id);
