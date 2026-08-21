@@ -162,7 +162,7 @@ impl<'a> App<'a> {
                 open.visible = imported.visible;
                 open.color = imported.color;
                 open.slice = imported.slice;
-                open.color_transfer = imported.color_transfer;
+                open.color_transfers.extend(imported.color_transfers);
                 open.hide_empty_color_values = imported.hide_empty_color_values;
             }
         }
@@ -378,7 +378,7 @@ impl<'a> App<'a> {
                     open.visible = imported.visible;
                     open.color = imported.color;
                     open.slice = imported.slice;
-                    open.color_transfer = imported.color_transfer;
+                    open.color_transfers.extend(imported.color_transfers);
                     open.hide_empty_color_values = imported.hide_empty_color_values;
                 }
             }

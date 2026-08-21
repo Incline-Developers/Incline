@@ -1,7 +1,7 @@
 use std::{fmt::Debug, hash::Hash};
 
 use crate::{
-    model::block_model::{BlockModelSlice, ColorStop, MAX_COLOR_STOPS, MIN_COLOR_STOPS, OpenBlockModel, color_variable_default, render_value_range},
+    model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
     ui::state::{EditorState, UiCommand},
 };
 
@@ -63,6 +63,193 @@ impl ViewportDockPanel {
 }
 
 /// Minimum gap (in normalized `t`) enforced between adjacent colour-transfer
+const RESET_COLORS_WIDTH: f32 = 44.0;
+const RESET_COLORS_HEIGHT: f32 = 16.0;
+
+/// A colormap as the ramp widget manipulates it.
+///
+/// The widget is a bar, so dragging along it is naturally a `0..1` position,
+/// while a [`Boundary`] stores an absolute data value. Both are carried, and
+/// `value` is only recomputed when a handle actually moves - so recolouring a
+/// band whose boundary sits outside the current render range (an imported
+/// colormap authored wider than its data) does not quietly clamp it into range.
+///
+/// `below` is OMF's `gradient[0]`: the colour under the first boundary. It has
+/// no handle because it has no position - it is selected from the swatch in the
+/// left gutter. Leaving it transparent is what makes the first boundary act as
+/// a grade cutoff.
+struct UiRamp {
+    below: [f32; 4],
+    stops: Vec<UiStop>,
+    interpolate: bool,
+}
+
+#[derive(Clone, Copy)]
+struct UiStop {
+    id: u64,
+    /// Position along the bar, `0..1`, clamped from `value`.
+    t: f32,
+    /// Absolute value in the variable's data units.
+    value: f64,
+    /// See [`Boundary::inclusive`].
+    inclusive: bool,
+    /// The colour of the band at or above this boundary - `gradient[i + 1]`.
+    color: [f32; 4],
+}
+
+/// Which swatch the colour picker is editing: the leading band, or the band
+/// above boundary `i`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+enum UiSelection {
+    Below,
+    Band(usize),
+}
+
+impl UiRamp {
+    /// Project a colormap onto the bar. A continuous colormap's evenly spaced
+    /// gradient becomes evenly spaced handles, so both kinds edit identically;
+    /// `to_transfer` puts each back into its own shape.
+    fn from_transfer(transfer: &ColorTransferFunction, min: f64, max: f64) -> Self {
+        match transfer {
+            // Categories are drawn by `draw_category_legend`, never here.
+            ColorTransferFunction::Category { .. } => Self {
+                below: [0.0; 4],
+                stops: Vec::new(),
+                interpolate: false,
+            },
+            ColorTransferFunction::Continuous { range, gradient } => {
+                let (low, high) = *range;
+                let last = gradient.len().saturating_sub(1).max(1);
+                Self {
+                    below: gradient.first().copied().unwrap_or([0.0; 4]),
+                    stops: gradient
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &color)| {
+                            let value = low + (high - low) * index as f64 / last as f64;
+                            UiStop {
+                                id: index as u64 + 1,
+                                t: value_to_normalized(value, min, max),
+                                value,
+                                inclusive: false,
+                                color,
+                            }
+                        })
+                        .collect(),
+                    interpolate: true,
+                }
+            }
+            ColorTransferFunction::Discrete { boundaries, gradient } => Self {
+                below: gradient.first().copied().unwrap_or([0.0; 4]),
+                stops: boundaries
+                    .iter()
+                    .enumerate()
+                    .map(|(index, boundary)| UiStop {
+                        id: boundary.id,
+                        t: value_to_normalized(boundary.value, min, max),
+                        value: boundary.value,
+                        inclusive: boundary.inclusive,
+                        color: gradient.get(index + 1).copied().unwrap_or([0.0; 4]),
+                    })
+                    .collect(),
+                interpolate: false,
+            },
+        }
+    }
+
+    fn to_transfer(&self) -> ColorTransferFunction {
+        if self.interpolate {
+            // A continuous gradient is evenly spaced by definition, so the
+            // handles only get to set the span; their colours are resampled
+            // onto an even grid across it.
+            let (low, high) = (self.stops.first().map_or(0.0, |stop| stop.value), self.stops.last().map_or(1.0, |stop| stop.value));
+            let samples = self.stops.len().max(2);
+            let span = high - low;
+            return ColorTransferFunction::Continuous {
+                range: (low, high),
+                gradient: (0..samples).map(|index| self.sample(low + span * index as f64 / (samples - 1) as f64)).collect(),
+            };
+        }
+        ColorTransferFunction::Discrete {
+            boundaries: self
+                .stops
+                .iter()
+                .map(|stop| Boundary {
+                    id: stop.id,
+                    value: stop.value,
+                    inclusive: stop.inclusive,
+                })
+                .collect(),
+            gradient: std::iter::once(self.below).chain(self.stops.iter().map(|stop| stop.color)).collect(),
+        }
+    }
+
+    /// Linear interpolation across the handles, clamped at both ends. Only used
+    /// when resampling a continuous gradient.
+    fn sample(&self, value: f64) -> [f32; 4] {
+        match self.stops.iter().position(|stop| stop.value > value) {
+            None => self.stops.last().map_or(self.below, |stop| stop.color),
+            Some(0) => self.stops[0].color,
+            Some(upper) => {
+                let (low, high) = (self.stops[upper - 1], self.stops[upper]);
+                let span = high.value - low.value;
+                let f = if span.abs() <= f64::EPSILON { 0.0 } else { (value - low.value) / span };
+                crate::model::block_model::lerp_rgba(low.color, high.color, f as f32)
+            }
+        }
+    }
+
+    fn color_at_selection(&self, selection: UiSelection) -> Option<[f32; 4]> {
+        match selection {
+            UiSelection::Below => Some(self.below),
+            UiSelection::Band(index) => self.stops.get(index).map(|stop| stop.color),
+        }
+    }
+
+    fn set_selection_color(&mut self, selection: UiSelection, color: [f32; 4]) {
+        match selection {
+            UiSelection::Below => self.below = color,
+            UiSelection::Band(index) => {
+                if let Some(stop) = self.stops.get_mut(index) {
+                    stop.color = color;
+                }
+            }
+        }
+    }
+
+    /// The colour the bar shows at `t`, mirroring `ramp_rgba`.
+    fn color_at_t(&self, t: f32) -> egui::Color32 {
+        let Some(first) = self.stops.first() else {
+            return color32_from_straight(self.below);
+        };
+        if t < first.t {
+            return color32_from_straight(self.below);
+        }
+        let last = self.stops[self.stops.len() - 1];
+        if t >= last.t {
+            return color32_from_straight(last.color);
+        }
+        for pair in self.stops.windows(2) {
+            if t < pair[1].t {
+                if !self.interpolate {
+                    return color32_from_straight(pair[0].color);
+                }
+                let span = pair[1].t - pair[0].t;
+                let f = if span <= f32::EPSILON { 0.0 } else { (t - pair[0].t) / span };
+                return color32_from_straight(crate::model::block_model::lerp_rgba(pair[0].color, pair[1].color, f));
+            }
+        }
+        color32_from_straight(last.color)
+    }
+}
+
+impl UiStop {
+    fn set_t(&mut self, t: f32, min: f64, max: f64) {
+        self.t = t;
+        self.value = normalized_to_value(t, min, max);
+    }
+}
+
 /// stops when dragging, so segments never collapse to zero width.
 const STOP_EPSILON: f32 = 0.01;
 const COLOR_STOP_HANDLE_WIDTH: f32 = 18.0;
@@ -90,7 +277,7 @@ const SCALE_BAR_SEGMENT_FRACTIONS: [f64; 6] = [0.0, 0.05, 0.10, 0.25, 0.50, 1.0]
 /// appears to do nothing. This is most visible at the bar's edges: clamping
 /// an overshot click to exactly `0.0`/`1.0` collides with a stop already
 /// sitting at that exact edge (the common case for default colour ramps).
-fn nudge_away_from_existing(stops: &[ColorStop], raw_t: f32) -> f32 {
+fn nudge_away_from_existing(stops: &[UiStop], raw_t: f32) -> f32 {
     let mut t = raw_t.clamp(0.0, 1.0);
     for _ in 0..=stops.len() {
         let Some(collision) = stops.iter().find(|stop| (stop.t - t).abs() < STOP_EPSILON) else {
@@ -114,56 +301,72 @@ fn nudge_away_from_existing(stops: &[ColorStop], raw_t: f32) -> f32 {
 /// from `stops[i-1]`/`stops[i+1]`, so a freshly-appended stop parked at the
 /// end of the vec would be treated as the right-most one and clamped to the
 /// old last stop's position.
-fn insert_stop_sorted(stops: &mut Vec<ColorStop>, id: u64, t: f32) -> usize {
-    let index = stops.partition_point(|stop| stop.t < t);
-    let color = color32_to_straight(interpolate_stops(stops, t));
-    stops.insert(index, ColorStop { id, t, color });
+fn insert_stop_sorted(ramp: &mut UiRamp, id: u64, t: f32, min: f64, max: f64) -> usize {
+    let index = ramp.stops.partition_point(|stop| stop.t < t);
+    // A new boundary splits the band it lands in, so both halves start out the
+    // colour that band already had.
+    let color = color32_to_straight(ramp.color_at_t(t));
+    ramp.stops.insert(
+        index,
+        UiStop {
+            id,
+            t,
+            value: normalized_to_value(t, min, max),
+            inclusive: false,
+            color,
+        },
+    );
     index
 }
 
-/// Samples a colour-transfer function's rgba at `t`, mirroring the shader's
-/// hard cutoffs. Values below the first stop are transparent; each stop then
-/// remains active until the next.
-fn interpolate_stops(stops: &[ColorStop], t: f32) -> egui::Color32 {
-    let t = t.clamp(0.0, 1.0);
-    if stops.is_empty() {
-        return egui::Color32::TRANSPARENT;
-    }
-    let first = stops[0];
-    let last = stops[stops.len() - 1];
-    if t < first.t {
-        return egui::Color32::TRANSPARENT;
-    }
-    if t >= last.t {
-        return color32_from_straight(last.color);
-    }
-    for i in 1..stops.len() {
-        if t < stops[i].t {
-            return color32_from_straight(stops[i - 1].color);
+/// Chequerboard behind a swatch, so a transparent colour reads as transparent
+/// rather than as the panel background. Matters for the leading band, whose
+/// whole job is usually to be invisible.
+fn paint_alpha_checker(painter: &egui::Painter, rect: egui::Rect) {
+    const SQUARE: f32 = 4.0;
+    let dark = egui::Color32::from_gray(90);
+    painter.rect_filled(rect, 2.0, egui::Color32::from_gray(130));
+    let mut y = rect.top();
+    let mut row = 0;
+    while y < rect.bottom() {
+        let mut x = rect.left() + if row % 2 == 0 { 0.0 } else { SQUARE };
+        while x < rect.right() {
+            let square = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(SQUARE, SQUARE)).intersect(rect);
+            if square.is_positive() {
+                painter.rect_filled(square, 0.0, dark);
+            }
+            x += SQUARE * 2.0;
         }
+        y += SQUARE;
+        row += 1;
     }
-    color32_from_straight(last.color)
 }
 
 fn color32_from_straight(c: [f32; 4]) -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(
-        (c[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (c[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (c[2].clamp(0.0, 1.0) * 255.0).round() as u8,
-        (c[3].clamp(0.0, 1.0) * 255.0).round() as u8,
-    )
+    let [r, g, b, a] = straight_to_unmultiplied_srgba(c);
+    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
 fn color32_to_straight(c: egui::Color32) -> [f32; 4] {
     unmultiplied_srgba_to_straight(c.to_srgba_unmultiplied())
 }
 
+/// Colour-stop RGB is linear: the scene renders into an sRGB surface view (see
+/// `rendering/graphics/init.rs`), so the shader emits linear and the GPU
+/// encodes it. egui works in sRGB bytes, so the swatch and the picker have to
+/// go through the transfer function rather than scaling by 255 - otherwise a
+/// legend swatch is visibly darker than the blocks it describes, and a colour
+/// picked in the legend comes back brighter than the one chosen. Alpha is
+/// linear in both, so it only scales.
 fn straight_to_unmultiplied_srgba(c: [f32; 4]) -> [u8; 4] {
-    c.map(|component| (component.clamp(0.0, 1.0) * 255.0).round() as u8)
+    let [r, g, b] = [c[0], c[1], c[2]].map(crate::rendering::color::linear_to_srgb_byte);
+    [r, g, b, (c[3].clamp(0.0, 1.0) * 255.0).round() as u8]
 }
 
 fn unmultiplied_srgba_to_straight(c: [u8; 4]) -> [f32; 4] {
-    c.map(|component| component as f32 / 255.0)
+    let mut straight = crate::rendering::color::rgb_bytes_to_linear_rgba([c[0], c[1], c[2]]);
+    straight[3] = f32::from(c[3]) / 255.0;
+    straight
 }
 
 #[derive(Clone, Copy)]
@@ -311,7 +514,27 @@ impl<'a> ColorScaleLegend<'a> {
                             self.draw_slice_controls(ui, content_width, model, commands);
                             if model_has_selectable_variable(model) {
                                 ui.separator();
-                                ui.label(egui::RichText::new("Colour mapping").strong().color(ui.visuals().weak_text_color()));
+                                ui.horizontal(|ui| {
+                                    // Title centred over everything left of the
+                                    // reset, which hangs off the right edge.
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2((content_width - RESET_COLORS_WIDTH).max(0.0), RESET_COLORS_HEIGHT),
+                                        egui::Layout::top_down(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(egui::RichText::new("Colour mapping").strong().color(ui.visuals().weak_text_color()));
+                                        },
+                                    );
+                                    if ui
+                                        .add_sized(
+                                            egui::vec2(RESET_COLORS_WIDTH, RESET_COLORS_HEIGHT),
+                                            egui::Button::new(egui::RichText::new("Reset").small()),
+                                        )
+                                        .on_hover_text("Rebuild this variable's colours from its data")
+                                        .clicked()
+                                    {
+                                        commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
+                                    }
+                                });
                                 ui.add_space(2.0);
                                 self.draw_variable_dropdown(ui, content_width, model, editor, commands);
                                 ui.add_space(4.0);
@@ -520,23 +743,27 @@ impl<'a> ColorScaleLegend<'a> {
         let Some(variable) = model.active_color_variable.as_deref().and_then(|name| model.model.variable(name)) else {
             return;
         };
+        // A category attribute's colours are a plain per-name list in OMF, so
+        // the legend edits that list directly - there are no boundaries to
+        // place and no cutoff band, and every category the file names can be
+        // coloured.
+        let ColorTransferFunction::Category { gradient } = model.color_transfer() else {
+            return;
+        };
         let default = color_variable_default(variable);
-        let mut stops = model.color_transfer.stops.clone();
+        let mut gradient = gradient.clone();
         let mut changed = false;
-        let categories = variable.strings.iter().take(MAX_COLOR_STOPS).collect::<Vec<_>>();
         ui.allocate_ui_with_layout(egui::vec2(content_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-            for (index, &(&code, label)) in categories.iter().enumerate() {
+            for (&code, label) in &variable.strings {
                 let is_default = default == Some(code as f64);
                 if model.active_category_code_present(code) == Some(false) {
                     continue;
                 }
-                let Some(stop_color) = stops.get(index).map(|stop| stop.color) else {
-                    continue;
-                };
+                let color = gradient.get(&code).copied().unwrap_or([0.72, 0.72, 0.75, 1.0]);
                 ui.push_id(("category_color", code), |ui| {
                     ui.horizontal(|ui| {
                         if !is_default || !model.hide_empty_color_values {
-                            let mut srgba = straight_to_unmultiplied_srgba(stop_color);
+                            let mut srgba = straight_to_unmultiplied_srgba(color);
                             if color_edit_button_srgba_unmultiplied(ui, &mut srgba)
                                 .on_hover_text(if is_default {
                                     "Edit the colour used for empty values"
@@ -545,13 +772,7 @@ impl<'a> ColorScaleLegend<'a> {
                                 })
                                 .changed()
                             {
-                                let color = unmultiplied_srgba_to_straight(srgba);
-                                stops[index].color = color;
-                                // Constant categorical columns carry a duplicate
-                                // terminal stop so the transfer remains valid.
-                                if categories.len() == 1 && stops.len() == 2 {
-                                    stops[1].color = color;
-                                }
+                                gradient.insert(code, unmultiplied_srgba_to_straight(srgba));
                                 changed = true;
                             }
                         }
@@ -568,11 +789,21 @@ impl<'a> ColorScaleLegend<'a> {
                 });
             }
         });
-        if variable.strings.len() > MAX_COLOR_STOPS {
-            ui.label(egui::RichText::new(format!("Only the first {MAX_COLOR_STOPS} categories can be coloured")).color(ui.visuals().weak_text_color()));
+        if variable.strings.len() >= MAX_GRADIENT_ENTRIES {
+            ui.label(
+                egui::RichText::new(format!(
+                    "All {} categories keep their colour; only the first {} are drawn distinctly",
+                    variable.strings.len(),
+                    MAX_GRADIENT_ENTRIES - 1
+                ))
+                .color(ui.visuals().weak_text_color()),
+            );
         }
         if changed {
-            commands.push(UiCommand::SetBlockModelColorStops { id: model.id, stops });
+            commands.push(UiCommand::SetBlockModelColorTransfer {
+                id: model.id,
+                transfer: ColorTransferFunction::Category { gradient },
+            });
         }
     }
 
@@ -597,6 +828,7 @@ impl<'a> ColorScaleLegend<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn draw_bar(&self, ui: &mut egui::Ui, content_width: f32, bar_width: f32, min: f64, max: f64, model: &OpenBlockModel, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
         let handle_height = 18.0;
         let bar_height = 16.0;
@@ -610,16 +842,19 @@ impl<'a> ColorScaleLegend<'a> {
         let bar_rect = egui::Rect::from_min_size(egui::pos2(rect.min.x + LEGEND_SIDE_GUTTER, handle_row_rect.bottom()), egui::vec2(bar_width, bar_height));
         let editor_row_rect = egui::Rect::from_min_size(egui::pos2(rect.min.x, bar_rect.bottom() + 2.0), egui::vec2(content_width, editor_height));
 
-        let mut stops = model.color_transfer.stops.clone();
+        let mut ramp = UiRamp::from_transfer(model.color_transfer(), min, max);
         let mut changed = false;
         let mut remove_index = None;
         let selected_id = self.id.with(("selected_color_stop", model.id));
-        let mut selected_stop = ui.data_mut(|data| data.get_persisted::<usize>(selected_id)).unwrap_or(0).min(stops.len().saturating_sub(1));
+        let mut selected = ui
+            .data_mut(|data| data.get_persisted::<UiSelection>(selected_id))
+            .filter(|selection| matches!(selection, UiSelection::Below) || ramp.color_at_selection(*selection).is_some())
+            .unwrap_or(UiSelection::Band(0));
         let value_popup_id = self.id.with(("stop_value_popup_open", model.id));
         let mut value_popup_stop = ui
             .data_mut(|data| data.get_persisted::<Option<usize>>(value_popup_id))
             .flatten()
-            .filter(|index| *index < stops.len());
+            .filter(|index| *index < ramp.stops.len());
         // Set whenever a stop interaction this frame opens/keeps the value
         // popup, so the click-outside close below doesn't immediately undo it
         // (clicking a handle is "outside" the popup's own rect).
@@ -636,38 +871,62 @@ impl<'a> ColorScaleLegend<'a> {
                     egui::pos2(bar_rect.left() + i as f32 * strip_width, bar_rect.top()),
                     egui::vec2(strip_width + 0.5, bar_rect.height()),
                 );
-                painter.rect_filled(strip_rect, 0.0, interpolate_stops(&stops, t));
+                painter.rect_filled(strip_rect, 0.0, ramp.color_at_t(t));
             }
             painter.rect_stroke(bar_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_gray(40)), egui::StrokeKind::Outside);
         }
 
+        // The leading band has no position, so it gets a fixed swatch in the
+        // left gutter rather than a draggable handle.
+        let below_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + LEGEND_SIDE_GUTTER * 0.5, handle_row_rect.center().y),
+            egui::vec2(COLOR_STOP_HANDLE_WIDTH * 0.75, handle_height * 0.7),
+        );
+        let below_response = ui
+            .interact(below_rect, self.id.with("below_band_swatch"), egui::Sense::click())
+            .on_hover_text("Colour below the first boundary. Transparent hides those blocks.");
+        if below_response.clicked() {
+            selected = UiSelection::Below;
+            value_popup_stop = None;
+        }
+        {
+            let painter = ui.painter();
+            let active = selected == UiSelection::Below;
+            paint_alpha_checker(painter, below_rect);
+            painter.rect_filled(below_rect, 2.0, color32_from_straight(ramp.below));
+            painter.rect_stroke(
+                below_rect,
+                2.0,
+                egui::Stroke::new(if active { 1.5 } else { 1.0 }, if active { egui::Color32::BLACK } else { egui::Color32::from_gray(40) }),
+                egui::StrokeKind::Outside,
+            );
+        }
+
         let bar_response = ui
             .interact(bar_rect, self.id.with("color_stop_bar"), egui::Sense::click())
-            .on_hover_text("Double-click to add a stop here");
+            .on_hover_text("Double-click to add a boundary here");
         // A double-click on either the bar or a handle requests an insert.
         // We record the target `t` and apply it *after* the handle loop so the
         // insertion never shifts indices mid-iteration, and so it lands in
         // sorted position (see `insert_stop_sorted`).
         let mut pending_insert: Option<f32> = None;
         if bar_response.double_clicked()
-            && stops.len() < MAX_COLOR_STOPS
+            && ramp.stops.len() < MAX_GRADIENT_ENTRIES - 1
             && let Some(pos) = bar_response.interact_pointer_pos()
         {
             let raw_t = (pos.x - bar_rect.left()) / bar_rect.width().max(1.0);
-            pending_insert = Some(nudge_away_from_existing(&stops, raw_t));
+            pending_insert = Some(nudge_away_from_existing(&ramp.stops, raw_t));
         }
 
-        for i in 0..stops.len() {
-            let x = bar_rect.left() + bar_rect.width() * stops[i].t;
+        for i in 0..ramp.stops.len() {
+            let x = bar_rect.left() + bar_rect.width() * ramp.stops[i].t;
             let handle_rect = egui::Rect::from_center_size(egui::pos2(x, handle_row_rect.center().y), egui::vec2(COLOR_STOP_HANDLE_WIDTH, handle_height));
-            let handle_id = self.id.with(("color_stop_handle", stops[i].id));
-            let response = ui
-                .interact(handle_rect, handle_id, egui::Sense::click_and_drag())
-                .on_hover_text(if stops.len() > MIN_COLOR_STOPS {
-                    "Drag to move · Right-click to remove"
-                } else {
-                    "Drag to move"
-                });
+            let handle_id = self.id.with(("color_stop_handle", ramp.stops[i].id));
+            let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag()).on_hover_text(if ramp.stops.len() > 1 {
+                "Drag to move · Right-click to remove · Middle-click toggles ≤"
+            } else {
+                "Drag to move · Middle-click toggles ≤"
+            });
             // Handles sit directly above the gradient strip, so a
             // double-click aimed at the bar near an existing stop (most
             // often the last one, at the visually prominent right edge)
@@ -675,32 +934,38 @@ impl<'a> ColorScaleLegend<'a> {
             // swallowed as an ordinary single click that just reselects the
             // handle, and no new stop is ever added.
             if response.double_clicked()
-                && stops.len() < MAX_COLOR_STOPS
+                && ramp.stops.len() < MAX_GRADIENT_ENTRIES - 1
                 && let Some(pos) = response.interact_pointer_pos()
             {
                 let raw_t = (pos.x - bar_rect.left()) / bar_rect.width().max(1.0);
-                pending_insert = Some(nudge_away_from_existing(&stops, raw_t));
+                pending_insert = Some(nudge_away_from_existing(&ramp.stops, raw_t));
             } else {
-                if response.secondary_clicked() && stops.len() > MIN_COLOR_STOPS {
+                if response.secondary_clicked() && ramp.stops.len() > 1 {
                     remove_index = Some(i);
                 }
+                // Inclusiveness is an OMF boundary property with no natural
+                // drag gesture; middle-click flips it in place.
+                if response.middle_clicked() && !ramp.interpolate {
+                    ramp.stops[i].inclusive = !ramp.stops[i].inclusive;
+                    changed = true;
+                }
                 if response.clicked() {
-                    selected_stop = i;
+                    selected = UiSelection::Band(i);
                     value_popup_stop = Some(i);
                     popup_kept_open = true;
                 }
                 if response.dragged() {
-                    let lower = if i == 0 { 0.0 } else { stops[i - 1].t + STOP_EPSILON };
-                    let upper = if i + 1 == stops.len() { 1.0 } else { stops[i + 1].t - STOP_EPSILON };
+                    let lower = if i == 0 { 0.0 } else { ramp.stops[i - 1].t + STOP_EPSILON };
+                    let upper = if i + 1 == ramp.stops.len() { 1.0 } else { ramp.stops[i + 1].t - STOP_EPSILON };
                     let (lo, hi) = (lower.min(upper), lower.max(upper));
                     if let Some(pos) = response.interact_pointer_pos() {
                         let t = ((pos.x - bar_rect.left()) / bar_rect.width().max(1.0)).clamp(lo, hi);
-                        if (stops[i].t - t).abs() > f32::EPSILON {
-                            stops[i].t = t;
+                        if (ramp.stops[i].t - t).abs() > f32::EPSILON {
+                            ramp.stops[i].set_t(t, min, max);
                             changed = true;
                         }
                     }
-                    selected_stop = i;
+                    selected = UiSelection::Band(i);
                     if value_popup_stop.is_some() {
                         value_popup_stop = Some(i);
                         popup_kept_open = true;
@@ -708,9 +973,9 @@ impl<'a> ColorScaleLegend<'a> {
                 }
             }
             let painter = ui.painter();
-            let marker_color = interpolate_stops(&stops, stops[i].t);
+            let marker_color = color32_from_straight(ramp.stops[i].color);
             let center = egui::pos2(x, handle_row_rect.center().y);
-            let active = i == selected_stop || response.dragged() || response.hovered();
+            let active = selected == UiSelection::Band(i) || response.dragged() || response.hovered();
             painter.line_segment(
                 [egui::pos2(x, handle_row_rect.bottom() - 1.0), egui::pos2(x, bar_rect.top())],
                 egui::Stroke::new(if active { 1.5 } else { 1.0 }, ui.visuals().widgets.noninteractive.bg_stroke.color),
@@ -721,93 +986,122 @@ impl<'a> ColorScaleLegend<'a> {
                 if active { 5.5 } else { 4.5 },
                 egui::Stroke::new(if active { 1.5 } else { 1.0 }, if active { egui::Color32::BLACK } else { egui::Color32::from_gray(40) }),
             );
+            // An inclusive boundary owns its own value, which changes which
+            // band a block exactly on it lands in - worth showing.
+            if ramp.stops[i].inclusive {
+                painter.text(
+                    egui::pos2(x, handle_row_rect.top()),
+                    egui::Align2::CENTER_TOP,
+                    "≤",
+                    egui::FontId::proportional(9.0),
+                    text_color,
+                );
+            }
         }
 
         if let Some(t) = pending_insert
-            && stops.len() < MAX_COLOR_STOPS
+            && ramp.stops.len() < MAX_GRADIENT_ENTRIES - 1
         {
-            let new_index = insert_stop_sorted(&mut stops, editor.allocate_color_stop_id(), t);
-            selected_stop = new_index;
+            let new_index = insert_stop_sorted(&mut ramp, editor.allocate_color_stop_id(), t, min, max);
+            selected = UiSelection::Band(new_index);
             value_popup_stop = Some(new_index);
             popup_kept_open = true;
             changed = true;
         }
 
         if let Some(index) = remove_index {
-            stops.remove(index);
+            ramp.stops.remove(index);
             value_popup_stop = match value_popup_stop {
                 Some(open_index) if open_index == index => None,
                 Some(open_index) if open_index > index => Some(open_index - 1),
                 other => other,
             };
-            selected_stop = selected_stop.min(stops.len().saturating_sub(1));
+            selected = match selected {
+                UiSelection::Band(current) if current >= ramp.stops.len() => UiSelection::Band(ramp.stops.len().saturating_sub(1)),
+                other => other,
+            };
             changed = true;
         }
 
-        if !stops.is_empty() {
-            if value_popup_stop == Some(selected_stop) {
-                let popup_response = self.draw_stop_value_popup(ui, &mut stops, selected_stop, bar_rect, handle_row_rect, min, max, &mut changed);
-                // Close the value input when the user clicks anywhere outside
-                // it - unless this frame's click was on a stop handle, which
-                // (re)opens it for that stop. Clicking inside the popup to edit
-                // the value is not "elsewhere", so it stays open.
-                if !popup_kept_open && popup_response.is_some_and(|response| response.clicked_elsewhere()) {
-                    value_popup_stop = None;
-                }
+        if let UiSelection::Band(index) = selected
+            && value_popup_stop == Some(index)
+        {
+            let popup_response = self.draw_stop_value_popup(ui, &mut ramp, index, bar_rect, handle_row_rect, min, max, &mut changed);
+            // Close the value input when the user clicks anywhere outside
+            // it - unless this frame's click was on a stop handle, which
+            // (re)opens it for that stop. Clicking inside the popup to edit
+            // the value is not "elsewhere", so it stays open.
+            if !popup_kept_open && popup_response.is_some_and(|response| response.clicked_elsewhere()) {
+                value_popup_stop = None;
             }
+        }
 
-            let selected_x = bar_rect.left() + bar_rect.width() * stops[selected_stop].t;
+        if let Some(color) = ramp.color_at_selection(selected) {
+            let selected_x = match selected {
+                UiSelection::Below => below_rect.center().x,
+                UiSelection::Band(index) => bar_rect.left() + bar_rect.width() * ramp.stops[index].t,
+            };
             let swatch_x = selected_x.clamp(rect.left() + COLOR_PICKER_BUTTON_WIDTH * 0.5, rect.right() - COLOR_PICKER_BUTTON_WIDTH * 0.5);
             let swatch_rect = egui::Rect::from_center_size(
                 egui::pos2(swatch_x, editor_row_rect.center().y),
                 egui::vec2(COLOR_PICKER_BUTTON_WIDTH, COLOR_PICKER_BUTTON_HEIGHT),
             );
-            let mut srgba = straight_to_unmultiplied_srgba(stops[selected_stop].color);
+            let mut srgba = straight_to_unmultiplied_srgba(color);
             let response = ui
                 .scope_builder(egui::UiBuilder::new().id_salt("color_stop_color_picker").max_rect(swatch_rect), |ui| {
                     ui.spacing_mut().interact_size = egui::vec2(COLOR_PICKER_BUTTON_WIDTH, COLOR_PICKER_BUTTON_HEIGHT);
                     color_edit_button_srgba_unmultiplied(ui, &mut srgba)
                 })
                 .inner
-                .on_hover_text("Click to edit color; right-click to remove");
-            let picker_remove_clicked =
-                (response.secondary_clicked() || (ui.rect_contains_pointer(swatch_rect) && ui.input(|input| input.pointer.secondary_clicked()))) && stops.len() > MIN_COLOR_STOPS;
-            if picker_remove_clicked {
+                .on_hover_text(match selected {
+                    UiSelection::Below => "Colour below the first boundary",
+                    UiSelection::Band(_) => "Click to edit color; right-click to remove",
+                });
+            let picker_remove_clicked = matches!(selected, UiSelection::Band(_))
+                && (response.secondary_clicked() || (ui.rect_contains_pointer(swatch_rect) && ui.input(|input| input.pointer.secondary_clicked())))
+                && ramp.stops.len() > 1;
+            if picker_remove_clicked && let UiSelection::Band(index) = selected {
                 value_popup_stop = None;
-                stops.remove(selected_stop);
-                selected_stop = selected_stop.min(stops.len().saturating_sub(1));
+                ramp.stops.remove(index);
+                selected = UiSelection::Band(index.min(ramp.stops.len().saturating_sub(1)));
                 changed = true;
             }
             if response.changed() {
-                stops[selected_stop].color = unmultiplied_srgba_to_straight(srgba);
+                ramp.set_selection_color(selected, unmultiplied_srgba_to_straight(srgba));
                 changed = true;
             }
         }
 
         if changed {
-            let selected_t = stops.get(selected_stop).map(|stop| stop.t);
-            let value_popup_t = value_popup_stop.and_then(|index| stops.get(index).map(|stop| stop.t));
-            stops.sort_by(|a, b| a.t.total_cmp(&b.t));
-            stops.dedup_by(|a, b| (a.t - b.t).abs() < 1e-4);
-            selected_stop = selected_t
-                .and_then(|t| {
-                    stops
-                        .iter()
-                        .enumerate()
-                        .min_by(|(_, a), (_, b)| (a.t - t).abs().total_cmp(&(b.t - t).abs()))
-                        .map(|(index, _)| index)
-                })
-                .unwrap_or(0);
-            value_popup_stop = value_popup_t.and_then(|t| {
-                stops
+            let selected_value = match selected {
+                UiSelection::Below => None,
+                UiSelection::Band(index) => ramp.stops.get(index).map(|stop| stop.value),
+            };
+            let popup_value = value_popup_stop.and_then(|index| ramp.stops.get(index).map(|stop| stop.value));
+            let transfer = ramp.to_transfer();
+            // The command applies `sanitise`, which may sort and merge; track
+            // the selection by value so it follows its stop through that.
+            let sanitised = {
+                let mut sanitised = transfer.clone();
+                sanitised.sanitise(Some((min, max)));
+                UiRamp::from_transfer(&sanitised, min, max)
+            };
+            let nearest = |value: f64| {
+                sanitised
+                    .stops
                     .iter()
                     .enumerate()
-                    .min_by(|(_, a), (_, b)| (a.t - t).abs().total_cmp(&(b.t - t).abs()))
+                    .min_by(|(_, a), (_, b)| (a.value - value).abs().total_cmp(&(b.value - value).abs()))
                     .map(|(index, _)| index)
-            });
-            commands.push(UiCommand::SetBlockModelColorStops { id: model.id, stops });
+            };
+            selected = match selected_value.and_then(nearest) {
+                Some(index) => UiSelection::Band(index),
+                None => selected,
+            };
+            value_popup_stop = popup_value.and_then(nearest);
+            commands.push(UiCommand::SetBlockModelColorTransfer { id: model.id, transfer });
         }
-        ui.data_mut(|data| data.insert_persisted(selected_id, selected_stop));
+        ui.data_mut(|data| data.insert_persisted(selected_id, selected));
         ui.data_mut(|data| data.insert_persisted(value_popup_id, value_popup_stop));
 
         let fractions: &[f32] = if bar_width < 260.0 {
@@ -837,7 +1131,7 @@ impl<'a> ColorScaleLegend<'a> {
     fn draw_stop_value_popup(
         &self,
         ui: &mut egui::Ui,
-        stops: &mut [ColorStop],
+        ramp: &mut UiRamp,
         selected_stop: usize,
         bar_rect: egui::Rect,
         handle_row_rect: egui::Rect,
@@ -845,6 +1139,7 @@ impl<'a> ColorScaleLegend<'a> {
         max: f64,
         changed: &mut bool,
     ) -> Option<egui::Response> {
+        let stops = ramp.stops.as_mut_slice();
         let stop = stops.get(selected_stop).copied()?;
         let selected_x = bar_rect.left() + bar_rect.width() * stop.t;
         let popup_pos = egui::pos2(selected_x, handle_row_rect.top() - 6.0);
@@ -877,7 +1172,7 @@ impl<'a> ColorScaleLegend<'a> {
                             .max_decimals(6),
                     );
                     if response.changed() {
-                        stops[selected_stop].t = value_to_normalized(value, min, max).clamp(lower_t.min(upper_t), lower_t.max(upper_t));
+                        stops[selected_stop].set_t(value_to_normalized(value, min, max).clamp(lower_t.min(upper_t), lower_t.max(upper_t)), min, max);
                         *changed = true;
                     }
                 });

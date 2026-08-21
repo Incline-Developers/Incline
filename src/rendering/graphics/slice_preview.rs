@@ -77,9 +77,14 @@ pub(super) fn slice_preview_scene_key(
         for channel in block_model.color {
             channel.to_bits().hash(&mut hasher);
         }
-        for stop in &block_model.color_transfer.stops {
-            stop.t.to_bits().hash(&mut hasher);
-            for channel in stop.color {
+        let ramp = block_model.normalized_ramp();
+        for channel in ramp.below {
+            channel.to_bits().hash(&mut hasher);
+        }
+        for band in &ramp.bands {
+            band.t.to_bits().hash(&mut hasher);
+            band.inclusive.hash(&mut hasher);
+            for channel in band.color {
                 channel.to_bits().hash(&mut hasher);
             }
         }

@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
@@ -8,8 +13,11 @@ use crate::model::{
     project::ProjectItemState,
 };
 
-pub(crate) const MIN_COLOR_STOPS: usize = 2;
-pub(crate) const MAX_COLOR_STOPS: usize = 12;
+/// How many gradient entries a [`NormalizedRamp`] - and so the GPU uniform and
+/// the shader loop - can carry. A stored [`ColorTransferFunction`] is *not*
+/// bounded by this: OMF puts no limit on a gradient, so a file's colormap is
+/// kept whole and only the render-side projection is capped.
+pub(crate) const MAX_GRADIENT_ENTRIES: usize = 32;
 pub(crate) const FIRST_CUSTOM_COLOR_STOP_ID: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -469,56 +477,390 @@ pub(crate) fn detect_uniform_grid(blocks: &[BlockBounds]) -> Option<UniformBlock
     })
 }
 
+/// One boundary of an OMF `Discrete` colormap: a value, and whether that value
+/// itself belongs to the band below it.
+///
+/// Mirrors OMF2 `Boundary::{Less, LessEqual}`. Values are `f64` because that is
+/// what [`BlockModelData`] decodes every numeric column to, so a boundary
+/// written by Incline always matches the type of the numbers it is written
+/// alongside - which the standard requires.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub(crate) struct ColorStop {
-    /// Stable runtime identity used by egui widgets. Rendering only reads
-    /// `t` and `color`.
+pub(crate) struct Boundary {
+    /// Stable runtime identity used by egui widgets. Nothing else reads it.
+    #[serde(default)]
     pub(crate) id: u64,
-    /// Position within the active variable's render range, `0..1`.
-    pub(crate) t: f32,
-    /// Straight (non-premultiplied) RGBA, `0..1` per channel.
-    pub(crate) color: [f32; 4],
+    pub(crate) value: f64,
+    /// `false` is OMF `Less` (values below this boundary sit in the band under
+    /// it); `true` is `LessEqual` (this exact value does too).
+    #[serde(default)]
+    pub(crate) inclusive: bool,
 }
 
-impl PartialEq for ColorStop {
+impl PartialEq for Boundary {
     fn eq(&self, other: &Self) -> bool {
-        self.t == other.t && self.color == other.color
+        self.value == other.value && self.inclusive == other.inclusive
     }
 }
 
-/// A colour ramp driving grade colouring. Stops are always kept sorted
-/// ascending by `t`.
+/// How a variable is coloured. A direct mirror of the OMF2 colormap model, so
+/// reading and writing a colormap is a move rather than a translation, and
+/// nothing an OMF file can say has to be approximated on the way in.
+///
+/// Every variant carries a `gradient` of straight (non-premultiplied) **linear**
+/// RGBA - the scene renders into an sRGB surface view, so shaders emit linear
+/// and the UI converts on the way to and from egui.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ColorTransferFunction {
-    pub(crate) stops: Vec<ColorStop>,
+pub(crate) enum ColorTransferFunction {
+    /// OMF `AttributeData::Category`'s optional `gradient`: one colour per
+    /// category, keyed by the category's code. Categories have no boundaries -
+    /// the code *is* the selector - so this is a lookup, not a ramp.
+    Category { gradient: BTreeMap<u32, [f32; 4]> },
+    /// OMF `NumberColormap::Continuous`. `gradient` is sampled evenly across
+    /// `range`; values outside it clamp to the end colours.
+    Continuous { range: (f64, f64), gradient: Vec<[f32; 4]> },
+    /// OMF `NumberColormap::Discrete`. `gradient` is one longer than
+    /// `boundaries`: `gradient[0]` covers everything below the first boundary,
+    /// and `gradient[i + 1]` the band at or above `boundaries[i]`.
+    ///
+    /// A transparent `gradient[0]` is how a grade cutoff is expressed - it is an
+    /// ordinary editable colour, not a marker, so it means the same thing to
+    /// Incline and to any other reader that honours alpha.
+    Discrete { boundaries: Vec<Boundary>, gradient: Vec<[f32; 4]> },
 }
 
 impl Default for ColorTransferFunction {
     fn default() -> Self {
-        Self {
-            // Stops use hard cutoffs: each stop's colour is active from its `t`
-            // up to the next stop. Placing them at 0, 1/3, 2/3 gives green,
-            // yellow and red each an equal third of the range (red owns the
-            // last third rather than only the single point at t=1.0).
-            stops: vec![
-                ColorStop {
+        Self::for_range(0.0, 1.0)
+    }
+}
+
+impl ColorTransferFunction {
+    /// The default cut-off / green / yellow / red ramp spread over `min..max`.
+    ///
+    /// `gradient[0]` is transparent, so everything below the first boundary is
+    /// hidden until the user gives that band a colour. The remaining three
+    /// split the range into equal thirds, red owning the last third rather than
+    /// only the single point at the maximum.
+    pub(crate) fn for_range(min: f64, max: f64) -> Self {
+        let span = max - min;
+        Self::Discrete {
+            boundaries: vec![
+                Boundary {
                     id: 1,
-                    t: 0.0,
-                    color: [0.0, 0.86, 0.22, 1.0],
+                    value: min,
+                    inclusive: false,
                 },
-                ColorStop {
+                Boundary {
                     id: 2,
-                    t: 1.0 / 3.0,
-                    color: [1.0, 0.85, 0.0, 1.0],
+                    value: min + span / 3.0,
+                    inclusive: false,
                 },
-                ColorStop {
+                Boundary {
                     id: 3,
-                    t: 2.0 / 3.0,
-                    color: [0.92, 0.0, 0.0, 1.0],
+                    value: min + span * 2.0 / 3.0,
+                    inclusive: false,
                 },
             ],
+            gradient: vec![[0.0; 4], [0.0, 0.86, 0.22, 1.0], [1.0, 0.85, 0.0, 1.0], [0.92, 0.0, 0.0, 1.0]],
         }
     }
+
+    /// Restore the invariants every other reader of this type relies on:
+    /// boundaries sorted ascending and distinct, and `gradient` exactly one
+    /// longer than `boundaries` (or non-empty, for `Continuous`).
+    ///
+    /// `range` sets the scale the "distinct" epsilon is measured in. Boundaries
+    /// outside it are left alone - a colormap is entitled to be authored wider
+    /// than the data it covers.
+    pub(crate) fn sanitise(&mut self, range: Option<(f64, f64)>) {
+        let (min, max) = range.unwrap_or((0.0, 1.0));
+        match self {
+            Self::Category { .. } => {}
+            Self::Continuous { range, gradient } => {
+                gradient.truncate(MAX_GRADIENT_ENTRIES);
+                if gradient.is_empty() {
+                    *gradient = vec![[0.0, 0.86, 0.22, 1.0]];
+                }
+                for color in gradient.iter_mut() {
+                    clamp_rgba(color);
+                }
+                if !range.0.is_finite() || !range.1.is_finite() || range.1 <= range.0 {
+                    *range = (min, max.max(min + f64::MIN_POSITIVE));
+                }
+            }
+            Self::Discrete { boundaries, gradient } => {
+                for boundary in boundaries.iter_mut() {
+                    if !boundary.value.is_finite() {
+                        boundary.value = min;
+                    }
+                }
+                // Sort boundaries and their upper-side colours together; index
+                // `i + 1` of the gradient belongs to boundary `i`.
+                let mut paired = boundaries
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(index, boundary)| (boundary, gradient.get(index + 1).copied().unwrap_or([0.0; 4])))
+                    .collect::<Vec<_>>();
+                paired.sort_by(|a, b| a.0.value.total_cmp(&b.0.value));
+                let epsilon = ((max - min).abs() * 1e-4).max(f64::MIN_POSITIVE);
+                paired.dedup_by(|a, b| (a.0.value - b.0.value).abs() < epsilon);
+                paired.truncate(MAX_GRADIENT_ENTRIES - 1);
+
+                let mut below = gradient.first().copied().unwrap_or([0.0; 4]);
+                clamp_rgba(&mut below);
+                *boundaries = paired.iter().map(|(boundary, _)| *boundary).collect();
+                *gradient = std::iter::once(below)
+                    .chain(paired.into_iter().map(|(_, mut color)| {
+                        clamp_rgba(&mut color);
+                        color
+                    }))
+                    .collect();
+                if boundaries.is_empty() {
+                    *self = Self::for_range(min, max);
+                }
+            }
+        }
+    }
+
+    /// Resolve against the range the renderer normalises grades with, ready to
+    /// sample. See [`NormalizedRamp`].
+    pub(crate) fn normalized(&self, range: Option<(f64, f64)>, categories: &BTreeMap<u32, String>) -> NormalizedRamp {
+        let Some((min, max)) = range else {
+            // No usable range means no block carries a normalised grade
+            // either, so the ramp is never sampled. Keep it well-formed.
+            return NormalizedRamp::default();
+        };
+        let degenerate = (max - min).abs() <= f64::EPSILON;
+        let to_t = |value: f64| -> f32 { if degenerate { 0.0 } else { (((value - min) / (max - min)).clamp(0.0, 1.0)) as f32 } };
+        match self {
+            // A category code selects a colour outright. The renderer only
+            // knows normalised grades, so the codes become the boundaries of a
+            // discrete ramp here - a rendering detail that never reaches the
+            // file, where the colours stay a plain per-name list.
+            Self::Category { gradient } => {
+                let mut codes = categories.keys().copied().collect::<Vec<_>>();
+                codes.sort_unstable();
+                codes.truncate(MAX_GRADIENT_ENTRIES - 1);
+                let mut bands = Vec::with_capacity(codes.len());
+                for (index, &code) in codes.iter().enumerate() {
+                    // Each band has to contain its own code, so it starts
+                    // halfway to the code below.
+                    let value = if index == 0 {
+                        f64::from(code)
+                    } else {
+                        (f64::from(codes[index - 1]) + f64::from(code)) * 0.5
+                    };
+                    bands.push(NormalizedBand {
+                        t: to_t(value),
+                        inclusive: false,
+                        color: gradient.get(&code).copied().unwrap_or(FALLBACK_CATEGORY_COLOR),
+                    });
+                }
+                NormalizedRamp {
+                    below: bands.first().map_or([0.0; 4], |band| band.color),
+                    bands,
+                    interpolate: false,
+                }
+            }
+            Self::Continuous { range: gradient_range, gradient } => {
+                let (low, high) = *gradient_range;
+                let last = gradient.len().saturating_sub(1).max(1);
+                let bands = subsample(gradient, MAX_GRADIENT_ENTRIES)
+                    .into_iter()
+                    .map(|(index, color)| NormalizedBand {
+                        t: to_t(low + (high - low) * index as f64 / last as f64),
+                        inclusive: false,
+                        color,
+                    })
+                    .collect::<Vec<_>>();
+                NormalizedRamp {
+                    // Below the range, OMF clamps to the first gradient entry.
+                    below: gradient.first().copied().unwrap_or([0.0; 4]),
+                    bands,
+                    interpolate: true,
+                }
+            }
+            Self::Discrete { boundaries, gradient } => {
+                // The leading colour takes a slot of its own, so the bands get
+                // one fewer.
+                let bands = subsample(boundaries, MAX_GRADIENT_ENTRIES - 1)
+                    .into_iter()
+                    .map(|(index, boundary)| NormalizedBand {
+                        t: to_t(boundary.value),
+                        inclusive: boundary.inclusive,
+                        color: gradient.get(index + 1).copied().unwrap_or([0.0; 4]),
+                    })
+                    .collect();
+                NormalizedRamp {
+                    below: gradient.first().copied().unwrap_or([0.0; 4]),
+                    bands,
+                    interpolate: false,
+                }
+            }
+        }
+    }
+}
+
+/// A category with no colour of its own. Only reachable when a file names more
+/// categories than its gradient colours, which the standard forbids.
+const FALLBACK_CATEGORY_COLOR: [f32; 4] = [0.72, 0.72, 0.75, 1.0];
+
+/// Take at most `limit` evenly spaced items, keeping both ends, and pair each
+/// with its index in the original slice.
+///
+/// OMF puts no bound on a gradient's length but the shader's stop array does,
+/// so a colormap longer than the array is thinned on its way to the renderer.
+/// The stored colormap is untouched, and the original index comes back with
+/// each item so positions are still computed against the original spacing.
+fn subsample<T: Copy>(items: &[T], limit: usize) -> Vec<(usize, T)> {
+    if items.len() <= limit || limit < 2 {
+        return items.iter().copied().enumerate().collect();
+    }
+    let last = limit - 1;
+    (0..limit)
+        .map(|step| {
+            let index = (step * (items.len() - 1) + last / 2) / last;
+            (index, items[index])
+        })
+        .collect()
+}
+
+fn clamp_rgba(color: &mut [f32; 4]) {
+    for channel in color.iter_mut() {
+        *channel = channel.clamp(0.0, 1.0);
+    }
+}
+
+/// A ramp as written into `incline:style` by builds that predate colormaps
+/// living in the OMF attribute.
+///
+/// Those builds stored a stop list with an implicit "everything below the first
+/// stop is hidden" rule, and earlier ones stored each stop's position
+/// normalised to `0..1` rather than in data units. Both forms deserialise here
+/// and [`Self::resolve`] lifts them into a [`ColorTransferFunction::Discrete`],
+/// where the implicit cutoff becomes an explicit transparent `gradient[0]`.
+/// Nothing writes this any more; it exists so old projects reopen unchanged.
+#[derive(Debug, Deserialize)]
+pub(crate) struct StoredColorTransferFunction {
+    stops: Vec<StoredColorStop>,
+    #[serde(default)]
+    shape: StoredRampShape,
+}
+
+#[derive(Debug, Default, Deserialize)]
+enum StoredRampShape {
+    #[default]
+    Discrete,
+    Continuous,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredColorStop {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    value: Option<f64>,
+    #[serde(default)]
+    t: Option<f32>,
+    color: [f32; 4],
+}
+
+impl StoredColorTransferFunction {
+    pub(crate) fn resolve(self, range: Option<(f64, f64)>) -> ColorTransferFunction {
+        let (min, max) = range.unwrap_or((0.0, 1.0));
+        let stops = self
+            .stops
+            .into_iter()
+            .enumerate()
+            .map(|(index, stop)| {
+                let value = stop.value.unwrap_or_else(|| min + (max - min) * f64::from(stop.t.unwrap_or(0.0)));
+                (
+                    Boundary {
+                        id: if stop.id == 0 { index as u64 + 1 } else { stop.id },
+                        value,
+                        inclusive: false,
+                    },
+                    stop.color,
+                )
+            })
+            .collect::<Vec<_>>();
+        if stops.is_empty() {
+            return ColorTransferFunction::for_range(min, max);
+        }
+        match self.shape {
+            StoredRampShape::Discrete => ColorTransferFunction::Discrete {
+                boundaries: stops.iter().map(|(boundary, _)| *boundary).collect(),
+                // The old implicit cutoff, made explicit.
+                gradient: std::iter::once([0.0; 4]).chain(stops.iter().map(|(_, color)| *color)).collect(),
+            },
+            // The old form interpolated between unevenly spaced stops; OMF
+            // samples evenly across a range, so resample onto an even grid.
+            StoredRampShape::Continuous => {
+                let (low, high) = (stops[0].0.value, stops[stops.len() - 1].0.value);
+                let samples = stops.len().clamp(2, MAX_GRADIENT_ENTRIES);
+                let sample = |value: f64| -> [f32; 4] {
+                    match stops.iter().position(|(boundary, _)| boundary.value > value) {
+                        None => stops[stops.len() - 1].1,
+                        Some(0) => stops[0].1,
+                        Some(upper) => {
+                            let (low_boundary, low_color) = stops[upper - 1];
+                            let (high_boundary, high_color) = stops[upper];
+                            let span = high_boundary.value - low_boundary.value;
+                            let f = if span.abs() <= f64::EPSILON { 0.0 } else { (value - low_boundary.value) / span };
+                            lerp_rgba(low_color, high_color, f as f32)
+                        }
+                    }
+                };
+                ColorTransferFunction::Continuous {
+                    range: (low, high),
+                    gradient: (0..samples).map(|index| sample(low + (high - low) * index as f64 / (samples - 1) as f64)).collect(),
+                }
+            }
+        }
+    }
+}
+
+/// One band of a [`NormalizedRamp`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NormalizedBand {
+    /// Where the band begins, normalised to `0..1` against the render range.
+    pub(crate) t: f32,
+    /// See [`Boundary::inclusive`]. Meaningless when interpolating.
+    pub(crate) inclusive: bool,
+    pub(crate) color: [f32; 4],
+}
+
+impl NormalizedBand {
+    /// Whether `t` sits at or above this band's start - i.e. inside it or past
+    /// it. Mirrors [`Boundary::is_above`] in normalised space.
+    pub(crate) fn is_above(&self, t: f32) -> bool {
+        if self.inclusive { t > self.t } else { t >= self.t }
+    }
+}
+
+/// A [`ColorTransferFunction`] resolved against a concrete value range, with
+/// band positions normalised to `0..1`.
+///
+/// Blocks reach the shaders carrying a normalised grade (see `normalized_grade`
+/// in `rendering/scene/gpu_cache.rs`), so the ramp has to be expressed in the
+/// same space to be sampled against them. Building it once per rebuild - rather
+/// than normalising per block - is also what keeps the CPU replica in
+/// `rendering/scene/block_model_ramp.rs` and the GPU uniform from drifting
+/// apart. It is a render-side projection only: it flattens all three colormap
+/// kinds into one shape and is capped at [`MAX_GRADIENT_ENTRIES`], neither of
+/// which the stored colormap is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct NormalizedRamp {
+    /// The colour below the first band - OMF's `gradient[0]`.
+    pub(crate) below: [f32; 4],
+    pub(crate) bands: Vec<NormalizedBand>,
+    pub(crate) interpolate: bool,
+}
+
+pub(crate) fn lerp_rgba(a: [f32; 4], b: [f32; 4], f: f32) -> [f32; 4] {
+    let f = f.clamp(0.0, 1.0);
+    std::array::from_fn(|channel| a[channel] + (b[channel] - a[channel]) * f)
 }
 
 /// An axis-aligned crop of a block model, expressed in its local grid
@@ -561,7 +903,12 @@ pub(crate) struct OpenBlockModel {
     /// Active crop in local grid coordinates, or `None` for the full model.
     pub(crate) slice: Option<BlockModelSlice>,
     pub(crate) active_color_variable: Option<String>,
-    pub(crate) color_transfer: ColorTransferFunction,
+    /// One ramp per colour variable, keyed by variable name. OMF hangs a
+    /// colormap off each attribute rather than off the element, so keeping
+    /// them per variable is both what the standard assumes and what stops a
+    /// user's colours being discarded every time they switch variable and
+    /// back. Populated on demand by [`Self::ensure_color_transfer_for_active_variable`].
+    pub(crate) color_transfers: BTreeMap<String, ColorTransferFunction>,
     pub(crate) hide_empty_color_values: bool,
     /// Lazily decoded values for [`Self::active_color_variable`], shared
     /// by the renderer's grade colouring and the UI's colour-scale legend so
@@ -723,15 +1070,70 @@ impl OpenBlockModel {
             .map(|codes| codes.contains(&code))
     }
 
-    pub(crate) fn reset_color_transfer_for_active_variable(&mut self) {
-        let categorical = self
+    /// The ramp for the active colour variable, or a neutral one when no
+    /// variable is active. Never inserts, so this stays callable behind `&self`
+    /// from the render path; [`Self::ensure_color_transfer_for_active_variable`]
+    /// is what populates the map.
+    pub(crate) fn color_transfer(&self) -> &ColorTransferFunction {
+        static FALLBACK: std::sync::LazyLock<ColorTransferFunction> = std::sync::LazyLock::new(ColorTransferFunction::default);
+        self.active_color_variable.as_deref().and_then(|name| self.color_transfers.get(name)).unwrap_or(&FALLBACK)
+    }
+
+    /// The active ramp resolved against the render range the shaders normalise
+    /// grades with, ready to sample. See [`NormalizedRamp`].
+    pub(crate) fn normalized_ramp(&self) -> NormalizedRamp {
+        static NO_CATEGORIES: std::sync::LazyLock<BTreeMap<u32, String>> = std::sync::LazyLock::new(BTreeMap::new);
+        let categories = self
             .active_color_variable
             .as_deref()
             .and_then(|name| self.model.variable(name))
-            .filter(|variable| matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort"));
-        self.color_transfer = categorical
-            .map(|variable| categorical_color_transfer(variable, self.active_value_range()))
-            .unwrap_or_default();
+            .map_or(&*NO_CATEGORIES, |variable| &variable.strings);
+        self.color_transfer().normalized(self.active_value_range(), categories)
+    }
+
+    /// Replace the active variable's ramp, restoring its invariants first.
+    pub(crate) fn set_color_transfer_for_active_variable(&mut self, mut transfer: ColorTransferFunction) {
+        let Some(name) = self.active_color_variable.clone() else {
+            return;
+        };
+        transfer.sanitise(self.active_value_range());
+        self.color_transfers.insert(name, transfer);
+    }
+
+    /// Give the active variable a ramp if it has none yet, derived from its
+    /// kind: a colour per category for a categorical column, otherwise the
+    /// default cut-off/green/yellow/red spread over its render range.
+    /// Existing ramps are left alone - that is what makes switching variable
+    /// and back non-destructive.
+    pub(crate) fn ensure_color_transfer_for_active_variable(&mut self) {
+        let Some(name) = self.active_color_variable.clone() else {
+            return;
+        };
+        if self.color_transfers.contains_key(&name) {
+            return;
+        }
+        let transfer = self.default_color_transfer_for(&name);
+        self.color_transfers.insert(name, transfer);
+    }
+
+    /// Discard the active variable's ramp and rebuild it from the data.
+    pub(crate) fn reset_color_transfer_for_active_variable(&mut self) {
+        let Some(name) = self.active_color_variable.clone() else {
+            return;
+        };
+        let transfer = self.default_color_transfer_for(&name);
+        self.color_transfers.insert(name, transfer);
+    }
+
+    fn default_color_transfer_for(&self, name: &str) -> ColorTransferFunction {
+        let range = self.active_value_range();
+        match self.model.variable(name) {
+            Some(variable) if categorical_variable(variable) => categorical_color_transfer(variable),
+            _ => {
+                let (min, max) = range.unwrap_or((0.0, 1.0));
+                ColorTransferFunction::for_range(min, max)
+            }
+        }
     }
 
     /// World-space AABB of all renderable blocks, cached at load. Reads the
@@ -867,8 +1269,10 @@ fn collect_present_category_codes(values: &[f64], renderable: &RenderableBlockIn
     )
 }
 
-fn categorical_color_transfer(variable: &crate::model::formats::block_model_data::BlockVariable, range: Option<(f64, f64)>) -> ColorTransferFunction {
-    const PALETTE: [[f32; 4]; MAX_COLOR_STOPS] = [
+/// The colour list a categorical variable starts with: whatever palette the
+/// source file shipped, and an invented one for any category it left out.
+pub(crate) fn categorical_color_transfer(variable: &crate::model::formats::block_model_data::BlockVariable) -> ColorTransferFunction {
+    const PALETTE: [[f32; 4]; 12] = [
         [0.12, 0.56, 1.00, 1.0],
         [1.00, 0.55, 0.10, 1.0],
         [0.18, 0.80, 0.36, 1.0],
@@ -882,35 +1286,17 @@ fn categorical_color_transfer(variable: &crate::model::formats::block_model_data
         [0.10, 0.56, 0.52, 1.0],
         [0.58, 0.62, 0.68, 1.0],
     ];
-    let mut codes = variable.strings.keys().map(|&code| code as f64).take(MAX_COLOR_STOPS).collect::<Vec<_>>();
-    if codes.is_empty() {
-        return ColorTransferFunction::default();
+    ColorTransferFunction::Category {
+        gradient: variable
+            .strings
+            .keys()
+            .enumerate()
+            .map(|(index, &code)| {
+                let color = variable.category_colors.get(&code).copied().unwrap_or(PALETTE[index % PALETTE.len()]);
+                (code, color)
+            })
+            .collect(),
     }
-    codes.sort_by(f64::total_cmp);
-    let (min, max) = range.unwrap_or_else(|| (*codes.first().unwrap(), *codes.last().unwrap()));
-    let span = max - min;
-    let mut stops = Vec::with_capacity(codes.len().max(MIN_COLOR_STOPS));
-    for (index, code) in codes.iter().enumerate() {
-        let t = if index == 0 || span.abs() <= f64::EPSILON {
-            0.0
-        } else {
-            let boundary = (codes[index - 1] + code) * 0.5;
-            ((boundary - min) / span).clamp(0.0, 1.0) as f32
-        };
-        stops.push(ColorStop {
-            id: index as u64 + 1,
-            t,
-            color: PALETTE[index],
-        });
-    }
-    if stops.len() == 1 {
-        stops.push(ColorStop {
-            id: 2,
-            t: 1.0,
-            color: stops[0].color,
-        });
-    }
-    ColorTransferFunction { stops }
 }
 
 /// Conventional "no grade" sentinels. Matched exactly (to float

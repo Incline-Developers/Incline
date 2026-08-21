@@ -22,7 +22,10 @@ use serde_json::{Value, json};
 use crate::{
     model::{
         Document, FillStyle, Layer, Object, ObjectColor, PolyVertex,
-        block_model::{BlockBounds, BlockBoundsSource, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, opaque_irregular_surface_block_count, opaque_surface_block_count},
+        block_model::{
+            BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
+            opaque_irregular_surface_block_count, opaque_surface_block_count,
+        },
         drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, LoadedDrillHoleDataset, OpenDrillHoleDataset},
         formats::{
             block_model_data::{BlockModelColumn, BlockModelData},
@@ -110,7 +113,11 @@ pub(crate) struct ImportedBlockModel {
     pub(crate) visible: bool,
     pub(crate) color: [f32; 4],
     pub(crate) slice: Option<crate::model::block_model::BlockModelSlice>,
-    pub(crate) color_transfer: crate::model::block_model::ColorTransferFunction,
+    /// Ramps keyed by variable name, resolved from Incline's own style
+    /// metadata where the source carried it and otherwise from the OMF
+    /// colormaps on the attributes themselves. A variable absent here has its
+    /// ramp invented at load from the data.
+    pub(crate) color_transfers: BTreeMap<String, ColorTransferFunction>,
     pub(crate) hide_empty_color_values: bool,
 }
 
@@ -450,6 +457,133 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     Ok(element)
 }
 
+/// Write a numeric attribute, carrying its colormap when it has one.
+///
+/// Both colormap kinds are stored in exactly OMF's shape, so this is a copy
+/// rather than a conversion. Boundaries and the range are written as `f64` to
+/// match the `f64` values alongside them, which the standard requires the types
+/// to agree on - [`BlockModelData`] decodes every numeric column to `f64`, so
+/// that is the only honest choice.
+fn write_number_attribute<W: Write + Seek + Send>(
+    writer: &mut omf_crate::file::Writer<W>,
+    name: &str,
+    location: omf_crate::Location,
+    values: omf_crate::Array<omf_crate::array_type::Number>,
+    transfer: Option<&ColorTransferFunction>,
+) -> Result<omf_crate::Attribute> {
+    match transfer {
+        Some(ColorTransferFunction::Discrete { boundaries, gradient }) if !boundaries.is_empty() && gradient.len() == boundaries.len() + 1 => {
+            let boundaries = writer.array_boundaries(boundaries.iter().map(|boundary| {
+                if boundary.inclusive {
+                    omf_crate::data::Boundary::LessEqual(boundary.value)
+                } else {
+                    omf_crate::data::Boundary::Less(boundary.value)
+                }
+            }))?;
+            let gradient = writer.array_gradient(gradient.iter().map(|color| rgba8(*color)))?;
+            Ok(omf_crate::Attribute::from_numbers_discrete_colormap(
+                name.to_owned(),
+                location,
+                values,
+                boundaries,
+                gradient,
+            ))
+        }
+        Some(ColorTransferFunction::Continuous { range, gradient }) if !gradient.is_empty() => {
+            let gradient = writer.array_gradient(gradient.iter().map(|color| rgba8(*color)))?;
+            Ok(omf_crate::Attribute::from_numbers_continuous_colormap(name.to_owned(), location, values, *range, gradient))
+        }
+        // A `Category` colormap on a numeric column, or a malformed one, has
+        // nothing valid to say here.
+        _ => Ok(omf_crate::Attribute::from_numbers(name.to_owned(), location, values)),
+    }
+}
+
+/// One RGBA per category, in `codes` order, ready for `Category.gradient`.
+fn category_gradient(variable: &crate::model::formats::block_model_data::BlockVariable, codes: &[u32], transfer: Option<&ColorTransferFunction>) -> Vec<[u8; 4]> {
+    codes
+        .iter()
+        .map(|code| {
+            let color = match transfer {
+                Some(ColorTransferFunction::Category { gradient }) => gradient.get(code).copied(),
+                _ => None,
+            }
+            .or_else(|| variable.category_colors.get(code).copied())
+            .unwrap_or([0.72, 0.72, 0.75, 1.0]);
+            rgba8(color)
+        })
+        .collect()
+}
+
+/// An OMF `NumberColormap` as an Incline colormap. A move, not a translation:
+/// gradients are kept whole (the render side caps its own working copy) and
+/// boundary inclusiveness is preserved.
+fn read_number_colormap<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<R>, colormap: &omf_crate::NumberColormap) -> Result<ColorTransferFunction> {
+    match colormap {
+        omf_crate::NumberColormap::Continuous { range, gradient } => {
+            let gradient = collect_results(reader.array_gradient(gradient)?)?.into_iter().map(linear_rgba).collect::<Vec<_>>();
+            if gradient.is_empty() {
+                bail!("continuous colormap has no colours");
+            }
+            Ok(ColorTransferFunction::Continuous {
+                range: number_range_bounds(range),
+                gradient,
+            })
+        }
+        omf_crate::NumberColormap::Discrete { boundaries, gradient } => {
+            let gradient = collect_results(reader.array_gradient(gradient)?)?.into_iter().map(linear_rgba).collect::<Vec<_>>();
+            let boundaries = read_boundaries(reader, boundaries)?;
+            if boundaries.is_empty() {
+                bail!("discrete colormap has no boundaries");
+            }
+            if gradient.len() != boundaries.len() + 1 {
+                bail!("discrete colormap has {} colours for {} boundaries", gradient.len(), boundaries.len());
+            }
+            Ok(ColorTransferFunction::Discrete { boundaries, gradient })
+        }
+    }
+}
+
+/// A colormap's range as `f64`. Dates and date-times become their numeric epoch
+/// offsets, matching how `array_numbers().try_into_f64()` decodes the values the
+/// range describes.
+fn number_range_bounds(range: &omf_crate::NumberRange) -> (f64, f64) {
+    match range {
+        omf_crate::NumberRange::Float { min, max } => (*min, *max),
+        omf_crate::NumberRange::Integer { min, max } => (*min as f64, *max as f64),
+        omf_crate::NumberRange::Date { min, max } => (date_to_f64(*min), date_to_f64(*max)),
+        omf_crate::NumberRange::DateTime { min, max } => (min.timestamp() as f64, max.timestamp() as f64),
+    }
+}
+
+/// Days since the 1970-01-01 epoch, the numeric form OMF defines for dates.
+fn date_to_f64(date: chrono::NaiveDate) -> f64 {
+    date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch is a valid date"))
+        .num_days() as f64
+}
+
+fn read_boundaries<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<R>, array: &omf_crate::Array<omf_crate::array_type::Boundary>) -> Result<Vec<Boundary>> {
+    let boundaries = reader.array_boundaries(array)?;
+    // Integer boundaries refuse the f64 cast, so fall back rather than losing
+    // the colormap entirely.
+    let decoded = match boundaries.try_into_f64() {
+        Ok(iter) => collect_results(iter)?,
+        Err(_) => collect_results(reader.array_boundaries(array)?.try_into_i64()?)?
+            .into_iter()
+            .map(|boundary| boundary.map(|value| value as f64))
+            .collect(),
+    };
+    Ok(decoded
+        .into_iter()
+        .enumerate()
+        .map(|(index, boundary)| Boundary {
+            id: index as u64 + 1,
+            value: boundary.value(),
+            inclusive: boundary.is_inclusive(),
+        })
+        .collect())
+}
+
 fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenBlockModel) -> Result<omf_crate::Element> {
     let model = &open.model;
     let lower = model.metadata.lower;
@@ -490,11 +624,14 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         };
         if variable.strings.is_empty() {
             let selected_values = selected.iter().map(|&index| values.get(index).copied().filter(|value| value.is_finite()));
-            element.attributes.push(omf_crate::Attribute::from_numbers(
-                variable.name.clone(),
+            let numbers = writer.array_numbers(selected_values)?;
+            element.attributes.push(write_number_attribute(
+                writer,
+                &variable.name,
                 omf_crate::Location::Subblocks,
-                writer.array_numbers(selected_values)?,
-            ));
+                numbers,
+                open.color_transfers.get(&variable.name),
+            )?);
         } else {
             let codes = variable.strings.keys().copied().collect::<Vec<_>>();
             let code_to_index = codes.iter().enumerate().map(|(index, code)| (*code, index as u32)).collect::<BTreeMap<_, _>>();
@@ -511,12 +648,18 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
                 omf_crate::Location::Categories,
                 writer.array_numbers(codes.iter().map(|code| Some(i64::from(*code))))?,
             );
+            // One colour per name, in the same order - OMF's `gradient` is
+            // exactly Incline's per-category ramp, so other applications see
+            // the colours the user chose rather than inventing their own.
+            let gradient = category_gradient(variable, &codes, open.color_transfers.get(&variable.name));
+            let indices = writer.array_indices(indices)?;
+            let names = writer.array_names(names)?;
             element.attributes.push(omf_crate::Attribute::from_categories(
                 variable.name.clone(),
                 omf_crate::Location::Subblocks,
-                writer.array_indices(indices)?,
-                writer.array_names(names)?,
-                None,
+                indices,
+                names,
+                Some(writer.array_gradient(gradient)?),
                 [original_codes],
             ));
         }
@@ -537,7 +680,6 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
             "color": open.color,
             "slice": open.slice,
             "active_color_variable": open.active_color_variable,
-            "color_transfer": open.color_transfer,
             "hide_empty_color_values": open.hide_empty_color_values,
         }),
     );
@@ -1309,6 +1451,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .filter(|name| model.variable(name).is_some())
             .or_else(|| model.color_variables().into_iter().find(|variable| !variable.special).map(|variable| variable.name.clone()));
         let active_values_cache = OpenBlockModel::prepare_active_values_cache(&model, &renderable, active_color_variable.as_deref());
+        let color_transfers = self.read_block_color_transfers(element, &model, &renderable, style, active_color_variable.as_deref());
         self.bundle.block_models.push(ImportedBlockModel {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -1331,10 +1474,78 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             visible: style_bool(style, "visible").unwrap_or(true),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.72, 0.72, 0.75, 1.0])),
             slice: style_value(style, "slice"),
-            color_transfer: style_value(style, "color_transfer").unwrap_or_default(),
+            color_transfers,
             hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
         });
         Ok(())
+    }
+
+    /// Colormaps for this element's variables, taken from the OMF attributes
+    /// themselves.
+    ///
+    /// The attribute is the authority: a number attribute's `colormap` and a
+    /// category attribute's `gradient` are where a colormap lives, so that is
+    /// where Incline reads it from and writes it back to. `incline:style` is
+    /// consulted only to migrate projects written before that was true, and is
+    /// never written any more - one representation, so nothing can drift.
+    ///
+    /// A colormap that fails to decode is skipped with a warning rather than
+    /// failing the import: colours are not worth losing a model over.
+    fn read_block_color_transfers(
+        &self,
+        element: &omf_crate::Element,
+        model: &BlockModelData,
+        renderable: &RenderableBlockIndices,
+        style: Option<&Value>,
+        active_color_variable: Option<&str>,
+    ) -> BTreeMap<String, ColorTransferFunction> {
+        let variable_range = |name: &str| -> Option<(f64, f64)> {
+            let variable = model.variable(name)?;
+            let default = crate::model::block_model::color_variable_default(variable);
+            let values = model.color_values(name).ok()?;
+            crate::model::block_model::render_value_range(&values, renderable, default)
+        };
+
+        let mut transfers = BTreeMap::new();
+        for attribute in &element.attributes {
+            let Some(variable) = model.variable(&attribute.name) else {
+                continue;
+            };
+            match &attribute.data {
+                omf_crate::AttributeData::Number { colormap: Some(colormap), .. } => match read_number_colormap(self.reader, colormap) {
+                    Ok(transfer) => {
+                        transfers.insert(attribute.name.clone(), transfer);
+                    }
+                    Err(error) => crate::userspace_warn!("Ignoring the colour map on OMF attribute '{}': {error:#}", attribute.name),
+                },
+                // Category colours arrive on the column as `category_colors`
+                // (see `read_block_column`) and are already merged into the
+                // variable, so the colormap is built from there.
+                omf_crate::AttributeData::Category { gradient: Some(_), .. } => {
+                    transfers.insert(attribute.name.clone(), crate::model::block_model::categorical_color_transfer(variable));
+                }
+                _ => {}
+            }
+        }
+
+        // Projects written before colormaps lived in the attribute.
+        if let Some(stored) = style_value::<BTreeMap<String, StoredColorTransferFunction>>(style, "color_transfers") {
+            for (name, transfer) in stored {
+                let range = variable_range(&name);
+                transfers.insert(name, transfer.resolve(range));
+            }
+        } else if let Some(stored) = style_value::<StoredColorTransferFunction>(style, "color_transfer") {
+            // Older still: one ramp per model, belonging to whichever variable
+            // was active.
+            if let Some(name) = active_color_variable {
+                let range = variable_range(name);
+                transfers.insert(name.to_owned(), stored.resolve(range));
+            }
+        }
+        for (name, transfer) in &mut transfers {
+            transfer.sanitise(variable_range(name));
+        }
+        transfers
     }
 
     fn read_block_column(&self, attribute: &omf_crate::Attribute, expansion: Option<&[usize]>) -> Result<Option<BlockModelColumn>> {
@@ -1346,9 +1557,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name: attribute.name.clone(),
                     values: Arc::new(values),
                     categories: None,
+                    category_colors: BTreeMap::new(),
                 }))
             }
-            omf_crate::AttributeData::Category { values, names, attributes, .. } => {
+            omf_crate::AttributeData::Category {
+                values,
+                names,
+                gradient,
+                attributes,
+            } => {
                 let names = collect_results(self.reader.array_names(names)?)?;
                 let original_codes = attributes
                     .iter()
@@ -1374,6 +1591,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                             .flatten()
                     });
                 let codes = original_codes.unwrap_or_else(|| (0..names.len() as u32).collect());
+                // The file's own palette, when it ships one, beats Incline's
+                // generic categorical colours.
+                let category_colors = gradient
+                    .as_ref()
+                    .map(|gradient| collect_results(self.reader.array_gradient(gradient)?))
+                    .transpose()?
+                    .map(|colors| codes.iter().copied().zip(colors).map(|(code, color)| (code, linear_rgba(color))).collect())
+                    .unwrap_or_default();
                 let categories = names.into_iter().zip(codes.iter().copied()).map(|(name, code)| (code, name)).collect();
                 let values = collect_results(self.reader.array_indices(values)?)?
                     .into_iter()
@@ -1384,6 +1609,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name: attribute.name.clone(),
                     values: Arc::new(values),
                     categories: Some(categories),
+                    category_colors,
                 }))
             }
             _ => Ok(None),

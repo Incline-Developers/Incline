@@ -9,7 +9,12 @@ use super::{
     block_model_ramp::{VISIBLE_ALPHA_EPSILON, is_hidden_block_appearance, ramp_rgba, volume_optical_depth_for_alpha},
     gpu_cache::{block_model_color_values, grade_for_block},
 };
-use crate::model::block_model::{ColorTransferFunction, OpenBlockModel};
+use crate::{
+    model::block_model::{MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel},
+    // The surface and volume shaders declare the same `ColorStop` layout and
+    // are packed by the same routine, so they share the Rust definition too.
+    rendering::scene::gpu_cache::{ColorStopUniform, pack_ramp_stops},
+};
 
 /// Hard CPU/backing-store ceiling for the optional volume path. Models above
 /// it fall back to the already bounded cube renderer instead of doing several
@@ -89,13 +94,6 @@ fn beam_enabled_for(asset: &BlockVolumeAsset) -> bool {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ColorStopUniform {
-    color: [f32; 4],
-    pos: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct BlockVolumeUniform {
     fallback_color: [f32; 4],
     options: [f32; 4],
@@ -120,7 +118,7 @@ pub(crate) struct BlockVolumeUniform {
     /// aggregate in the brick-aggregate buffer (= occupied brick count), or
     /// 0 to disable the level-1 LOD entirely.
     super_dims: [u32; 4],
-    stops: [ColorStopUniform; crate::model::block_model::MAX_COLOR_STOPS],
+    stops: [ColorStopUniform; MAX_GRADIENT_ENTRIES],
 }
 
 pub(crate) struct CachedBlockVolumeGpu {
@@ -165,18 +163,18 @@ impl CachedBlockVolumeGpu {
     /// Nearest visible volume cell along a model-local ray. This mirrors the
     /// volume asset's sparse occupancy rather than treating its outer AABB as
     /// solid, so document picks remain possible through genuine holes.
-    pub(crate) fn nearest_opaque_cell_hit(&self, ray_origin: Vec3, ray_direction: Vec3, color_transfer: &ColorTransferFunction, fallback_alpha: f32) -> Option<f32> {
-        self.nearest_cell_hit(ray_origin, ray_direction, color_transfer, fallback_alpha, 0.98)
+    pub(crate) fn nearest_opaque_cell_hit(&self, ray_origin: Vec3, ray_direction: Vec3, ramp: &NormalizedRamp, fallback_alpha: f32) -> Option<f32> {
+        self.nearest_cell_hit(ray_origin, ray_direction, ramp, fallback_alpha, 0.98)
     }
 
     /// Nearest cell that contributes visible colour to the volume render.
     /// Unlike the depth-occlusion query above, this includes translucent cells
     /// so interaction rays can anchor to what the user can actually see.
-    pub(crate) fn nearest_visible_cell_hit(&self, ray_origin: Vec3, ray_direction: Vec3, color_transfer: &ColorTransferFunction, fallback_alpha: f32) -> Option<f32> {
-        self.nearest_cell_hit(ray_origin, ray_direction, color_transfer, fallback_alpha, VISIBLE_ALPHA_EPSILON)
+    pub(crate) fn nearest_visible_cell_hit(&self, ray_origin: Vec3, ray_direction: Vec3, ramp: &NormalizedRamp, fallback_alpha: f32) -> Option<f32> {
+        self.nearest_cell_hit(ray_origin, ray_direction, ramp, fallback_alpha, VISIBLE_ALPHA_EPSILON)
     }
 
-    fn nearest_cell_hit(&self, ray_origin: Vec3, ray_direction: Vec3, color_transfer: &ColorTransferFunction, fallback_alpha: f32, minimum_alpha: f32) -> Option<f32> {
+    fn nearest_cell_hit(&self, ray_origin: Vec3, ray_direction: Vec3, ramp: &NormalizedRamp, fallback_alpha: f32, minimum_alpha: f32) -> Option<f32> {
         let asset = &self.asset;
         let brick_dims = asset.brick_dims.map(|value| value as usize);
         let dims = asset.dims.map(|value| value as usize);
@@ -214,7 +212,7 @@ impl CachedBlockVolumeGpu {
                         } else if payload & FALLBACK_CELL_FLAG != 0 {
                             fallback_alpha
                         } else {
-                            ramp_rgba(color_transfer, (payload & CELL_GRADE_MASK) as f32 / CELL_GRADE_MAX)[3]
+                            ramp_rgba(ramp, (payload & CELL_GRADE_MASK) as f32 / CELL_GRADE_MAX)[3]
                         };
                         if alpha < minimum_alpha {
                             continue;
@@ -946,7 +944,7 @@ fn write_info_updates(queue: &wgpu::Queue, buffer: &wgpu::Buffer, mut updates: V
 }
 
 pub(crate) fn update_block_volume_style(queue: &wgpu::Queue, volume: &mut CachedBlockVolumeGpu, scene_origin: DVec3, block_model: &OpenBlockModel, boundary_highlights: bool) {
-    let style = compute_brick_style_data(&volume.asset, &block_model.color_transfer, block_model.color);
+    let style = compute_brick_style_data(&volume.asset, &block_model.normalized_ramp(), block_model.color);
     queue.write_buffer(&volume.brick_aggregate_buffer, 0, bytemuck::cast_slice(&style.aggregates));
     if !style.super_aggregates.is_empty() {
         queue.write_buffer(
@@ -1014,15 +1012,9 @@ fn block_volume_uniform(block_model: &OpenBlockModel, scene_origin: DVec3, asset
     let mut fallback_color = block_model.color;
     fallback_color[3] = fallback_color[3].clamp(0.0, 1.0);
 
-    let mut stops = [ColorStopUniform { color: [0.0; 4], pos: [0.0; 4] }; crate::model::block_model::MAX_COLOR_STOPS];
-    let stop_count = block_model.color_transfer.stops.len().clamp(2, crate::model::block_model::MAX_COLOR_STOPS);
-    for (slot, stop) in stops
-        .iter_mut()
-        .zip(block_model.color_transfer.stops.iter().take(crate::model::block_model::MAX_COLOR_STOPS))
-    {
-        slot.color = stop.color;
-        slot.pos = [stop.t, 0.0, 0.0, 0.0];
-    }
+    let mut stops = [ColorStopUniform { color: [0.0; 4], pos: [0.0; 4] }; MAX_GRADIENT_ENTRIES];
+    let ramp = block_model.normalized_ramp();
+    let stop_count = pack_ramp_stops(&ramp, &mut stops);
 
     let [row_x, row_y, row_z] = scene_to_local_rows(block_model, scene_origin);
 
@@ -1122,7 +1114,7 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
     // Capture only the thread-safe fields needed by the parallel occupancy
     // pass; `OpenBlockModel` also contains a `RefCell` cache.
     let blocks = &block_model.blocks;
-    let color_transfer = &block_model.color_transfer;
+    let ramp = block_model.normalized_ramp();
     let hide_empty = block_model.hide_empty_color_values;
     type BlockPlacement = (u16, [[usize; 2]; 3]);
     // Resolve placement from compact block geometry on demand. This is walked
@@ -1134,7 +1126,7 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
             return Ok(None);
         };
         let grade = grade_for_block(&color_values, block_index, hide_empty);
-        if is_hidden_block_appearance(grade, color_values.is_some(), color_transfer) {
+        if is_hidden_block_appearance(grade, color_values.is_some(), &ramp) {
             return Ok(None);
         }
         let Some(ix0) = x_lookup.index(block.lower.x as f32) else {
@@ -1295,7 +1287,7 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
         _metadata_reservation: metadata_reservation,
     };
     asset.brick_detail_required = compute_brick_detail_requirements(&asset);
-    let style = compute_brick_style_data(&asset, &block_model.color_transfer, block_model.color);
+    let style = compute_brick_style_data(&asset, &block_model.normalized_ramp(), block_model.color);
     asset.brick_aggregates = style.aggregates;
     asset.super_aggregates = style.super_aggregates;
     asset.brick_uniform = style.uniform_flags;
@@ -1309,29 +1301,34 @@ struct VolumeRampLut {
 }
 
 impl VolumeRampLut {
-    fn build(color_transfer: &ColorTransferFunction, fallback_color: [f32; 4]) -> Self {
+    fn build(ramp: &NormalizedRamp, fallback_color: [f32; 4]) -> Self {
         let entry = |color: [f32; 4]| (color, volume_optical_depth_for_alpha(color[3].clamp(0.0, 1.0)));
-        // The ramp is piecewise-constant over sorted stops, so the table is
-        // runs of identical entries. Sweep the stop list alongside the grade
-        // index - one optical-depth (`ln`) evaluation per stop - instead of a
-        // full `ramp_rgba` evaluation per entry: this runs on the render thread
-        // on every colour-stop drag tick. Must mirror `ramp_rgba` exactly:
-        // below the first stop is transparent, each stop's colour runs until
-        // the next stop's `t`, the last runs to 1.
-        let stops = &color_transfer.stops[..color_transfer.stops.len().min(crate::model::block_model::MAX_COLOR_STOPS)];
-        let transparent = entry([0.0; 4]);
+        let bands = ramp.bands.as_slice();
         // One entry per 15-bit grade value.
-        let mut entries = vec![transparent; CELL_GRADE_MASK as usize + 1];
-        if stops.len() >= 2 {
-            let per_stop: Vec<([f32; 4], f32)> = stops.iter().map(|stop| entry(stop.color)).collect();
-            let mut next_stop = 0;
+        let mut entries = vec![entry(ramp.below); CELL_GRADE_MASK as usize + 1];
+        if ramp.interpolate {
+            // A continuous ramp changes colour at every entry, so a run sweep
+            // buys nothing and the table is built by sampling.
+            for (grade, slot) in entries.iter_mut().enumerate() {
+                *slot = entry(ramp_rgba(ramp, grade as f32 / CELL_GRADE_MAX));
+            }
+        } else if !bands.is_empty() {
+            // A discrete ramp is piecewise-constant over sorted bands, so the
+            // table is runs of identical entries. Sweep the band list alongside
+            // the grade index - one optical-depth (`ln`) evaluation per band -
+            // instead of a full `ramp_rgba` evaluation per entry: this runs on
+            // the render thread on every colour-stop drag tick. Must mirror
+            // `ramp_rgba` exactly: `below` covers everything under the first
+            // band, then each band's colour runs until the next.
+            let per_band: Vec<([f32; 4], f32)> = bands.iter().map(|band| entry(band.color)).collect();
+            let mut next_band = 0;
             for (grade, slot) in entries.iter_mut().enumerate() {
                 let t = grade as f32 / CELL_GRADE_MAX;
-                while next_stop < stops.len() && t >= stops[next_stop].t {
-                    next_stop += 1;
+                while next_band < bands.len() && bands[next_band].is_above(t) {
+                    next_band += 1;
                 }
-                if next_stop > 0 {
-                    *slot = per_stop[next_stop - 1];
+                if next_band > 0 {
+                    *slot = per_band[next_band - 1];
                 }
             }
         }
@@ -1471,12 +1468,12 @@ fn compute_brick_detail_requirements(asset: &BlockVolumeAsset) -> Vec<bool> {
         .collect()
 }
 
-fn compute_brick_style_data(asset: &BlockVolumeAsset, color_transfer: &ColorTransferFunction, fallback_color: [f32; 4]) -> BrickStyleData {
+fn compute_brick_style_data(asset: &BlockVolumeAsset, ramp: &NormalizedRamp, fallback_color: [f32; 4]) -> BrickStyleData {
     use rayon::prelude::*;
 
     let mut fallback_color = fallback_color;
     fallback_color[3] = fallback_color[3].clamp(0.0, 1.0);
-    let lut = VolumeRampLut::build(color_transfer, fallback_color);
+    let lut = VolumeRampLut::build(ramp, fallback_color);
     let dims = [asset.dims[0] as usize, asset.dims[1] as usize, asset.dims[2] as usize];
     let brick_dims = [asset.brick_dims[0] as usize, asset.brick_dims[1] as usize, asset.brick_dims[2] as usize];
     let cell_lengths = |planes: &[f32]| -> Vec<f32> { planes.windows(2).map(|pair| pair[1] - pair[0]).collect() };

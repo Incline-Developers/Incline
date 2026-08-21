@@ -10,8 +10,8 @@ use crate::{
     model::{
         SceneEntityId,
         block_model::{
-            BlockBounds, BlockBoundsSource, BlockModelId, BlockModelSource, ColorStop, ColorTransferFunction, LoadedBlockModel, MAX_COLOR_STOPS, MIN_COLOR_STOPS, OpenBlockModel,
-            RegularBlockBounds, RenderableBlockIndices, compute_world_bounds, is_no_data_sentinel, numeric_variable_default,
+            BlockBounds, BlockBoundsSource, BlockModelId, BlockModelSource, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RegularBlockBounds, RenderableBlockIndices,
+            compute_world_bounds, is_no_data_sentinel, numeric_variable_default,
         },
         drill_hole::{DrillFieldKind, DrillHoleDataset, DrillHoleId, DrillValue},
         formats::{
@@ -222,12 +222,12 @@ impl<'a> App<'a> {
             color: DEFAULT_BLOCK_MODEL_COLOR,
             slice: None,
             active_color_variable: loaded.active_color_variable,
-            color_transfer: ColorTransferFunction::default(),
+            color_transfers: std::collections::BTreeMap::new(),
             hide_empty_color_values: true,
             active_values_cache: loaded.active_values_cache,
             world_bounds: loaded.world_bounds,
         };
-        open_model.reset_color_transfer_for_active_variable();
+        open_model.ensure_color_transfer_for_active_variable();
         self.block_models.push(open_model);
         self.touch_active_project_content();
         if should_fit {
@@ -253,7 +253,6 @@ impl<'a> App<'a> {
         let Some((model_data, renderable_block_indices)) = self.block_models.iter_mut().find(|model| model.id == id).and_then(|model| {
             (model.active_color_variable.as_deref() != Some(variable.as_str())).then(|| {
                 model.active_color_variable = Some(variable.clone());
-                model.color_transfer = ColorTransferFunction::default();
                 model.state.touch();
                 model.begin_active_values_decode(&variable);
                 (model.model.clone(), std::sync::Arc::clone(&model.renderable_block_indices))
@@ -278,7 +277,7 @@ impl<'a> App<'a> {
                     && model.active_color_variable.as_deref() == Some(decoded_variable.as_str())
                 {
                     model.install_active_values_cache(prepared);
-                    model.reset_color_transfer_for_active_variable();
+                    model.ensure_color_transfer_for_active_variable();
                     model.state.touch();
                     app.touch_active_project_content();
                     app.request_topology_redraw();
@@ -292,11 +291,21 @@ impl<'a> App<'a> {
         self.spawn_job("Decoding block-model colour variable…", vec![crate::app::jobs::JobKey::BlockModel(id)], compute, apply);
     }
 
-    pub(crate) fn set_block_model_color_stops(&mut self, id: BlockModelId, stops: Vec<ColorStop>) {
+    pub(crate) fn set_block_model_color_transfer(&mut self, id: BlockModelId, transfer: ColorTransferFunction) {
         let Some(model) = self.block_models.iter_mut().find(|model| model.id == id) else {
             return;
         };
-        model.color_transfer.stops = normalized_color_stops(stops);
+        model.set_color_transfer_for_active_variable(transfer);
+        model.state.touch();
+        self.touch_active_project_content();
+        self.request_topology_redraw();
+    }
+
+    pub(crate) fn reset_block_model_color_transfer(&mut self, id: BlockModelId) {
+        let Some(model) = self.block_models.iter_mut().find(|model| model.id == id) else {
+            return;
+        };
+        model.reset_color_transfer_for_active_variable();
         model.state.touch();
         self.touch_active_project_content();
         self.request_topology_redraw();
@@ -429,6 +438,7 @@ impl<'a> App<'a> {
                     name: variable.clone(),
                     values: std::sync::Arc::new(result.estimates),
                     categories: None,
+                    category_colors: std::collections::BTreeMap::new(),
                 });
             }
             let (dims, grid_upper, count) = grid_result.context("No variables were selected for kriging")?;
@@ -657,25 +667,6 @@ fn loaded_block_model_from_bytes(bytes: Vec<u8>, name: String, source: BlockMode
         active_color_variable,
         active_values_cache,
     })
-}
-
-fn normalized_color_stops(mut stops: Vec<ColorStop>) -> Vec<ColorStop> {
-    if stops.len() < MIN_COLOR_STOPS {
-        stops = ColorTransferFunction::default().stops;
-    }
-    for stop in &mut stops {
-        stop.t = stop.t.clamp(0.0, 1.0);
-        for channel in &mut stop.color {
-            *channel = channel.clamp(0.0, 1.0);
-        }
-    }
-    stops.sort_by(|a, b| a.t.total_cmp(&b.t));
-    stops.dedup_by(|a, b| (a.t - b.t).abs() < 1e-4);
-    if stops.len() < MIN_COLOR_STOPS {
-        stops = ColorTransferFunction::default().stops;
-    }
-    stops.truncate(MAX_COLOR_STOPS);
-    stops
 }
 
 fn boundary_mesh_from_blocks(

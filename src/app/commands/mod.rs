@@ -479,8 +479,12 @@ impl<'a> App<'a> {
                 self.set_block_model_color_variable(id, variable);
                 Ok(())
             }
-            UiCommand::SetBlockModelColorStops { id, stops } => {
-                self.set_block_model_color_stops(id, stops);
+            UiCommand::SetBlockModelColorTransfer { id, transfer } => {
+                self.set_block_model_color_transfer(id, transfer);
+                Ok(())
+            }
+            UiCommand::ResetBlockModelColorTransfer { id } => {
+                self.reset_block_model_color_transfer(id);
                 Ok(())
             }
             UiCommand::SetBlockModelSlice { id, slice } => {

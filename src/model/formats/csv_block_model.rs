@@ -325,6 +325,7 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
             name,
             values: Arc::new(values),
             categories: (role == CsvColumnRole::Category).then(|| categories.into_iter().map(|(label, code)| (code, label)).collect()),
+            category_colors: BTreeMap::new(),
         })
         .collect();
     let model = BlockModelData::from_columns(blocks.len(), overall_lower, overall_upper, columns, retained_geometry_bytes)

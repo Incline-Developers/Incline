@@ -11,7 +11,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     model::{
-        block_model::{BlockModelId, BlockModelSlice, ColorTransferFunction, MAX_COLOR_STOPS, OpenBlockModel, color_variable_default},
+        block_model::{BlockModelId, BlockModelSlice, MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel, color_variable_default},
         formats::mesh_data,
         raster::{OpenRasterTexture, RasterTextureId},
         triangulation::{OpenTriangulation, TriangulationId},
@@ -95,9 +95,11 @@ struct SurfaceStyleUniform {
 /// padding to keep the array's stride 16-byte aligned.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ColorStopUniform {
-    color: [f32; 4],
-    pos: [f32; 4],
+pub(crate) struct ColorStopUniform {
+    pub(crate) color: [f32; 4],
+    /// `x`: normalised position; `y`: interpolate flag; `z`: inclusive
+    /// (`LessEqual`) boundary flag; `w`: unused padding.
+    pub(crate) pos: [f32; 4],
 }
 
 #[repr(C)]
@@ -119,7 +121,7 @@ struct BlockModelStyleUniform {
     /// `±f32::MAX` when no slice is active.
     clip_min: [f32; 4],
     clip_max: [f32; 4],
-    stops: [ColorStopUniform; MAX_COLOR_STOPS],
+    stops: [ColorStopUniform; MAX_GRADIENT_ENTRIES],
 }
 
 /// Per-triangulation edge style uniform. Updated cheaply when colour/width changes.
@@ -204,7 +206,10 @@ pub(crate) struct CachedBlockModelGpu {
     line_color: [f32; 4],
     edge_width: f32,
     variable: Option<String>,
-    color_transfer: ColorTransferFunction,
+    /// The active ramp already resolved against the render range, so a change
+    /// to either the stops or the range the grades were normalised with shows
+    /// up as style-dirty.
+    ramp: NormalizedRamp,
     hide_empty_color_values: bool,
     boundary_highlights: bool,
     /// See [`hidden_blocks_fingerprint`]: geometry was built for this set of
@@ -507,9 +512,9 @@ impl BlockModelGpuCache {
                 let volume_origin = apply_scene_to_local(&volume.scene_to_local, scene_origin);
                 let volume_direction = apply_scene_to_local(&volume.scene_to_local, scene_origin + scene_direction) - volume_origin;
                 let volume_hit = if include_transparent {
-                    volume.nearest_visible_cell_hit(volume_origin, volume_direction, &cached.color_transfer, cached.fallback_color[3])
+                    volume.nearest_visible_cell_hit(volume_origin, volume_direction, &cached.ramp, cached.fallback_color[3])
                 } else {
-                    volume.nearest_opaque_cell_hit(volume_origin, volume_direction, &cached.color_transfer, cached.fallback_color[3])
+                    volume.nearest_opaque_cell_hit(volume_origin, volume_direction, &cached.ramp, cached.fallback_color[3])
                 };
                 if let Some(distance) = volume_hit {
                     let distance = f64::from(distance);
@@ -603,7 +608,8 @@ impl BlockModelGpuCache {
                 let variable_dirty = cached.variable != block_model.active_color_variable;
                 let fallback_color_dirty = cached.fallback_color != block_model.color;
                 let geometry_dirty = cached.translucent != translucent || cached.force_translucent != force_translucent;
-                let style_dirty = cached.color_transfer != block_model.color_transfer;
+                let ramp = block_model.normalized_ramp();
+                let style_dirty = cached.ramp != ramp;
                 let empty_visibility_dirty = cached.hide_empty_color_values != block_model.hide_empty_color_values;
                 let boundary_highlights_dirty = cached.boundary_highlights != boundary_highlights;
                 let scene_origin_dirty = cached.scene_origin != scene_origin;
@@ -620,7 +626,7 @@ impl BlockModelGpuCache {
                 // and the chunk branches below, and walking it is O(blocks) -
                 // compute it once, but only when something that can change it
                 // is dirty (skip it for edge/scene-origin-only updates).
-                let ramp_visibility_dirty = style_dirty && !same_ramp_visibility(&cached.color_transfer, &block_model.color_transfer);
+                let ramp_visibility_dirty = style_dirty && !same_ramp_visibility(&cached.ramp, &ramp);
                 let hidden_fingerprint = if variable_dirty || empty_visibility_dirty || ramp_visibility_dirty {
                     hidden_blocks_fingerprint(block_model)
                 } else {
@@ -711,7 +717,7 @@ impl BlockModelGpuCache {
                     let style = block_model_style(scene_origin, block_model, force_translucent);
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     cached.variable = block_model.active_color_variable.clone();
-                    cached.color_transfer = block_model.color_transfer.clone();
+                    cached.ramp = ramp.clone();
                     cached.hide_empty_color_values = block_model.hide_empty_color_values;
                     cached.hidden_fingerprint = hidden_fingerprint;
                     cached.translucent = translucent;
@@ -741,7 +747,7 @@ impl BlockModelGpuCache {
                         queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
                     }
                     cached.variable = block_model.active_color_variable.clone();
-                    cached.color_transfer = block_model.color_transfer.clone();
+                    cached.ramp = ramp.clone();
                     cached.hide_empty_color_values = block_model.hide_empty_color_values;
                 } else if style_dirty {
                     // The colour-transfer function changed. This can change
@@ -760,7 +766,7 @@ impl BlockModelGpuCache {
                     }
                     let style = block_model_style(scene_origin, block_model, force_translucent);
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
-                    cached.color_transfer = block_model.color_transfer.clone();
+                    cached.ramp = ramp.clone();
                 }
                 if fallback_color_dirty {
                     let style = block_model_style(scene_origin, block_model, force_translucent);
@@ -939,7 +945,7 @@ impl BlockModelGpuCache {
                         line_color,
                         edge_width,
                         variable: block_model.active_color_variable.clone(),
-                        color_transfer: block_model.color_transfer.clone(),
+                        ramp: block_model.normalized_ramp(),
                         hide_empty_color_values: block_model.hide_empty_color_values,
                         boundary_highlights,
                         hidden_fingerprint,
@@ -1011,10 +1017,14 @@ fn surface_chunks_key(scene_origin: DVec3, block_model: &OpenBlockModel, force_t
         block_model.active_color_variable.hash(&mut hasher);
         block_model.hide_empty_color_values.hash(&mut hasher);
         (block_model.color[3] >= 0.98).hash(&mut hasher);
-        for stop in &block_model.color_transfer.stops {
-            stop.t.to_bits().hash(&mut hasher);
-            (stop.color[3] >= VISIBLE_ALPHA_EPSILON).hash(&mut hasher);
-            (stop.color[3] >= 0.98).hash(&mut hasher);
+        let ramp = block_model.normalized_ramp();
+        (ramp.below[3] >= VISIBLE_ALPHA_EPSILON).hash(&mut hasher);
+        (ramp.below[3] >= 0.98).hash(&mut hasher);
+        for band in &ramp.bands {
+            band.t.to_bits().hash(&mut hasher);
+            band.inclusive.hash(&mut hasher);
+            (band.color[3] >= VISIBLE_ALPHA_EPSILON).hash(&mut hasher);
+            (band.color[3] >= 0.98).hash(&mut hasher);
         }
     }
     // A variable whose values are still decoding builds fallback-grade
@@ -1067,9 +1077,12 @@ fn volume_asset_key(block_model: &OpenBlockModel) -> u64 {
     let mut hasher = DefaultHasher::new();
     block_model.active_color_variable.hash(&mut hasher);
     block_model.hide_empty_color_values.hash(&mut hasher);
-    for stop in &block_model.color_transfer.stops {
-        stop.t.to_bits().hash(&mut hasher);
-        (stop.color[3] >= VISIBLE_ALPHA_EPSILON).hash(&mut hasher);
+    let ramp = block_model.normalized_ramp();
+    (ramp.below[3] >= VISIBLE_ALPHA_EPSILON).hash(&mut hasher);
+    for band in &ramp.bands {
+        band.t.to_bits().hash(&mut hasher);
+        band.inclusive.hash(&mut hasher);
+        (band.color[3] >= VISIBLE_ALPHA_EPSILON).hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -1674,11 +1687,11 @@ fn hidden_blocks_fingerprint(block_model: &OpenBlockModel) -> u64 {
     let color_values = block_model_color_values(block_model);
     // Captured by field: `OpenBlockModel` holds a `RefCell` cache and is not
     // `Sync`, but the pieces this scan needs all are.
-    let color_transfer = &block_model.color_transfer;
+    let ramp = block_model.normalized_ramp();
     let hide_empty = block_model.hide_empty_color_values;
     block_model.renderable_block_indices.par_filter_map_reduce(
         || 0,
-        |index| block_is_hidden(&color_values, color_transfer, index, hide_empty).then(|| splitmix64(index as u64)),
+        |index| block_is_hidden(&color_values, &ramp, index, hide_empty).then(|| splitmix64(index as u64)),
         |a, b| a ^ b,
     )
 }
@@ -1687,15 +1700,16 @@ fn hidden_blocks_fingerprint(block_model: &OpenBlockModel) -> u64 {
 /// alpha edits that stay above the discard epsilon cannot change volume
 /// occupancy, so they do not justify walking every block merely to reproduce
 /// the cached hidden-set fingerprint.
-fn same_ramp_visibility(a: &ColorTransferFunction, b: &ColorTransferFunction) -> bool {
-    fn visibility_runs(ramp: &ColorTransferFunction) -> Vec<(f32, bool)> {
-        let stops = &ramp.stops[..ramp.stops.len().min(MAX_COLOR_STOPS)];
+fn same_ramp_visibility(a: &NormalizedRamp, b: &NormalizedRamp) -> bool {
+    fn visibility_runs(ramp: &NormalizedRamp) -> Vec<(f32, bool)> {
+        let stops = ramp.bands.iter().map(|band| (band.t, band.color)).collect::<Vec<_>>();
+        let stops = stops.as_slice();
         let mut runs = Vec::with_capacity(stops.len() + 1);
-        let mut visible = false;
+        let mut visible = ramp.below[3] >= VISIBLE_ALPHA_EPSILON;
         runs.push((0.0, visible));
-        for stop in stops {
-            let next_visible = stop.color[3] >= VISIBLE_ALPHA_EPSILON;
-            let at = stop.t.clamp(0.0, 1.0);
+        for &(t, color) in stops {
+            let next_visible = color[3] >= VISIBLE_ALPHA_EPSILON;
+            let at = t.clamp(0.0, 1.0);
             if next_visible != visible {
                 if runs.last().is_some_and(|(last_at, _)| *last_at == at) {
                     runs.pop();
@@ -1732,9 +1746,9 @@ pub(crate) fn grade_for_block(color_values: &Option<BlockModelColorValues>, bloc
 /// `block_index` - combining the hidden-grade sentinel with a colour-ramp
 /// alpha below the visibility epsilon. Geometry building treats such blocks as
 /// absent, so this must stay in lockstep with `fs_main` in `block_model.wgsl`.
-fn block_is_hidden(color_values: &Option<BlockModelColorValues>, color_transfer: &ColorTransferFunction, block_index: usize, hide_empty: bool) -> bool {
+fn block_is_hidden(color_values: &Option<BlockModelColorValues>, ramp: &NormalizedRamp, block_index: usize, hide_empty: bool) -> bool {
     let grade = grade_for_block(color_values, block_index, hide_empty);
-    is_hidden_block_appearance(grade, color_values.is_some(), color_transfer)
+    is_hidden_block_appearance(grade, color_values.is_some(), ramp)
 }
 
 /// Recomputes and re-uploads `grade` for every already-built chunk of a
@@ -1785,7 +1799,7 @@ fn build_block_model_surface_chunks(scene_origin: DVec3, block_model: &OpenBlock
     let color_values = block_model_color_values(block_model);
     let renderable = &block_model.renderable_block_indices;
     let blocks = &block_model.blocks;
-    let color_transfer = &block_model.color_transfer;
+    let ramp = block_model.normalized_ramp();
     let hide_empty = block_model.hide_empty_color_values;
     let fallback_alpha = block_model.color[3];
     let model = &block_model.model;
@@ -1803,7 +1817,7 @@ fn build_block_model_surface_chunks(scene_origin: DVec3, block_model: &OpenBlock
                     .get(block_index)
                     .is_some_and(|block| block.lower.cmplt(slice.max).all() && block.upper.cmpgt(slice.min).all())
             });
-            let block_drawn = intersects_slice && block_is_drawn(grade, color_values.is_some(), color_transfer, selection, fallback_alpha);
+            let block_drawn = intersects_slice && block_is_drawn(grade, color_values.is_some(), &ramp, selection, fallback_alpha);
             (grade, block_drawn)
         })
         .into_iter()
@@ -1887,12 +1901,9 @@ fn block_model_style(scene_origin: DVec3, block_model: &OpenBlockModel, transluc
     if translucent {
         make_translucent(&mut fallback_color);
     }
-    let mut stops = [ColorStopUniform { color: [0.0; 4], pos: [0.0; 4] }; MAX_COLOR_STOPS];
-    let stop_count = block_model.color_transfer.stops.len().min(MAX_COLOR_STOPS);
-    for (slot, stop) in stops.iter_mut().zip(block_model.color_transfer.stops.iter().take(MAX_COLOR_STOPS)) {
-        slot.color = stop.color;
-        slot.pos = [stop.t, 0.0, 0.0, 0.0];
-    }
+    let mut stops = [ColorStopUniform { color: [0.0; 4], pos: [0.0; 4] }; MAX_GRADIENT_ENTRIES];
+    let ramp = block_model.normalized_ramp();
+    let stop_count = pack_ramp_stops(&ramp, &mut stops);
     // Local->scene rotation columns. Translation is zero because
     // `build_block_model_surface_chunks` pre-offsets instance bounds by the
     // local point that maps to the scene origin.
@@ -1925,6 +1936,36 @@ fn block_model_style(scene_origin: DVec3, block_model: &OpenBlockModel, transluc
     }
 }
 
+/// Lay a resolved ramp into the shader's fixed stop array, returning how many
+/// slots are live.
+///
+/// Slot 0 carries `ramp.below` - OMF's `gradient[0]` - parked at a `t` below
+/// any real grade, so the shader's walk yields it for everything under the
+/// first boundary without a special case. Grades reaching `ramp_color` are
+/// always `>= 0` (negatives are the fallback/hidden sentinels, filtered before
+/// the ramp is consulted), so `LEADING_BAND_T` can never be reached by one.
+///
+/// For a continuous ramp `below` equals the first gradient entry, so the
+/// interpolation across that leading span is between two identical colours -
+/// exactly the clamp OMF specifies below the range.
+pub(crate) fn pack_ramp_stops(ramp: &NormalizedRamp, stops: &mut [ColorStopUniform; MAX_GRADIENT_ENTRIES]) -> usize {
+    const LEADING_BAND_T: f32 = -1.0;
+    let interpolate = if ramp.interpolate { 1.0 } else { 0.0 };
+    stops[0] = ColorStopUniform {
+        color: ramp.below,
+        pos: [LEADING_BAND_T, interpolate, 0.0, 0.0],
+    };
+    let mut count = 1;
+    for band in ramp.bands.iter().take(MAX_GRADIENT_ENTRIES - 1) {
+        stops[count] = ColorStopUniform {
+            color: band.color,
+            pos: [band.t, interpolate, if band.inclusive { 1.0 } else { 0.0 }, 0.0],
+        };
+        count += 1;
+    }
+    count
+}
+
 fn block_model_instance_slice(scene_origin: DVec3, block_model: &OpenBlockModel) -> Option<BlockModelSlice> {
     let slice = block_model.active_slice()?;
     let local_ref = block_model.model.rotation().inverse() * (scene_origin - block_model.model.origin());
@@ -1939,12 +1980,12 @@ fn block_model_instance_slice(scene_origin: DVec3, block_model: &OpenBlockModel)
 /// Fused so the colour ramp is evaluated once per block - this runs for every
 /// renderable block on each surface-chunk rebuild. Must stay in lockstep with
 /// `is_hidden_block_appearance` and `fs_main` in `block_model.wgsl`.
-fn block_is_drawn(grade: f32, has_grade: bool, color_transfer: &ColorTransferFunction, selection: BlockSurfaceSelection, fallback_alpha: f32) -> bool {
+fn block_is_drawn(grade: f32, has_grade: bool, ramp: &NormalizedRamp, selection: BlockSurfaceSelection, fallback_alpha: f32) -> bool {
     if is_hidden_block_grade(grade) {
         return false;
     }
     let graded = has_grade && grade >= 0.0;
-    let alpha = if graded { ramp_alpha(color_transfer, grade) } else { fallback_alpha };
+    let alpha = if graded { ramp_alpha(ramp, grade) } else { fallback_alpha };
     if graded && alpha < VISIBLE_ALPHA_EPSILON {
         return false;
     }
@@ -1961,7 +2002,9 @@ fn block_is_drawn(grade: f32, has_grade: bool, color_transfer: &ColorTransferFun
 /// correctly, even if the user hasn't toggled translucency manually.
 pub(crate) fn block_model_has_partial_alpha_stops(block_model: &OpenBlockModel) -> bool {
     let fallback_can_render = block_model.active_color_variable.is_none() || !block_model.hide_empty_color_values;
-    let ramp_has_partial_alpha = block_model.active_color_variable.is_some() && block_model.color_transfer.stops.iter().any(|stop| partial_block_alpha(stop.color[3]));
+    let ramp = block_model.normalized_ramp();
+    let ramp_has_partial_alpha =
+        block_model.active_color_variable.is_some() && (partial_block_alpha(ramp.below[3]) || ramp.bands.iter().any(|band| partial_block_alpha(band.color[3])));
     color_configuration_has_partial_alpha(block_model.color[3], fallback_can_render, ramp_has_partial_alpha)
 }
 
@@ -2144,6 +2187,7 @@ fn normalized_grade(value: f64, range: (f64, f64)) -> f32 {
 fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, block_model: &OpenBlockModel) -> Vec<CachedEdgeChunk> {
     const EDGES_PER_CHUNK: usize = 64 * 1024;
     let color_values = block_model_color_values(block_model);
+    let ramp = block_model.normalized_ramp();
     let slice = block_model.active_slice();
     let mut chunks = Vec::new();
     let mut instances = Vec::new();
@@ -2161,7 +2205,7 @@ fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, blo
             }
         }
         // Shader-hidden blocks draw no faces; skip their outlines too.
-        if block_is_hidden(&color_values, &block_model.color_transfer, block_index, block_model.hide_empty_color_values) {
+        if block_is_hidden(&color_values, &ramp, block_index, block_model.hide_empty_color_values) {
             continue;
         }
         let corners = block_corners(&block_model.model, block);

@@ -18,7 +18,7 @@ struct BlockModelStyle {
     translation: vec4<f32>,
     clip_min: vec4<f32>,
     clip_max: vec4<f32>,
-    stops: array<ColorStop, 12>,
+    stops: array<ColorStop, 32>,
 };
 @group(1) @binding(0)
 var<uniform> block_style: BlockModelStyle;
@@ -46,23 +46,34 @@ struct TransparencyOutput {
 };
 
 fn ramp_color(t: f32) -> vec4<f32> {
-    let stop_count = max(2, i32(block_style.options.y + 0.5));
+    let stop_count = max(1, i32(block_style.options.y + 0.5));
     let last_index = stop_count - 1;
-    let first = block_style.stops[0];
+    // Slot 0 is OMF's `gradient[0]`, parked below any real grade, so values
+    // under the first boundary fall out of the walk below with no special
+    // case. `pos.y` is the interpolate flag and `pos.z` marks a `LessEqual`
+    // boundary; both are uniform per stop. See `pack_ramp_stops` on the Rust
+    // side.
     let last = block_style.stops[last_index];
-    if (t < first.pos.x) {
-        return vec4<f32>(0.0);
-    }
-    if (t >= last.pos.x) {
+    let interpolate = block_style.stops[0].pos.y > 0.5;
+    if (!select((t < last.pos.x), (t <= last.pos.x), (last.pos.z > 0.5))) {
         return last.color;
     }
-    for (var i = 1; i < 12; i++) {
+    for (var i = 1; i < 32; i++) {
         if (i >= stop_count) {
             break;
         }
         let stop = block_style.stops[i];
-        if (t < stop.pos.x) {
-            return block_style.stops[i - 1].color;
+        // Inclusive (`LessEqual`) boundaries keep their own value in the band
+        // below them.
+        let below_stop = select((t < stop.pos.x), (t <= stop.pos.x), (stop.pos.z > 0.5));
+        if (below_stop) {
+            let previous = block_style.stops[i - 1];
+            if (!interpolate) {
+                return previous.color;
+            }
+            let span = stop.pos.x - previous.pos.x;
+            let f = select(0.0, (t - previous.pos.x) / span, span > 1.0e-6);
+            return mix(previous.color, stop.color, clamp(f, 0.0, 1.0));
         }
     }
     return last.color;

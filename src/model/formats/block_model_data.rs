@@ -25,6 +25,10 @@ pub(crate) struct BlockModelColumn {
     /// column; categorical columns store their codes in `values` as exact
     /// non-negative integers and use `NaN` for blank CSV cells.
     pub(crate) categories: Option<BTreeMap<u32, String>>,
+    /// Category code to the colour the source file assigned it, for formats
+    /// that ship one. Empty when the source has no palette of its own and the
+    /// built-in categorical palette should be used instead.
+    pub(crate) category_colors: BTreeMap<u32, [f32; 4]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -45,6 +49,9 @@ pub(crate) struct BlockVariable {
     pub(crate) default: String,
     pub(crate) global: String,
     pub(crate) strings: BTreeMap<u32, String>,
+    /// Source-supplied colour per category code; see
+    /// [`BlockModelColumn::category_colors`].
+    pub(crate) category_colors: BTreeMap<u32, [f32; 4]>,
     pub(crate) special: bool,
 }
 
@@ -103,7 +110,12 @@ impl BlockModelData {
         let mut variables = Vec::with_capacity(columns.len());
         let mut retained_bytes = retained_geometry_bytes;
         for column in columns {
-            let BlockModelColumn { name, values, categories } = column;
+            let BlockModelColumn {
+                name,
+                values,
+                categories,
+                category_colors,
+            } = column;
             if name.trim().is_empty() {
                 return Err(invalid("in-memory block-model resource name is blank"));
             }
@@ -151,6 +163,7 @@ impl BlockModelData {
                 default: if categories.is_some() { String::new() } else { "NaN".to_owned() },
                 global: if categories.is_some() { String::new() } else { "NaN".to_owned() },
                 strings: categories.unwrap_or_default(),
+                category_colors,
                 special: false,
             });
         }

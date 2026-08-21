@@ -1,6 +1,6 @@
 //! Evaluates the block model colour ramp and opacity transfers for CPU caching and test reference.
 
-use crate::model::block_model::{ColorTransferFunction, MAX_COLOR_STOPS};
+use crate::model::block_model::{NormalizedRamp, lerp_rgba};
 
 /// Mirrors `VISIBLE_ALPHA_EPSILON` in `block_model.wgsl`: graded fragments
 /// whose ramp alpha falls below this are discarded.
@@ -17,34 +17,44 @@ pub(crate) fn is_hidden_block_grade(grade: f32) -> bool {
     grade < HIDDEN_GRADE_DISCARD_THRESHOLD
 }
 
-pub(crate) fn is_hidden_block_appearance(grade: f32, has_grade: bool, color_transfer: &ColorTransferFunction) -> bool {
-    is_hidden_block_grade(grade) || (has_grade && grade >= 0.0 && ramp_alpha(color_transfer, grade) < VISIBLE_ALPHA_EPSILON)
+pub(crate) fn is_hidden_block_appearance(grade: f32, has_grade: bool, ramp: &NormalizedRamp) -> bool {
+    is_hidden_block_grade(grade) || (has_grade && grade >= 0.0 && ramp_alpha(ramp, grade) < VISIBLE_ALPHA_EPSILON)
 }
 
-/// CPU replica of `ramp_color` in the block-model WGSL shaders. The first
-/// stop is a lower cutoff: values below it are transparent. Each stop then
-/// starts at its own position and remains active until the next.
-pub(crate) fn ramp_rgba(color_transfer: &ColorTransferFunction, t: f32) -> [f32; 4] {
-    let stops = &color_transfer.stops[..color_transfer.stops.len().min(MAX_COLOR_STOPS)];
-    let [first, .., last] = stops else {
-        return [0.0; 4];
+/// CPU replica of `ramp_color` in the block-model WGSL shaders.
+///
+/// Below the first band the colour is `ramp.below` - OMF's `gradient[0]`, which
+/// covers everything under the first boundary. Each band then starts at its own
+/// position and either holds until the next (a discrete colormap) or blends
+/// into it (a continuous one). A grade cutoff is simply a transparent
+/// `gradient[0]`, so it needs no special case here.
+pub(crate) fn ramp_rgba(ramp: &NormalizedRamp, t: f32) -> [f32; 4] {
+    let bands = ramp.bands.as_slice();
+    let (Some(first), Some(last)) = (bands.first(), bands.last()) else {
+        return ramp.below;
     };
-    if t < first.t {
-        return [0.0; 4];
+    if !first.is_above(t) {
+        return ramp.below;
     }
     if t >= last.t {
         return last.color;
     }
-    for pair in stops.windows(2) {
-        if t < pair[1].t {
-            return pair[0].color;
+    for pair in bands.windows(2) {
+        let (low, high) = (pair[0], pair[1]);
+        if !high.is_above(t) {
+            if !ramp.interpolate {
+                return low.color;
+            }
+            let span = high.t - low.t;
+            let f = if span <= f32::EPSILON { 0.0 } else { (t - low.t) / span };
+            return lerp_rgba(low.color, high.color, f);
         }
     }
     last.color
 }
 
-pub(crate) fn ramp_alpha(color_transfer: &ColorTransferFunction, t: f32) -> f32 {
-    ramp_rgba(color_transfer, t)[3]
+pub(crate) fn ramp_alpha(ramp: &NormalizedRamp, t: f32) -> f32 {
+    ramp_rgba(ramp, t)[3]
 }
 
 /// CPU replica of `optical_depth_for_alpha` in

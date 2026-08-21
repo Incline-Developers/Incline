@@ -17,7 +17,7 @@ use crate::{
     logging::CommandReportSpec,
     model::{
         FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
-        block_model::{BlockModelId, ColorStop, FIRST_CUSTOM_COLOR_STOP_ID},
+        block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
         drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleSource},
         formats::{
             MeshFormat,
@@ -2014,9 +2014,16 @@ pub(crate) enum UiCommand {
         id: BlockModelId,
         variable: String,
     },
-    SetBlockModelColorStops {
+    /// Replace the active variable's colormap wholesale. The legend edits a
+    /// copy and hands the whole thing back, so one command covers moving a
+    /// boundary, recolouring a band, and switching colormap kind.
+    SetBlockModelColorTransfer {
         id: BlockModelId,
-        stops: Vec<ColorStop>,
+        transfer: ColorTransferFunction,
+    },
+    /// Discard the active variable's ramp and rebuild it from the data.
+    ResetBlockModelColorTransfer {
+        id: BlockModelId,
     },
     SetBlockModelSlice {
         id: BlockModelId,
@@ -2263,7 +2270,8 @@ impl UiCommand {
             | Self::OpenContourTriangulation
             | Self::OpenPlotDialog
             | Self::FitPlotScaleToData
-            | Self::SetBlockModelColorStops { .. }
+            | Self::SetBlockModelColorTransfer { .. }
+            | Self::ResetBlockModelColorTransfer { .. }
             | Self::SetDrillHoleColorStops { .. }
             | Self::SetDrillHoleCategoryColors { .. }
             | Self::OpenDrillHoleColorDialog(_)
