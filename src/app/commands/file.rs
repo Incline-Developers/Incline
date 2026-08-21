@@ -1741,7 +1741,16 @@ impl<'a> App<'a> {
     pub(crate) fn save_and_exit(&mut self) -> Result<()> {
         self.exit_after_pending_saves = true;
         self.discard_changes_on_deferred_exit = false;
-        if self.save_dirty_project()? {
+        let started = self.save_dirty_project()?;
+        // The exit prompt has done its job either way: from here the deferred
+        // exit is driven by whatever the save is waiting on, and a lossy-OMF
+        // confirmation draws its own dialog on top.
+        self.editor.exit_confirm_open = false;
+        // `save_dirty_project` reporting true only means no Save As dialog is
+        // outstanding. The write itself may still be running in the background,
+        // and an OMF Incline cannot round-trip replaces the save with a
+        // confirmation prompt - exiting on that alone quits without writing.
+        if started && !self.project_save_is_in_flight() && self.pending_file_dialogs.is_empty() && !self.has_unsaved_changes_for_exit() {
             self.finish_deferred_exit();
         }
         Ok(())
@@ -1773,8 +1782,27 @@ impl<'a> App<'a> {
         self.workspace.active_project().is_some_and(|project| self.project_content_is_dirty(project.runtime_id)) || self.editor.text_editing_enabled
     }
 
+    /// Whether a project write that has already been handed off is still
+    /// running. Native writes sit in `pending_saves`; browser writes report
+    /// back through `AppEvent::BrowserProjectSaved` instead.
+    pub(crate) fn project_save_is_in_flight(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            !self.pending_saves.is_empty() || !self.browser_saves_pending.is_empty()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            !self.pending_saves.is_empty()
+        }
+    }
+
     pub(crate) fn try_finish_deferred_exit(&mut self) {
-        if !self.exit_after_pending_saves || !self.pending_file_dialogs.is_empty() || !self.pending_saves.is_empty() {
+        if !self.exit_after_pending_saves || !self.pending_file_dialogs.is_empty() || self.project_save_is_in_flight() {
+            return;
+        }
+        // The lossy-OMF confirmation is waiting on the user; re-entering the
+        // save path here would reopen it every frame.
+        if self.editor.lossy_save_confirm_open {
             return;
         }
         if self.discard_changes_on_deferred_exit {
