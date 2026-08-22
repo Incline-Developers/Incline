@@ -697,8 +697,8 @@ impl<'a> App<'a> {
                 self.batch_set_polyline_line_weight(ids, weight);
                 Ok(())
             }
-            UiCommand::BatchSetZValue(ids, weight) => {
-                self.batch_set_z_value(ids, weight);
+            UiCommand::BatchSetAxisValue(ids, axis, value) => {
+                self.batch_set_axis_value(ids, axis, value);
                 Ok(())
             }
             UiCommand::MoveObjectsToLayer { object_ids, target_layer, copy } => {
@@ -744,7 +744,7 @@ impl<'a> App<'a> {
                 self.open_batter_berm_dialog();
                 Ok(())
             }
-            UiCommand::OpenSetSelectionZValueDialog => {
+            UiCommand::OpenMoveToAxisDialog(axis) => {
                 let selected_objects: Vec<crate::model::ObjectId> = self
                     .editor
                     .selected_handles
@@ -756,13 +756,24 @@ impl<'a> App<'a> {
                     .collect();
 
                 if selected_objects.is_empty() {
-                    userspace_warn!("Select one or more objects before setting Z");
+                    userspace_warn!("Select one or more objects before setting {}", axis.label());
                     return Ok(());
                 }
 
-                self.editor.set_selection_z_dialog = Some(crate::ui::dialogs::SetSelectionZDialog {
+                // Seed Z from the toolbar plane, X and Y from the first selected object.
+                let value = if axis == crate::model::Axis::Z {
+                    self.editor.z_input
+                } else {
+                    self.workspace
+                        .active_project()
+                        .and_then(|project| project.project.document.get_object(selected_objects[0]))
+                        .map_or(0.0, |object| object.axis_position(axis))
+                };
+
+                self.editor.move_to_axis_dialog = Some(crate::ui::dialogs::MoveToAxisDialog {
                     object_ids: selected_objects,
-                    z_input: self.editor.z_input,
+                    axis,
+                    value,
                 });
                 Ok(())
             }

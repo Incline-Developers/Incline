@@ -16,7 +16,7 @@ use strum::{Display, EnumIter};
 use crate::{
     logging::CommandReportSpec,
     model::{
-        FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
+        Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
         drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleSource},
         formats::{
@@ -802,7 +802,7 @@ pub(crate) struct EditorState {
     // Cursor & snapping
     /// Z plane used for all placement operations (point, line, poly vertices).
     pub(crate) z_level: f64,
-    /// Editable Z level value used by toolbar and Set Selection Z.
+    /// Editable Z level value used by the toolbar and Design > Move to > Set Z.
     pub(crate) z_input: f64,
     /// True when the current `cursor_world` is a snapped position (not raw ray).
     pub(crate) cursor_snapped: bool,
@@ -824,7 +824,11 @@ pub(crate) struct EditorState {
     /// `DragValue` is being dragged.
     pub(crate) canvas_context_line_weight_input: Option<(Vec<ObjectId>, f32)>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
-    pub(crate) set_selection_z_dialog: Option<crate::ui::dialogs::SetSelectionZDialog>,
+    pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
+    /// Whether the selected polylines cross anywhere, refreshed by
+    /// `App::refresh_intersection_availability` before each frame's UI. Gates
+    /// Design > Insert Point > At intersection.
+    pub(crate) selection_has_intersections: bool,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
 
     // Display overrides
@@ -1278,7 +1282,7 @@ impl EditorState {
         self.canvas_context_menu_px = None;
         self.canvas_context_line_weight_input = None;
         self.move_to_layer_dialog = None;
-        self.set_selection_z_dialog = None;
+        self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
@@ -1505,7 +1509,8 @@ impl EditorState {
             canvas_context_menu_px: None,
             canvas_context_line_weight_input: None,
             move_to_layer_dialog: None,
-            set_selection_z_dialog: None,
+            move_to_axis_dialog: None,
+            selection_has_intersections: false,
             insert_point_at_elevation_dialog: None,
             xray_enabled: false,
             vertical_exaggeration_dialog_open: false,
@@ -2007,7 +2012,7 @@ pub(crate) enum UiCommand {
         target_layer: LayerId,
         copy: bool,
     },
-    BatchSetZValue(Vec<ObjectId>, f64),
+    BatchSetAxisValue(Vec<ObjectId>, Axis, f64),
     CommitTextEdit(ObjectId, String, f64, f64, [f32; 4]),
     CancelTextEdit,
     SetTriangulationColor(TriangulationId, [f32; 4]),
@@ -2118,8 +2123,8 @@ pub(crate) enum UiCommand {
     CancelBatterBerm,
     /// Open the Create Triangulation main dialog.
     OpenCreateTriangulation,
-    /// Open the Set selections to Z value.
-    OpenSetSelectionZValueDialog,
+    /// Open the Move to dialog that sets one axis of every selected object.
+    OpenMoveToAxisDialog(Axis),
     /// Insert vertices at every plan-view crossing between selected polylines.
     InsertPointsAtIntersections,
     /// Open the elevation input for inserting vertices into selected polylines.
@@ -2265,7 +2270,7 @@ impl UiCommand {
             | Self::OpenBatterBermDialog
             | Self::CancelBatterBerm
             | Self::OpenCreateTriangulation
-            | Self::OpenSetSelectionZValueDialog
+            | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenPointCloudTin
             | Self::OpenCutTriangulationByPolyline
@@ -2380,7 +2385,7 @@ impl UiCommand {
                 if *copy { "Copy Objects to Layer" } else { "Move Objects to Layer" },
                 format!("{} object(s) · {target_layer:?}", object_ids.len()),
             ),
-            Self::BatchSetZValue(ids, z) => report("Set Elevation", format!("{} object(s) · Z {z}", ids.len())),
+            Self::BatchSetAxisValue(ids, axis, value) => report("Move to Axis Value", format!("{} object(s) · {} {value}", ids.len(), axis.label())),
             Self::CommitTextEdit(id, _, _, _, _) => report("Edit Text", format!("{id:?}")),
             Self::SetTriangulationColor(id, _) => report("Set Triangulation Colour", format!("{id:?}")),
             Self::LoadTriangulation(id) => report("Load Triangulation", format!("{id:?}")),

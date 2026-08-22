@@ -1,7 +1,7 @@
 //! Object editing and viewport tool dialogs.
 
 use crate::{
-    model::{Document, FillStyle, ObjectColor, ObjectId},
+    model::{Axis, Document, FillStyle, ObjectColor, ObjectId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
@@ -327,22 +327,26 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     }
 }
 
-pub(crate) fn draw_set_selection_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    let Some(dialog) = editor.set_selection_z_dialog.as_mut() else {
+pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(dialog) = editor.move_to_axis_dialog.as_mut() else {
         return;
     };
 
+    let axis = dialog.axis;
+    let axis_label = axis.label();
     let object_count = dialog.object_ids.len();
-    let can_apply = dialog.z_input.is_finite() && object_count > 0;
+    let can_apply = dialog.value.is_finite() && object_count > 0;
     let mut close = false;
     let mut apply = false;
     let mut open = true;
 
-    DragableMenu::new("Set Selection Z").open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
+    DragableMenu::new(format!("Set {axis_label}")).open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
         ui.set_max_width(280.0);
-        let response = MenuFieldF64::new("Z value", &mut dialog.z_input, f64::MIN..=f64::MAX).width(120.0).show(ui);
-        if !dialog.z_input.is_finite() {
-            ui.colored_label(egui::Color32::from_rgb(200, 70, 70), "Enter a valid Z value.");
+        let response = MenuFieldF64::new(format!("{axis_label} value"), &mut dialog.value, f64::MIN..=f64::MAX)
+            .width(120.0)
+            .show(ui);
+        if !dialog.value.is_finite() {
+            ui.colored_label(egui::Color32::from_rgb(200, 70, 70), format!("Enter a valid {axis_label} value."));
         }
         ui.add_space(4.0);
         let submitted = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
@@ -358,12 +362,15 @@ pub(crate) fn draw_set_selection_z_dialog(ui: &mut egui::Ui, editor: &mut Editor
     });
 
     if apply {
-        commands.push(UiCommand::BatchSetZValue(dialog.object_ids.clone(), dialog.z_input));
-        editor.z_input = dialog.z_input;
-        editor.z_level = dialog.z_input;
-        editor.set_selection_z_dialog = None;
+        let value = dialog.value;
+        commands.push(UiCommand::BatchSetAxisValue(dialog.object_ids.clone(), axis, value));
+        if axis == Axis::Z {
+            editor.z_input = value;
+            editor.z_level = value;
+        }
+        editor.move_to_axis_dialog = None;
     } else if close || !open {
-        editor.set_selection_z_dialog = None;
+        editor.move_to_axis_dialog = None;
     }
 }
 
@@ -380,9 +387,14 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 
     DragableMenu::new("Insert Point at Elevation").open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
         ui.set_max_width(300.0);
-        let response = MenuFieldF64::new("Elevation", &mut dialog.elevation, f64::MIN..=f64::MAX).width(120.0).show(ui);
+        let response = MenuFieldF64::new("Elevation", &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
+            .width(120.0)
+            .show(ui);
         if !dialog.elevation.is_finite() {
             ui.colored_label(egui::Color32::from_rgb(200, 70, 70), "Enter a valid elevation.");
+        }
+        if dialog.min_elevation > f64::MIN {
+            ui.label(format!("Selection spans {:.2} to {:.2}.", dialog.min_elevation, dialog.max_elevation));
         }
         ui.label("Segments lying at this elevation are ignored.");
         ui.add_space(4.0);

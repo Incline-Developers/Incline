@@ -1,11 +1,11 @@
 use crate::{
     app::App,
-    model::{Command, FillStyle, LayerId, Object, ObjectColor, ObjectId, SceneEntityId},
+    model::{Axis, Command, FillStyle, LayerId, Object, ObjectColor, ObjectId, SceneEntityId},
     userspace_log,
 };
 
 macro_rules! batch_property {
-    ($self:expr, $ids:expr, $update_fn:expr, $log:literal) => {{
+    ($self:expr, $ids:expr, $update_fn:expr, $log:literal $(, $arg:expr)*) => {{
         let Some(project) = $self.workspace.active_project_mut() else {
             return;
         };
@@ -22,7 +22,7 @@ macro_rules! batch_property {
         if !cmds.is_empty() {
             $self.history.execute(doc, Command::Batch(cmds));
         }
-        userspace_log!($log, $ids.len());
+        userspace_log!($log, $ids.len() $(, $arg)*);
         $self.invalidate_geometry();
     }};
 }
@@ -80,14 +80,15 @@ impl<'a> App<'a> {
         );
     }
 
-    pub(crate) fn batch_set_z_value(&mut self, ids: Vec<ObjectId>, z: f64) {
+    pub(crate) fn batch_set_axis_value(&mut self, ids: Vec<ObjectId>, axis: Axis, value: f64) {
         batch_property!(
             self,
             ids,
             |obj: &mut Object| {
-                obj.set_z_position(z);
+                obj.set_axis_position(axis, value);
             },
-            "Batch-set Z value on {} objects"
+            "Batch-set {1} value on {0} object(s)",
+            axis.label()
         )
     }
 

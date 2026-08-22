@@ -29,6 +29,25 @@ pub(crate) struct LayerId(pub(crate) u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct ObjectId(pub(crate) u64);
 
+/// Cartesian axis targeted by axis-wide edits such as Design > Move to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Axis {
+    X,
+    Y,
+    Z,
+}
+
+impl Axis {
+    /// Single-letter name used in menus, dialog titles and console reports.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::X => "X",
+            Self::Y => "Y",
+            Self::Z => "Z",
+        }
+    }
+}
+
 /// Stable identity used by rendering, selection and spatial queries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SceneEntityId {
@@ -295,12 +314,30 @@ impl Object {
         }
     }
 
-    pub(crate) fn set_z_position(&mut self, z: f64) {
+    /// Coordinate along `axis` of the object's first vertex, used to seed axis dialogs.
+    pub(crate) fn axis_position(&self, axis: Axis) -> f64 {
+        let pos = match self {
+            Object::Point { pos, .. } | Object::Text { pos, .. } => *pos,
+            Object::Polyline { verts, .. } => verts.first().map_or(DVec3::ZERO, |vertex| vertex.pos),
+        };
+        match axis {
+            Axis::X => pos.x,
+            Axis::Y => pos.y,
+            Axis::Z => pos.z,
+        }
+    }
+
+    pub(crate) fn set_axis_position(&mut self, axis: Axis, value: f64) {
+        let set = |pos: &mut DVec3| match axis {
+            Axis::X => pos.x = value,
+            Axis::Y => pos.y = value,
+            Axis::Z => pos.z = value,
+        };
         match self {
-            Object::Point { pos, .. } | Object::Text { pos, .. } => pos.z = z,
+            Object::Point { pos, .. } | Object::Text { pos, .. } => set(pos),
             Object::Polyline { verts, .. } => {
                 for vertex in verts {
-                    vertex.pos.z = z;
+                    set(&mut vertex.pos);
                 }
             }
         }

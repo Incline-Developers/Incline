@@ -279,6 +279,9 @@ pub(crate) struct App<'a> {
     /// `ProjectStore::composite_key()` of the last `scene_document` build;
     /// `None` forces the next invalidation to rebuild.
     scene_document_key: Option<u64>,
+    /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
+    /// so the intersection scan only reruns when the selection or the documents change.
+    intersection_availability_key: Option<u64>,
     history: crate::model::History,
     modifiers: ModifiersState,
     drag: Option<DragState>,
@@ -383,6 +386,7 @@ impl<'a> Default for App<'a> {
             snap_index: ObjectSnapIndex::default(),
             snap_index_dirty: false,
             scene_document_key: None,
+            intersection_availability_key: None,
             history: crate::model::History::new(),
             modifiers: ModifiersState::empty(),
             drag: None,
@@ -454,7 +458,9 @@ impl<'a> App<'a> {
             MacMenuAction::ToggleConsole => Some(UiCommand::SetShowConsole(!self.editor.show_console)),
             MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
             MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
-            MacMenuAction::OpenSetSelectionZ => Some(UiCommand::OpenSetSelectionZValueDialog),
+            MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),
+            MacMenuAction::OpenMoveToY => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Y)),
+            MacMenuAction::OpenMoveToZ => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::Z)),
             MacMenuAction::OpenCreateTriangulation => Some(UiCommand::OpenCreateTriangulation),
             MacMenuAction::OpenCutTriangulationByPolyline => Some(UiCommand::OpenCutTriangulationByPolyline),
             MacMenuAction::OpenCutTriangulationByZ => Some(UiCommand::OpenCutTriangulationByZ),

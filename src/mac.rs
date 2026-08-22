@@ -15,7 +15,10 @@ use objc2::{
 use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuDelegate, NSMenuItem};
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 
-use crate::ui::state::{EditorState, UiProjectView};
+use crate::{
+    model::SceneEntityId,
+    ui::state::{EditorState, UiProjectView},
+};
 
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
 static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
@@ -31,6 +34,8 @@ struct MenuState {
     can_create_terrain_tin: bool,
     can_create_block_model: bool,
     can_create_ore_triangulation: bool,
+    has_design_selection: bool,
+    has_selection_intersections: bool,
 }
 
 /// Actions emitted by AppKit and consumed by the winit application loop.
@@ -54,7 +59,9 @@ pub(crate) enum MacMenuAction {
     ToggleConsole,
     InsertPointsAtIntersections,
     OpenInsertPointAtElevation,
-    OpenSetSelectionZ,
+    OpenMoveToX,
+    OpenMoveToY,
+    OpenMoveToZ,
     OpenCreateTriangulation,
     OpenCutTriangulationByPolyline,
     OpenCutTriangulationByZ,
@@ -88,7 +95,9 @@ impl MacMenuAction {
             value if value == Self::ToggleConsole as isize => Self::ToggleConsole,
             value if value == Self::InsertPointsAtIntersections as isize => Self::InsertPointsAtIntersections,
             value if value == Self::OpenInsertPointAtElevation as isize => Self::OpenInsertPointAtElevation,
-            value if value == Self::OpenSetSelectionZ as isize => Self::OpenSetSelectionZ,
+            value if value == Self::OpenMoveToX as isize => Self::OpenMoveToX,
+            value if value == Self::OpenMoveToY as isize => Self::OpenMoveToY,
+            value if value == Self::OpenMoveToZ as isize => Self::OpenMoveToZ,
             value if value == Self::OpenCreateTriangulation as isize => Self::OpenCreateTriangulation,
             value if value == Self::OpenCutTriangulationByPolyline as isize => Self::OpenCutTriangulationByPolyline,
             value if value == Self::OpenCutTriangulationByZ as isize => Self::OpenCutTriangulationByZ,
@@ -254,16 +263,21 @@ pub(crate) fn install_menu_bar() {
     add_action(&view_menu, "Show Console", "", MacMenuAction::ToggleConsole, &target, mtm);
     add_submenu(&root, "View", &view_menu, mtm);
 
-    let object_menu = menu("Object", mtm);
-    object_menu.setAutoenablesItems(false);
+    let design_menu = menu("Design", mtm);
+    design_menu.setAutoenablesItems(false);
     let insert_point_menu = menu("Insert Point", mtm);
     insert_point_menu.setAutoenablesItems(false);
     add_action(&insert_point_menu, "At Intersection", "", MacMenuAction::InsertPointsAtIntersections, &target, mtm);
     add_action(&insert_point_menu, "At Elevation…", "", MacMenuAction::OpenInsertPointAtElevation, &target, mtm);
-    add_submenu(&object_menu, "Insert Point", &insert_point_menu, mtm);
-    add_separator(&object_menu, mtm);
-    add_action(&object_menu, "Set Selection Z Value…", "", MacMenuAction::OpenSetSelectionZ, &target, mtm);
-    add_submenu(&root, "Object", &object_menu, mtm);
+    add_submenu(&design_menu, "Insert Point", &insert_point_menu, mtm);
+    add_separator(&design_menu, mtm);
+    let move_to_menu = menu("Move to", mtm);
+    move_to_menu.setAutoenablesItems(false);
+    add_action(&move_to_menu, "Set X…", "", MacMenuAction::OpenMoveToX, &target, mtm);
+    add_action(&move_to_menu, "Set Y…", "", MacMenuAction::OpenMoveToY, &target, mtm);
+    add_action(&move_to_menu, "Set Z…", "", MacMenuAction::OpenMoveToZ, &target, mtm);
+    add_submenu(&design_menu, "Move to", &move_to_menu, mtm);
+    add_submenu(&root, "Design", &design_menu, mtm);
 
     let triangulation_menu = menu("Triangulation", mtm);
     triangulation_menu.setAutoenablesItems(false);
@@ -361,6 +375,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_terrain_tin: project.point_clouds.iter().any(|cloud| cloud.is_loaded),
         can_create_block_model: project.drill_holes.iter().any(|dataset| dataset.is_loaded),
         can_create_ore_triangulation: !project.block_models.is_empty(),
+        has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
+        has_selection_intersections: editor.selection_has_intersections,
     };
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -385,4 +401,15 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);
+    // The Design menu only acts on selected design objects.
+    for action in [
+        MacMenuAction::OpenInsertPointAtElevation,
+        MacMenuAction::OpenMoveToX,
+        MacMenuAction::OpenMoveToY,
+        MacMenuAction::OpenMoveToZ,
+    ] {
+        set_enabled(&root, action, state.has_design_selection);
+    }
+    // Inserting at intersections additionally needs two polylines that cross.
+    set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
 }

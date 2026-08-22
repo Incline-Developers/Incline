@@ -159,6 +159,7 @@ impl<'a> App<'a> {
                     // This event satisfies any queued redraw request, including
                     // redraws generated directly by the compositor during resize.
                     self.redraw_requested = false;
+                    self.refresh_intersection_availability();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
                         let title = project.projects.first().map_or_else(

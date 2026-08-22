@@ -1,6 +1,9 @@
-//! Top application menu bar (File, Design, View, Analyse, Open Pit, Triangulation).
+//! Top application menu bar (File, View, Design, Triangulation, Survey, Geology).
 
-use crate::ui::{EditorState, UiCommand, UiProjectView, state::UiProjectEntry};
+use crate::{
+    model::{Axis, SceneEntityId},
+    ui::{EditorState, UiCommand, UiProjectView, state::UiProjectEntry},
+};
 
 /// Draw the top menu bar panel.
 ///
@@ -99,22 +102,31 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                     }
                 });
 
-                ui.menu_button("Object", |ui| {
-                    ui.menu_button("Insert Point", |ui| {
-                        if ui.button("At intersection").clicked() {
-                            commands.push(UiCommand::InsertPointsAtIntersections);
-                            ui.close();
-                        }
-                        if ui.button("At elevation...").clicked() {
-                            commands.push(UiCommand::OpenInsertPointAtElevationDialog);
-                            ui.close();
-                        }
+                ui.menu_button("Design", |ui| {
+                    // Every entry here acts on the current design selection.
+                    let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
+                    ui.add_enabled_ui(has_selection, |ui| {
+                        ui.menu_button("Insert Point", |ui| {
+                            // Needs two or more crossing polylines to insert anything.
+                            if ui.add_enabled(editor.selection_has_intersections, egui::Button::new("At intersection")).clicked() {
+                                commands.push(UiCommand::InsertPointsAtIntersections);
+                                ui.close();
+                            }
+                            if ui.button("At elevation...").clicked() {
+                                commands.push(UiCommand::OpenInsertPointAtElevationDialog);
+                                ui.close();
+                            }
+                        });
+                        ui.separator();
+                        ui.menu_button("Move to", |ui| {
+                            for axis in [Axis::X, Axis::Y, Axis::Z] {
+                                if ui.button(format!("Set {}...", axis.label())).clicked() {
+                                    commands.push(UiCommand::OpenMoveToAxisDialog(axis));
+                                    ui.close();
+                                }
+                            }
+                        });
                     });
-                    ui.separator();
-                    if ui.button("Set Selection Z Value...").clicked() {
-                        commands.push(UiCommand::OpenSetSelectionZValueDialog);
-                        ui.close();
-                    }
                 });
 
                 ui.menu_button("Triangulation", |ui| {
