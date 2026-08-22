@@ -1,11 +1,99 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="800px" height="800px" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
- <rect x="2.2882" y="2.2882" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
- <rect x="12" y="2.2882" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
- <rect x="7.1441" y="7.1441" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
- <rect x="16.856" y="7.1441" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
- <rect x="2.2882" y="12" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
- <rect x="12" y="12" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
- <rect x="7.1441" y="16.856" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
- <rect x="16.856" y="16.856" width="4.8559" height="4.8559" ry="0" style="fill:#767676"/>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="800px"
+   height="800px"
+   fill="none"
+   version="1.1"
+   viewBox="0 0 24 24"
+   id="svg8"
+   sodipodi:docname="raster.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs8" />
+  <sodipodi:namedview
+     id="namedview8"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.723125"
+     inkscape:cx="472.25583"
+     inkscape:cy="497.83924"
+     inkscape:window-width="1025"
+     inkscape:window-height="1217"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg8" />
+  <rect
+     x="2.2882"
+     y="2.2882"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect1" />
+  <rect
+     x="12"
+     y="2.2882"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect2" />
+  <rect
+     x="7.1441"
+     y="7.1441"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect3" />
+  <rect
+     x="16.856"
+     y="7.1441"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect4" />
+  <rect
+     x="2.2882"
+     y="12"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect5" />
+  <rect
+     x="12"
+     y="12"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect6" />
+  <rect
+     x="7.1441"
+     y="16.856"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect7" />
+  <rect
+     x="16.856"
+     y="16.856"
+     width="4.8559"
+     height="4.8559"
+     ry="0"
+     style="fill:#39615d;fill-opacity:1"
+     id="rect8" />
 </svg>
