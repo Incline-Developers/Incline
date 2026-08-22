@@ -826,6 +826,10 @@ pub(crate) struct EditorState {
     /// Design properties tab. The value must survive across frames while its
     /// `DragValue` is being dragged.
     pub(crate) design_line_weight_input: Option<(Vec<ObjectId>, f32)>,
+    /// Objects described by the explorer's Design properties tab: whatever the
+    /// last non-empty selection held, kept after that selection is cleared so
+    /// the tab stays put. Entries are dropped once the object is gone.
+    pub(crate) property_objects: Vec<ObjectId>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
     /// Whether the selected polylines cross anywhere, refreshed by
@@ -1135,8 +1139,9 @@ pub(crate) struct EditorState {
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
-    /// Block model shown by the explorer's Block Model properties tab. Follows
-    /// the selection, and is remembered while that model stays selected.
+    /// Block model described by the explorer's Block Model properties tab. Set
+    /// by the last non-empty selection and kept after that selection is
+    /// cleared, until the model is closed or another selection replaces it.
     pub(crate) viewport_block_model_id: Option<BlockModelId>,
     pub(crate) block_model_variable_ranges: HashMap<(BlockModelId, String), Option<(f64, f64)>>,
     pub(crate) next_color_stop_id: u64,
@@ -1357,6 +1362,7 @@ impl EditorState {
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
         self.design_line_weight_input = None;
+        self.property_objects.clear();
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
@@ -1579,6 +1585,7 @@ impl EditorState {
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
             design_line_weight_input: None,
+            property_objects: Vec::new(),
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,

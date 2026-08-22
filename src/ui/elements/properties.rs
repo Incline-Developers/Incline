@@ -4,8 +4,10 @@
 //! Sections are [`PropertyTab`]s. The four settings tabs are always present and
 //! apply live - every committed edit becomes an [`UiCommand::ApplyPreferences`],
 //! which saves the config file - so there is no draft to confirm or discard.
-//! The Block Model and Design tabs describe the current selection and only
-//! appear while there is something for them to describe.
+//! The Block Model and Design tabs describe the last non-empty selection and
+//! only appear while there is something for them to describe; clearing the
+//! selection leaves them in place, as Blender's properties editor does with
+//! its active object.
 
 use crate::{
     model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel},
@@ -124,23 +126,37 @@ pub(crate) fn draw_properties(
 }
 
 fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], document: &Document) -> PropertyContext {
-    let selected_model = block_models
-        .iter()
-        .find(|model| editor.viewport_block_model_id == Some(model.id) && editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id)))
-        .or_else(|| block_models.iter().find(|model| editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id))))
-        .map(|model| model.id);
-    // Remember which model the tab describes, so a multi-model selection does
-    // not switch between them as the set is re-walked.
-    editor.viewport_block_model_id = selected_model;
+    // Only a selection that holds something replaces what the panel describes.
+    // Clearing the selection leaves the last one in place, so the tabs stay
+    // where they were instead of dropping the user back onto the settings -
+    // the same way Blender's properties editor keeps describing the active
+    // object after everything is deselected.
+    if !editor.selected_handles.is_empty() {
+        // Remember which model the tab describes, so a multi-model selection
+        // does not switch between them as the set is re-walked.
+        editor.viewport_block_model_id = block_models
+            .iter()
+            .find(|model| editor.viewport_block_model_id == Some(model.id) && editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id)))
+            .or_else(|| block_models.iter().find(|model| editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id))))
+            .map(|model| model.id);
+        editor.property_objects = editor
+            .selected_handles
+            .iter()
+            .filter_map(|handle| match handle {
+                SceneEntityId::Object(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+    }
 
-    let objects: Vec<ObjectId> = editor
-        .selected_handles
-        .iter()
-        .filter_map(|handle| match handle {
-            SceneEntityId::Object(id) => Some(*id),
-            _ => None,
-        })
-        .collect();
+    // What is remembered outlives the selection, but not the thing itself: a
+    // deleted object or a closed model stops being described.
+    editor.viewport_block_model_id = editor
+        .viewport_block_model_id
+        .filter(|id| block_models.iter().any(|model| model.id == *id && model.state.loaded));
+    editor.property_objects.retain(|&id| document.get_object(id).is_some());
+
+    let objects = editor.property_objects.clone();
     let polylines = objects
         .iter()
         .copied()
@@ -148,7 +164,7 @@ fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], do
         .collect();
 
     PropertyContext {
-        block_model: selected_model,
+        block_model: editor.viewport_block_model_id,
         objects,
         polylines,
     }
