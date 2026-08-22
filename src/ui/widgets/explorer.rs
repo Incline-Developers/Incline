@@ -12,55 +12,58 @@ pub(crate) fn row_height(ui: &egui::Ui) -> f32 {
     (font.size + 8.0).max(22.0)
 }
 
-/// Paint one row's alternating background across the panel's full width.
+/// Reserve a paint slot for the panel's alternating background, and record
+/// where its bands should start.
 ///
-/// `shape` is a slot reserved with `Painter::add` before the row's contents
-/// were laid out: the rect is only known afterwards, and painting then would
-/// cover the row's own text.
-fn paint_row_stripe(ui: &egui::Ui, shape: egui::layers::ShapeIdx, y_range: egui::Rangef, row_index: usize, stripe: egui::Color32) {
-    if row_index % 2 != 1 {
-        return;
-    }
-    let row = egui::Rect::from_x_y_ranges(ui.clip_rect().x_range(), y_range);
-    ui.painter().set(shape, egui::Shape::rect_filled(row, 0.0, stripe));
+/// Call this before any row is drawn, so the bands paint behind row content;
+/// finish with [`paint_fixed_stripes`] once the tree's final height is known.
+pub(crate) fn reserve_fixed_stripes(ui: &egui::Ui) -> (egui::layers::ShapeIdx, f32) {
+    (ui.painter().add(egui::Shape::Noop), ui.cursor().top())
 }
 
-/// Continue the banding into the empty space below the last row.
+/// Paint the tree's alternating background as one fixed, tiled pattern
+/// anchored to `top`, rather than a colour recomputed per row from its
+/// position in the (changing) list.
 ///
-/// Without this the tree reads as a list that stops partway down the panel;
-/// with it, it reads as a table that runs to the properties panel's edge.
-/// `next_row_index` is the position the next real row would have taken.
-pub(crate) fn fill_trailing_stripes(ui: &egui::Ui, next_row_index: usize, stripe: egui::Color32) {
+/// Rows draw with a transparent background and simply slide over these bands
+/// as sections collapse or expand. Painting per row instead - each row
+/// picking odd/even from its own place in the current content order - looked
+/// fine at rest, but the moment a section opened or closed, egui lays out
+/// every row below it in the same frame the toggle happens (only the reveal
+/// animates), so every row's colour snapped to its new value a beat before it
+/// finished sliding into position: bands appeared to invert under the moving
+/// content instead of staying put. Anchoring to the content's top edge and
+/// painting one shape for the whole tree makes the pattern indifferent to
+/// which row currently sits where.
+pub(crate) fn paint_fixed_stripes(ui: &egui::Ui, slot: egui::layers::ShapeIdx, top: f32, stripe: egui::Color32) {
     let height = row_height(ui);
-    let remaining = ui.available_rect_before_wrap();
-    if remaining.height() <= 0.0 {
+    let bottom = ui.available_rect_before_wrap().bottom();
+    if bottom <= top {
         return;
     }
     let x_range = ui.clip_rect().x_range();
-    let mut top = remaining.top();
-    let mut row_index = next_row_index;
-    while top < remaining.bottom() {
-        if row_index % 2 == 1 {
-            let band = egui::Rect::from_x_y_ranges(x_range, egui::Rangef::new(top, (top + height).min(remaining.bottom())));
-            ui.painter().rect_filled(band, 0.0, stripe);
+    let mut shapes = Vec::new();
+    let mut band_top = top;
+    let mut band_index = 0usize;
+    while band_top < bottom {
+        if band_index % 2 == 1 {
+            let band = egui::Rect::from_x_y_ranges(x_range, egui::Rangef::new(band_top, (band_top + height).min(bottom)));
+            shapes.push(egui::Shape::rect_filled(band, 0.0, stripe));
         }
-        top += height;
-        row_index += 1;
+        band_top += height;
+        band_index += 1;
     }
+    ui.painter().set(slot, egui::Shape::Vec(shapes));
 }
 
-/// A section's empty-state line ("No design layers"), as a striped tree row.
-pub(crate) fn explorer_note(ui: &mut egui::Ui, text: &str, row_index: usize, stripe: egui::Color32) {
+/// A section's empty-state line ("No design layers"), as a tree row.
+pub(crate) fn explorer_note(ui: &mut egui::Ui, text: &str) {
     let height = row_height(ui);
-    let slot = ui.painter().add(egui::Shape::Noop);
-    let response = ui
-        .allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-            ui.add_space(ENTRY_LABEL_GUTTER);
-            ui.label(egui::RichText::new(text).weak().italics());
-        })
-        .response;
-    paint_row_stripe(ui, slot, response.rect.y_range(), row_index, stripe);
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        ui.add_space(ENTRY_LABEL_GUTTER);
+        ui.label(egui::RichText::new(text).weak().italics());
+    });
 }
 
 /// A label row used for entries in the explorer tree.
@@ -72,10 +75,6 @@ pub(crate) struct ExplorerEntry {
     title: egui::WidgetText,
     selected: bool,
     reserve_toggle_gutter: bool,
-    /// Row position within the panel, for the alternating background.
-    row_index: usize,
-    /// Fill for the lit rows.
-    stripe: egui::Color32,
 }
 
 impl ExplorerEntry {
@@ -85,20 +84,11 @@ impl ExplorerEntry {
             title: title.into(),
             selected: false,
             reserve_toggle_gutter: false,
-            row_index: 0,
-            stripe: egui::Color32::TRANSPARENT,
         }
     }
 
     pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
-        self
-    }
-
-    /// Give this row the alternating tint for `row_index`, filled with `stripe`.
-    pub(crate) fn stripe(mut self, row_index: usize, stripe: egui::Color32) -> Self {
-        self.row_index = row_index;
-        self.stripe = stripe;
         self
     }
 }
@@ -110,15 +100,12 @@ impl egui::Widget for ExplorerEntry {
             title,
             selected,
             reserve_toggle_gutter,
-            row_index,
-            stripe,
         } = self;
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             ui.spacing_mut().item_spacing.x = 0.0;
-            let slot = ui.painter().add(egui::Shape::Noop);
-            let row = ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 if reserve_toggle_gutter {
                     // CollapsingState reserves exactly `spacing.indent` for its toggle.
                     // Match its gutter so this leaf starts at the same x.
@@ -132,9 +119,8 @@ impl egui::Widget for ExplorerEntry {
                         .selected(selected)
                         .min_size(egui::vec2(ui.available_width(), height)),
                 )
-            });
-            paint_row_stripe(ui, slot, row.response.rect.y_range(), row_index, stripe);
-            row.inner
+            })
+            .inner
         })
         .inner
     }
@@ -214,10 +200,6 @@ pub(crate) struct ExplorerHeader {
     /// Entry count and active-project epoch, for sections that follow their
     /// contents. `None` leaves the section on plain `default_open` behaviour.
     auto_open: Option<(usize, u64)>,
-    /// Row position within the panel, for the alternating background.
-    row_index: usize,
-    /// Fill for the lit rows.
-    stripe: egui::Color32,
 }
 
 impl ExplorerHeader {
@@ -230,17 +212,7 @@ impl ExplorerHeader {
             default_open: false,
             color: None,
             auto_open: None,
-            row_index: 0,
-            stripe: egui::Color32::TRANSPARENT,
         }
-    }
-
-    /// Give this heading row the alternating tint for `row_index`, filled with
-    /// `stripe`. Headings take part in the striping like any other row.
-    pub(crate) fn stripe(mut self, row_index: usize, stripe: egui::Color32) -> Self {
-        self.row_index = row_index;
-        self.stripe = stripe;
-        self
     }
 
     /// Show `icon` ahead of the heading text. The section's entries are plain
@@ -292,8 +264,6 @@ impl ExplorerHeader {
             mut default_open,
             color,
             auto_open,
-            row_index,
-            stripe,
         } = self;
         if let Some((entries, epoch)) = auto_open {
             apply_auto_open(ui.ctx(), id, entries, epoch);
@@ -307,7 +277,6 @@ impl ExplorerHeader {
         }
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_header_scope")), |ui| {
-            let slot = ui.painter().add(egui::Shape::Noop);
             let (toggle_response, header_response, body_response) = state
                 .show_header(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -335,8 +304,6 @@ impl ExplorerHeader {
                 state.toggle(ui);
                 state.store(ui.ctx());
             }
-
-            paint_row_stripe(ui, slot, toggle_response.rect.union(header_response.response.rect).y_range(), row_index, stripe);
 
             (toggle_response, header_response, body_response)
         })

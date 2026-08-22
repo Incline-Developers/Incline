@@ -16,7 +16,7 @@ use crate::{
         elements::properties::draw_properties,
         fonts::bold,
         unthemed_icon,
-        widgets::explorer::{ExplorerEntry, ExplorerHeader, explorer_note, fill_trailing_stripes},
+        widgets::explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
     },
 };
 
@@ -107,16 +107,6 @@ fn on_hover_file_details(response: egui::Response, main: &str, path: Option<&Pat
     })
 }
 
-/// Take the next row position for the alternating background.
-///
-/// The count runs across the whole tree rather than per section, so the
-/// stripes stay in step across a section boundary.
-fn next_stripe(row_index: &mut usize) -> usize {
-    let index = *row_index;
-    *row_index += 1;
-    index
-}
-
 /// Draw the left explorer panel.
 ///
 /// Shows the active project path, the collapsible data sections, and the
@@ -160,9 +150,9 @@ pub(crate) fn draw_explorer(
             // horizontally to the headers' intrinsic width; a visible
             // `ExplorerEntry` masks that by requesting all available width,
             // which made panel resizing depend on whether an entry existed.
-            let mut row_index = 0usize;
+            //
             // Vertical shrinking is off so the banding below the last row has
-            // the full panel height to run into: see `fill_trailing_stripes`.
+            // the full panel height to run into: see `paint_fixed_stripes`.
             // A `ScrollArea` claims 64pt of height by default even when less
             // than that is left, and paints its rows over whatever is below -
             // here, the properties panel. Let it shrink to what the properties
@@ -175,15 +165,18 @@ pub(crate) fn draw_explorer(
                 // so the stripes tile the list without gaps.
                 ui.spacing_mut().item_spacing.y = 0.0;
 
+                // Reserved before any row is laid out, and filled once the
+                // tree's final height is known below: see `paint_fixed_stripes`.
+                let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
+
                 ExplorerHeader::new(egui::Id::new("projects_collapse"), "Projects")
                     .icon(unthemed_icon!("section_projects.svg"))
-                    .stripe(next_stripe(&mut row_index), stripe)
                     .color(HEADER_PROJECTS)
                     .dirty(project.tracked_projects.iter().any(|entry| entry.dirty))
                     .default_open(true)
                     .show(ui, |ui| {
                         if project.tracked_projects.is_empty() {
-                            explorer_note(ui, "No tracked projects", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No tracked projects");
                         }
                         // Only the active project can be deactivated, and closing it is
                         // exactly that: no project active, so the welcome splash returns.
@@ -197,8 +190,7 @@ pub(crate) fn draw_explorer(
                                         egui::Id::new(("explorer_project", &tracked.path)),
                                         if tracked.is_active { bold(&title) } else { egui::RichText::new(&title) },
                                     )
-                                    .selected(tracked.is_active)
-                                    .stripe(next_stripe(&mut row_index), stripe),
+                                    .selected(tracked.is_active),
                                 ),
                                 &tracked.path.display().to_string(),
                                 Some(&tracked.path),
@@ -210,8 +202,7 @@ pub(crate) fn draw_explorer(
                                         egui::Id::new(("explorer_project", tracked.id)),
                                         if tracked.is_active { bold(&title) } else { egui::RichText::new(&title) },
                                     )
-                                    .selected(tracked.is_active)
-                                    .stripe(next_stripe(&mut row_index), stripe),
+                                    .selected(tracked.is_active),
                                 ),
                                 if tracked.stored_in_browser {
                                     "Saved in browser storage"
@@ -256,17 +247,16 @@ pub(crate) fn draw_explorer(
                 let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
                 ExplorerHeader::new(egui::Id::new("designs_collapse"), "Designs")
                     .icon(unthemed_icon!("layer.svg"))
-                    .stripe(next_stripe(&mut row_index), stripe)
                     .color(HEADER_DESIGNS)
                     .dirty(designs_dirty)
                     .auto_open(project.projects.first().map_or(0, |entry| entry.layers.len()), epoch)
                     .show(ui, |ui| {
                         let Some(entry) = project.projects.first() else {
-                            explorer_note(ui, "No open project", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No open project");
                             return;
                         };
                         if entry.layers.is_empty() {
-                            explorer_note(ui, "No design layers", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No design layers");
                         }
                         for layer in &entry.layers {
                             let layer_id = layer.id;
@@ -278,9 +268,7 @@ pub(crate) fn draw_explorer(
                                 egui::RichText::new(&layer_name).color(INACTIVE_TEXT_COLOR)
                             };
                             let layer_resp = ui.add(
-                                ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
-                                    .selected(is_active)
-                                    .stripe(next_stripe(&mut row_index), stripe),
+                                ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label).selected(is_active),
                             );
                             if layer_resp.double_clicked() {
                                 if layer.is_loaded {
@@ -328,17 +316,16 @@ pub(crate) fn draw_explorer(
                 let triangulations_dirty = project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("triangulations_collapse"), "Triangulations")
                     .icon(unthemed_icon!("triangulation.svg"))
-                    .stripe(next_stripe(&mut row_index), stripe)
                     .color(HEADER_TRIANGULATIONS)
                     .dirty(triangulations_dirty)
                     .auto_open(project.triangulations.len(), epoch)
                     .show(ui, |ui| {
                         if project.triangulations.is_empty() {
-                            explorer_note(ui, "No triangulations", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No triangulations");
                         }
 
                         // Helper closure: render one tri entry row and attach its context menu.
-                        let render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, tri: &crate::ui::UiTriangulationEntry, stripe_index: usize| {
+                        let render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, tri: &crate::ui::UiTriangulationEntry| {
                             let tri_path = format!(
                                 "ID: triangulation:{}{}",
                                 tri.id.0,
@@ -356,9 +343,7 @@ pub(crate) fn draw_explorer(
 
                             let response = on_hover_file_details(
                                 ui.add(
-                                    ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
-                                        .selected(tri.is_active)
-                                        .stripe(stripe_index, stripe),
+                                    ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label).selected(tri.is_active),
                                 ),
                                 &tri_path,
                                 None,
@@ -404,20 +389,19 @@ pub(crate) fn draw_explorer(
                         };
 
                         for triangulation in &project.triangulations {
-                            render_tri_entry(ui, commands, triangulation, next_stripe(&mut row_index));
+                            render_tri_entry(ui, commands, triangulation);
                         }
                     });
 
                 let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
                 ExplorerHeader::new("rasters_collapse".into(), "Rasters")
                     .icon(unthemed_icon!("raster.svg"))
-                    .stripe(next_stripe(&mut row_index), stripe)
                     .color(HEADER_RASTERS)
                     .dirty(rasters_dirty)
                     .auto_open(project.raster_textures.len(), epoch)
                     .show(ui, |ui| {
                         if project.raster_textures.is_empty() {
-                            explorer_note(ui, "No image textures", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No image textures");
                         }
                         for raster in &project.raster_textures {
                             let raster_label = if raster.dirty { format!("{} *", raster.name) } else { raster.name.clone() };
@@ -437,9 +421,7 @@ pub(crate) fn draw_explorer(
                             );
                             let response = on_hover_file_details(
                                 ui.add(
-                                    ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
-                                        .selected(raster.is_draped)
-                                        .stripe(next_stripe(&mut row_index), stripe),
+                                    ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label).selected(raster.is_draped),
                                 ),
                                 &details,
                                 None,
@@ -490,13 +472,12 @@ pub(crate) fn draw_explorer(
                 let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), "Point Clouds")
                     .icon(unthemed_icon!("section_point_clouds.svg"))
-                    .stripe(next_stripe(&mut row_index), stripe)
                     .color(HEADER_POINT_CLOUDS)
                     .dirty(point_clouds_dirty)
                     .auto_open(project.point_clouds.len(), epoch)
                     .show(ui, |ui| {
                         if project.point_clouds.is_empty() {
-                            explorer_note(ui, "No point clouds", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No point clouds");
                         }
                         for point_cloud in &project.point_clouds {
                             let dirty_marker = if point_cloud.dirty { " *" } else { "" };
@@ -514,7 +495,7 @@ pub(crate) fn draw_explorer(
                             );
                             let response = on_hover_file_details(
                                 ui.add(
-                                    ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label).stripe(next_stripe(&mut row_index), stripe),
+                                    ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label),
                                 ),
                                 &tooltip,
                                 None,
@@ -554,13 +535,12 @@ pub(crate) fn draw_explorer(
                 let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("block_models_collapse"), "Block Models")
                     .icon(unthemed_icon!("section_block_models.svg"))
-                    .stripe(next_stripe(&mut row_index), stripe)
                     .color(HEADER_BLOCK_MODELS)
                     .dirty(block_models_dirty)
                     .auto_open(project.block_models.len(), epoch)
                     .show(ui, |ui| {
                         if project.block_models.is_empty() {
-                            explorer_note(ui, "No block models", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No block models");
                         }
                         for block_model in &project.block_models {
                             let is_selected = editor.selected_handles.contains(&crate::model::SceneEntityId::BlockModel(block_model.id));
@@ -573,9 +553,7 @@ pub(crate) fn draw_explorer(
                             };
                             let response = on_hover_file_details(
                                 ui.add(
-                                    ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
-                                        .selected(is_selected)
-                                        .stripe(next_stripe(&mut row_index), stripe),
+                                    ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label).selected(is_selected),
                                 ),
                                 &format!(
                                     "ID: block-model:{}{}\n{} colour variable(s)",
@@ -624,13 +602,12 @@ pub(crate) fn draw_explorer(
                 let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), "Drill Holes")
                     .icon(unthemed_icon!("drill_hole.svg"))
-                    .stripe(next_stripe(&mut row_index), stripe)
                     .color(HEADER_DRILL_HOLES)
                     .dirty(drill_holes_dirty)
                     .auto_open(project.drill_holes.len(), epoch)
                     .show(ui, |ui| {
                         if project.drill_holes.is_empty() {
-                            explorer_note(ui, "No drill holes", next_stripe(&mut row_index), stripe);
+                            explorer_note(ui, "No drill holes");
                         }
                         for dataset in &project.drill_holes {
                             let dataset_label = if dataset.dirty { format!("{} *", dataset.name) } else { dataset.name.clone() };
@@ -648,7 +625,7 @@ pub(crate) fn draw_explorer(
                             );
                             let response = on_hover_file_details(
                                 ui.add(
-                                    ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label).stripe(next_stripe(&mut row_index), stripe),
+                                    ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label),
                                 ),
                                 &tooltip,
                                 None,
@@ -687,7 +664,7 @@ pub(crate) fn draw_explorer(
                         }
                     });
 
-                fill_trailing_stripes(ui, row_index, stripe);
+                paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
             });
         })
         .response
