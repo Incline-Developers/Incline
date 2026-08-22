@@ -66,10 +66,6 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Preferences...").clicked() {
-                        commands.push(UiCommand::OpenPreferences);
-                        ui.close();
-                    }
                     if ui.button(format!("About {}...", crate::APP_NAME)).clicked() {
                         editor.show_about = true;
                         ui.close();

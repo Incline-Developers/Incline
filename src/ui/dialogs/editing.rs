@@ -370,13 +370,10 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                         ui.add_space(PANEL_SIZE - (COLUMN_WIDTH * 2.0) - 60.0);
 
                         select_project_action_column(ui, "Application", COLUMN_WIDTH, |ui| {
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_preferences.svg")), "Preferences", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
-                                commands.push(UiCommand::OpenPreferences);
-                            }
                             if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_website.svg")), "Website", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
                             }
-                            // Enter has no sensible default among New / Load / Preferences,
+                            // Enter has no sensible default among New / Load / Website,
                             // so only Escape is bound here, matching Close.
                             if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Close", COLUMN_WIDTH, ROW_HEIGHT).clicked()
                                 || menu::dialog_cancel_pressed(ui.ctx())

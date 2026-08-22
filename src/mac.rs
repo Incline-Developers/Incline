@@ -51,7 +51,6 @@ pub(crate) enum MacMenuAction {
     OpenExport,
     ExportViewportImage,
     OpenPlotDialog,
-    OpenPreferences,
     RequestExit,
     ToggleXyGrid,
     ToggleScaleBar,
@@ -87,7 +86,6 @@ impl MacMenuAction {
             value if value == Self::OpenExport as isize => Self::OpenExport,
             value if value == Self::ExportViewportImage as isize => Self::ExportViewportImage,
             value if value == Self::OpenPlotDialog as isize => Self::OpenPlotDialog,
-            value if value == Self::OpenPreferences as isize => Self::OpenPreferences,
             value if value == Self::RequestExit as isize => Self::RequestExit,
             value if value == Self::ToggleXyGrid as isize => Self::ToggleXyGrid,
             value if value == Self::ToggleScaleBar as isize => Self::ToggleScaleBar,
@@ -231,8 +229,6 @@ pub(crate) fn install_menu_bar() {
     let application_menu = menu(crate::APP_NAME, mtm);
     application_menu.setAutoenablesItems(false);
     add_action(&application_menu, &format!("About {}", crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);
-    add_separator(&application_menu, mtm);
-    add_action(&application_menu, "Preferences…", ",", MacMenuAction::OpenPreferences, &target, mtm);
     add_separator(&application_menu, mtm);
     add_action(&application_menu, &format!("Quit {}", crate::APP_NAME), "q", MacMenuAction::RequestExit, &target, mtm);
     add_submenu(&root, crate::APP_NAME, &application_menu, mtm);

@@ -2040,8 +2040,6 @@ pub(crate) enum UiCommand {
     SetShowScaleBar(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
-    /// Bring the explorer's properties panel to the settings tabs.
-    OpenPreferences,
     /// Make one block model the selection, so its properties tab is shown.
     SelectBlockModel(BlockModelId),
     SaveProject,
@@ -2335,7 +2333,6 @@ impl UiCommand {
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
             | Self::SetShowConsole(_)
-            | Self::OpenPreferences
             | Self::ApplyPreferences(_)
             | Self::SelectBlockModel(_)
             | Self::BeginRenameLayer(_)

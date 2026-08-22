@@ -652,12 +652,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
-            UiCommand::OpenPreferences => {
-                // Settings live in the explorer's properties panel; "open"
-                // means bringing its first settings tab to the front.
-                self.editor.active_property_tab = crate::ui::state::PropertyTab::Interface;
-                Ok(())
-            }
             UiCommand::SelectBlockModel(id) => {
                 self.select_block_model(id);
                 Ok(())

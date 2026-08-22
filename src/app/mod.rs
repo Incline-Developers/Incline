@@ -450,7 +450,6 @@ impl<'a> App<'a> {
                 self.editor.show_about = true;
                 None
             }
-            MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
             MacMenuAction::ToggleXyGrid => Some(UiCommand::SetShowXyGrid(!self.editor.show_xy_grid)),
             MacMenuAction::ToggleScaleBar => Some(UiCommand::SetShowScaleBar(!self.editor.show_scale_bar)),
