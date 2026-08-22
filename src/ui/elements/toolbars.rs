@@ -7,7 +7,7 @@ use crate::ui::{
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
-        toolbar::{ColorSquarePicker, HatchPicker, ToolCellButton, ToolbarButton, ToolbarGroup},
+        toolbar::{ColorSquarePicker, HatchPicker, TOOL_CELL_SIZE, ToolCellButton, ToolbarButton, ToolbarGroup},
     },
 };
 
@@ -16,8 +16,6 @@ pub(crate) const BOTTOM_TOOLBAR_HEIGHT: f32 = 32.0;
 /// Space between toolbar tiles. The tiles pad themselves, so the visible gap
 /// is this less the padding either side of it.
 const TOOL_GROUP_GAP: f32 = 16.0;
-/// Outer width of a tile, for laying tiles out in a floating overlay.
-const TOOL_TILE_WIDTH: f32 = 36.0;
 /// Height of a docked toolbar strip. The explorer's header and the viewport's
 /// top toolbar share it, so their bottom rules meet as one line.
 const TOOLBAR_STRIP_HEIGHT: f32 = 34.0;
@@ -400,7 +398,7 @@ pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
         // stack's own edge would clip the tiles' right-hand corners off.
         .constrain_to(canvas_rect.shrink2(egui::vec2(0.0, VIEW_TOOLS_MARGIN)))
         .show(ui.ctx(), |ui| {
-            ui.set_max_width(TOOL_TILE_WIDTH);
+            ui.set_max_width(TOOL_CELL_SIZE);
             ui.spacing_mut().item_spacing.y = TOOL_GROUP_GAP;
 
             ToolbarGroup::new().show(ui, |ui| {

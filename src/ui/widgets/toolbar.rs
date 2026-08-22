@@ -67,19 +67,18 @@ impl egui::Widget for ToolbarButton {
 
 /// Corner rounding on a toolbar group's tile.
 const GROUP_CORNER_RADIUS: u8 = 3;
-/// Space between a tile's edge and the buttons inside it.
-const GROUP_PADDING: f32 = 4.0;
 /// Gap between the buttons stacked inside a tile.
 const GROUP_BUTTON_GAP: f32 = 3.0;
-/// Side of a tool cell: the buttons fill the tile's inner width.
-const TOOL_CELL_SIZE: f32 = 28.0;
+/// Side of a tool cell, which is also the tile's width: the buttons run edge
+/// to edge, so a selected tool's fill has no strip of tile left beside it.
+pub(crate) const TOOL_CELL_SIZE: f32 = 32.0;
 /// Side of the icon drawn inside a tool cell.
 const TOOL_ICON_SIZE: f32 = 20.0;
-/// Corner rounding on a tool cell's fill.
-const TOOL_CELL_CORNER_RADIUS: f32 = 3.0;
+/// Corner rounding on a tool cell's fill. The cells reach the tile's corners,
+/// so it has to be the tile's own rounding.
+const TOOL_CELL_CORNER_RADIUS: f32 = GROUP_CORNER_RADIUS as f32;
 
-/// A tool button that fills its cell, sized to a [`ToolbarGroup`] tile's inner
-/// width.
+/// A tool button that fills its cell, sized to a [`ToolbarGroup`] tile's width.
 ///
 /// Unlike [`ToolbarButton`], whose fill is a small square inside whatever space
 /// it is given, this fills its whole cell - so a selected tool reads as a solid
@@ -161,10 +160,10 @@ impl ToolbarGroup {
         });
         let rows = inner.response.rect;
         if rows.height() > 0.0 {
-            let tile_rect = egui::Rect::from_center_size(
-                egui::pos2(ui.max_rect().center().x, rows.center().y),
-                egui::vec2(self.width + GROUP_PADDING * 2.0, rows.height() + GROUP_PADDING * 2.0),
-            );
+            // The tile is exactly the run of cells: no padding, so a selected
+            // cell's fill reaches the tile's edges instead of floating inside
+            // a border of it.
+            let tile_rect = egui::Rect::from_center_size(egui::pos2(ui.max_rect().center().x, rows.center().y), egui::vec2(self.width, rows.height()));
             // The tile carries the panel colour, because it *is* the panel now:
             // the toolbar's own background is transparent, so the tiles are all
             // that separates the tools from the scene behind them.
