@@ -967,8 +967,13 @@ impl<'a> BlockModelProperties<'a> {
         let stop = stops.get(selected_stop).copied()?;
         let selected_y = bar_rect.bottom() - bar_rect.height() * stop.t;
         let popup_pos = egui::pos2(handle_column_rect.left() - 4.0, selected_y);
+        // The ramp is drawn wherever its host puts it - today the properties
+        // panel, whose layer is `Order::Background`. `set_sublayer` below
+        // requires parent and child to share an order, so take the parent's
+        // rather than assuming one.
+        let parent_layer = ui.layer_id();
         let area_response = egui::Area::new(self.id.with("stop_value_popup"))
-            .order(egui::Order::Middle)
+            .order(parent_layer.order)
             // The popup is fixed to its stop. Its container must not retain a
             // drag response after the stop slider has been adjusted.
             .movable(false)
@@ -1001,8 +1006,8 @@ impl<'a> BlockModelProperties<'a> {
                     }
                 });
             });
-        // Keep the value editor above its background-layer parent.
-        ui.ctx().set_sublayer(ui.layer_id(), area_response.response.layer_id);
+        // Keep the value editor above its parent layer.
+        ui.ctx().set_sublayer(parent_layer, area_response.response.layer_id);
         Some(area_response.response)
     }
 }
