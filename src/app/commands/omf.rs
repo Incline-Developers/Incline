@@ -112,7 +112,6 @@ impl<'a> App<'a> {
             project.lossy_save_warnings = lossy_save_warnings;
             project.lossy_save_confirmed = false;
             project.loaded_layers.extend(project.project.document.layers().iter().map(|layer| layer.id));
-            self.editor.active_layer = project.project.document.layers().first().map(|layer| layer.id);
         }
 
         let mut raster_id_map = std::collections::HashMap::new();
