@@ -529,7 +529,12 @@ impl egui::Widget for SlidingToggle<'_> {
 
         if ui.is_rect_visible(rect) {
             let visuals = ui.style().interact_selectable(&response, *self.value);
-            let animation = ui.ctx().animate_bool_responsive(response.id.with("sliding_toggle"), *self.value);
+            // Keyed by the bool's own address rather than `response.id`: that id is
+            // assigned by allocation order within the enclosing panel, so switching
+            // properties tabs lines a toggle up with whatever occupied that same slot
+            // in the previous tab and replays a slide from its stale cached value.
+            let value_id = egui::Id::new(self.value as *const bool as usize);
+            let animation = ui.ctx().animate_bool_responsive(value_id, *self.value);
             let radius = rect.height() / 2.0;
             let track_rect = rect.shrink2(egui::vec2(1.0, 3.0));
             let off_fill = ui.visuals().widgets.inactive.bg_fill;
