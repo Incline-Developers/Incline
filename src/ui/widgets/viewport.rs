@@ -74,12 +74,10 @@ const RESET_COLORS_HEIGHT: f32 = 16.0;
 /// band whose boundary sits outside the current render range (an imported
 /// colormap authored wider than its data) does not quietly clamp it into range.
 ///
-/// `below` is OMF's `gradient[0]`: the colour under the first boundary. It has
-/// no handle because it has no position - it is selected from the swatch in the
-/// left gutter. Leaving it transparent is what makes the first boundary act as
-/// a grade cutoff.
+/// OMF's `gradient[0]` - the band under the first boundary - is not editable
+/// here: the widget always writes [`BELOW_FIRST_BOUNDARY`], so the first
+/// boundary acts as a grade cutoff that hides everything beneath it.
 struct UiRamp {
-    below: [f32; 4],
     stops: Vec<UiStop>,
     interpolate: bool,
 }
@@ -97,13 +95,9 @@ struct UiStop {
     color: [f32; 4],
 }
 
-/// Which swatch the colour picker is editing: the leading band, or the band
-/// above boundary `i`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-enum UiSelection {
-    Below,
-    Band(usize),
-}
+/// The colour of everything below the first boundary. Always transparent, so
+/// blocks under the cutoff are not drawn.
+const BELOW_FIRST_BOUNDARY: [f32; 4] = [0.0; 4];
 
 impl UiRamp {
     /// Project a colormap onto the bar. A continuous colormap's evenly spaced
@@ -113,7 +107,6 @@ impl UiRamp {
         match transfer {
             // Categories are drawn by `draw_category_legend`, never here.
             ColorTransferFunction::Category { .. } => Self {
-                below: [0.0; 4],
                 stops: Vec::new(),
                 interpolate: false,
             },
@@ -121,7 +114,6 @@ impl UiRamp {
                 let (low, high) = *range;
                 let last = gradient.len().saturating_sub(1).max(1);
                 Self {
-                    below: gradient.first().copied().unwrap_or([0.0; 4]),
                     stops: gradient
                         .iter()
                         .enumerate()
@@ -140,7 +132,6 @@ impl UiRamp {
                 }
             }
             ColorTransferFunction::Discrete { boundaries, gradient } => Self {
-                below: gradient.first().copied().unwrap_or([0.0; 4]),
                 stops: boundaries
                     .iter()
                     .enumerate()
@@ -180,7 +171,7 @@ impl UiRamp {
                     inclusive: stop.inclusive,
                 })
                 .collect(),
-            gradient: std::iter::once(self.below).chain(self.stops.iter().map(|stop| stop.color)).collect(),
+            gradient: std::iter::once(BELOW_FIRST_BOUNDARY).chain(self.stops.iter().map(|stop| stop.color)).collect(),
         }
     }
 
@@ -188,7 +179,7 @@ impl UiRamp {
     /// when resampling a continuous gradient.
     fn sample(&self, value: f64) -> [f32; 4] {
         match self.stops.iter().position(|stop| stop.value > value) {
-            None => self.stops.last().map_or(self.below, |stop| stop.color),
+            None => self.stops.last().map_or(BELOW_FIRST_BOUNDARY, |stop| stop.color),
             Some(0) => self.stops[0].color,
             Some(upper) => {
                 let (low, high) = (self.stops[upper - 1], self.stops[upper]);
@@ -199,31 +190,13 @@ impl UiRamp {
         }
     }
 
-    fn color_at_selection(&self, selection: UiSelection) -> Option<[f32; 4]> {
-        match selection {
-            UiSelection::Below => Some(self.below),
-            UiSelection::Band(index) => self.stops.get(index).map(|stop| stop.color),
-        }
-    }
-
-    fn set_selection_color(&mut self, selection: UiSelection, color: [f32; 4]) {
-        match selection {
-            UiSelection::Below => self.below = color,
-            UiSelection::Band(index) => {
-                if let Some(stop) = self.stops.get_mut(index) {
-                    stop.color = color;
-                }
-            }
-        }
-    }
-
     /// The colour the bar shows at `t`, mirroring `ramp_rgba`.
     fn color_at_t(&self, t: f32) -> egui::Color32 {
         let Some(first) = self.stops.first() else {
-            return color32_from_straight(self.below);
+            return color32_from_straight(BELOW_FIRST_BOUNDARY);
         };
         if t < first.t {
-            return color32_from_straight(self.below);
+            return color32_from_straight(BELOW_FIRST_BOUNDARY);
         }
         let last = self.stops[self.stops.len() - 1];
         if t >= last.t {
@@ -252,16 +225,22 @@ impl UiStop {
 
 /// stops when dragging, so segments never collapse to zero width.
 const STOP_EPSILON: f32 = 0.01;
-const COLOR_STOP_HANDLE_WIDTH: f32 = 18.0;
+/// Side of a boundary handle's square hit target.
+const COLOR_STOP_HANDLE_SIZE: f32 = 18.0;
 const COLOR_PICKER_BUTTON_WIDTH: f32 = 40.0;
 const COLOR_PICKER_BUTTON_HEIGHT: f32 = 18.0;
-const COLOR_PICKER_EDGE_BUFFER: f32 = 8.0;
-const LEGEND_SIDE_GUTTER: f32 = COLOR_PICKER_BUTTON_WIDTH * 0.5 + COLOR_PICKER_EDGE_BUFFER;
+/// The gradient bar and its columns: handles to its left, value labels and
+/// the colour picker to its right.
+const LEGEND_BAR_HEIGHT: f32 = 400.0;
+const LEGEND_BAR_THICKNESS: f32 = 16.0;
+/// Wide enough for a handle plus the `≤` marker drawn beside it.
+const LEGEND_HANDLE_COLUMN_WIDTH: f32 = COLOR_STOP_HANDLE_SIZE + 8.0;
+const LEGEND_COLUMN_GAP: f32 = 6.0;
+const LEGEND_LABEL_FRACTIONS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 /// Floor on the width the block-model properties lay themselves out in, so a
 /// very narrow explorer panel scrolls horizontally rather than collapsing the
-/// colour bar to nothing.
+/// legend's columns into each other.
 const MIN_CONTENT_WIDTH: f32 = 200.0;
-const MIN_BAR_WIDTH: f32 = 96.0;
 const SCALE_BAR_TARGET_WIDTH: f64 = 320.0;
 const SCALE_BAR_VIEWPORT_MARGIN: f32 = 10.0;
 const SCALE_BAR_LABEL_OVERHANG: f32 = 18.0;
@@ -319,9 +298,9 @@ fn insert_stop_sorted(ramp: &mut UiRamp, id: u64, t: f32, min: f64, max: f64) ->
     index
 }
 
-/// Chequerboard behind a swatch, so a transparent colour reads as transparent
-/// rather than as the panel background. Matters for the leading band, whose
-/// whole job is usually to be invisible.
+/// Chequerboard behind the gradient bar, so a band with alpha reads as
+/// transparent rather than as the panel background - including the stretch
+/// under the first boundary, which is always fully transparent.
 fn paint_alpha_checker(painter: &egui::Painter, rect: egui::Rect) {
     const SQUARE: f32 = 4.0;
     let dark = egui::Color32::from_gray(90);
@@ -467,7 +446,6 @@ impl<'a> BlockModelProperties<'a> {
     pub(crate) fn show(self, ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
         let model = self.model;
         let content_width = ui.available_width().max(MIN_CONTENT_WIDTH);
-        let bar_width = (content_width - LEGEND_SIDE_GUTTER * 2.0).max(MIN_BAR_WIDTH);
         let range = active_variable_range(editor, model);
 
         self.draw_slice_controls(ui, content_width, model, commands);
@@ -494,7 +472,7 @@ impl<'a> BlockModelProperties<'a> {
         if model.active_variable_is_categorical() {
             self.draw_category_legend(ui, content_width, model, commands);
         } else if let Some((min, max)) = range {
-            self.draw_bar(ui, content_width, bar_width, min, max, model, editor, commands);
+            self.draw_bar(ui, content_width, min, max, model, editor, commands);
         } else {
             self.draw_no_data(ui, content_width);
         }
@@ -697,16 +675,9 @@ impl<'a> BlockModelProperties<'a> {
     }
 
     fn draw_no_data(&self, ui: &mut egui::Ui, content_width: f32) {
-        let handle_height = 18.0;
-        let bar_height = 16.0;
-        // Must match `draw_bar`'s `editor_height` so switching to/from a
+        // Must match `draw_bar`'s allocation so switching to or from a
         // variable with no usable range doesn't resize the legend.
-        let editor_height = COLOR_PICKER_BUTTON_HEIGHT + 6.0;
-        let label_height = 16.0;
-        let (rect, _response) = ui.allocate_exact_size(
-            egui::vec2(content_width, handle_height + bar_height + editor_height + label_height + 5.0),
-            egui::Sense::hover(),
-        );
+        let (rect, _response) = ui.allocate_exact_size(egui::vec2(content_width, LEGEND_BAR_HEIGHT), egui::Sense::hover());
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -716,29 +687,44 @@ impl<'a> BlockModelProperties<'a> {
         );
     }
 
+    /// The ramp runs bottom to top - `t = 0`, the variable's minimum, sits at
+    /// the bar's bottom edge - so the boundary handles, the value labels and
+    /// the colour picker sit side by side in the narrow properties panel
+    /// rather than competing for its width.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
-    fn draw_bar(&self, ui: &mut egui::Ui, content_width: f32, bar_width: f32, min: f64, max: f64, model: &OpenBlockModel, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-        let handle_height = 18.0;
-        let bar_height = 16.0;
-        let editor_height = COLOR_PICKER_BUTTON_HEIGHT + 6.0;
-        let label_height = 16.0;
-        let (rect, _response) = ui.allocate_exact_size(
-            egui::vec2(content_width, handle_height + bar_height + editor_height + label_height + 5.0),
-            egui::Sense::hover(),
-        );
-        let handle_row_rect = egui::Rect::from_min_size(rect.min, egui::vec2(content_width, handle_height));
-        let bar_rect = egui::Rect::from_min_size(egui::pos2(rect.min.x + LEGEND_SIDE_GUTTER, handle_row_rect.bottom()), egui::vec2(bar_width, bar_height));
-        let editor_row_rect = egui::Rect::from_min_size(egui::pos2(rect.min.x, bar_rect.bottom() + 2.0), egui::vec2(content_width, editor_height));
+    fn draw_bar(&self, ui: &mut egui::Ui, content_width: f32, min: f64, max: f64, model: &OpenBlockModel, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+        let (rect, _response) = ui.allocate_exact_size(egui::vec2(content_width, LEGEND_BAR_HEIGHT), egui::Sense::hover());
+        let handle_column_rect = egui::Rect::from_min_size(rect.min, egui::vec2(LEGEND_HANDLE_COLUMN_WIDTH, LEGEND_BAR_HEIGHT));
+        let bar_rect = egui::Rect::from_min_size(egui::pos2(handle_column_rect.right(), rect.top()), egui::vec2(LEGEND_BAR_THICKNESS, LEGEND_BAR_HEIGHT));
+        let handle_center_x = handle_column_rect.right() - COLOR_STOP_HANDLE_SIZE * 0.5;
+        let y_at = |t: f32| bar_rect.bottom() - bar_rect.height() * t;
+        let t_at = |y: f32| (bar_rect.bottom() - y) / bar_rect.height().max(1.0);
+
+        let text_color = ui.visuals().text_color();
+        // The value labels are laid out (but not painted) up front: their
+        // widest line decides where the colour picker column starts.
+        let label_font = egui::FontId::proportional(11.0);
+        let labels: Vec<_> = LEGEND_LABEL_FRACTIONS
+            .iter()
+            .map(|&t| {
+                (
+                    t,
+                    ui.painter().layout_no_wrap(format_grade(normalized_to_value(t, min, max)), label_font.clone(), text_color),
+                )
+            })
+            .collect();
+        let label_left = bar_rect.right() + LEGEND_COLUMN_GAP;
+        let label_width = labels.iter().map(|(_, galley)| galley.size().x).fold(0.0_f32, f32::max);
+        let picker_left = (label_left + label_width + LEGEND_COLUMN_GAP).min(rect.right() - COLOR_PICKER_BUTTON_WIDTH).max(label_left);
 
         let mut ramp = UiRamp::from_transfer(model.color_transfer(), min, max);
         let mut changed = false;
         let mut remove_index = None;
         let selected_id = self.id.with(("selected_color_stop", model.id));
         let mut selected = ui
-            .data_mut(|data| data.get_persisted::<UiSelection>(selected_id))
-            .filter(|selection| matches!(selection, UiSelection::Below) || ramp.color_at_selection(*selection).is_some())
-            .unwrap_or(UiSelection::Band(0));
+            .data_mut(|data| data.get_persisted::<usize>(selected_id))
+            .filter(|index| *index < ramp.stops.len())
+            .unwrap_or(0);
         let value_popup_id = self.id.with(("stop_value_popup_open", model.id));
         let mut value_popup_stop = ui
             .data_mut(|data| data.get_persisted::<Option<usize>>(value_popup_id))
@@ -749,46 +735,20 @@ impl<'a> BlockModelProperties<'a> {
         // (clicking a handle is "outside" the popup's own rect).
         let mut popup_kept_open = false;
 
-        let text_color = ui.visuals().text_color();
         {
             let painter = ui.painter();
+            paint_alpha_checker(painter, bar_rect);
             const STRIPS: usize = 96;
-            let strip_width = bar_rect.width() / STRIPS as f32;
+            let strip_height = bar_rect.height() / STRIPS as f32;
             for i in 0..STRIPS {
                 let t = i as f32 / (STRIPS - 1) as f32;
                 let strip_rect = egui::Rect::from_min_size(
-                    egui::pos2(bar_rect.left() + i as f32 * strip_width, bar_rect.top()),
-                    egui::vec2(strip_width + 0.5, bar_rect.height()),
+                    egui::pos2(bar_rect.left(), bar_rect.bottom() - (i as f32 + 1.0) * strip_height),
+                    egui::vec2(bar_rect.width(), strip_height + 0.5),
                 );
                 painter.rect_filled(strip_rect, 0.0, ramp.color_at_t(t));
             }
             painter.rect_stroke(bar_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_gray(40)), egui::StrokeKind::Outside);
-        }
-
-        // The leading band has no position, so it gets a fixed swatch in the
-        // left gutter rather than a draggable handle.
-        let below_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.left() + LEGEND_SIDE_GUTTER * 0.5, handle_row_rect.center().y),
-            egui::vec2(COLOR_STOP_HANDLE_WIDTH * 0.75, handle_height * 0.7),
-        );
-        let below_response = ui
-            .interact(below_rect, self.id.with("below_band_swatch"), egui::Sense::click())
-            .on_hover_text("Colour below the first boundary. Transparent hides those blocks.");
-        if below_response.clicked() {
-            selected = UiSelection::Below;
-            value_popup_stop = None;
-        }
-        {
-            let painter = ui.painter();
-            let active = selected == UiSelection::Below;
-            paint_alpha_checker(painter, below_rect);
-            painter.rect_filled(below_rect, 2.0, color32_from_straight(ramp.below));
-            painter.rect_stroke(
-                below_rect,
-                2.0,
-                egui::Stroke::new(if active { 1.5 } else { 1.0 }, if active { egui::Color32::BLACK } else { egui::Color32::from_gray(40) }),
-                egui::StrokeKind::Outside,
-            );
         }
 
         let bar_response = ui
@@ -803,22 +763,21 @@ impl<'a> BlockModelProperties<'a> {
             && ramp.stops.len() < MAX_GRADIENT_ENTRIES - 1
             && let Some(pos) = bar_response.interact_pointer_pos()
         {
-            let raw_t = (pos.x - bar_rect.left()) / bar_rect.width().max(1.0);
-            pending_insert = Some(nudge_away_from_existing(&ramp.stops, raw_t));
+            pending_insert = Some(nudge_away_from_existing(&ramp.stops, t_at(pos.y)));
         }
 
         for i in 0..ramp.stops.len() {
-            let x = bar_rect.left() + bar_rect.width() * ramp.stops[i].t;
-            let handle_rect = egui::Rect::from_center_size(egui::pos2(x, handle_row_rect.center().y), egui::vec2(COLOR_STOP_HANDLE_WIDTH, handle_height));
+            let y = y_at(ramp.stops[i].t);
+            let handle_rect = egui::Rect::from_center_size(egui::pos2(handle_center_x, y), egui::vec2(COLOR_STOP_HANDLE_SIZE, COLOR_STOP_HANDLE_SIZE));
             let handle_id = self.id.with(("color_stop_handle", ramp.stops[i].id));
             let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag()).on_hover_text(if ramp.stops.len() > 1 {
                 "Drag to move · Right-click to remove · Middle-click toggles ≤"
             } else {
                 "Drag to move · Middle-click toggles ≤"
             });
-            // Handles sit directly above the gradient strip, so a
+            // Handles sit directly beside the gradient strip, so a
             // double-click aimed at the bar near an existing stop (most
-            // often the last one, at the visually prominent right edge)
+            // often the last one, at the visually prominent top edge)
             // lands on the handle instead. Without this, that click is
             // swallowed as an ordinary single click that just reselects the
             // handle, and no new stop is ever added.
@@ -826,8 +785,7 @@ impl<'a> BlockModelProperties<'a> {
                 && ramp.stops.len() < MAX_GRADIENT_ENTRIES - 1
                 && let Some(pos) = response.interact_pointer_pos()
             {
-                let raw_t = (pos.x - bar_rect.left()) / bar_rect.width().max(1.0);
-                pending_insert = Some(nudge_away_from_existing(&ramp.stops, raw_t));
+                pending_insert = Some(nudge_away_from_existing(&ramp.stops, t_at(pos.y)));
             } else {
                 if response.secondary_clicked() && ramp.stops.len() > 1 {
                     remove_index = Some(i);
@@ -839,7 +797,7 @@ impl<'a> BlockModelProperties<'a> {
                     changed = true;
                 }
                 if response.clicked() {
-                    selected = UiSelection::Band(i);
+                    selected = i;
                     value_popup_stop = Some(i);
                     popup_kept_open = true;
                 }
@@ -848,13 +806,13 @@ impl<'a> BlockModelProperties<'a> {
                     let upper = if i + 1 == ramp.stops.len() { 1.0 } else { ramp.stops[i + 1].t - STOP_EPSILON };
                     let (lo, hi) = (lower.min(upper), lower.max(upper));
                     if let Some(pos) = response.interact_pointer_pos() {
-                        let t = ((pos.x - bar_rect.left()) / bar_rect.width().max(1.0)).clamp(lo, hi);
+                        let t = t_at(pos.y).clamp(lo, hi);
                         if (ramp.stops[i].t - t).abs() > f32::EPSILON {
                             ramp.stops[i].set_t(t, min, max);
                             changed = true;
                         }
                     }
-                    selected = UiSelection::Band(i);
+                    selected = i;
                     if value_popup_stop.is_some() {
                         value_popup_stop = Some(i);
                         popup_kept_open = true;
@@ -863,24 +821,25 @@ impl<'a> BlockModelProperties<'a> {
             }
             let painter = ui.painter();
             let marker_color = color32_from_straight(ramp.stops[i].color);
-            let center = egui::pos2(x, handle_row_rect.center().y);
-            let active = selected == UiSelection::Band(i) || response.dragged() || response.hovered();
+            let center = egui::pos2(handle_center_x, y);
+            let active = selected == i || response.dragged() || response.hovered();
+            let radius = if active { 5.5 } else { 4.5 };
             painter.line_segment(
-                [egui::pos2(x, handle_row_rect.bottom() - 1.0), egui::pos2(x, bar_rect.top())],
+                [egui::pos2(center.x + radius, y), egui::pos2(bar_rect.left(), y)],
                 egui::Stroke::new(if active { 1.5 } else { 1.0 }, ui.visuals().widgets.noninteractive.bg_stroke.color),
             );
-            painter.circle_filled(center, if active { 5.5 } else { 4.5 }, marker_color);
+            painter.circle_filled(center, radius, marker_color);
             painter.circle_stroke(
                 center,
-                if active { 5.5 } else { 4.5 },
+                radius,
                 egui::Stroke::new(if active { 1.5 } else { 1.0 }, if active { egui::Color32::BLACK } else { egui::Color32::from_gray(40) }),
             );
             // An inclusive boundary owns its own value, which changes which
             // band a block exactly on it lands in - worth showing.
             if ramp.stops[i].inclusive {
                 painter.text(
-                    egui::pos2(x, handle_row_rect.top()),
-                    egui::Align2::CENTER_TOP,
+                    egui::pos2(handle_column_rect.left(), y),
+                    egui::Align2::LEFT_CENTER,
                     "≤",
                     egui::FontId::proportional(9.0),
                     text_color,
@@ -892,7 +851,7 @@ impl<'a> BlockModelProperties<'a> {
             && ramp.stops.len() < MAX_GRADIENT_ENTRIES - 1
         {
             let new_index = insert_stop_sorted(&mut ramp, editor.allocate_color_stop_id(), t, min, max);
-            selected = UiSelection::Band(new_index);
+            selected = new_index;
             value_popup_stop = Some(new_index);
             popup_kept_open = true;
             changed = true;
@@ -905,17 +864,12 @@ impl<'a> BlockModelProperties<'a> {
                 Some(open_index) if open_index > index => Some(open_index - 1),
                 other => other,
             };
-            selected = match selected {
-                UiSelection::Band(current) if current >= ramp.stops.len() => UiSelection::Band(ramp.stops.len().saturating_sub(1)),
-                other => other,
-            };
+            selected = selected.min(ramp.stops.len().saturating_sub(1));
             changed = true;
         }
 
-        if let UiSelection::Band(index) = selected
-            && value_popup_stop == Some(index)
-        {
-            let popup_response = self.draw_stop_value_popup(ui, &mut ramp, index, bar_rect, handle_row_rect, min, max, &mut changed);
+        if value_popup_stop == Some(selected) {
+            let popup_response = self.draw_stop_value_popup(ui, &mut ramp, selected, bar_rect, handle_column_rect, min, max, &mut changed);
             // Close the value input when the user clicks anywhere outside
             // it - unless this frame's click was on a stop handle, which
             // (re)opens it for that stop. Clicking inside the popup to edit
@@ -925,14 +879,10 @@ impl<'a> BlockModelProperties<'a> {
             }
         }
 
-        if let Some(color) = ramp.color_at_selection(selected) {
-            let selected_x = match selected {
-                UiSelection::Below => below_rect.center().x,
-                UiSelection::Band(index) => bar_rect.left() + bar_rect.width() * ramp.stops[index].t,
-            };
-            let swatch_x = selected_x.clamp(rect.left() + COLOR_PICKER_BUTTON_WIDTH * 0.5, rect.right() - COLOR_PICKER_BUTTON_WIDTH * 0.5);
+        if let Some(color) = ramp.stops.get(selected).map(|stop| stop.color) {
+            let swatch_y = y_at(ramp.stops[selected].t).clamp(rect.top() + COLOR_PICKER_BUTTON_HEIGHT * 0.5, rect.bottom() - COLOR_PICKER_BUTTON_HEIGHT * 0.5);
             let swatch_rect = egui::Rect::from_center_size(
-                egui::pos2(swatch_x, editor_row_rect.center().y),
+                egui::pos2(picker_left + COLOR_PICKER_BUTTON_WIDTH * 0.5, swatch_y),
                 egui::vec2(COLOR_PICKER_BUTTON_WIDTH, COLOR_PICKER_BUTTON_HEIGHT),
             );
             let mut srgba = straight_to_unmultiplied_srgba(color);
@@ -942,30 +892,25 @@ impl<'a> BlockModelProperties<'a> {
                     color_edit_button_srgba_unmultiplied(ui, &mut srgba)
                 })
                 .inner
-                .on_hover_text(match selected {
-                    UiSelection::Below => "Colour below the first boundary",
-                    UiSelection::Band(_) => "Click to edit color; right-click to remove",
-                });
-            let picker_remove_clicked = matches!(selected, UiSelection::Band(_))
-                && (response.secondary_clicked() || (ui.rect_contains_pointer(swatch_rect) && ui.input(|input| input.pointer.secondary_clicked())))
-                && ramp.stops.len() > 1;
-            if picker_remove_clicked && let UiSelection::Band(index) = selected {
+                .on_hover_text("Click to edit color; right-click to remove");
+            let picker_remove_clicked =
+                (response.secondary_clicked() || (ui.rect_contains_pointer(swatch_rect) && ui.input(|input| input.pointer.secondary_clicked()))) && ramp.stops.len() > 1;
+            if picker_remove_clicked {
                 value_popup_stop = None;
-                ramp.stops.remove(index);
-                selected = UiSelection::Band(index.min(ramp.stops.len().saturating_sub(1)));
+                ramp.stops.remove(selected);
+                selected = selected.min(ramp.stops.len().saturating_sub(1));
                 changed = true;
             }
             if response.changed() {
-                ramp.set_selection_color(selected, unmultiplied_srgba_to_straight(srgba));
+                if let Some(stop) = ramp.stops.get_mut(selected) {
+                    stop.color = unmultiplied_srgba_to_straight(srgba);
+                }
                 changed = true;
             }
         }
 
         if changed {
-            let selected_value = match selected {
-                UiSelection::Below => None,
-                UiSelection::Band(index) => ramp.stops.get(index).map(|stop| stop.value),
-            };
+            let selected_value = ramp.stops.get(selected).map(|stop| stop.value);
             let popup_value = value_popup_stop.and_then(|index| ramp.stops.get(index).map(|stop| stop.value));
             let transfer = ramp.to_transfer();
             // The command applies `sanitise`, which may sort and merge; track
@@ -983,36 +928,26 @@ impl<'a> BlockModelProperties<'a> {
                     .min_by(|(_, a), (_, b)| (a.value - value).abs().total_cmp(&(b.value - value).abs()))
                     .map(|(index, _)| index)
             };
-            selected = match selected_value.and_then(nearest) {
-                Some(index) => UiSelection::Band(index),
-                None => selected,
-            };
+            selected = selected_value.and_then(nearest).unwrap_or(selected);
             value_popup_stop = popup_value.and_then(nearest);
             commands.push(UiCommand::SetBlockModelColorTransfer { id: model.id, transfer });
         }
         ui.data_mut(|data| data.insert_persisted(selected_id, selected));
         ui.data_mut(|data| data.insert_persisted(value_popup_id, value_popup_stop));
 
-        let fractions: &[f32] = if bar_width < 260.0 {
-            &[0.0, 1.0]
-        } else if bar_width < 420.0 {
-            &[0.0, 0.5, 1.0]
-        } else {
-            &[0.0, 0.25, 0.5, 0.75, 1.0]
-        };
         let painter = ui.painter();
-        for &t in fractions {
-            let x = bar_rect.left() + bar_rect.width() * t;
-            let value = normalized_to_value(t, min, max);
-            let anchor = if t <= 0.01 {
-                egui::Align2::LEFT_TOP
-            } else if t >= 0.99 {
-                egui::Align2::RIGHT_TOP
-            } else {
-                egui::Align2::CENTER_TOP
-            };
-            let label_top = editor_row_rect.bottom() + 1.0;
-            painter.text(egui::pos2(x, label_top), anchor, format_grade(value), egui::FontId::proportional(11.0), text_color);
+        for (t, galley) in labels {
+            let y = y_at(t);
+            let height = galley.size().y;
+            painter.line_segment(
+                [egui::pos2(bar_rect.right(), y), egui::pos2(bar_rect.right() + LEGEND_COLUMN_GAP * 0.5, y)],
+                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            );
+            painter.galley(
+                egui::pos2(label_left, (y - height * 0.5).clamp(bar_rect.top(), bar_rect.bottom() - height)),
+                galley,
+                text_color,
+            );
         }
     }
 
@@ -1023,22 +958,22 @@ impl<'a> BlockModelProperties<'a> {
         ramp: &mut UiRamp,
         selected_stop: usize,
         bar_rect: egui::Rect,
-        handle_row_rect: egui::Rect,
+        handle_column_rect: egui::Rect,
         min: f64,
         max: f64,
         changed: &mut bool,
     ) -> Option<egui::Response> {
         let stops = ramp.stops.as_mut_slice();
         let stop = stops.get(selected_stop).copied()?;
-        let selected_x = bar_rect.left() + bar_rect.width() * stop.t;
-        let popup_pos = egui::pos2(selected_x, handle_row_rect.top() - 6.0);
+        let selected_y = bar_rect.bottom() - bar_rect.height() * stop.t;
+        let popup_pos = egui::pos2(handle_column_rect.left() - 4.0, selected_y);
         let area_response = egui::Area::new(self.id.with("stop_value_popup"))
             .order(egui::Order::Middle)
             // The popup is fixed to its stop. Its container must not retain a
             // drag response after the stop slider has been adjusted.
             .movable(false)
             .sense(egui::Sense::hover())
-            .pivot(egui::Align2::CENTER_BOTTOM)
+            .pivot(egui::Align2::RIGHT_CENTER)
             .fixed_pos(popup_pos)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {

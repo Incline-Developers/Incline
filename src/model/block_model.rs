@@ -538,9 +538,10 @@ impl ColorTransferFunction {
     /// The default cut-off / green / yellow / red ramp spread over `min..max`.
     ///
     /// `gradient[0]` is transparent, so everything below the first boundary is
-    /// hidden until the user gives that band a colour. The remaining three
-    /// split the range into equal thirds, red owning the last third rather than
-    /// only the single point at the maximum.
+    /// hidden - the legend keeps it that way, making the first boundary a
+    /// grade cutoff. The remaining three split the range into equal thirds,
+    /// red owning the last third rather than only the single point at the
+    /// maximum.
     pub(crate) fn for_range(min: f64, max: f64) -> Self {
         let span = max - min;
         Self::Discrete {
