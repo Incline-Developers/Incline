@@ -148,7 +148,7 @@ pub(crate) fn draw_explorer(
             // Prevent content from forcing the panel wider than the user has dragged it.
             ui.set_max_width(ui.available_width());
 
-            crate::ui::elements::toolbars::draw_explorer_toolbar(ui, project, commands, can_undo, can_redo);
+            crate::ui::elements::toolbars::draw_explorer_toolbar(ui, editor, project, commands, can_undo, can_redo);
             draw_properties(ui, editor, block_models, document, commands, geometry_dirty);
 
             // Sections other than Projects belong to the active project, so

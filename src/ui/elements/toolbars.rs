@@ -50,7 +50,7 @@ const VIEW_TOOLS_MARGIN: f32 = 16.0;
 /// is as tall as the viewport's top toolbar, and carries the chrome fill the
 /// properties tab column uses, which is what sets it apart from the tree's
 /// list surface below - it needs no border of its own.
-pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>, can_undo: bool, can_redo: bool) {
+pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, can_undo: bool, can_redo: bool) {
     egui::Panel::top("explorer_tools_strip")
         .resizable(false)
         .default_size(TOOLBAR_STRIP_HEIGHT)
@@ -87,6 +87,28 @@ pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, project: &UiProjectView, 
                         if download.clicked() {
                             commands.push(UiCommand::DownloadProject);
                         }
+                    }
+
+                    ui.add_space(STRIP_CLUSTER_GAP - STRIP_BUTTON_GAP);
+
+                    // The same two dialogs the File menu opens; only one of
+                    // the pair is ever up, so opening one closes the other.
+                    let has_project = project.projects.iter().any(|entry| entry.is_active);
+                    let import = ui.add_enabled(
+                        has_project,
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "import_data.svg")), "Import...").id_salt("import"),
+                    );
+                    if import.clicked() {
+                        editor.show_import = true;
+                        editor.show_export = false;
+                    }
+                    let export = ui.add_enabled(
+                        has_project,
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "export_data.svg")), "Export...").id_salt("export"),
+                    );
+                    if export.clicked() {
+                        editor.show_import = false;
+                        editor.show_export = true;
                     }
 
                     ui.add_space(STRIP_CLUSTER_GAP - STRIP_BUTTON_GAP);

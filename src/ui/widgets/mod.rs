@@ -18,14 +18,14 @@ fn shifted(color: egui::Color32, delta: i16) -> egui::Color32 {
 
 /// Base and alternating row colours for the explorer tree.
 ///
-/// The lit rows take the properties panel's background, so the two halves of
-/// the side panel share one palette; the base rows sit just below it. The
+/// The base rows take the properties panel's background, so the two halves of
+/// the side panel share one palette; the banded rows sit just below it. The
 /// banding is there to carry the eye along a row, not to draw stripes, so the
 /// step is a handful of levels. The console keeps its own stronger pairing -
 /// it is a log, not part of this panel.
 pub(crate) fn tree_row_colors(ui: &egui::Ui) -> (egui::Color32, egui::Color32) {
-    let stripe = ui.visuals().panel_fill;
-    (shifted(stripe, if ui.visuals().dark_mode { -5 } else { -6 }), stripe)
+    let surface = ui.visuals().panel_fill;
+    (surface, shifted(surface, if ui.visuals().dark_mode { -5 } else { -6 }))
 }
 
 /// Fill for the properties panel's tab column.
