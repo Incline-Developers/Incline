@@ -40,7 +40,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
         return;
     }
     if !is_import_menu(editor.data_menu) {
-        editor.data_menu = DataMenu::Dxf;
+        editor.data_menu = DataMenu::Omf;
     }
 
     let mut show_import = editor.show_import;
@@ -92,7 +92,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
         return;
     }
     if !is_export_menu(editor.data_menu) {
-        editor.data_menu = DataMenu::Dxf;
+        editor.data_menu = DataMenu::Omf;
     }
 
     let mut show_export = editor.show_export;
