@@ -18,54 +18,103 @@ pub(crate) const BOTTOM_TOOLBAR_HEIGHT: f32 = 32.0;
 const TOOL_GROUP_GAP: f32 = 16.0;
 /// Outer width of a tile, for laying tiles out in a floating overlay.
 const TOOL_TILE_WIDTH: f32 = 36.0;
+/// Height of a docked toolbar strip. The explorer's header and the viewport's
+/// top toolbar share it, so their bottom rules meet as one line.
+const TOOLBAR_STRIP_HEIGHT: f32 = 34.0;
+/// Space between a docked strip's edge and its buttons.
+const STRIP_MARGIN: i8 = 6;
+/// Gap between buttons in the same cluster of a docked strip.
+const STRIP_BUTTON_GAP: f32 = 2.0;
+/// Gap between two clusters of buttons in a docked strip. The floating tiles'
+/// gap reads as more space than it is, because the tiles pad themselves; this
+/// is the docked equivalent of that separation.
+const STRIP_CLUSTER_GAP: f32 = 12.0;
+/// Label for the primary shortcut modifier in tooltips. Spelled out rather
+/// than drawn as a glyph, so it can't land as tofu in the bundled fonts.
+const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" };
+/// Label for the shift modifier in tooltips.
+const SHIFT_MODIFIER: &str = "Shift+";
+
 /// Gap between the view tools and the viewport's right edge. Matches the
 /// orientation gizmo's margin, so the stack and the gizmo share an edge.
 const VIEW_TOOLS_MARGIN: f32 = 16.0;
 
-/// Draw the explorer's own toolbar: the project-wide actions, sitting above
-/// the data tree rather than out over the viewport.
+/// Draw the explorer's header: the project-wide actions, sitting above the
+/// data tree rather than out over the viewport.
+///
+/// The floating view tools group their buttons onto tiles, because out there a
+/// tile is all that separates a tool from the scene behind it. A docked strip
+/// already has a surface, so it groups by spacing alone: related buttons close
+/// together, a wider gap between clusters. The button metrics, rounding and
+/// hover fills are shared, so the two toolbars read as one family. The strip
+/// is as tall as the viewport's top toolbar, and carries the chrome fill the
+/// properties tab column uses, which is what sets it apart from the tree's
+/// list surface below - it needs no border of its own.
 pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>, can_undo: bool, can_redo: bool) {
-    egui::Panel::top("explorer_tools_strip").resizable(false).default_size(32.0).show(ui, |ui| {
-        let contents_id = ui.make_persistent_id("explorer_toolbar_buttons");
-        ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.add_space(4.0);
-                let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
-                let save = ui.add_enabled(
-                    has_unsaved,
-                    ToolbarButton::new(egui::Image::new(unthemed_icon!("save_project.svg")), "Save Project").id_salt("save_project"),
-                );
-                if save.clicked() {
-                    commands.push(UiCommand::SaveProject);
-                }
+    egui::Panel::top("explorer_tools_strip")
+        .resizable(false)
+        .default_size(TOOLBAR_STRIP_HEIGHT)
+        .show_separator_line(false)
+        .frame(
+            egui::Frame::NONE
+                .fill(crate::ui::widgets::recessed_chrome_fill(ui))
+                .inner_margin(egui::Margin::symmetric(STRIP_MARGIN, 0)),
+        )
+        .show(ui, |ui| {
+            let contents_id = ui.make_persistent_id("explorer_toolbar_buttons");
+            ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = STRIP_BUTTON_GAP;
 
-                #[cfg(target_arch = "wasm32")]
-                if ui
-                    .add_enabled(!project.projects.is_empty(), egui::Button::new("Download OMF"))
-                    .on_hover_text("Download the current project as an .omf file")
-                    .clicked()
-                {
-                    commands.push(UiCommand::DownloadProject);
-                }
+                    let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
+                    let save = ui.add_enabled(
+                        has_unsaved,
+                        ToolbarButton::new(egui::Image::new(unthemed_icon!("save_project.svg")), format!("Save Project ({PRIMARY_MODIFIER}S)")).id_salt("save_project"),
+                    );
+                    if save.clicked() {
+                        commands.push(UiCommand::SaveProject);
+                    }
 
-                let undo_btn = ui.add_enabled(can_undo, ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), "Undo").id_salt("undo"));
-                if undo_btn.clicked() {
-                    commands.push(UiCommand::Undo);
-                }
-                let redo_btn = ui.add_enabled(can_redo, ToolbarButton::new(egui::Image::new(themed_icon!(ui, "redo.svg")), "Redo").id_salt("redo"));
-                if redo_btn.clicked() {
-                    commands.push(UiCommand::Redo);
-                }
+                    // In the browser, saving only reaches IndexedDB, so taking
+                    // a copy away with you is a project action of its own.
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        let download = ui.add_enabled(
+                            !project.projects.is_empty(),
+                            ToolbarButton::new(egui::Image::new(unthemed_icon!("open_mining_format.svg")), "Download the current project as an .omf file")
+                                .id_salt("download_project"),
+                        );
+                        if download.clicked() {
+                            commands.push(UiCommand::DownloadProject);
+                        }
+                    }
+
+                    ui.add_space(STRIP_CLUSTER_GAP - STRIP_BUTTON_GAP);
+
+                    let undo_btn = ui.add_enabled(
+                        can_undo,
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), format!("Undo ({PRIMARY_MODIFIER}Z)")).id_salt("undo"),
+                    );
+                    if undo_btn.clicked() {
+                        commands.push(UiCommand::Undo);
+                    }
+                    let redo_btn = ui.add_enabled(
+                        can_redo,
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "redo.svg")), format!("Redo ({PRIMARY_MODIFIER}{SHIFT_MODIFIER}Z)")).id_salt("redo"),
+                    );
+                    if redo_btn.clicked() {
+                        commands.push(UiCommand::Redo);
+                    }
+                });
             });
         });
-    });
 }
 
 /// Draw the top toolbar (layer combo, Z level, line colour, hatch).
 pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) -> egui::Rect {
     egui::Panel::top("top_tools_strip")
         .resizable(false)
-        .default_size(34.0)
+        .default_size(TOOLBAR_STRIP_HEIGHT)
         .show(ui, |ui| {
             // Keep the automatic ids below this point independent of the
             // parent panel's layout pass. egui may rerun a frame for sizing;
