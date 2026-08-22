@@ -453,7 +453,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             let response = on_hover_file_details(
                                 ui.add(ExplorerEntry::new(
                                     egui::Id::new(("explorer_point_cloud", point_cloud.id)),
-                                    unthemed_icon!("point_clouds_section.svg"),
+                                    unthemed_icon!("point_cloud.svg"),
                                     label,
                                 )),
                                 &tooltip,
@@ -510,7 +510,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             };
                             let response = on_hover_file_details(
                                 ui.add(
-                                    ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), unthemed_icon!("block_models_section.svg"), label)
+                                    ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), unthemed_icon!("block_model.svg"), label)
                                         .selected(block_model.is_active),
                                 ),
                                 &format!(
@@ -578,7 +578,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                             let response = on_hover_file_details(
                                 ui.add(ExplorerEntry::new(
                                     egui::Id::new(("explorer_drill_hole", dataset.id)),
-                                    unthemed_icon!("drill_holes_section.svg"),
+                                    unthemed_icon!("drill_hole.svg"),
                                     label,
                                 )),
                                 &tooltip,
