@@ -163,7 +163,11 @@ pub(crate) fn draw_explorer(
             let mut row_index = 0usize;
             // Vertical shrinking is off so the banding below the last row has
             // the full panel height to run into: see `fill_trailing_stripes`.
-            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            // A `ScrollArea` claims 64pt of height by default even when less
+            // than that is left, and paints its rows over whatever is below -
+            // here, the properties panel. Let it shrink to what the properties
+            // panel leaves it instead.
+            egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
                 // Empty-state messages should behave like explorer entries at
                 // narrow widths: stay on one line and end with an ellipsis.
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);

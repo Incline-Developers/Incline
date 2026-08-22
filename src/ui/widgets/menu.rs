@@ -317,22 +317,49 @@ fn selected_file_label(paths: &[PathBuf], empty_text: egui::WidgetText) -> egui:
     }
 }
 
+/// Size of the round help marker drawn beside a label.
+const HELP_MARKER_SIZE: f32 = 14.0;
+
 fn menu_field_row<R>(ui: &mut egui::Ui, label: egui::WidgetText, help_text: Option<egui::WidgetText>, add_field: impl FnOnce(&mut egui::Ui, f32) -> R) -> R {
     let row_height = ui.spacing().interact_size.y;
     let row_width = ui.available_width();
 
-    ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        menu_field_label(ui, label, help_text);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| add_field(ui, row_height)).inner
+    // The control claims its width first and the label takes what is left, so
+    // a label too long for the row ends in an ellipsis instead of running on
+    // underneath the control.
+    ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let inner = add_field(ui, row_height);
+        let label_width = ui.available_width();
+        ui.allocate_ui_with_layout(egui::vec2(label_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            menu_field_label(ui, label, help_text);
+        });
+        inner
     })
     .inner
 }
 
+/// Draw a field's label, and its help marker if it has one, within the width
+/// the caller has left for them.
+///
+/// The text is laid out against that width less the marker's slot, so it
+/// truncates rather than pushing the marker over the field beside it. A
+/// truncated label names itself in full on hover.
 pub(crate) fn menu_field_label(ui: &mut egui::Ui, label: egui::WidgetText, help_text: Option<egui::WidgetText>) {
-    ui.label(label);
+    let marker_slot = if help_text.is_some() { HELP_MARKER_SIZE + ui.spacing().item_spacing.x } else { 0.0 };
+    let text_width = (ui.available_width() - marker_slot).max(0.0);
+    let full_text = label.text().to_owned();
+    let galley = label.into_galley(ui, Some(egui::TextWrapMode::Truncate), text_width, egui::TextStyle::Body);
+    let elided = galley.elided;
+    let (rect, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().galley(rect.min, galley, ui.visuals().text_color());
+    }
+    if elided {
+        response.on_hover_text(full_text);
+    }
+
     if let Some(help_text) = help_text {
-        let desired_size = egui::vec2(14.0, 14.0);
-        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(HELP_MARKER_SIZE), egui::Sense::hover());
         if ui.is_rect_visible(rect) {
             let color = ui.visuals().weak_text_color();
             ui.painter().circle_stroke(rect.center(), 5.5, egui::Stroke::new(1.0, color));

@@ -390,6 +390,15 @@ pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
         .sense(egui::Sense::hover())
         .pivot(egui::Align2::RIGHT_TOP)
         .fixed_pos(egui::pos2(canvas_rect.right() - VIEW_TOOLS_MARGIN, top))
+        // Middle order paints over every panel, so a stack taller than the
+        // space below the gizmo would otherwise run across the bottom toolbar
+        // and the console. Constraining slides it up to sit inside the
+        // viewport, and clips anything still too tall, so the panels stay on
+        // top the way they do beside the left toolbar. Only the vertical range
+        // is tightened: each group's tile is painted a little wider than the
+        // column of buttons the area measures, so a rect that hugged the
+        // stack's own edge would clip the tiles' right-hand corners off.
+        .constrain_to(canvas_rect.shrink2(egui::vec2(0.0, VIEW_TOOLS_MARGIN)))
         .show(ui.ctx(), |ui| {
             ui.set_max_width(TOOL_TILE_WIDTH);
             ui.spacing_mut().item_spacing.y = TOOL_GROUP_GAP;

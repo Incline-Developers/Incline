@@ -32,6 +32,12 @@ const TAB_GROUP_GAP: f32 = 10.0;
 /// Width the labelled fields give their control, leaving room for the label in
 /// a panel far narrower than a dialog.
 const FIELD_WIDTH: f32 = 88.0;
+/// Shortest the panel may be dragged, and the height it keeps when the side
+/// panel is too short to honour [`MIN_TREE_HEIGHT`] as well.
+const MIN_HEIGHT: f32 = 120.0;
+/// Tree height the panel always leaves above itself - roughly three rows, so
+/// the sections stay reachable however short the window gets.
+const MIN_TREE_HEIGHT: f32 = 72.0;
 
 /// What the panel can show this frame, given the current selection.
 struct PropertyContext {
@@ -81,11 +87,16 @@ pub(crate) fn draw_properties(
     // Half the side panel by default: enough for the longer settings tabs and
     // the block-model colour ramp without the tree feeling squeezed. Only the
     // first frame uses this; after that the panel remembers its dragged size.
-    let default_height = (ui.available_height() * 0.5).clamp(180.0, 640.0);
+    let available_height = ui.available_height();
+    let default_height = (available_height * 0.5).clamp(180.0, 640.0);
+    // Never take the last of the tree's height: a short window would otherwise
+    // leave it with a sliver the section headers spill straight out of.
+    let max_height = (available_height - MIN_TREE_HEIGHT).max(MIN_HEIGHT);
     egui::Panel::bottom("explorer_properties")
         .resizable(true)
         .default_size(default_height)
-        .min_size(120.0)
+        .min_size(MIN_HEIGHT)
+        .max_size(max_height)
         .frame(egui::Frame::NONE.fill(content_fill))
         .show(ui, |ui| {
             // A panel ends up as tall as its contents report, and that height
@@ -112,6 +123,11 @@ pub(crate) fn draw_properties(
                     // Leave room for the scrollbar so the right-aligned controls
                     // are never tucked underneath it.
                     ui.set_max_width((ui.available_width() - 4.0).max(1.0));
+                    // Headings and field labels get whatever their row's control
+                    // leaves them, which in a panel this narrow is regularly less
+                    // than the text: end it in an ellipsis rather than wrapping
+                    // the fields apart.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                     match shown_tab {
                         PropertyTab::Interface => draw_interface_settings(ui, editor, commands),
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
