@@ -776,3 +776,18 @@ impl PreferenceCategory {
         )
     }
 }
+
+/// Standard dialog keyboard shortcuts.
+///
+/// Enter confirms the dialog's primary action and Escape cancels it. Both keys
+/// are *consumed* from egui's input, so only the first dialog that asks for
+/// them in a frame reacts, and the viewport tools never see the same press
+/// (`App::handle_key_code` skips them while a modal dialog is open).
+pub(crate) fn dialog_confirm_pressed(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+}
+
+/// Escape half of [`dialog_confirm_pressed`].
+pub(crate) fn dialog_cancel_pressed(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+}

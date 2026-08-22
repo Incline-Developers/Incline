@@ -2,7 +2,7 @@
 
 use crate::ui::{
     state::{EditorState, UiCommand, UiProjectView},
-    widgets::menu::DragableMenu,
+    widgets::menu::{self, DragableMenu},
 };
 
 /// Draw the "Save before quit?" confirmation dialog.
@@ -17,13 +17,15 @@ pub(crate) fn draw_exit_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         ui.label("Save the modified project to browser storage before exiting?");
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Save and Exit").clicked() {
+            if ui.button("Save and Exit").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndExit);
             }
+            // Discarding work stays mouse-only: Enter must never be the key
+            // that throws away unsaved changes.
             if ui.button("Exit Without Saving").clicked() {
                 commands.push(UiCommand::ExitWithoutSaving);
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 commands.push(UiCommand::CancelExit);
             }
         });
@@ -45,13 +47,13 @@ pub(crate) fn draw_replace_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<
         ui.label("Save changes to the current project before replacing it?");
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Save").clicked() {
+            if ui.button("Save").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndReplaceProject);
             }
             if ui.button("Discard").clicked() {
                 commands.push(UiCommand::DiscardAndReplaceProject);
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 commands.push(UiCommand::CancelProjectReplacement);
             }
         });
@@ -77,10 +79,10 @@ pub(crate) fn draw_lossy_save_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCom
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Save Anyway").clicked() {
+            if ui.button("Save Anyway").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::ConfirmLossyProjectSave);
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 commands.push(UiCommand::CancelLossyProjectSave);
             }
         });
@@ -102,11 +104,11 @@ pub(crate) fn draw_delete_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
         ui.label(format!("Are you sure you want to delete {count} selected item{}?", if count == 1 { "" } else { "s" }));
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if ui.button("Delete").clicked() {
+            if ui.button("Delete").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::ConfirmDeleteSelection);
                 editor.delete_confirm_open = false;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.delete_confirm_open = false;
             }
         });
@@ -126,10 +128,10 @@ pub(crate) fn draw_delete_layer_confirm_dialog(ui: &mut egui::Ui, commands: &mut
         ui.label(format!("Delete layer '{name}' and all objects on it?\nThis cannot be undone."));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Delete Layer").clicked() {
+            if ui.button("Delete Layer").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::DeleteLayer(layer_id));
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.pending_delete_layer = None;
             }
         });
@@ -175,13 +177,13 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button(if removing { "Save and Remove" } else { "Save and Close" }).clicked() {
+                if ui.button(if removing { "Save and Remove" } else { "Save and Close" }).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                 }
                 if ui.button(if removing { "Remove Without Saving" } else { "Close Without Saving" }).clicked() {
                     commands.push(UiCommand::CloseProjectForce(runtime_id));
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     commands.push(UiCommand::CancelCloseProject);
                 }
             });
@@ -196,18 +198,19 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if removing {
+                    // Removing always discards, so it is deliberately not bound to Enter.
                     if ui.button("Remove Project").clicked() {
                         commands.push(UiCommand::CloseProjectForce(runtime_id));
                     }
                 } else {
-                    if ui.button("Save and Close").clicked() {
+                    if ui.button("Save and Close").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                         commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                     }
                     if ui.button("Close Without Saving").clicked() {
                         commands.push(UiCommand::CloseProjectForce(runtime_id));
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     commands.push(UiCommand::CancelCloseProject);
                 }
             });
@@ -240,10 +243,10 @@ pub(crate) fn draw_discard_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<
         ));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Discard Changes").clicked() {
+            if ui.button("Discard Changes").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::DiscardProjectChanges(runtime_id));
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.pending_discard_project = None;
             }
         });
@@ -270,10 +273,10 @@ pub(crate) fn draw_discard_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
         ));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Discard Changes").clicked() {
+            if ui.button("Discard Changes").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::DiscardLayerChanges(layer_id));
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.pending_discard_layer = None;
             }
         });

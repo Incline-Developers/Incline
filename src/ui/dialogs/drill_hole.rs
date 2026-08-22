@@ -2,7 +2,7 @@ use crate::{
     model::drill_hole::{DrillColorPreset, DrillFieldKind, OpenDrillHoleDataset},
     ui::{
         state::{EditorState, UiCommand},
-        widgets::menu::{DragableMenu, MenuField, MenuFieldCombo},
+        widgets::menu::{self, DragableMenu, MenuField, MenuFieldCombo},
     },
 };
 
@@ -127,7 +127,13 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 }
             }
         });
-    if !open {
+    // Colour edits apply live, so there is no confirm step: both keys dismiss.
+    let dismissed = {
+        let confirm = menu::dialog_confirm_pressed(ui.ctx());
+        let cancel = menu::dialog_cancel_pressed(ui.ctx());
+        confirm || cancel
+    };
+    if !open || dismissed {
         editor.drill_hole_color_dialog = None;
     }
 }

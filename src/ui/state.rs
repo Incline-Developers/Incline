@@ -1239,6 +1239,79 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
+    /// Dialogs that take Enter as their confirm shortcut.
+    ///
+    /// The GUI only reports a key press as consumed when a text field holds
+    /// focus, so without asking here the viewport tools would act on the same
+    /// press before the dialog is drawn. Keep this in step with the dialogs
+    /// that call [`crate::ui::widgets::menu::dialog_confirm_pressed`].
+    pub(crate) fn dialog_owns_confirm_key(&self) -> bool {
+        if self.viewport_pick_in_progress() {
+            return false;
+        }
+        self.poly_finish_dialog || self.dialog_owns_both_keys()
+    }
+
+    /// Dialogs that take Escape as their cancel shortcut. The startup splash
+    /// is absent on purpose: nothing in the tool chain reacts to Escape while
+    /// it is up, so its own handler is enough.
+    pub(crate) fn dialog_owns_cancel_key(&self) -> bool {
+        if self.viewport_pick_in_progress() {
+            return false;
+        }
+        self.dialog_owns_both_keys()
+    }
+
+    /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
+    /// to the pick (it returns to the dialog), and Enter means nothing.
+    fn viewport_pick_in_progress(&self) -> bool {
+        self.triangulation_pick_target.is_some() || self.tri_cut_poly_awaiting_pick || self.canvas_context_menu_open || self.text_editing_enabled
+    }
+
+    /// The common case: a dialog that confirms on Enter and cancels on Escape.
+    fn dialog_owns_both_keys(&self) -> bool {
+        self.exit_confirm_open
+            || self.replace_project_confirm_open
+            || self.lossy_save_confirm_open
+            || self.delete_confirm_open
+            || self.pending_delete_layer.is_some()
+            || self.pending_close_project.is_some()
+            || self.pending_discard_project.is_some()
+            || self.pending_discard_layer.is_some()
+            || self.show_about
+            || self.preferences_open
+            || self.show_import
+            || self.show_export
+            || self.drill_hole_color_dialog.is_some()
+            || self.plot_dialog.is_some()
+            || self.move_to_layer_dialog.is_some()
+            || self.move_to_axis_dialog.is_some()
+            || self.insert_point_at_elevation_dialog.is_some()
+            || self.new_layer_dialog_open
+            || self.renaming_layer.is_some()
+            || self.tri_create_open
+            || self.tri_create_failure.is_some()
+            || self.tri_cut_poly_open
+            || self.tri_cut_z_open
+            || self.tri_cut_surface_open
+            || self.tri_cut_pitshell_open
+            || self.tri_include_solid_open
+            || self.tri_contour_open
+            || self.point_cloud_tin_open
+            || self.block_model_create_open
+            || self.ore_triangulation_open
+            || {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.new_project_dialog_open
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    false
+                }
+            }
+    }
+
     pub(crate) fn update_contour_layer_name_from_surface(&mut self, surface_name: &str) {
         if !self.tri_contour_layer_name_auto {
             return;

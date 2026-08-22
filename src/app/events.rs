@@ -1115,6 +1115,19 @@ impl<'a> App<'a> {
     }
 
     fn handle_key_code(&mut self, key: KeyCode) {
+        // An open dialog owns Enter/Escape: the GUI only reports the press as
+        // consumed when a text field has focus, so without this the viewport
+        // tools would act on the same key before the dialog is drawn. The
+        // dialog itself consumes the key from egui's queue next frame.
+        let dialog_owns_key = match key {
+            KeyCode::Enter | KeyCode::NumpadEnter => self.editor.dialog_owns_confirm_key(),
+            KeyCode::Escape => self.editor.dialog_owns_cancel_key(),
+            _ => false,
+        };
+        if dialog_owns_key {
+            self.redraw_requested = true;
+            return;
+        }
         match &key {
             KeyCode::Escape => {
                 if self.editor.canvas_context_menu_open {

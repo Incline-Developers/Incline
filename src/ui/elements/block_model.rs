@@ -9,7 +9,7 @@ use crate::{
     ui::{
         EditorState, UiCommand,
         state::OreFilterMode,
-        widgets::menu::{DragableMenu, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
+        widgets::menu::{self, DragableMenu, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
     },
 };
 
@@ -198,10 +198,11 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             && editor.kriging_min_samples <= editor.kriging_max_samples
             && editor.kriging_max_samples <= 64;
         ui.horizontal(|ui| {
-            if ui.button("Cancel").clicked() {
+            let confirm = menu::dialog_confirm_pressed(ui.ctx());
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.block_model_create_open = false;
             }
-            if ui.add_enabled(ready, egui::Button::new("Create")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new("Create")).clicked() || (confirm && ready) {
                 commands.push(UiCommand::ExecuteCreateBlockModel {
                     drill_hole_id: editor.kriging_drill_hole_id.unwrap(),
                     variables: editor.kriging_variables.clone(),
@@ -330,10 +331,11 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
             && min.is_finite()
             && (editor.ore_filter_mode != OreFilterMode::Between || max.is_finite());
         ui.horizontal(|ui| {
-            if ui.button("Cancel").clicked() {
+            let confirm = menu::dialog_confirm_pressed(ui.ctx());
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.ore_triangulation_open = false;
             }
-            if ui.add_enabled(ready, egui::Button::new("Create")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new("Create")).clicked() || (confirm && ready) {
                 commands.push(UiCommand::ExecuteCreateOreTriangulation {
                     block_model_id: editor.ore_block_model_id.unwrap(),
                     variable: editor.ore_variable.clone(),

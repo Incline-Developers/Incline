@@ -5,7 +5,10 @@
 //! notice, and carries the attribution the bundled MIT and Apache-2.0
 //! components require alongside it.
 
-use crate::ui::{state::EditorState, widgets::menu::DragableMenu};
+use crate::ui::{
+    state::EditorState,
+    widgets::menu::{self, DragableMenu},
+};
 
 /// Copyright line, kept in step with the one on the startup splash.
 const COPYRIGHT: &str = "© 2026 Leo Timmins and Lucas Timmins";
@@ -84,7 +87,10 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
                     ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/Incline-Developers/Incline"));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Close").clicked() {
+                    // Nothing here is confirmed or cancelled, so both keys dismiss.
+                    let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                    let cancel = menu::dialog_cancel_pressed(ui.ctx());
+                    if ui.button("Close").clicked() || confirm || cancel {
                         editor.show_about = false;
                     }
                 });

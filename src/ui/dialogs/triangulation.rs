@@ -5,7 +5,7 @@ use crate::{
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
-        widgets::menu::{DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+        widgets::menu::{self, DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
     },
 };
 
@@ -290,7 +290,9 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             let ready = has_selection && !editor.tri_name_input.trim().is_empty();
-            if ui.add_enabled(ready, egui::Button::new("Triangulate")).clicked() {
+            let confirm = menu::dialog_confirm_pressed(ui.ctx());
+            let cancel = menu::dialog_cancel_pressed(ui.ctx());
+            if ui.add_enabled(ready, egui::Button::new("Triangulate")).clicked() || (confirm && ready) {
                 let object_ids: Vec<ObjectId> = editor.tri_selected_object_ids.clone();
                 let name = editor.tri_name_input.trim().to_owned();
                 let surface_type = editor.tri_surface_type;
@@ -298,7 +300,7 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 tri_reset_state(editor);
                 commands.push(command);
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || cancel {
                 tri_reset_state(editor);
             }
         });
@@ -336,7 +338,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("Weld & Retry").clicked() {
+                if ui.button("Weld & Retry").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::ExecuteCreateTriangulationWithWeld {
                         name: failure.name.clone(),
                         object_ids: failure.object_ids.clone(),
@@ -344,7 +346,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                     });
                     dismiss = true;
                 }
-                if ui.button("Close").clicked() {
+                if ui.button("Close").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     dismiss = true;
                 }
             });
@@ -364,7 +366,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("Generate Upper Surface").clicked() {
+                if ui.button("Generate Upper Surface").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::ExecuteCreateTriangulationUpperSurface {
                         name: failure.name.clone(),
                         object_ids: failure.object_ids.clone(),
@@ -373,13 +375,16 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                     });
                     dismiss = true;
                 }
-                if ui.button("Close").clicked() {
+                if ui.button("Close").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     dismiss = true;
                 }
             });
         } else {
             ui.colored_label(egui::Color32::LIGHT_RED, &failure.message);
-            if ui.button("Close").clicked() {
+            // Only one button, so Enter and Escape both dismiss.
+            let confirm = menu::dialog_confirm_pressed(ui.ctx());
+            let cancel = menu::dialog_cancel_pressed(ui.ctx());
+            if ui.button("Close").clicked() || confirm || cancel {
                 dismiss = true;
             }
         }
@@ -567,7 +572,8 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
             let can_run = editor.tri_cut_poly_tri_id.is_some() && editor.tri_cut_poly_object_id.is_some() && !editor.tri_cut_poly_name_input.trim().is_empty();
 
             ui.horizontal(|ui| {
-                if ui.add_enabled(can_run, egui::Button::new("Clip")).clicked()
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add_enabled(can_run, egui::Button::new("Clip")).clicked() || (confirm && can_run))
                     && let (Some(tri_id), Some(poly_id)) = (editor.tri_cut_poly_tri_id, editor.tri_cut_poly_object_id)
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationByPolyline {
@@ -577,7 +583,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                         name: editor.tri_cut_poly_name_input.trim().to_owned(),
                     });
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     editor.tri_cut_poly_open = false;
                     editor.tool_highlight_id = None;
                 }
@@ -686,7 +692,8 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
             let can_run = editor.tri_cut_z_tri_id.is_some() && valid_z_range && !editor.tri_cut_z_name_input.trim().is_empty();
 
             ui.horizontal(|ui| {
-                if ui.add_enabled(can_run, egui::Button::new("Slice")).clicked()
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add_enabled(can_run, egui::Button::new("Slice")).clicked() || (confirm && can_run))
                     && let Some(tri_id) = editor.tri_cut_z_tri_id
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationByZ {
@@ -696,7 +703,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         name: editor.tri_cut_z_name_input.trim().to_owned(),
                     });
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     editor.tri_cut_z_open = false;
                 }
             });
@@ -824,7 +831,8 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 && editor.tri_cut_surface_target_id != editor.tri_cut_surface_reference_id
                 && !editor.tri_cut_surface_name_input.trim().is_empty();
             ui.horizontal(|ui| {
-                if ui.add_enabled(can_run, egui::Button::new("Trim")).clicked()
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add_enabled(can_run, egui::Button::new("Trim")).clicked() || (confirm && can_run))
                     && let (Some(target_id), Some(reference_id)) = (editor.tri_cut_surface_target_id, editor.tri_cut_surface_reference_id)
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationBySurface {
@@ -834,7 +842,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                         name: editor.tri_cut_surface_name_input.trim().to_owned(),
                     });
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     editor.tri_cut_surface_open = false;
                 }
             });
@@ -940,7 +948,8 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
             let can_run = editor.tri_cut_pitshell_topology_id.is_some() && editor.tri_cut_pitshell_pitshell_id.is_some() && !editor.tri_cut_pitshell_name_input.trim().is_empty();
 
             ui.horizontal(|ui| {
-                if ui.add_enabled(can_run, egui::Button::new("Cut")).clicked()
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add_enabled(can_run, egui::Button::new("Cut")).clicked() || (confirm && can_run))
                     && let (Some(topology_id), Some(pit_shell_id)) = (editor.tri_cut_pitshell_topology_id, editor.tri_cut_pitshell_pitshell_id)
                 {
                     commands.push(UiCommand::ExecuteCutTopologyByPitShell {
@@ -949,7 +958,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
                         name: editor.tri_cut_pitshell_name_input.trim().to_owned(),
                     });
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     editor.tri_cut_pitshell_open = false;
                     editor.tool_highlight_id = None;
                 }
@@ -1053,7 +1062,8 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 && editor.tri_include_solid_topology_id != editor.tri_include_solid_shape_id
                 && !editor.tri_include_solid_name_input.trim().is_empty();
             ui.horizontal(|ui| {
-                if ui.add_enabled(can_run, egui::Button::new("Merge")).clicked()
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add_enabled(can_run, egui::Button::new("Merge")).clicked() || (confirm && can_run))
                     && let (Some(topology_id), Some(shape_id)) = (editor.tri_include_solid_topology_id, editor.tri_include_solid_shape_id)
                 {
                     commands.push(UiCommand::ExecuteIncludeSolidInTopology {
@@ -1063,7 +1073,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                         save_as_two: editor.tri_include_solid_save_as_two,
                     });
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     editor.tri_include_solid_open = false;
                 }
             });
@@ -1287,9 +1297,8 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                     || (!new_layer_name.is_empty() && !new_layer_name_conflicts));
 
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(can_run, egui::Button::new("Generate"))
-                    .clicked()
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add_enabled(can_run, egui::Button::new("Generate")).clicked() || (confirm && can_run))
                     && let Some(tri_id) = editor.tri_contour_tri_id
                 {
                     let output_layer = editor
@@ -1306,7 +1315,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                         output_layer,
                     });
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     editor.tri_contour_open = false;
                 }
             });
@@ -1503,7 +1512,8 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             let can_run = selected.is_some() && !editor.point_cloud_tin_name_input.trim().is_empty() && memory_ok;
-            if ui.add_enabled(can_run, egui::Button::new("Generate")).clicked()
+            let confirm = menu::dialog_confirm_pressed(ui.ctx());
+            if (ui.add_enabled(can_run, egui::Button::new("Generate")).clicked() || (confirm && can_run))
                 && let Some((cloud_id, ..)) = selected
             {
                 commands.push(UiCommand::ExecutePointCloudTin {
@@ -1519,7 +1529,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 });
                 editor.point_cloud_tin_open = false;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.point_cloud_tin_open = false;
             }
         });

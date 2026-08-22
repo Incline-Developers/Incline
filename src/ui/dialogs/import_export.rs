@@ -13,7 +13,7 @@ use crate::{
     },
     ui::{
         state::{DataMenu, EditorState, UiCommand, UiProjectView},
-        widgets::menu::{DragableMenu, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
+        widgets::menu::{self, DragableMenu, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
     },
 };
 
@@ -45,6 +45,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
 
     let mut show_import = editor.show_import;
     let mut close_after_action = false;
+    let mut cancelled = false;
     DragableMenu::new("Import").open(&mut show_import).show(ui.ctx(), |ui| {
         ui.set_height(MENU_HEIGHT);
         ui.set_width(MENU_WIDTH);
@@ -63,7 +64,9 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         let command = import_command(editor);
-                        if ui.add_enabled(command.is_some(), egui::Button::new("Import")).clicked()
+                        let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                        cancelled = menu::dialog_cancel_pressed(ui.ctx());
+                        if (ui.add_enabled(command.is_some(), egui::Button::new("Import")).clicked() || confirm)
                             && let Some(command) = command
                         {
                             commands.push(command);
@@ -81,7 +84,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
             });
         });
     });
-    if close_after_action {
+    if close_after_action || cancelled {
         show_import = false;
     }
     editor.show_import = show_import;
@@ -97,6 +100,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
 
     let mut show_export = editor.show_export;
     let mut close_after_action = false;
+    let mut cancelled = false;
     DragableMenu::new("Export").open(&mut show_export).show(ui.ctx(), |ui| {
         ui.set_height(MENU_HEIGHT);
         ui.set_width(MENU_WIDTH);
@@ -115,7 +119,9 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         let command = export_command(editor);
-                        if ui.add_enabled(command.is_some(), egui::Button::new("Export")).clicked()
+                        let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                        cancelled = menu::dialog_cancel_pressed(ui.ctx());
+                        if (ui.add_enabled(command.is_some(), egui::Button::new("Export")).clicked() || confirm)
                             && let Some(command) = command
                         {
                             commands.push(command);
@@ -129,7 +135,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
             });
         });
     });
-    if close_after_action {
+    if close_after_action || cancelled {
         show_export = false;
     }
     editor.show_export = show_export;

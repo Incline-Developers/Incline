@@ -10,7 +10,7 @@ use crate::{
             context_menu::{
                 ContextMenu, ContextMenuAction, ContextMenuFieldColor32, ContextMenuFieldCombo, ContextMenuFieldF32, ContextMenuFieldSegmented, context_menu_separator,
             },
-            menu::{DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
+            menu::{self, DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
     },
@@ -303,10 +303,11 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let action_label = if dialog.copy { "Copy" } else { "Move" };
-            if ui.add_enabled(can_apply, egui::Button::new(action_label)).clicked() {
+            let confirm = menu::dialog_confirm_pressed(ui.ctx());
+            if ui.add_enabled(can_apply, egui::Button::new(action_label)).clicked() || (confirm && can_apply) {
                 apply = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });
@@ -342,19 +343,20 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
 
     DragableMenu::new(format!("Set {axis_label}")).open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
         ui.set_max_width(280.0);
-        let response = MenuFieldF64::new(format!("{axis_label} value"), &mut dialog.value, f64::MIN..=f64::MAX)
+        MenuFieldF64::new(format!("{axis_label} value"), &mut dialog.value, f64::MIN..=f64::MAX)
             .width(120.0)
             .show(ui);
         if !dialog.value.is_finite() {
             ui.colored_label(egui::Color32::from_rgb(200, 70, 70), format!("Enter a valid {axis_label} value."));
         }
         ui.add_space(4.0);
-        let submitted = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let submitted = menu::dialog_confirm_pressed(ui.ctx());
+        let cancelled = menu::dialog_cancel_pressed(ui.ctx());
         ui.horizontal(|ui| {
             if (submitted || ui.add_enabled(can_apply, egui::Button::new("Apply")).clicked()) && can_apply {
                 apply = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || cancelled {
                 close = true;
             }
         });
@@ -387,7 +389,7 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 
     DragableMenu::new("Insert Point at Elevation").open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
         ui.set_max_width(300.0);
-        let response = MenuFieldF64::new("Elevation", &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
+        MenuFieldF64::new("Elevation", &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
             .width(120.0)
             .show(ui);
         if !dialog.elevation.is_finite() {
@@ -398,12 +400,13 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
         }
         ui.label("Segments lying at this elevation are ignored.");
         ui.add_space(4.0);
-        let submitted = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let submitted = menu::dialog_confirm_pressed(ui.ctx());
+        let cancelled = menu::dialog_cancel_pressed(ui.ctx());
         ui.horizontal(|ui| {
             if (submitted || ui.add_enabled(can_apply, egui::Button::new("Apply")).clicked()) && can_apply {
                 apply = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || cancelled {
                 close = true;
             }
         });
@@ -464,7 +467,11 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                             if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_website.svg")), "Website", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
                             }
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Close", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            // Enter has no sensible default among New / Load / Preferences,
+                            // so only Escape is bound here, matching Close.
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Close", COLUMN_WIDTH, ROW_HEIGHT).clicked()
+                                || menu::dialog_cancel_pressed(ui.ctx())
+                            {
                                 commands.push(UiCommand::CloseStartupDialog);
                             }
                         });
@@ -580,8 +587,9 @@ pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
         .min_width(240.0)
         .show(ui.ctx(), |ui| {
             let can_create = !editor.new_project_name.trim().is_empty();
-            let name_response = MenuFieldText::new("Project name", &mut editor.new_project_name).hint_text("Required").show(ui);
-            let submitted = name_response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            MenuFieldText::new("Project name", &mut editor.new_project_name).hint_text("Required").show(ui);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
             ui.horizontal(|ui| {
                 if (submitted || ui.add_enabled(can_create, egui::Button::new("Create project")).clicked()) && can_create {
                     commands.push(UiCommand::CreateBrowserProject {
@@ -589,7 +597,7 @@ pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
                     });
                     editor.new_project_dialog_open = false;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || cancelled {
                     editor.new_project_dialog_open = false;
                 }
             });
@@ -607,8 +615,9 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         .min_width(220.0)
         .show(ui.ctx(), |ui| {
             let can_save = !editor.new_layer_name.trim().is_empty();
-            let name_response = MenuFieldText::new("Layer name", &mut editor.new_layer_name).hint_text("Required").show(ui);
-            let submitted = name_response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            MenuFieldText::new("Layer name", &mut editor.new_layer_name).hint_text("Required").show(ui);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let create_clicked = ui.add_enabled(can_save, egui::Button::new("Create Layer")).clicked();
                 if (submitted || create_clicked) && can_save {
@@ -617,7 +626,7 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
                     });
                     editor.new_layer_dialog_open = false;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button("Cancel").clicked() || cancelled {
                     editor.new_layer_dialog_open = false;
                 }
             });
@@ -636,14 +645,14 @@ pub(crate) fn draw_rename_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
     let mut open = true;
     DragableMenu::new("Rename Layer").open(&mut open).show(ui.ctx(), |ui| {
         ui.set_max_width(230.);
-        let response = MenuFieldText::new("New name", &mut name_buf).width(160.0).hint_text("Required").show(ui);
+        MenuFieldText::new("New name", &mut name_buf).width(160.0).hint_text("Required").show(ui);
         ui.horizontal(|ui| {
             let can_rename = !name_buf.trim().is_empty();
-            let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
             if (submitted || ui.add_enabled(can_rename, egui::Button::new("Rename")).clicked()) && can_rename {
                 rename_to = Some(name_buf.trim().to_string());
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });
@@ -717,7 +726,7 @@ pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<
     ViewportDockPanel::new("finish_poly_dialog", "Finish Polyline", viewport_rect).show(ui, |ui| {
         MenuField::new("Shape").show(ui, |ui, _| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Open").clicked() {
+                if ui.button("Open").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::CommitStrokeOpen);
                     editor.poly_finish_dialog = false;
                 }

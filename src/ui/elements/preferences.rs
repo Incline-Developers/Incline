@@ -4,7 +4,7 @@ use crate::{
     rendering::color::{byte_to_linear_rgba, linear_to_srgb_byte},
     ui::{
         EditorState, UiCommand,
-        widgets::menu::{DragableMenu, MenuFieldBool, MenuFieldColor32, MenuFieldF64, MenuFieldU32, PreferenceCategory},
+        widgets::menu::{self, DragableMenu, MenuFieldBool, MenuFieldColor32, MenuFieldF64, MenuFieldU32, PreferenceCategory},
     },
 };
 
@@ -64,11 +64,17 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                         *draft = Default::default();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_enabled(*draft != saved, egui::Button::new("Save Changes")).clicked() {
+                        let dirty = *draft != saved;
+                        let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                        let cancel = menu::dialog_cancel_pressed(ui.ctx());
+                        if ui.add_enabled(dirty, egui::Button::new("Save Changes")).clicked() || (confirm && dirty) {
                             commands.push(UiCommand::ApplyPreferences(*draft));
                             close_requested = true;
+                        } else if confirm {
+                            // Enter with nothing to save just dismisses.
+                            close_requested = true;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button("Cancel").clicked() || cancel {
                             *draft = saved;
                             close_requested = true;
                         }
