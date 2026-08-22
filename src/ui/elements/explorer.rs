@@ -19,6 +19,18 @@ use crate::ui::{
 /// Grey colour used for inactive (not loaded) layers and triangulations.
 const INACTIVE_TEXT_COLOR: egui::Color32 = egui::Color32::from_gray(140);
 
+/// Section heading tints, keyed to the icons each section's entries use.
+///
+/// One colour serves both themes: each holds at least a 3:1 contrast ratio
+/// against the light panel (white) and the dark one alike.
+const HEADER_PROJECTS: egui::Color32 = egui::Color32::from_rgb(0xD6, 0x6E, 0x1E);
+const HEADER_DESIGNS: egui::Color32 = egui::Color32::from_rgb(0x44, 0x62, 0xBF);
+const HEADER_TRIANGULATIONS: egui::Color32 = egui::Color32::from_rgb(0xAE, 0x58, 0xDB);
+const HEADER_RASTERS: egui::Color32 = egui::Color32::from_rgb(0x2F, 0x91, 0x99);
+const HEADER_POINT_CLOUDS: egui::Color32 = egui::Color32::from_rgb(0xC9, 0x3B, 0x2C);
+const HEADER_BLOCK_MODELS: egui::Color32 = egui::Color32::from_rgb(0x69, 0x8F, 0x3F);
+const HEADER_DRILL_HOLES: egui::Color32 = egui::Color32::from_rgb(0xDB, 0x5F, 0x58);
+
 #[cfg(not(target_arch = "wasm32"))]
 const MODIFIED_TIME_CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -123,6 +135,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 
                 ExplorerHeader::new(egui::Id::new("projects_collapse"), "Projects")
+                    .color(HEADER_PROJECTS)
                     .dirty(project.tracked_projects.iter().any(|entry| entry.dirty))
                     .default_open(true)
                     .show(ui, |ui| {
@@ -199,6 +212,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                 let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
                 ExplorerHeader::new(egui::Id::new("designs_collapse"), "Designs")
+                    .color(HEADER_DESIGNS)
                     .dirty(designs_dirty)
                     .auto_open(project.projects.first().map_or(0, |entry| entry.layers.len()), epoch)
                     .show(ui, |ui| {
@@ -264,6 +278,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                 let triangulations_dirty = project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("triangulations_collapse"), "Triangulations")
+                    .color(HEADER_TRIANGULATIONS)
                     .dirty(triangulations_dirty)
                     .auto_open(project.triangulations.len(), epoch)
                     .show(ui, |ui| {
@@ -341,6 +356,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                 let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
                 ExplorerHeader::new("rasters_collapse".into(), "Rasters")
+                    .color(HEADER_RASTERS)
                     .dirty(rasters_dirty)
                     .auto_open(project.raster_textures.len(), epoch)
                     .show(ui, |ui| {
@@ -413,6 +429,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                 let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), "Point Clouds")
+                    .color(HEADER_POINT_CLOUDS)
                     .dirty(point_clouds_dirty)
                     .auto_open(project.point_clouds.len(), epoch)
                     .show(ui, |ui| {
@@ -476,6 +493,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                 let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("block_models_collapse"), "Block Models")
+                    .color(HEADER_BLOCK_MODELS)
                     .dirty(block_models_dirty)
                     .auto_open(project.block_models.len(), epoch)
                     .show(ui, |ui| {
@@ -536,6 +554,7 @@ pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project
 
                 let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
                 ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), "Drill Holes")
+                    .color(HEADER_DRILL_HOLES)
                     .dirty(drill_holes_dirty)
                     .auto_open(project.drill_holes.len(), epoch)
                     .show(ui, |ui| {

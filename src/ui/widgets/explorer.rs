@@ -129,6 +129,9 @@ pub(crate) struct ExplorerHeader {
     title: String,
     dirty: bool,
     default_open: bool,
+    /// Heading tint, matching the section's entry icons. `None` uses the
+    /// theme's normal text colour.
+    color: Option<egui::Color32>,
     /// Entry count and active-project epoch, for sections that follow their
     /// contents. `None` leaves the section on plain `default_open` behaviour.
     auto_open: Option<(usize, u64)>,
@@ -141,6 +144,7 @@ impl ExplorerHeader {
             title: title.into(),
             dirty: false,
             default_open: false,
+            color: None,
             auto_open: None,
         }
     }
@@ -156,6 +160,13 @@ impl ExplorerHeader {
 
     pub(crate) fn default_open(mut self, default_open: bool) -> Self {
         self.default_open = default_open;
+        self
+    }
+
+    /// Tint the heading text, keying the section to the colour of the icons
+    /// its entries use.
+    pub(crate) fn color(mut self, color: egui::Color32) -> Self {
+        self.color = Some(color);
         self
     }
 
@@ -177,6 +188,7 @@ impl ExplorerHeader {
             mut title,
             dirty,
             mut default_open,
+            color,
             auto_open,
         } = self;
         if let Some((entries, epoch)) = auto_open {
@@ -193,7 +205,11 @@ impl ExplorerHeader {
             let (toggle_response, header_response, body_response) = state
                 .show_header(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                    ui.add(egui::Button::new(crate::ui::fonts::bold(&title)).frame(false).sense(egui::Sense::click()))
+                    let text = match color {
+                        Some(color) => crate::ui::fonts::bold(&title).color(color),
+                        None => crate::ui::fonts::bold(&title),
+                    };
+                    ui.add(egui::Button::new(text).frame(false).sense(egui::Sense::click()))
                 })
                 .body(|ui| {
                     ui.add_space(1.0);
