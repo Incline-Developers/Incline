@@ -198,8 +198,13 @@ impl ToolbarGroup {
             // the toolbar's own background is transparent, so the tiles are all
             // that separates the tools from the scene behind them.
             let fill = ui.visuals().panel_fill;
-            ui.painter()
-                .set(tile, egui::Shape::rect_filled(tile_rect, egui::CornerRadius::same(GROUP_CORNER_RADIUS), fill));
+            // A disabled group fades everything painted through `ui.painter()`,
+            // the tile included - but the tile is the toolbar's backdrop, not a
+            // tool, so it should stay fully opaque even while its tools can't
+            // be used.
+            let mut painter = ui.painter().clone();
+            painter.set_opacity(1.0);
+            painter.set(tile, egui::Shape::rect_filled(tile_rect, egui::CornerRadius::same(GROUP_CORNER_RADIUS), fill));
         }
         inner.inner
     }
