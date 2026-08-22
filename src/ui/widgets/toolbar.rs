@@ -67,16 +67,32 @@ impl egui::Widget for ToolbarButton {
 
 /// Corner rounding on a toolbar group's tile.
 const GROUP_CORNER_RADIUS: u8 = 3;
-/// Gap between the buttons stacked inside a tile.
-const GROUP_BUTTON_GAP: f32 = 3.0;
+/// Gap between the buttons stacked inside a tile. None: the cells butt up
+/// against each other so a run of them reads as one block.
+const GROUP_BUTTON_GAP: f32 = 0.0;
 /// Side of a tool cell, which is also the tile's width: the buttons run edge
 /// to edge, so a selected tool's fill has no strip of tile left beside it.
 pub(crate) const TOOL_CELL_SIZE: f32 = 32.0;
 /// Side of the icon drawn inside a tool cell.
 const TOOL_ICON_SIZE: f32 = 20.0;
-/// Corner rounding on a tool cell's fill. The cells reach the tile's corners,
-/// so it has to be the tile's own rounding.
+/// Corner rounding on a tool cell's fill outside a tile, where it has no
+/// neighbours to sit flush against.
 const TOOL_CELL_CORNER_RADIUS: f32 = GROUP_CORNER_RADIUS as f32;
+
+/// Where a [`ToolbarGroup`]'s cells park their fills until the group knows
+/// which of them are its end caps.
+///
+/// A cell's fill is painted before its icon, but only the group knows whether
+/// a cell is the run's first, last, or neither - which is what decides the
+/// corners it rounds. So each cell reserves its slot in the paint list and
+/// registers here, and the group fills the slots in once the run is complete.
+/// Groups never nest, so one key serves them all.
+#[derive(Clone, Default)]
+struct GroupCellFills(Vec<(egui::layers::ShapeIdx, egui::Rect, Color32)>);
+
+fn group_cell_fills_id() -> egui::Id {
+    egui::Id::new("toolbar_group_cell_fills")
+}
 
 /// A tool button that fills its cell, sized to a [`ToolbarGroup`] tile's width.
 ///
@@ -126,7 +142,18 @@ impl egui::Widget for ToolCellButton {
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, TOOL_CELL_CORNER_RADIUS, fill);
+        // Inside a tile the group rounds the run's end caps and squares off
+        // everything between them; on its own the cell rounds all four.
+        let slot = ui.painter().add(egui::Shape::Noop);
+        let in_group = ui.data_mut(|data| {
+            data.get_temp_mut_or_default::<Option<GroupCellFills>>(group_cell_fills_id())
+                .as_mut()
+                .map(|cells| cells.0.push((slot, rect, fill)))
+                .is_some()
+        });
+        if !in_group {
+            ui.painter().set(slot, egui::Shape::rect_filled(rect, TOOL_CELL_CORNER_RADIUS, fill));
+        }
 
         let icon_size = Vec2::splat(TOOL_ICON_SIZE);
         let icon_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(icon_size, rect);
@@ -153,11 +180,14 @@ impl ToolbarGroup {
         // The tile has to be painted under the buttons, and its height is only
         // known once they have been laid out, so its slot is reserved first.
         let tile = ui.painter().add(egui::Shape::Noop);
+        ui.data_mut(|data| data.insert_temp(group_cell_fills_id(), Some(GroupCellFills::default())));
         let inner = ui.vertical_centered(|ui| {
             ui.set_max_width(self.width);
             ui.spacing_mut().item_spacing.y = GROUP_BUTTON_GAP;
             add_buttons(ui)
         });
+        let cells = ui.data_mut(|data| data.remove_temp::<Option<GroupCellFills>>(group_cell_fills_id()).flatten().unwrap_or_default());
+        paint_cell_fills(ui, &cells.0);
         let rows = inner.response.rect;
         if rows.height() > 0.0 {
             // The tile is exactly the run of cells: no padding, so a selected
@@ -172,6 +202,23 @@ impl ToolbarGroup {
                 .set(tile, egui::Shape::rect_filled(tile_rect, egui::CornerRadius::same(GROUP_CORNER_RADIUS), fill));
         }
         inner.inner
+    }
+}
+
+/// Paint a group's cell fills, rounding only the run's outer corners so the
+/// cells sit flush against each other.
+fn paint_cell_fills(ui: &Ui, cells: &[(egui::layers::ShapeIdx, egui::Rect, Color32)]) {
+    let last = cells.len().saturating_sub(1);
+    for (index, &(slot, rect, fill)) in cells.iter().enumerate() {
+        let top = if index == 0 { GROUP_CORNER_RADIUS } else { 0 };
+        let bottom = if index == last { GROUP_CORNER_RADIUS } else { 0 };
+        let corner_radius = egui::CornerRadius {
+            nw: top,
+            ne: top,
+            sw: bottom,
+            se: bottom,
+        };
+        ui.painter().set(slot, egui::Shape::rect_filled(rect, corner_radius, fill));
     }
 }
 
