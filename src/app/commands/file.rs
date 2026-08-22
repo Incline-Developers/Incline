@@ -22,8 +22,13 @@ impl FileHandleExt for rfd::FileHandle {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::{
-    app::App,
+    app::file_name,
+    model::{Layer, Object},
+};
+use crate::{
+    app::{App, commands::omf::ViewOnOpen},
     model::{
         LayerId,
         block_model::BlockModelId,
@@ -33,11 +38,6 @@ use crate::{
     },
     ui::state::DataMenu,
     userspace_log, userspace_warn,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::{
-    app::file_name,
-    model::{Layer, Object},
 };
 
 /// Whether Save still has work to do for a project browser storage has never
@@ -327,7 +327,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<(PathBuf, String, formats::omf::ImportBundle)>| {
             app.pending_project_open_paths.remove(&reserved_path);
             match result {
-                Ok((path, source_name, bundle)) => app.apply_opened_omf_bundle(Some(path), source_name, bundle),
+                Ok((path, source_name, bundle)) => app.apply_opened_omf_bundle(Some(path), source_name, bundle, ViewOnOpen::Fit),
                 Err(error) => userspace_warn!("Could not open {}: {error:#}", reserved_path.display()),
             }
         };
@@ -409,7 +409,7 @@ impl<'a> App<'a> {
                     Ok((name, bundle))
                 };
                 let apply = |app: &mut App, result: Result<(String, formats::omf::ImportBundle)>| match result {
-                    Ok((name, bundle)) => app.apply_opened_omf_bundle(None, name, bundle),
+                    Ok((name, bundle)) => app.apply_opened_omf_bundle(None, name, bundle, ViewOnOpen::Fit),
                     Err(error) => {
                         userspace_warn!("Could not open browser project: {error:#}");
                     }
@@ -2206,7 +2206,7 @@ impl<'a> App<'a> {
                 userspace_warn!("Discard was cancelled because the project changed while the OMF was reloading");
                 return;
             }
-            app.apply_opened_omf_bundle(Some(path.clone()), source_name, bundle);
+            app.apply_opened_omf_bundle(Some(path.clone()), source_name, bundle, ViewOnOpen::Keep);
             userspace_log!("Discarded changes: reloaded {}", path.display());
         };
         self.spawn_job_reporting_progress(

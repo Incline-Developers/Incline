@@ -57,6 +57,15 @@ pub(crate) struct DesignPointGpuCache {
 }
 
 impl DesignPointGpuCache {
+    /// Drop every cached marker chunk. The content key is derived from object
+    /// ids and revisions, both of which restart with a replacement project, so
+    /// the cache must be reset rather than left to notice a changed key.
+    pub(crate) fn clear(&mut self) {
+        self.chunks.clear();
+        self.key = None;
+        self.enabled = false;
+    }
+
     pub(crate) fn new(device: &wgpu::Device, style_layout: &wgpu::BindGroupLayout) -> Self {
         let outer_style = style_uniform([0.0, 0.0, 0.0, 1.0], 8.0);
         let inner_style = style_uniform([1.0, 1.0, 1.0, 1.0], 6.0);

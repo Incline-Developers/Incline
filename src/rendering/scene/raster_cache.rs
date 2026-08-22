@@ -34,6 +34,13 @@ pub(crate) struct RasterGpuCache {
 }
 
 impl RasterGpuCache {
+    /// Drop every uploaded raster, keeping the fallback texture. Raster ids
+    /// restart with a replacement project, and `sync` only re-uploads for an
+    /// id it has never seen.
+    pub(crate) fn clear(&mut self) {
+        self.rasters.clear();
+    }
+
     pub(crate) fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene_origin: DVec3, rasters: &[OpenRasterTexture], layout: &wgpu::BindGroupLayout) {
         if self.fallback.is_none() {
             self.fallback = Some(upload_raster(

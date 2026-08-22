@@ -460,6 +460,27 @@ impl<'a> Graphics<'a> {
         self.invalidate_scene_bounds();
     }
 
+    /// Drop every per-item GPU cache, for a project replacement.
+    ///
+    /// Project-owned item ids restart at 0 with each project, so the incoming
+    /// project's first triangulation, block model, drill hole, point cloud, and
+    /// raster all reuse the ids their predecessors had. These caches are keyed
+    /// on those ids and only re-upload when they see a new id or a changed
+    /// style, so without an explicit reset the previous project's geometry
+    /// keeps rendering under the new project's items. The same applies to the
+    /// design-object caches, whose fingerprints are built from object ids and
+    /// revisions that likewise restart.
+    pub(crate) fn clear_item_caches(&mut self) {
+        self.triangulation_gpu.clear();
+        self.block_model_gpu.clear();
+        self.drill_hole_gpu = Default::default();
+        self.point_cloud_gpu = Default::default();
+        self.raster_gpu.clear();
+        self.static_strokes = Default::default();
+        self.design_point_gpu.clear();
+        self.invalidate_geometry();
+    }
+
     pub(crate) fn invalidate_scene_bounds(&mut self) {
         self.cached_bounds_document_revision = u64::MAX;
         self.cached_scene_bounds = None;

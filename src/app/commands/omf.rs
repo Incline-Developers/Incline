@@ -16,6 +16,18 @@ use crate::{
     userspace_log, userspace_warn,
 };
 
+/// Whether installing a decoded OMF re-frames the camera.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewOnOpen {
+    /// Opening or switching projects: reset to a plan view fitted to the new
+    /// project's content.
+    Fit,
+    /// Reloading the project already on screen (a revert): keep the camera.
+    /// Reverting is native-only, so the browser build never constructs this.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Keep,
+}
+
 impl<'a> App<'a> {
     pub(super) fn omf_export_snapshot(&mut self) -> Result<ProjectSnapshot> {
         if self.has_pending_move_delta() {
@@ -48,8 +60,12 @@ impl<'a> App<'a> {
     /// Install a decoded OMF as the single native project. Unlike OMF merge,
     /// this establishes the file as the clean persistence baseline and
     /// replaces every item owned by the previous project.
-    pub(crate) fn apply_opened_omf_bundle(&mut self, path: Option<PathBuf>, source_name: String, bundle: ImportBundle) {
-        let should_fit = !self.scene_has_renderables();
+    pub(crate) fn apply_opened_omf_bundle(&mut self, path: Option<PathBuf>, source_name: String, bundle: ImportBundle, view: ViewOnOpen) {
+        // A view left pointing into the outgoing project frames nothing in the
+        // incoming one, which shares no coordinates with it. Reverting is the
+        // exception: it reloads the project already on screen, so the camera
+        // stays where the user put it - unless there was nothing to look at.
+        let should_fit = view == ViewOnOpen::Fit || !self.scene_has_renderables();
         let lossy_save_warnings = bundle.warnings.clone();
         for warning in &lossy_save_warnings {
             userspace_warn!("{source_name}: {warning}");

@@ -40,7 +40,7 @@ use winit::{
 };
 
 use crate::{
-    app::commands::file::PendingFileDialog,
+    app::commands::{file::PendingFileDialog, omf::ViewOnOpen},
     model::{
         Document, LayerId, Object, ObjectId, SceneEntityId,
         block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
@@ -791,6 +791,14 @@ impl<'a> App<'a> {
         self.project_asset_baseline = SaveToken::default();
         self.clear_editor_transient_state();
         self.scene_document_key = None;
+        // Item and object ids restart with the replacement project, so the
+        // renderer's id-keyed caches would otherwise keep drawing this
+        // project's geometry under the next one's items until something
+        // that clears them (a view fit) happened to run.
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.clear_item_caches();
+        }
+        self.redraw_requested = true;
     }
 
     fn activate_project_index(&mut self, index: usize) {
@@ -1344,7 +1352,7 @@ impl<'a> App<'a> {
             crate::model::formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0)).map(|bundle| (source_name, bundle))
         });
         match result {
-            Ok((source_name, bundle)) => self.apply_opened_omf_bundle(Some(path), source_name, bundle),
+            Ok((source_name, bundle)) => self.apply_opened_omf_bundle(Some(path), source_name, bundle, ViewOnOpen::Fit),
             Err(error) => log::warn!("Failed to reopen session project: {error:#}"),
         }
     }
@@ -1565,7 +1573,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                         let progress = crate::model::progress::Progress::new();
                         match crate::model::formats::omf::from_bytes(&source_name, record.omf_bytes, &progress.phase(0.0, 1.0)) {
                             Ok(bundle) => {
-                                self.apply_opened_omf_bundle(None, source_name, bundle);
+                                self.apply_opened_omf_bundle(None, source_name, bundle, ViewOnOpen::Fit);
                                 if let Some(project) = self.workspace.active_project_mut() {
                                     project.id = record.id;
                                     project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(record.id);
@@ -1598,7 +1606,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                             app.browser_project_loads_pending.remove(&project_id);
                             match result {
                                 Ok((record_id, record_name, source_name, bundle)) => {
-                                    app.apply_opened_omf_bundle(None, source_name, bundle);
+                                    app.apply_opened_omf_bundle(None, source_name, bundle, ViewOnOpen::Fit);
                                     if let Some(project) = app.workspace.active_project_mut() {
                                         project.id = record_id;
                                         project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(record_id);
