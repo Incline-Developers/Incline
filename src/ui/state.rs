@@ -971,6 +971,8 @@ pub(crate) struct EditorState {
     pub(crate) chamfer_hover_corner_px: Option<(f32, f32)>,
     /// Screen position of the vertex that Move or Delete would act on (raw pixels).
     pub(crate) tool_hover_vertex_px: Option<(f32, f32)>,
+    /// Same vertex in world space, so the overlay can draw the shared point marker for it.
+    pub(crate) tool_hover_vertex_world: Option<DVec3>,
     /// Screen position of the first chamfer corner vertex (raw pixels).
     pub(crate) chamfer_gizmo_corner_px: Option<(f32, f32)>,
     /// Screen direction of the gizmo bisector (used when radius=0 so arrow is still visible).
@@ -1326,6 +1328,7 @@ impl EditorState {
         self.chamfer_preview_screen_px.clear();
         self.chamfer_hover_corner_px = None;
         self.tool_hover_vertex_px = None;
+        self.tool_hover_vertex_world = None;
         self.chamfer_gizmo_corner_px = None;
         self.chamfer_gizmo_bisector_px = None;
         self.chamfer_gizmo_handle_px = None;
@@ -1572,6 +1575,7 @@ impl EditorState {
             chamfer_preview_screen_px: Vec::new(),
             chamfer_hover_corner_px: None,
             tool_hover_vertex_px: None,
+            tool_hover_vertex_world: None,
             chamfer_gizmo_corner_px: None,
             chamfer_gizmo_bisector_px: None,
             chamfer_gizmo_handle_px: None,

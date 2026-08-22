@@ -1,3 +1,5 @@
+use glam::DVec3;
+
 use crate::{
     app::{App, MOVE_VERTEX_PICK_PX, PICK_THRESHOLD_PX},
     logging::CommandReportSpec,
@@ -10,12 +12,14 @@ struct DeleteVertexHit {
     object_id: ObjectId,
     vertex_index: usize,
     screen_px: (f32, f32),
+    world: DVec3,
 }
 
 struct MoveVertexHit {
     object_id: ObjectId,
     point: ObjectPoint,
     screen_px: (f32, f32),
+    world: DVec3,
 }
 
 impl<'a> App<'a> {
@@ -75,22 +79,24 @@ impl<'a> App<'a> {
     pub(crate) fn update_move_delete_hover(&mut self) {
         let vertex_hit = match self.editor.active_tool {
             ActiveTool::Move if self.editor.move_gizmo_hovered_axis.is_none() && self.editor.move_gizmo_hovered_plane.is_none() && self.gizmo_drag.is_none() => {
-                self.move_vertex_hit().map(|hit| (hit.object_id, hit.screen_px))
+                self.move_vertex_hit().map(|hit| (hit.object_id, hit.screen_px, hit.world))
             }
-            ActiveTool::DeletePoints => self.delete_polyline_vertex_hit().map(|hit| (hit.object_id, hit.screen_px)),
+            ActiveTool::DeletePoints => self.delete_polyline_vertex_hit().map(|hit| (hit.object_id, hit.screen_px, hit.world)),
             _ => None,
         };
-        let hover_px = vertex_hit.map(|(_, screen_px)| screen_px);
+        let hover_px = vertex_hit.map(|(_, screen_px, _)| screen_px);
+        let hover_world = vertex_hit.map(|(_, _, world)| world);
         // Delete Points only ever acts on point objects, so don't highlight
         // whole elements it can't delete.
         let point_objects_only = self.editor.active_tool == ActiveTool::DeletePoints;
-        let hovered_object = vertex_hit.map(|(object_id, _)| object_id).or_else(|| {
+        let hovered_object = vertex_hit.map(|(object_id, _, _)| object_id).or_else(|| {
             self.pick_hovered_object()
                 .filter(|&id| !point_objects_only || self.scene_document.get_object(id).is_some_and(is_point_object))
         });
 
         if self.editor.tool_hover_vertex_px != hover_px {
             self.editor.tool_hover_vertex_px = hover_px;
+            self.editor.tool_hover_vertex_world = hover_world;
             self.invalidate_overlay();
         }
         if self.editor.tool_highlight_id != hovered_object {
@@ -136,6 +142,7 @@ impl<'a> App<'a> {
         };
         self.history.execute(&mut project.project.document, Command::Replace { before, after });
         self.editor.tool_hover_vertex_px = None;
+        self.editor.tool_hover_vertex_world = None;
         self.editor.selected_handles.clear();
         self.editor.selected_handles.insert(SceneEntityId::Object(hit.object_id));
         crate::logging::report_completed_action(
@@ -170,6 +177,7 @@ impl<'a> App<'a> {
             object_id,
             vertex_index,
             screen_px: (screen_pos.x as f32, screen_pos.y as f32),
+            world,
         })
     }
 
@@ -306,6 +314,7 @@ impl<'a> App<'a> {
             object_id,
             point,
             screen_px: (screen_pos.x as f32, screen_pos.y as f32),
+            world,
         })
     }
 }

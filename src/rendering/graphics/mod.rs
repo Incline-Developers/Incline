@@ -59,6 +59,10 @@ pub(super) const DOC_LINE_WIDTH: f32 = 1.0;
 /// Colour for the in-progress stroke preview (committed segments + rubber band).
 pub(super) const PREVIEW_COLOR: [f32; 4] = [0.4, 0.85, 1.0, 1.0];
 pub(super) const MEASUREMENT_COLOR: [f32; 4] = [1.0, 0.82, 0.15, 1.0];
+/// Outline, and default fill, for the screen-space point markers (snap cursor,
+/// fuse endpoints, move-vertex handles). Near-black rather than black: linear
+/// value for sRGB (20, 20, 20), since the scene renders into an sRGB target.
+pub(super) const POINT_MARKER_COLOR: [f32; 4] = [0.007, 0.007, 0.007, 1.0];
 /// Logical em size used by cosmic-text layout; vector outlines are normalized
 /// and the document text height scales this into world units.
 pub(super) const DOC_TEXT_FONT_SIZE: f32 = 64.0;

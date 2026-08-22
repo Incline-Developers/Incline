@@ -442,7 +442,10 @@ impl<'a> App<'a> {
                 .await?
                 .path()
                 .to_owned();
-            Some(super::file::FileDialogAction::ExportOmf { snapshot, path })
+            Some(super::file::FileDialogAction::ExportOmf {
+                snapshot: Box::new(snapshot),
+                path,
+            })
         });
         Ok(())
     }

@@ -117,10 +117,16 @@ pub(crate) fn draw_screen_sphere(ctx: &mut DrawContext, center: DVec3, radius_px
 /// same pixel footprint and dark outline, round instead of square and filled
 /// with `color` so a snapped vertex reads as highlighted rather than covered.
 pub(crate) fn draw_screen_point_marker(ctx: &mut DrawContext, center: DVec3, color: [f32; 4]) {
-    const OUTER_PX: f32 = 8.0;
-    const INNER_PX: f32 = 6.0;
-    draw_screen_sphere(ctx, center, OUTER_PX * 0.5 * ctx.scale_factor, [0.0, 0.0, 0.0, 1.0]);
-    draw_screen_sphere(ctx, center, INNER_PX * 0.5 * ctx.scale_factor, color);
+    draw_screen_point_marker_sized(ctx, center, 10.0, color);
+}
+
+/// The same outlined marker at an explicit outer diameter in logical pixels, so
+/// overlays that need a size hierarchy (an active endpoint against its
+/// candidates, a selected vertex against its siblings) still read as one family.
+pub(crate) fn draw_screen_point_marker_sized(ctx: &mut DrawContext, center: DVec3, outer_px: f32, color: [f32; 4]) {
+    let inner_px = (outer_px - 3.0).max(1.0);
+    draw_screen_sphere(ctx, center, outer_px * 0.5 * ctx.scale_factor, crate::rendering::graphics::POINT_MARKER_COLOR);
+    draw_screen_sphere(ctx, center, inner_px * 0.5 * ctx.scale_factor, color);
 }
 
 pub(crate) fn draw_screen_cross(ctx: &mut DrawContext, center: DVec3, half_size_px: f32, line_width: f32, color: [f32; 4]) {

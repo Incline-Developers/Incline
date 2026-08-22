@@ -644,17 +644,6 @@ fn draw_ui(
         dialogs::editing::draw_chamfer_panel(root_ui, editor, commands, canvas_rect);
     }
 
-    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
-        && let Some(hover_px) = editor.tool_hover_vertex_px
-    {
-        let ppp = root_ui.ctx().pixels_per_point();
-        let pos = egui::pos2(hover_px.0 / ppp, hover_px.1 / ppp);
-        let painter = root_ui.painter().with_clip_rect(canvas_rect);
-        let color = SELECTION_COLOR;
-        painter.circle_filled(pos, 6.0, color);
-        painter.circle_stroke(pos, 7.5, egui::Stroke::new(1.5, egui::Color32::WHITE));
-    }
-
     // Split At Points tool: vertex dots and selected split points
     if editor.active_tool == ActiveTool::SplitAtPoints {
         let ppp = root_ui.ctx().pixels_per_point();

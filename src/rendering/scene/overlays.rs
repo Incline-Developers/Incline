@@ -10,8 +10,8 @@ use crate::{
     },
     rendering::{
         StrokeVertex, Vertex,
-        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_sphere, tessellate_polyline_stroke},
-        graphics::{DOC_LINE_WIDTH, MEASUREMENT_COLOR, PREVIEW_COLOR},
+        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_point_marker_sized, tessellate_polyline_stroke},
+        graphics::{DOC_LINE_WIDTH, MEASUREMENT_COLOR, POINT_MARKER_COLOR, PREVIEW_COLOR},
         pick::world_to_screen,
     },
     ui::state::{ActiveTool, EditorState},
@@ -108,7 +108,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     if editor.cursor_snapped
         && let Some(position) = editor.cursor_world
     {
-        draw_screen_point_marker(&mut overlay, position, PREVIEW_COLOR);
+        draw_screen_point_marker(&mut overlay, position, POINT_MARKER_COLOR);
     }
 
     if editor.active_tool == ActiveTool::VerticalSlice
@@ -159,6 +159,12 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
 
+    if matches!(editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints)
+        && let Some(hover) = editor.tool_hover_vertex_world
+    {
+        draw_screen_point_marker_sized(&mut overlay, hover, 11.0, POINT_MARKER_COLOR);
+    }
+
     let marker_target_id = editor.move_vertex_target.map(|(id, _)| id);
     if let Some(target_id) = marker_target_id
         && let Some(obj) = document.get_object(target_id)
@@ -166,22 +172,22 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         match (obj, editor.move_vertex_target.map(|(_, point)| point)) {
             (Object::Polyline { verts, closed, .. }, Some(ObjectPoint::Center)) => {
                 if let Some(center) = compact_circle_center(verts, *closed) {
-                    draw_screen_sphere(&mut overlay, center, 8.0, PREVIEW_COLOR);
+                    draw_screen_point_marker_sized(&mut overlay, center, 11.0, POINT_MARKER_COLOR);
                 }
             }
             (Object::Polyline { verts, .. }, Some(ObjectPoint::Vertex(selected_index))) => {
                 for (index, v) in verts.iter().enumerate() {
                     let selected = index == selected_index;
-                    draw_screen_sphere(
+                    draw_screen_point_marker_sized(
                         &mut overlay,
                         v.pos,
-                        if selected { 8.0 } else { 5.0 },
-                        if selected { PREVIEW_COLOR } else { crate::ui::SELECTION_COLOR_F32 },
+                        if selected { 11.0 } else { 9.0 },
+                        if selected { POINT_MARKER_COLOR } else { crate::ui::SELECTION_COLOR_F32 },
                     );
                 }
             }
             (Object::Point { pos, .. }, Some(ObjectPoint::Vertex(0))) => {
-                draw_screen_sphere(&mut overlay, *pos, 8.0, PREVIEW_COLOR);
+                draw_screen_point_marker_sized(&mut overlay, *pos, 11.0, POINT_MARKER_COLOR);
             }
             _ => {}
         }
@@ -209,20 +215,20 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
 
         if let Some(tail) = editor.fuse_chain_tail {
-            draw_screen_sphere(&mut overlay, tail, 9.0, crate::ui::SELECTION_COLOR_F32);
+            draw_screen_point_marker_sized(&mut overlay, tail, 11.0, crate::ui::SELECTION_COLOR_F32);
         }
 
         if editor.fuse_awaiting_endpoint.is_none()
             && let Some(endpoint) = editor.fuse_close_marker
         {
-            draw_screen_sphere(&mut overlay, endpoint, 7.0, PREVIEW_COLOR);
+            draw_screen_point_marker(&mut overlay, endpoint, POINT_MARKER_COLOR);
         }
 
         if editor.fuse_awaiting_endpoint.is_some() {
             for &(_, marker) in &editor.fuse_endpoint_markers {
                 let is_tail = editor.fuse_chain_tail.is_some_and(|tail| (tail - marker).length_squared() < 1e-10);
                 if !is_tail {
-                    draw_screen_sphere(&mut overlay, marker, 7.0, PREVIEW_COLOR);
+                    draw_screen_point_marker(&mut overlay, marker, POINT_MARKER_COLOR);
                 }
             }
         }

@@ -78,7 +78,7 @@ pub(crate) fn ordinary_kriging(samples: &[KrigingSample], grid: KrigingGrid, opt
     let mut estimates = allocated_values(count, f64::NAN, "kriging estimates")?;
     let total_covariance = options.sill + options.nugget;
 
-    for index in 0..count {
+    for (index, slot) in estimates.iter_mut().enumerate() {
         if index.is_multiple_of(256) {
             if cancel.is_cancelled() {
                 anyhow::bail!("Cancelled");
@@ -95,7 +95,7 @@ pub(crate) fn ordinary_kriging(samples: &[KrigingSample], grid: KrigingGrid, opt
             continue;
         }
         if let Some(estimate) = estimate_at(center, samples, &neighbours, options, total_covariance) {
-            estimates[index] = estimate;
+            *slot = estimate;
         }
     }
     progress.finish();

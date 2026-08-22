@@ -468,6 +468,7 @@ impl<'a> App<'a> {
                         self.update_move_delete_hover();
                     } else if !matches!(self.editor.active_tool, ActiveTool::Move | ActiveTool::DeletePoints) && self.editor.tool_hover_vertex_px.is_some() {
                         self.editor.tool_hover_vertex_px = None;
+                        self.editor.tool_hover_vertex_world = None;
                         self.invalidate_overlay();
                     }
                     if let Some(cursor_px) = self.editor.cursor_screen_px {

@@ -146,7 +146,7 @@ pub(crate) enum FileDialogAction {
     #[cfg(not(target_arch = "wasm32"))]
     ExportProjectDxf { project_runtime_id: u32, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
-    ExportOmf { snapshot: formats::omf::ProjectSnapshot, path: PathBuf },
+    ExportOmf { snapshot: Box<formats::omf::ProjectSnapshot>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
     ExportTriangulation { id: TriangulationId, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
@@ -642,7 +642,7 @@ impl<'a> App<'a> {
             }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportOmf { snapshot, path } => {
-                self.export_omf_snapshot(snapshot, path);
+                self.export_omf_snapshot(*snapshot, path);
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -689,7 +689,15 @@ impl<'a> App<'a> {
                 let mut snapshot = self.omf_export_snapshot()?;
                 let asset_token = self.project_asset_save_token();
                 snapshot.name = new_name;
-                self.spawn_project_write(project_runtime_id, snapshot_hash, snapshot_layer_hashes, asset_token, snapshot, path, Some(previous_name));
+                let kind = PendingSaveKind::Project {
+                    runtime_id: project_runtime_id,
+                    snapshot_hash,
+                    snapshot_layer_hashes,
+                    asset_token,
+                    close_after: false,
+                    save_as_previous_name: Some(previous_name),
+                };
+                self.spawn_project_write(kind, snapshot, path);
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1866,7 +1874,15 @@ impl<'a> App<'a> {
             };
             let snapshot = self.omf_export_snapshot()?;
             let asset_token = self.project_asset_save_token();
-            self.spawn_project_write(runtime_id, snapshot_hash, snapshot_layer_hashes, asset_token, snapshot, path, None);
+            let kind = PendingSaveKind::Project {
+                runtime_id,
+                snapshot_hash,
+                snapshot_layer_hashes,
+                asset_token,
+                close_after: false,
+                save_as_previous_name: None,
+            };
+            self.spawn_project_write(kind, snapshot, path);
             Ok(())
         }
     }
@@ -1927,24 +1943,7 @@ impl<'a> App<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_project_write(
-        &mut self,
-        runtime_id: u32,
-        snapshot_hash: u64,
-        snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
-        asset_token: crate::model::project::SaveToken,
-        snapshot: formats::omf::ProjectSnapshot,
-        path: PathBuf,
-        save_as_previous_name: Option<String>,
-    ) {
-        let kind = PendingSaveKind::Project {
-            runtime_id,
-            snapshot_hash,
-            snapshot_layer_hashes,
-            asset_token,
-            close_after: false,
-            save_as_previous_name,
-        };
+    fn spawn_project_write(&mut self, kind: PendingSaveKind, snapshot: formats::omf::ProjectSnapshot, path: PathBuf) {
         let (ticket, progress) = self.begin_reported_task(save_label(&kind, &path));
         let (result_tx, result_rx) = mpsc::channel();
         self.pending_saves.push(PendingSave {
