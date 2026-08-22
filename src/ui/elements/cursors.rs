@@ -5,9 +5,19 @@
 /// The marker is clipped to `clip_rect` so it doesn't bleed over panels.
 /// Returns early if the position is outside the clip area.
 /// Draw a screen-space world orientation gizmo in the bottom-left of the viewport.
-pub(crate) fn draw_orientation_gizmo(ui: &mut egui::Ui, canvas_rect: egui::Rect, camera_forward: [f32; 3], camera_up: [f32; 3], commands: &mut Vec<crate::ui::state::UiCommand>) {
+/// Draw the world-axis gizmo in the viewport's top-right corner.
+///
+/// Returns the rect it occupies, which is what the view tools below it anchor
+/// to; [`egui::Rect::NOTHING`] when the viewport is too small to draw it.
+pub(crate) fn draw_orientation_gizmo(
+    ui: &mut egui::Ui,
+    canvas_rect: egui::Rect,
+    camera_forward: [f32; 3],
+    camera_up: [f32; 3],
+    commands: &mut Vec<crate::ui::state::UiCommand>,
+) -> egui::Rect {
     if canvas_rect.width() < 88.0 || canvas_rect.height() < 88.0 {
-        return;
+        return egui::Rect::NOTHING;
     }
 
     const SIZE: f32 = 76.0;
@@ -101,7 +111,9 @@ pub(crate) fn draw_orientation_gizmo(ui: &mut egui::Ui, canvas_rect: egui::Rect,
             {
                 commands.push(crate::ui::state::UiCommand::SetStandardView(standard_view_for_axis(axis)));
             }
-        });
+        })
+        .response
+        .rect
 }
 
 pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: egui::Rect) {

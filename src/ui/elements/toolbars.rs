@@ -13,9 +13,14 @@ use crate::ui::{
 
 pub(crate) const BOTTOM_TOOLBAR_HEIGHT: f32 = 32.0;
 
-/// Space between the left toolbar's tiles. The tiles pad themselves, so the
-/// visible gap is this less the padding either side of it.
+/// Space between toolbar tiles. The tiles pad themselves, so the visible gap
+/// is this less the padding either side of it.
 const TOOL_GROUP_GAP: f32 = 16.0;
+/// Outer width of a tile, for laying tiles out in a floating overlay.
+const TOOL_TILE_WIDTH: f32 = 36.0;
+/// Gap between the view tools and the viewport's right edge. Matches the
+/// orientation gizmo's margin, so the stack and the gizmo share an edge.
+const VIEW_TOOLS_MARGIN: f32 = 16.0;
 
 /// Draw the explorer's own toolbar: the project-wide actions, sitting above
 /// the data tree rather than out over the viewport.
@@ -297,127 +302,126 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
         .rect
 }
 
-/// Draw the right toolbar (Reset view, Zoom to extents, Vertical exaggeration, X-Ray).
-pub(crate) fn draw_right_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    egui::Panel::right("right_tools_strip")
-        .resizable(false)
-        .show_separator_line(false)
-        .default_size(32.0)
-        .show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .show(ui, |ui| {
-                    let contents_id = ui.make_persistent_id("right_toolbar_buttons");
-                    ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
-                        ui.vertical_centered(|ui| {
-                            // Reset view button
-                            let response = ui.add(ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view").id_salt("reset_view"));
-                            if response.clicked() {
-                                commands.push(UiCommand::ResetView);
-                            }
+/// Draw the view tools: a floating stack of tiles under the viewport's
+/// orientation gizmo, `top` being the y the first tile starts at.
+pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, canvas_rect: egui::Rect, top: f32) {
+    if canvas_rect.width() < 120.0 || canvas_rect.height() < 120.0 {
+        return;
+    }
 
-                            // Zoom to bounds button
-                            let response = ui.add(ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents").id_salt("zoom_to_extents"));
-                            if response.clicked() {
-                                commands.push(UiCommand::ZoomToExtents);
-                            }
+    egui::Area::new(egui::Id::new("view_tools"))
+        // Above egui's Background layer, or right clicks inside the buttons
+        // leak through to the viewport's orbit and context handling.
+        .order(egui::Order::Middle)
+        // `Area` is movable by default, which would give the whole stack a
+        // drag response and swallow middle-drag camera moves.
+        .movable(false)
+        .sense(egui::Sense::hover())
+        .pivot(egui::Align2::RIGHT_TOP)
+        .fixed_pos(egui::pos2(canvas_rect.right() - VIEW_TOOLS_MARGIN, top))
+        .show(ui.ctx(), |ui| {
+            ui.set_max_width(TOOL_TILE_WIDTH);
+            ui.spacing_mut().item_spacing.y = TOOL_GROUP_GAP;
 
-                            // Open Vertical Exaggeration menu button
-                            let response = ui.add(
-                                ToolbarButton::new(
-                                    egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
-                                    format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
-                                )
-                                .id_salt("vertical_exaggeration")
-                                .selected(editor.vertical_exaggeration != 1.0),
-                            );
-                            if response.clicked() {
-                                editor.vertical_exaggeration_input = editor.vertical_exaggeration;
-                                editor.vertical_exaggeration_dialog_open = true;
-                            }
+            ToolbarGroup::new().show(ui, |ui| {
+                let response = ui.add(ToolCellButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view").id_salt("reset_view"));
+                if response.clicked() {
+                    commands.push(UiCommand::ResetView);
+                }
 
-                            // Enable x-ray vision
-                            let response = ui.add(
-                                ToolbarButton::new(
-                                    egui::Image::new(unthemed_icon!("toggle_xray.svg")),
-                                    if editor.xray_enabled { "Disable X-Ray Vision" } else { "Enable X-Ray Vision" },
-                                )
-                                .id_salt("xray")
-                                .selected(editor.xray_enabled),
-                            );
-                            if response.clicked() {
-                                editor.xray_enabled = !editor.xray_enabled;
-                            }
+                let response = ui.add(ToolCellButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents").id_salt("zoom_to_extents"));
+                if response.clicked() {
+                    commands.push(UiCommand::ZoomToExtents);
+                }
 
-                            // Show vertices for every visible design object
-                            let response = ui.add(
-                                ToolbarButton::new(
-                                    egui::Image::new(unthemed_icon!("toggle_points.svg")),
-                                    if editor.show_points { "Hide Points" } else { "Show Points" },
-                                )
-                                .id_salt("show_points")
-                                .selected(editor.show_points),
-                            );
-                            if response.clicked() {
-                                commands.push(UiCommand::SetShowPoints(!editor.show_points));
-                            }
+                let response = ui.add(
+                    ToolCellButton::new(
+                        egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
+                        format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
+                    )
+                    .id_salt("vertical_exaggeration")
+                    .selected(editor.vertical_exaggeration != 1.0),
+                );
+                if response.clicked() {
+                    editor.vertical_exaggeration_input = editor.vertical_exaggeration;
+                    editor.vertical_exaggeration_dialog_open = true;
+                }
+            });
 
-                            // Show wireframes on every topology mesh
-                            let response = ui.add(
-                                ToolbarButton::new(
-                                    egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
-                                    if editor.topology_wireframes_enabled { "Hide Wireframes" } else { "Show Wireframes" },
-                                )
-                                .id_salt("wireframes")
-                                .selected(editor.topology_wireframes_enabled),
-                            );
-                            if response.clicked() {
-                                commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
-                            }
+            ToolbarGroup::new().show(ui, |ui| {
+                let response = ui.add(
+                    ToolCellButton::new(
+                        egui::Image::new(unthemed_icon!("toggle_xray.svg")),
+                        if editor.xray_enabled { "Disable X-Ray Vision" } else { "Enable X-Ray Vision" },
+                    )
+                    .id_salt("xray")
+                    .selected(editor.xray_enabled),
+                );
+                if response.clicked() {
+                    editor.xray_enabled = !editor.xray_enabled;
+                }
 
-                            // Vertical slice view: arm the two-click line placement, or
-                            // exit the mode if it is already active.
-                            let slice_engaged = editor.slice_mode_enabled || editor.active_tool == ActiveTool::VerticalSlice;
-                            let response = ui.add(
-                                ToolbarButton::new(
-                                    egui::Image::new(unthemed_icon!("slice_view.svg")),
-                                    if editor.slice_mode_enabled { "Exit Slice View" } else { "Vertical Slice View" },
-                                )
-                                .id_salt("vertical_slice")
-                                .selected(slice_engaged),
-                            );
-                            if response.clicked() {
-                                if editor.slice_mode_enabled {
-                                    commands.push(UiCommand::SetSliceModeEnabled(false));
-                                } else {
-                                    commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
-                                }
-                            }
+                let response = ui.add(
+                    ToolCellButton::new(
+                        egui::Image::new(unthemed_icon!("toggle_points.svg")),
+                        if editor.show_points { "Hide Points" } else { "Show Points" },
+                    )
+                    .id_salt("show_points")
+                    .selected(editor.show_points),
+                );
+                if response.clicked() {
+                    commands.push(UiCommand::SetShowPoints(!editor.show_points));
+                }
 
-                            // Toggle fly mode
-                            let response = ui.add(
-                                ToolbarButton::new(
-                                    egui::Image::new(unthemed_icon!("fly_mode.svg")),
-                                    if editor.fly_mode_enabled { "Disable Flying Mode" } else { "Enable Flying Mode" },
-                                )
-                                .id_salt("fly_mode")
-                                .selected(editor.fly_mode_enabled),
-                            );
-                            if response.clicked() {
-                                commands.push(UiCommand::SetFlyModeEnabled(!editor.fly_mode_enabled));
-                            }
-                        });
-                    });
-                });
-        })
-        .response
-        .rect
+                let response = ui.add(
+                    ToolCellButton::new(
+                        egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
+                        if editor.topology_wireframes_enabled { "Hide Wireframes" } else { "Show Wireframes" },
+                    )
+                    .id_salt("wireframes")
+                    .selected(editor.topology_wireframes_enabled),
+                );
+                if response.clicked() {
+                    commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
+                }
+            });
+
+            ToolbarGroup::new().show(ui, |ui| {
+                // Vertical slice view: arm the two-click line placement, or
+                // exit the mode if it is already active.
+                let slice_engaged = editor.slice_mode_enabled || editor.active_tool == ActiveTool::VerticalSlice;
+                let response = ui.add(
+                    ToolCellButton::new(
+                        egui::Image::new(unthemed_icon!("slice_view.svg")),
+                        if editor.slice_mode_enabled { "Exit Slice View" } else { "Vertical Slice View" },
+                    )
+                    .id_salt("vertical_slice")
+                    .selected(slice_engaged),
+                );
+                if response.clicked() {
+                    if editor.slice_mode_enabled {
+                        commands.push(UiCommand::SetSliceModeEnabled(false));
+                    } else {
+                        commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
+                    }
+                }
+
+                let response = ui.add(
+                    ToolCellButton::new(
+                        egui::Image::new(unthemed_icon!("fly_mode.svg")),
+                        if editor.fly_mode_enabled { "Disable Flying Mode" } else { "Enable Flying Mode" },
+                    )
+                    .id_salt("fly_mode")
+                    .selected(editor.fly_mode_enabled),
+                );
+                if response.clicked() {
+                    commands.push(UiCommand::SetFlyModeEnabled(!editor.fly_mode_enabled));
+                }
+            });
+        });
 }
 
 /// Draw the bottom toolbar (reveal/hide/freeze selection, cursor mode, measure distance).
-///
-/// Updates `geometry_dirty` based on which selection actions were triggered.
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, geometry_dirty: &mut bool, commands: &mut Vec<UiCommand>) -> egui::Rect {
     egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
@@ -504,7 +508,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, g
         .rect
 }
 
-/// Draw a single tool button; toggles `editor.active_tool` on click.
+/// Draw a tool button in a horizontal toolbar; sets `editor.active_tool` on click.
 pub(crate) fn tool_button(
     ui: &mut egui::Ui,
     icon: egui::Image<'static>,
