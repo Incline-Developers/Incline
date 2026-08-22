@@ -45,19 +45,13 @@ const VIEW_TOOLS_MARGIN: f32 = 16.0;
 /// already has a surface, so it groups by spacing alone: related buttons close
 /// together, a wider gap between clusters. The button metrics, rounding and
 /// hover fills are shared, so the two toolbars read as one family. The strip
-/// is as tall as the viewport's top toolbar, and carries the chrome fill the
-/// properties tab column uses, which is what sets it apart from the tree's
-/// list surface below - it needs no border of its own.
+/// is as tall as the viewport's top toolbar, and shares its default panel
+/// fill and separator line, so the two read as one family across the split.
 pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, can_undo: bool, can_redo: bool) {
     egui::Panel::top("explorer_tools_strip")
         .resizable(false)
         .default_size(TOOLBAR_STRIP_HEIGHT)
-        .show_separator_line(false)
-        .frame(
-            egui::Frame::NONE
-                .fill(crate::ui::widgets::recessed_chrome_fill(ui))
-                .inner_margin(egui::Margin::symmetric(STRIP_MARGIN, 0)),
-        )
+        .frame(egui::Frame::NONE.fill(ui.visuals().panel_fill).inner_margin(egui::Margin::symmetric(STRIP_MARGIN, 0)))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("explorer_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
