@@ -693,16 +693,10 @@ impl<'a> BlockModelProperties<'a> {
     /// rather than competing for its width.
     #[allow(clippy::too_many_arguments)]
     fn draw_bar(&self, ui: &mut egui::Ui, content_width: f32, min: f64, max: f64, model: &OpenBlockModel, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-        let (rect, _response) = ui.allocate_exact_size(egui::vec2(content_width, LEGEND_BAR_HEIGHT), egui::Sense::hover());
-        let handle_column_rect = egui::Rect::from_min_size(rect.min, egui::vec2(LEGEND_HANDLE_COLUMN_WIDTH, LEGEND_BAR_HEIGHT));
-        let bar_rect = egui::Rect::from_min_size(egui::pos2(handle_column_rect.right(), rect.top()), egui::vec2(LEGEND_BAR_THICKNESS, LEGEND_BAR_HEIGHT));
-        let handle_center_x = handle_column_rect.right() - COLOR_STOP_HANDLE_SIZE * 0.5;
-        let y_at = |t: f32| bar_rect.bottom() - bar_rect.height() * t;
-        let t_at = |y: f32| (bar_rect.bottom() - y) / bar_rect.height().max(1.0);
-
         let text_color = ui.visuals().text_color();
         // The value labels are laid out (but not painted) up front: their
-        // widest line decides where the colour picker column starts.
+        // widest line decides how wide the legend is as a whole, and so both
+        // where it starts and where the colour picker column sits.
         let label_font = egui::FontId::proportional(11.0);
         let labels: Vec<_> = LEGEND_LABEL_FRACTIONS
             .iter()
@@ -713,8 +707,20 @@ impl<'a> BlockModelProperties<'a> {
                 )
             })
             .collect();
-        let label_left = bar_rect.right() + LEGEND_COLUMN_GAP;
         let label_width = labels.iter().map(|(_, galley)| galley.size().x).fold(0.0_f32, f32::max);
+
+        let (rect, _response) = ui.allocate_exact_size(egui::vec2(content_width, LEGEND_BAR_HEIGHT), egui::Sense::hover());
+        // Handle column | bar | gap | labels | gap | colour picker, centred as
+        // a group in the panel, and pinned left when it doesn't fit.
+        let group_width = LEGEND_HANDLE_COLUMN_WIDTH + LEGEND_BAR_THICKNESS + LEGEND_COLUMN_GAP + label_width + LEGEND_COLUMN_GAP + COLOR_PICKER_BUTTON_WIDTH;
+        let group_left = rect.left() + ((rect.width() - group_width) * 0.5).max(0.0);
+        let handle_column_rect = egui::Rect::from_min_size(egui::pos2(group_left, rect.top()), egui::vec2(LEGEND_HANDLE_COLUMN_WIDTH, LEGEND_BAR_HEIGHT));
+        let bar_rect = egui::Rect::from_min_size(egui::pos2(handle_column_rect.right(), rect.top()), egui::vec2(LEGEND_BAR_THICKNESS, LEGEND_BAR_HEIGHT));
+        let handle_center_x = handle_column_rect.right() - COLOR_STOP_HANDLE_SIZE * 0.5;
+        let y_at = |t: f32| bar_rect.bottom() - bar_rect.height() * t;
+        let t_at = |y: f32| (bar_rect.bottom() - y) / bar_rect.height().max(1.0);
+
+        let label_left = bar_rect.right() + LEGEND_COLUMN_GAP;
         let picker_left = (label_left + label_width + LEGEND_COLUMN_GAP).min(rect.right() - COLOR_PICKER_BUTTON_WIDTH).max(label_left);
 
         let mut ramp = UiRamp::from_transfer(model.color_transfer(), min, max);
