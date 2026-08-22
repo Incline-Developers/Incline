@@ -442,6 +442,10 @@ impl<'a> App<'a> {
             }
             MacMenuAction::ExportViewportImage => Some(UiCommand::ExportViewportImage),
             MacMenuAction::OpenPlotDialog => Some(UiCommand::OpenPlotDialog),
+            MacMenuAction::OpenAbout => {
+                self.editor.show_about = true;
+                None
+            }
             MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
             MacMenuAction::ToggleXyGrid => Some(UiCommand::SetShowXyGrid(!self.editor.show_xy_grid)),

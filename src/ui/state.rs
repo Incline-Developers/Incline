@@ -1217,6 +1217,8 @@ pub(crate) struct EditorState {
     pub(crate) active_preference_category: PreferenceCategory,
     pub(crate) show_import: bool,
     pub(crate) show_export: bool,
+    /// Whether the About dialog is open.
+    pub(crate) show_about: bool,
     /// What filetype should be selected in the import/export menu
     pub(crate) data_menu: DataMenu,
     pub(crate) import_source_menu: DataMenu,
@@ -1729,6 +1731,7 @@ impl EditorState {
             active_preference_category: PreferenceCategory::Interface,
             show_import: false,
             show_export: false,
+            show_about: false,
             data_menu: DataMenu::None,
             import_source_menu: DataMenu::None,
             import_source_paths: Vec::new(),

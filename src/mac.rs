@@ -65,6 +65,7 @@ pub(crate) enum MacMenuAction {
     OpenPointCloudTin,
     OpenCreateBlockModel,
     OpenCreateOreTriangulation,
+    OpenAbout,
 }
 
 impl MacMenuAction {
@@ -98,6 +99,7 @@ impl MacMenuAction {
             value if value == Self::OpenPointCloudTin as isize => Self::OpenPointCloudTin,
             value if value == Self::OpenCreateBlockModel as isize => Self::OpenCreateBlockModel,
             value if value == Self::OpenCreateOreTriangulation as isize => Self::OpenCreateOreTriangulation,
+            value if value == Self::OpenAbout as isize => Self::OpenAbout,
             _ => return None,
         })
     }
@@ -219,6 +221,8 @@ pub(crate) fn install_menu_bar() {
 
     let application_menu = menu(crate::APP_NAME, mtm);
     application_menu.setAutoenablesItems(false);
+    add_action(&application_menu, &format!("About {}", crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);
+    add_separator(&application_menu, mtm);
     add_action(&application_menu, "Preferences…", ",", MacMenuAction::OpenPreferences, &target, mtm);
     add_separator(&application_menu, mtm);
     add_action(&application_menu, &format!("Quit {}", crate::APP_NAME), "q", MacMenuAction::RequestExit, &target, mtm);

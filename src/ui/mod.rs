@@ -759,6 +759,7 @@ fn draw_ui(
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_set_selection_z_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
+    dialogs::about::draw_about_dialog(root_ui, editor);
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open

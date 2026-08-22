@@ -5,6 +5,7 @@
 
 use crate::model::ObjectId;
 
+pub(crate) mod about;
 pub(crate) mod confirmations;
 pub(crate) mod drill_hole;
 pub(crate) mod editing;
