@@ -19,7 +19,7 @@ use crate::app::App;
 pub(crate) type Size = (f32, f32);
 /// Application display name.
 pub(crate) const APP_NAME: &str = env!("CARGO_PKG_NAME");
-/// Native package identifier used by platform integrations. 
+/// Native package identifier used by platform integrations.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const APP_ID: &str = "net.inclinedesign.incline";
 /// Application release version.

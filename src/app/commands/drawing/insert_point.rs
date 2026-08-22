@@ -334,7 +334,10 @@ fn any_insertable_intersection(polylines: &[(&[PolyVertex], bool)]) -> bool {
     let edges: Vec<u64> = polylines.iter().map(|(verts, closed)| edge_count(verts, *closed) as u64).collect();
     // Σ(i<j) Ei·Ej, without walking the pairs.
     let total: u64 = edges.iter().sum();
-    let pairs = total.saturating_mul(total).saturating_sub(edges.iter().map(|count| count.saturating_mul(*count)).sum::<u64>()) / 2;
+    let pairs = total
+        .saturating_mul(total)
+        .saturating_sub(edges.iter().map(|count| count.saturating_mul(*count)).sum::<u64>())
+        / 2;
     if pairs > INTERSECTION_SCAN_BUDGET {
         return true;
     }
