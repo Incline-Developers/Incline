@@ -23,11 +23,11 @@ pub(crate) const fn default_resize_frame_rate_cap() -> u32 {
 }
 
 pub(crate) const fn default_block_model_interaction_resolution_divisor() -> u32 {
-    3
+    1
 }
 
 pub(crate) const fn default_show_block_model_boundary_highlights() -> bool {
-    false
+    true
 }
 
 pub(crate) const fn default_downscale_raster_previews() -> bool {
