@@ -11,7 +11,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     model::{
-        block_model::{BlockModelId, BlockModelSlice, MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel, color_variable_default},
+        block_model::{BlockBounds, BlockModelId, BlockModelSlice, MAX_GRADIENT_ENTRIES, NormalizedRamp, OpenBlockModel, color_variable_default},
         formats::mesh_data,
         raster::{OpenRasterTexture, RasterTextureId},
         triangulation::{OpenTriangulation, TriangulationId},
@@ -2062,47 +2062,215 @@ enum BlockOccupancy {
         grid: crate::model::block_model::UniformBlockGrid,
         bits: Vec<u64>,
     },
-    /// Fallback for sub-blocked/irregular models (or grids too sparse for a
-    /// bitset): quantized block bounds in a hash set.
+    /// Sub-blocked model whose blocks land on a lattice of the smallest one:
+    /// one bit per finest-size cell, each block stamping every cell it
+    /// covers. See [`BlockLattice`].
+    Lattice { lattice: BlockLattice, bits: Vec<u64> },
+    /// Fallback for irregular models (or lattices too large for a bitset):
+    /// quantized block bounds in a hash set. Only matches same-size
+    /// neighbours, so a model that mixes block sizes keeps faces on every
+    /// size boundary.
     Keys(BlockKeySet),
+}
+
+/// Cell lattice of the smallest drawn block.
+///
+/// Sub-blocked (octree / regular-sub-block) models mix block sizes, and the
+/// same-size neighbour probe [`BlockOccupancy::Keys`] does can never match
+/// across a size change - so every block on a size boundary reports all six
+/// faces exposed. Here each drawn block stamps every finest-size cell it
+/// covers, and a face is occluded only when all the cells across it are
+/// stamped. That is correct in both directions: a coarse block whose face is
+/// tiled by finer neighbours, and a fine block against a coarse one.
+///
+/// A block that does not land on the lattice stamps nothing and reads as
+/// fully exposed, so imprecise geometry can only keep faces that culling
+/// would have removed - never punch a hole in a surface.
+struct BlockLattice {
+    origin: DVec3,
+    /// `1 / cell`, so the per-block span lookup multiplies instead of divides.
+    inv_cell: DVec3,
+    dims: [usize; 3],
+}
+
+/// Cap on the finest-block lattice: 64 Mi cells is 8 MiB of bits, and the
+/// stamp pass is proportional to it. A model finer than that keeps the
+/// same-size key probes rather than stalling every geometry rebuild.
+const MAX_LATTICE_CELLS: usize = 1 << 26;
+
+/// Tolerance, in cells, for a block corner counting as on the lattice.
+const LATTICE_TOL: f64 = 1.0e-4;
+
+impl BlockLattice {
+    /// Bounds and cell size of the lattice, or `None` when the blocks are
+    /// degenerate or the lattice would exceed [`MAX_LATTICE_CELLS`].
+    fn detect(blocks: impl Iterator<Item = BlockBounds>) -> Option<Self> {
+        let mut origin = DVec3::INFINITY;
+        let mut far = DVec3::NEG_INFINITY;
+        let mut cell = DVec3::INFINITY;
+        for block in blocks {
+            let size = block.upper - block.lower;
+            if !size.is_finite() || size.min_element() <= 0.0 {
+                return None;
+            }
+            origin = origin.min(block.lower);
+            far = far.max(block.upper);
+            cell = cell.min(size);
+        }
+        if !origin.is_finite() || !far.is_finite() {
+            return None;
+        }
+        let extent = ((far - origin) / cell).to_array();
+        let mut dims = [0usize; 3];
+        for axis in 0..3 {
+            if !extent[axis].is_finite() || extent[axis] <= 0.0 || extent[axis] > MAX_LATTICE_CELLS as f64 {
+                return None;
+            }
+            dims[axis] = (extent[axis].round() as usize).max(1);
+        }
+        let cells = dims[0].checked_mul(dims[1])?.checked_mul(dims[2])?;
+        (cells <= MAX_LATTICE_CELLS).then_some(Self {
+            origin,
+            inv_cell: DVec3::ONE / cell,
+            dims,
+        })
+    }
+
+    fn cell_count(&self) -> usize {
+        // Checked against overflow in `detect`.
+        self.dims[0] * self.dims[1] * self.dims[2]
+    }
+
+    fn linear_index(&self, coords: [usize; 3]) -> usize {
+        (coords[2] * self.dims[1] + coords[1]) * self.dims[0] + coords[0]
+    }
+
+    /// Half-open cell range the block covers, or `None` when it does not sit
+    /// on the lattice. A partly-covered cell must never be stamped, or the
+    /// cull would remove a face that is only half hidden.
+    fn span(&self, block: BlockBounds) -> Option<([usize; 3], [usize; 3])> {
+        let lower = ((block.lower - self.origin) * self.inv_cell).to_array();
+        let upper = ((block.upper - self.origin) * self.inv_cell).to_array();
+        let mut lo = [0usize; 3];
+        let mut hi = [0usize; 3];
+        for axis in 0..3 {
+            let start = lower[axis].round();
+            let end = upper[axis].round();
+            if (lower[axis] - start).abs() > LATTICE_TOL || (upper[axis] - end).abs() > LATTICE_TOL {
+                return None;
+            }
+            if start < 0.0 || end <= start || end > self.dims[axis] as f64 {
+                return None;
+            }
+            lo[axis] = start as usize;
+            hi[axis] = end as usize;
+        }
+        Some((lo, hi))
+    }
+
+    fn stamp(&self, bits: &mut [u64], block: BlockBounds) {
+        let Some((lo, hi)) = self.span(block) else {
+            return;
+        };
+        for z in lo[2]..hi[2] {
+            for y in lo[1]..hi[1] {
+                // Cells along x are contiguous, so walk that axis innermost.
+                let row = self.linear_index([0, y, z]);
+                for x in lo[0]..hi[0] {
+                    let index = row + x;
+                    bits[index / 64] |= 1 << (index % 64);
+                }
+            }
+        }
+    }
+
+    /// Whether every cell across `face` (an index into `FACE_OFFSETS`) is
+    /// stamped, i.e. the face is fully hidden by drawn blocks.
+    fn face_occluded(&self, bits: &[u64], (lo, hi): ([usize; 3], [usize; 3]), face: usize) -> bool {
+        let axis = face / 2;
+        let mut cell_lo = lo;
+        let mut cell_hi = hi;
+        if face.is_multiple_of(2) {
+            // Lattice-edge blocks always show their outer face.
+            if lo[axis] == 0 {
+                return false;
+            }
+            cell_lo[axis] = lo[axis] - 1;
+            cell_hi[axis] = lo[axis];
+        } else {
+            if hi[axis] >= self.dims[axis] {
+                return false;
+            }
+            cell_lo[axis] = hi[axis];
+            cell_hi[axis] = hi[axis] + 1;
+        }
+        for z in cell_lo[2]..cell_hi[2] {
+            for y in cell_lo[1]..cell_hi[1] {
+                let row = self.linear_index([0, y, z]);
+                for x in cell_lo[0]..cell_hi[0] {
+                    let index = row + x;
+                    if bits[index / 64] & (1 << (index % 64)) == 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
 }
 
 /// Build the drawn-block occupancy for shared-face culling. `drawn` is
 /// aligned with `renderable_block_indices` (see
 /// `build_block_model_surface_chunks`).
 fn build_block_occupancy(block_model: &OpenBlockModel, drawn: &[bool]) -> BlockOccupancy {
-    let drawn_blocks = block_model
-        .renderable_block_indices
-        .iter()
-        .zip(drawn)
-        .filter(|&(_, &block_drawn)| block_drawn)
-        .filter_map(|(index, _)| block_model.blocks.get(index));
     if let Some(grid) = block_model.uniform_grid.as_ref() {
         let mut bits = vec![0u64; grid.cell_count().div_ceil(64)];
-        for block in drawn_blocks {
+        for block in drawn_blocks(block_model, drawn) {
             if let Some(coords) = grid.cell_coords(block.lower) {
                 let index = grid.linear_index(coords);
                 bits[index / 64] |= 1 << (index % 64);
             }
         }
-        BlockOccupancy::Grid { grid: grid.clone(), bits }
-    } else {
-        BlockOccupancy::Keys(drawn_blocks.map(block_key).collect())
+        return BlockOccupancy::Grid { grid: grid.clone(), bits };
     }
+    // Mixed block sizes (sub-blocked models) never match a same-size probe,
+    // so try the finest-block lattice before falling back to keys.
+    if let Some(lattice) = BlockLattice::detect(drawn_blocks(block_model, drawn)) {
+        let mut bits = vec![0u64; lattice.cell_count().div_ceil(64)];
+        for block in drawn_blocks(block_model, drawn) {
+            lattice.stamp(&mut bits, block);
+        }
+        return BlockOccupancy::Lattice { lattice, bits };
+    }
+    BlockOccupancy::Keys(drawn_blocks(block_model, drawn).map(block_key).collect())
 }
+
+/// The blocks the shader draws, in `renderable_block_indices` order. `drawn`
+/// is aligned with that order (see `build_block_model_surface_chunks`).
+fn drawn_blocks<'a>(block_model: &'a OpenBlockModel, drawn: &'a [bool]) -> impl Iterator<Item = BlockBounds> + 'a {
+    block_model
+        .renderable_block_indices
+        .iter()
+        .zip(drawn)
+        .filter(|&(_, &block_drawn)| block_drawn)
+        .filter_map(|(index, _)| block_model.blocks.get(index))
+}
+
+/// Axis offsets to a block's six same-size neighbours, in the `-X, +X, -Y,
+/// +Y, -Z, +Z` order every face index in this module uses.
+const FACE_OFFSETS: [[isize; 3]; 6] = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 
 impl BlockOccupancy {
     /// Whether every one of the block's six same-size neighbours is drawn,
     /// i.e. the block shows no face. Short-circuits on the first exposed
     /// face, which spares surface blocks most of the six probes.
-    fn fully_occluded(&self, block: crate::model::block_model::BlockBounds) -> bool {
+    fn fully_occluded(&self, block: BlockBounds) -> bool {
         match self {
             Self::Grid { grid, bits } => {
                 let Some(coords) = grid.cell_coords(block.lower) else {
                     return false;
                 };
-                const NEIGHBOUR_OFFSETS: [[isize; 3]; 6] = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
-                NEIGHBOUR_OFFSETS.iter().all(|offset| {
+                FACE_OFFSETS.iter().all(|offset| {
                     let mut neighbour = [0usize; 3];
                     for axis in 0..3 {
                         let position = coords[axis] as isize + offset[axis];
@@ -2116,6 +2284,12 @@ impl BlockOccupancy {
                     bits[index / 64] & (1 << (index % 64)) != 0
                 })
             }
+            Self::Lattice { lattice, bits } => {
+                let Some(span) = lattice.span(block) else {
+                    return false;
+                };
+                (0..6).all(|face| lattice.face_occluded(bits, span, face))
+            }
             Self::Keys(keys) => {
                 let size = block.upper - block.lower;
                 let neighbours = [
@@ -2127,7 +2301,7 @@ impl BlockOccupancy {
                     DVec3::new(0.0, 0.0, size.z),
                 ];
                 neighbours.iter().all(|&delta| {
-                    let neighbour = block_key(crate::model::block_model::BlockBounds {
+                    let neighbour = block_key(BlockBounds {
                         lower: block.lower + delta,
                         upper: block.upper + delta,
                     });
@@ -2136,9 +2310,53 @@ impl BlockOccupancy {
             }
         }
     }
+
+    /// Per-face exposure in `FACE_OFFSETS` order: `true` where the block's
+    /// same-size neighbour across that face is absent, so the face is
+    /// visible. Unlike `fully_occluded` this has to probe all six faces, so
+    /// it keeps the grid coordinates rather than recomputing them per probe.
+    fn exposed_faces(&self, block: BlockBounds) -> [bool; 6] {
+        match self {
+            Self::Grid { grid, bits } => {
+                let Some(coords) = grid.cell_coords(block.lower) else {
+                    return [true; 6];
+                };
+                FACE_OFFSETS.map(|offset| {
+                    let mut neighbour = [0usize; 3];
+                    for axis in 0..3 {
+                        let position = coords[axis] as isize + offset[axis];
+                        if position < 0 || position as usize >= grid.dims[axis] {
+                            // Grid-edge blocks always show their outer face.
+                            return true;
+                        }
+                        neighbour[axis] = position as usize;
+                    }
+                    let index = grid.linear_index(neighbour);
+                    bits[index / 64] & (1 << (index % 64)) == 0
+                })
+            }
+            Self::Lattice { lattice, bits } => {
+                let Some(span) = lattice.span(block) else {
+                    return [true; 6];
+                };
+                std::array::from_fn(|face| !lattice.face_occluded(bits, span, face))
+            }
+            Self::Keys(keys) => {
+                let size = block.upper - block.lower;
+                FACE_OFFSETS.map(|offset| {
+                    let delta = DVec3::new(offset[0] as f64 * size.x, offset[1] as f64 * size.y, offset[2] as f64 * size.z);
+                    let neighbour = block_key(BlockBounds {
+                        lower: block.lower + delta,
+                        upper: block.upper + delta,
+                    });
+                    !keys.contains(&neighbour)
+                })
+            }
+        }
+    }
 }
 
-fn block_key(block: crate::model::block_model::BlockBounds) -> [u64; 6] {
+fn block_key(block: BlockBounds) -> [u64; 6] {
     [
         quantize(block.lower.x),
         quantize(block.lower.y),
@@ -2184,19 +2402,64 @@ fn normalized_grade(value: f64, range: (f64, f64)) -> f32 {
     }
 }
 
+/// The twelve cube edges, each paired with the two faces it borders (indices
+/// into `FACE_OFFSETS`). Corner numbering matches `block_corners`. An edge is
+/// drawn only when one of those faces is exposed, so a block model's
+/// wireframe is the grid on its visible skin instead of every block's full
+/// cage - the interior lattice is invisible behind an opaque model anyway,
+/// and swamps the view once the model is translucent.
+const BLOCK_EDGE_FACES: [([usize; 2], [usize; 2]); 12] = [
+    ([0, 1], [2, 4]),
+    ([1, 2], [1, 4]),
+    ([2, 3], [3, 4]),
+    ([3, 0], [0, 4]),
+    ([4, 5], [2, 5]),
+    ([5, 6], [1, 5]),
+    ([6, 7], [3, 5]),
+    ([7, 4], [0, 5]),
+    ([0, 4], [0, 2]),
+    ([1, 5], [1, 2]),
+    ([2, 6], [1, 3]),
+    ([3, 7], [0, 3]),
+];
+
 fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, block_model: &OpenBlockModel) -> Vec<CachedEdgeChunk> {
     const EDGES_PER_CHUNK: usize = 64 * 1024;
     let color_values = block_model_color_values(block_model);
     let ramp = block_model.normalized_ramp();
     let slice = block_model.active_slice();
+    let hide_empty = block_model.hide_empty_color_values;
+    let blocks = &block_model.blocks;
+    // Which blocks the shader draws at all, aligned with
+    // `renderable_block_indices`. Occupancy is built from the same set, so a
+    // hidden or sliced-away neighbour leaves the face - and its edges -
+    // exposed, mirroring `build_block_model_surface_chunks`.
+    let visible = block_model.renderable_block_indices.par_map(|block_index| {
+        let intersects_slice = slice.is_none_or(|slice| {
+            blocks
+                .get(block_index)
+                .is_some_and(|block| block.lower.cmplt(slice.max).all() && block.upper.cmpgt(slice.min).all())
+        });
+        intersects_slice && !block_is_hidden(&color_values, &ramp, block_index, hide_empty)
+    });
+    let occupancy = build_block_occupancy(block_model, &visible);
     let mut chunks = Vec::new();
     let mut instances = Vec::new();
-    for block_index in block_model.renderable_block_indices.iter() {
-        let Some(mut block) = block_model.blocks.get(block_index) else {
+    for (position, block_index) in block_model.renderable_block_indices.iter().enumerate() {
+        if !visible[position] {
+            continue;
+        }
+        let Some(mut block) = blocks.get(block_index) else {
             continue;
         };
-        // Match the surface shader: remove outside blocks and clamp boundary
-        // block outlines to the exact slice planes.
+        // Probe occupancy with the unclamped bounds the neighbour keys were
+        // built from, before the slice clamp below moves the corners.
+        let exposed = occupancy.exposed_faces(block);
+        if !exposed.iter().any(|&face| face) {
+            continue;
+        }
+        // Match the surface shader: clamp boundary block outlines to the
+        // exact slice planes.
         if let Some(slice) = slice {
             block.lower = block.lower.max(slice.min);
             block.upper = block.upper.min(slice.max);
@@ -2204,12 +2467,11 @@ fn build_block_model_edge_chunks(device: &wgpu::Device, scene_origin: DVec3, blo
                 continue;
             }
         }
-        // Shader-hidden blocks draw no faces; skip their outlines too.
-        if block_is_hidden(&color_values, &ramp, block_index, block_model.hide_empty_color_values) {
-            continue;
-        }
         let corners = block_corners(&block_model.model, block);
-        for [a, b] in [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]] {
+        for ([a, b], [face_a, face_b]) in BLOCK_EDGE_FACES {
+            if !exposed[face_a] && !exposed[face_b] {
+                continue;
+            }
             instances.push(EdgeInstance {
                 start: (corners[a] - scene_origin).as_vec3().to_array(),
                 end: (corners[b] - scene_origin).as_vec3().to_array(),
@@ -2241,4 +2503,107 @@ fn block_corners(model: &crate::model::formats::block_model_data::BlockModelData
         model.local_to_world(DVec3::new(hi.x, hi.y, hi.z)),
         model.local_to_world(DVec3::new(lo.x, hi.y, hi.z)),
     ]
+}
+
+#[cfg(test)]
+mod lattice_tests {
+    use super::*;
+
+    fn block(lower: [f64; 3], size: f64) -> BlockBounds {
+        let lower = DVec3::from_array(lower);
+        BlockBounds {
+            lower,
+            upper: lower + DVec3::splat(size),
+        }
+    }
+
+    /// A coarse 2-cube whose +X face is tiled by four unit sub-blocks: the
+    /// case the same-size key probe cannot see.
+    fn octree_case() -> (BlockLattice, Vec<u64>, BlockBounds, BlockBounds) {
+        let coarse = block([0.0, 0.0, 0.0], 2.0);
+        let mut blocks = vec![coarse];
+        for y in 0..2 {
+            for z in 0..2 {
+                blocks.push(block([2.0, y as f64, z as f64], 1.0));
+            }
+        }
+        let lattice = BlockLattice::detect(blocks.iter().copied()).expect("lattice");
+        let mut bits = vec![0u64; lattice.cell_count().div_ceil(64)];
+        for b in &blocks {
+            lattice.stamp(&mut bits, *b);
+        }
+        (lattice, bits, coarse, blocks[1])
+    }
+
+    #[test]
+    fn detects_finest_cell_and_dims() {
+        let (lattice, _, _, _) = octree_case();
+        assert_eq!(lattice.dims, [3, 2, 2]);
+        assert_eq!(lattice.origin, DVec3::ZERO);
+    }
+
+    #[test]
+    fn coarse_face_tiled_by_fine_blocks_is_occluded() {
+        let (lattice, bits, coarse, fine) = octree_case();
+        let occupancy = BlockOccupancy::Lattice { lattice, bits };
+        // -X,+X,-Y,+Y,-Z,+Z: only +X meets the sub-blocks; the rest are on
+        // the lattice boundary.
+        assert_eq!(occupancy.exposed_faces(coarse), [true, false, true, true, true, true]);
+        // And the reverse direction: the fine block's -X face meets the
+        // coarse one, and its +Y/+Z faces meet its siblings.
+        assert_eq!(occupancy.exposed_faces(fine), [false, true, true, false, true, false]);
+        assert!(!occupancy.fully_occluded(coarse));
+    }
+
+    #[test]
+    fn same_size_probe_misses_what_the_lattice_finds() {
+        let (_, _, coarse, _) = octree_case();
+        let mut keys = BlockKeySet::default();
+        let mut blocks = vec![coarse];
+        for y in 0..2 {
+            for z in 0..2 {
+                blocks.push(block([2.0, y as f64, z as f64], 1.0));
+            }
+        }
+        for b in &blocks {
+            keys.insert(block_key(*b));
+        }
+        // The regression this fixes: the key probe looks for a 2-cube at
+        // x = 2 and finds none, so the buried face reads as exposed.
+        assert_eq!(BlockOccupancy::Keys(keys).exposed_faces(coarse), [true; 6]);
+    }
+
+    #[test]
+    fn fully_enclosed_block_shows_no_face() {
+        let mut blocks = Vec::new();
+        for x in 0..3 {
+            for y in 0..3 {
+                for z in 0..3 {
+                    blocks.push(block([x as f64, y as f64, z as f64], 1.0));
+                }
+            }
+        }
+        let lattice = BlockLattice::detect(blocks.iter().copied()).expect("lattice");
+        let mut bits = vec![0u64; lattice.cell_count().div_ceil(64)];
+        for b in &blocks {
+            lattice.stamp(&mut bits, *b);
+        }
+        let occupancy = BlockOccupancy::Lattice { lattice, bits };
+        assert!(occupancy.fully_occluded(block([1.0, 1.0, 1.0], 1.0)));
+        assert_eq!(occupancy.exposed_faces(block([1.0, 1.0, 1.0], 1.0)), [false; 6]);
+        assert_eq!(occupancy.exposed_faces(block([0.0, 1.0, 1.0], 1.0)), [true, false, false, false, false, false]);
+    }
+
+    #[test]
+    fn off_lattice_block_stamps_nothing_and_stays_exposed() {
+        let blocks = vec![block([0.0, 0.0, 0.0], 1.0), block([1.0, 0.0, 0.0], 1.0)];
+        let lattice = BlockLattice::detect(blocks.iter().copied()).expect("lattice");
+        let mut bits = vec![0u64; lattice.cell_count().div_ceil(64)];
+        for b in &blocks {
+            lattice.stamp(&mut bits, *b);
+        }
+        let occupancy = BlockOccupancy::Lattice { lattice, bits };
+        // Half a cell off the lattice: culling must not claim its faces.
+        assert_eq!(occupancy.exposed_faces(block([0.5, 0.0, 0.0], 1.0)), [true; 6]);
+    }
 }
