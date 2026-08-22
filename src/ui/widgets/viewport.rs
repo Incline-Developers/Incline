@@ -257,11 +257,11 @@ const COLOR_PICKER_BUTTON_WIDTH: f32 = 40.0;
 const COLOR_PICKER_BUTTON_HEIGHT: f32 = 18.0;
 const COLOR_PICKER_EDGE_BUFFER: f32 = 8.0;
 const LEGEND_SIDE_GUTTER: f32 = COLOR_PICKER_BUTTON_WIDTH * 0.5 + COLOR_PICKER_EDGE_BUFFER;
-/// Fixed outer width of the block-model panel, including its horizontal
-/// frame margins. Keeping this independent of the viewport prevents the
-/// controls from shifting as the application window is resized.
-const COLOR_SCALE_PANEL_WIDTH: f32 = 620.0;
-const COLOR_SCALE_PANEL_MARGIN: f32 = 10.0;
+/// Floor on the width the block-model properties lay themselves out in, so a
+/// very narrow explorer panel scrolls horizontally rather than collapsing the
+/// colour bar to nothing.
+const MIN_CONTENT_WIDTH: f32 = 200.0;
+const MIN_BAR_WIDTH: f32 = 96.0;
 const SCALE_BAR_TARGET_WIDTH: f64 = 320.0;
 const SCALE_BAR_VIEWPORT_MARGIN: f32 = 10.0;
 const SCALE_BAR_LABEL_OVERHANG: f32 = 18.0;
@@ -449,214 +449,103 @@ fn format_grade_range(min: f64, max: f64) -> String {
     format!("({min:.decimals$} - {max:.decimals$})")
 }
 
-/// An interactive colour-scale legend/editor pinned flush to the bottom-right
-/// corner of the 3D viewport.
-pub(crate) struct ColorScaleLegend<'a> {
+/// The interactive colour-scale and slice editor for one block model, drawn
+/// inline in the explorer's properties panel.
+pub(crate) struct BlockModelProperties<'a> {
     id: egui::Id,
-    models: &'a [OpenBlockModel],
-    viewport_rect: egui::Rect,
+    model: &'a OpenBlockModel,
 }
 
-impl<'a> ColorScaleLegend<'a> {
-    pub(crate) fn new(id_source: impl Hash + Debug, models: &'a [OpenBlockModel], viewport_rect: egui::Rect) -> Self {
+impl<'a> BlockModelProperties<'a> {
+    pub(crate) fn new(id_source: impl Hash + Debug, model: &'a OpenBlockModel) -> Self {
         Self {
             id: egui::Id::new(id_source),
-            models,
-            viewport_rect,
+            model,
         }
     }
 
-    pub(crate) fn show(self, ctx: &egui::Context, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> Option<egui::Rect> {
-        let visible_models = self.models.iter().filter(|model| model.visible).collect::<Vec<_>>();
-        if visible_models.is_empty() {
-            return None;
+    pub(crate) fn show(self, ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+        let model = self.model;
+        let content_width = ui.available_width().max(MIN_CONTENT_WIDTH);
+        let bar_width = (content_width - LEGEND_SIDE_GUTTER * 2.0).max(MIN_BAR_WIDTH);
+        let range = active_variable_range(editor, model);
+
+        self.draw_slice_controls(ui, content_width, model, commands);
+        if !model_has_selectable_variable(model) {
+            return;
         }
-
-        editor.viewport_block_model_id = editor
-            .viewport_block_model_id
-            .filter(|id| visible_models.iter().any(|model| model.id == *id))
-            .or_else(|| visible_models.first().map(|model| model.id));
-
-        let content_width = COLOR_SCALE_PANEL_WIDTH - COLOR_SCALE_PANEL_MARGIN * 2.0;
-        let bar_width = content_width - LEGEND_SIDE_GUTTER * 2.0;
-        let response = egui::Area::new(self.id.with("settings_panel"))
-            // This is an interactive viewport overlay, so it must live above
-            // egui's Background layer. Background-layer areas deliberately do
-            // not claim pointer input inside the root viewport, which lets
-            // right clicks leak through to camera orbit/context handling.
-            .order(egui::Order::Middle)
-            // `Area` defaults to movable, which gives its entire rectangle a
-            // drag response even when `fixed_pos` is used. Leave interaction
-            // to the child controls so middle-drag can pass to the viewport.
-            .movable(false)
-            .sense(egui::Sense::hover())
-            .pivot(egui::Align2::RIGHT_BOTTOM)
-            .fixed_pos(self.viewport_rect.right_bottom())
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(ui.visuals().panel_fill)
-                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                    .corner_radius(egui::CornerRadius { nw: 0, ne: 0, sw: 0, se: 0 })
-                    .inner_margin(egui::Margin::symmetric(COLOR_SCALE_PANEL_MARGIN as i8, 8))
-                    .show(ui, |ui| {
-                        ui.set_min_width(content_width);
-                        ui.set_max_width(content_width);
-                        self.draw_model_tabs(ui, &visible_models, editor, content_width);
-                        if editor.block_model_settings_collapsed {
-                            return;
-                        }
-                        let Some(model) = editor.viewport_block_model_id.and_then(|id| visible_models.iter().copied().find(|model| model.id == id)) else {
-                            return;
-                        };
-                        let range = active_variable_range(editor, model);
-                        ui.separator();
-                        ui.vertical_centered(|ui| {
-                            self.draw_slice_controls(ui, content_width, model, commands);
-                            if model_has_selectable_variable(model) {
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    // Title centred over everything left of the
-                                    // reset, which hangs off the right edge.
-                                    ui.allocate_ui_with_layout(
-                                        egui::vec2((content_width - RESET_COLORS_WIDTH).max(0.0), RESET_COLORS_HEIGHT),
-                                        egui::Layout::top_down(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(egui::RichText::new("Colour mapping").strong().color(ui.visuals().weak_text_color()));
-                                        },
-                                    );
-                                    if ui
-                                        .add_sized(
-                                            egui::vec2(RESET_COLORS_WIDTH, RESET_COLORS_HEIGHT),
-                                            egui::Button::new(egui::RichText::new("Reset").small()),
-                                        )
-                                        .on_hover_text("Rebuild this variable's colours from its data")
-                                        .clicked()
-                                    {
-                                        commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
-                                    }
-                                });
-                                ui.add_space(2.0);
-                                self.draw_variable_dropdown(ui, content_width, model, editor, commands);
-                                ui.add_space(4.0);
-                                if model.active_variable_is_categorical() {
-                                    self.draw_category_legend(ui, content_width, model, commands);
-                                } else if let Some((min, max)) = range {
-                                    self.draw_bar(ui, content_width, bar_width, min, max, model, editor, commands);
-                                } else {
-                                    self.draw_no_data(ui, content_width);
-                                }
-                            }
-                        });
-                    });
-            });
-        Some(response.response.rect)
-    }
-
-    fn draw_model_tabs(&self, ui: &mut egui::Ui, visible_models: &[&OpenBlockModel], editor: &mut EditorState, content_width: f32) {
-        let minimise_width = if editor.block_model_settings_collapsed { 0.0 } else { 82.0 };
+        ui.add_space(6.0);
+        ui.separator();
         ui.horizontal(|ui| {
-            egui::ScrollArea::horizontal()
-                .id_salt(self.id.with("model_tabs_scroll"))
-                .max_width((content_width - minimise_width).max(96.0))
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    ui.horizontal(|ui| {
-                        for model in visible_models {
-                            let active = editor.viewport_block_model_id == Some(model.id);
-                            let response = ui
-                                .add(
-                                    egui::Button::selectable(active && !editor.block_model_settings_collapsed, egui::RichText::new(&model.name).strong())
-                                        .min_size(egui::vec2(96.0, 24.0)),
-                                )
-                                .on_hover_text(if active && editor.block_model_settings_collapsed {
-                                    "Show this block model's settings"
-                                } else if active {
-                                    "Minimise this block model's settings"
-                                } else {
-                                    "Show this block model's settings"
-                                });
-                            if response.clicked() {
-                                if active {
-                                    editor.block_model_settings_collapsed = !editor.block_model_settings_collapsed;
-                                } else {
-                                    editor.viewport_block_model_id = Some(model.id);
-                                    editor.block_model_settings_collapsed = false;
-                                }
-                            }
-                        }
-                    });
-                });
-            if !editor.block_model_settings_collapsed
-                && ui
-                    .add_sized(egui::vec2(76.0, 22.0), egui::Button::new("Minimise").small())
-                    .on_hover_text("Collapse settings to the model tabs")
+            ui.label(egui::RichText::new("Colour mapping").strong().color(ui.visuals().weak_text_color()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_sized(egui::vec2(RESET_COLORS_WIDTH, RESET_COLORS_HEIGHT), egui::Button::new(egui::RichText::new("Reset").small()))
+                    .on_hover_text("Rebuild this variable's colours from its data")
                     .clicked()
-            {
-                editor.block_model_settings_collapsed = true;
-            }
+                {
+                    commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
+                }
+            });
         });
+        ui.add_space(2.0);
+        self.draw_variable_dropdown(ui, content_width, model, editor, commands);
+        ui.add_space(4.0);
+        if model.active_variable_is_categorical() {
+            self.draw_category_legend(ui, content_width, model, commands);
+        } else if let Some((min, max)) = range {
+            self.draw_bar(ui, content_width, bar_width, min, max, model, editor, commands);
+        } else {
+            self.draw_no_data(ui, content_width);
+        }
     }
 
+    /// One row per axis, so the six bounds fit a side panel's width.
     fn draw_slice_controls(&self, ui: &mut egui::Ui, content_width: f32, model: &OpenBlockModel, commands: &mut Vec<UiCommand>) {
         let (lower, upper) = model.local_bounds();
         let full = BlockModelSlice { min: lower, max: upper };
         let mut slice = model.slice.unwrap_or(full).clamped_to(lower, upper);
         let mut changed = false;
-        let (row, _) = ui.allocate_exact_size(egui::vec2(content_width, 24.0), egui::Sense::hover());
-        let widget_height = 22.0;
-        let top = row.center().y - widget_height * 0.5;
-        let gap = ui.spacing().item_spacing.x;
-        let slice_label_width = 34.0;
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Slice").strong().color(ui.visuals().weak_text_color()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_sized(egui::vec2(RESET_COLORS_WIDTH, RESET_COLORS_HEIGHT), egui::Button::new(egui::RichText::new("Reset").small()))
+                    .on_hover_text("Restore the full model range")
+                    .clicked()
+                {
+                    commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: None });
+                }
+            });
+        });
+
         let axis_label_width = 14.0;
-        let value_width = 58.0;
-        let reset_width = 42.0;
-        let axis_width = (content_width - slice_label_width - reset_width - gap * 4.0) / 3.0;
-        let mut x = row.left();
-
-        ui.put(
-            egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(slice_label_width, widget_height)),
-            egui::Label::new("Slice"),
-        );
-        x += slice_label_width + gap;
-
+        let gap = ui.spacing().item_spacing.x;
+        let value_width = ((content_width - axis_label_width - gap * 2.0) * 0.5).max(48.0);
         for (axis, label) in ["X", "Y", "Z"].into_iter().enumerate() {
-            let axis_start = x;
-            ui.put(
-                egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(axis_label_width, widget_height)),
-                egui::Label::new(egui::RichText::new(label).strong()),
-            );
-            x += axis_label_width + gap;
             let extent = (upper[axis] - lower[axis]).abs();
             let speed = (extent / 500.0).max(0.001);
-            changed |= ui
-                .put(
-                    egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(value_width, widget_height)),
-                    egui::DragValue::new(&mut slice.min[axis]).range(lower[axis]..=slice.max[axis]).speed(speed).max_decimals(4),
-                )
-                .on_hover_text(format!("{label} minimum"))
-                .changed();
-            x += value_width + gap;
-            changed |= ui
-                .put(
-                    egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(value_width, widget_height)),
-                    egui::DragValue::new(&mut slice.max[axis]).range(slice.min[axis]..=upper[axis]).speed(speed).max_decimals(4),
-                )
-                .on_hover_text(format!("{label} maximum"))
-                .changed();
-            x = axis_start + axis_width + gap;
+            ui.horizontal(|ui| {
+                ui.add_sized(egui::vec2(axis_label_width, 20.0), egui::Label::new(egui::RichText::new(label).strong()));
+                changed |= ui
+                    .add_sized(
+                        egui::vec2(value_width, 20.0),
+                        egui::DragValue::new(&mut slice.min[axis]).range(lower[axis]..=slice.max[axis]).speed(speed).max_decimals(4),
+                    )
+                    .on_hover_text(format!("{label} minimum"))
+                    .changed();
+                changed |= ui
+                    .add_sized(
+                        egui::vec2(value_width, 20.0),
+                        egui::DragValue::new(&mut slice.max[axis]).range(slice.min[axis]..=upper[axis]).speed(speed).max_decimals(4),
+                    )
+                    .on_hover_text(format!("{label} maximum"))
+                    .changed();
+            });
         }
 
-        let reset = ui
-            .put(
-                egui::Rect::from_min_size(egui::pos2(row.right() - reset_width, top), egui::vec2(reset_width, widget_height)),
-                egui::Button::new("Reset").small(),
-            )
-            .on_hover_text("Restore the full model range")
-            .clicked();
-        if reset {
-            commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: None });
-        } else if changed {
+        if changed {
             commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: Some(slice) });
         }
     }
@@ -1201,16 +1090,16 @@ impl ViewportScaleBar {
         }
     }
 
-    pub(crate) fn show(self, ctx: &egui::Context, world_per_point: Option<f64>, viewport_background: [f32; 4], bottom_right_overlay: Option<egui::Rect>) {
+    pub(crate) fn show(self, ctx: &egui::Context, world_per_point: Option<f64>, viewport_background: [f32; 4]) {
         let Some(world_per_point) = world_per_point.filter(|value| value.is_finite() && *value > 0.0) else {
             return;
         };
         let distance = nice_scale_distance(world_per_point * SCALE_BAR_TARGET_WIDTH);
         let bar_width = (distance / world_per_point) as f32;
-        let bottom = bottom_right_overlay
-            .map(|rect| rect.top() - SCALE_BAR_VIEWPORT_MARGIN)
-            .unwrap_or(self.viewport_rect.bottom() - SCALE_BAR_VIEWPORT_MARGIN);
-        let anchor = egui::pos2(self.viewport_rect.right() - SCALE_BAR_VIEWPORT_MARGIN, bottom);
+        let anchor = egui::pos2(
+            self.viewport_rect.right() - SCALE_BAR_VIEWPORT_MARGIN,
+            self.viewport_rect.bottom() - SCALE_BAR_VIEWPORT_MARGIN,
+        );
         let luminance = 0.2126 * viewport_background[0] + 0.7152 * viewport_background[1] + 0.0722 * viewport_background[2];
         let (ink, outline) = if luminance > 0.45 {
             (egui::Color32::BLACK, egui::Color32::WHITE)

@@ -481,6 +481,22 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Make one block model the whole selection.
+    ///
+    /// The explorer's properties panel shows a block model's colours and slice
+    /// only while it is selected, and clicking it in the tree is the other way
+    /// (besides picking it in the viewport) to say which one.
+    pub(crate) fn select_block_model(&mut self, id: BlockModelId) {
+        if !self.block_models.iter().any(|model| model.id == id && model.state.loaded) {
+            return;
+        }
+        self.editor.selected_handles.clear();
+        self.editor.selected_handles.insert(SceneEntityId::BlockModel(id));
+        self.editor.viewport_block_model_id = Some(id);
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+    }
+
     pub(crate) fn close_block_model(&mut self, id: BlockModelId) {
         let Some(entity_id) = self.block_models.iter_mut().find(|model| model.id == id).map(|model| {
             model.state.loaded = false;

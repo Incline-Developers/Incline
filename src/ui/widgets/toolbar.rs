@@ -51,7 +51,7 @@ impl egui::Widget for ToolbarButton {
         let id = self.id_salt.map_or(auto_id, |salt| ui.make_persistent_id(salt));
         let response = ui.interact(rect, id, Sense::click());
         let fill = if self.selected {
-            ui.visuals().widgets.active.bg_fill
+            ui.visuals().selection.bg_fill
         } else if response.hovered() {
             ui.visuals().widgets.hovered.bg_fill
         } else {
@@ -62,6 +62,117 @@ impl egui::Widget for ToolbarButton {
         let icon_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(self.icon_size, rect);
         self.icon.fit_to_exact_size(self.icon_size).paint_at(ui, icon_rect);
         response.on_hover_text(self.tooltip)
+    }
+}
+
+/// Corner rounding on a toolbar group's tile.
+const GROUP_CORNER_RADIUS: u8 = 3;
+/// Space between a tile's edge and the buttons inside it.
+const GROUP_PADDING: f32 = 4.0;
+/// Gap between the buttons stacked inside a tile.
+const GROUP_BUTTON_GAP: f32 = 3.0;
+/// Side of a tool cell: the buttons fill the tile's inner width.
+const TOOL_CELL_SIZE: f32 = 28.0;
+/// Side of the icon drawn inside a tool cell.
+const TOOL_ICON_SIZE: f32 = 20.0;
+/// Corner rounding on a tool cell's fill.
+const TOOL_CELL_CORNER_RADIUS: f32 = 3.0;
+
+/// A tool button that fills its cell, sized to a [`ToolbarGroup`] tile's inner
+/// width.
+///
+/// Unlike [`ToolbarButton`], whose fill is a small square inside whatever space
+/// it is given, this fills its whole cell - so a selected tool reads as a solid
+/// block the width of the tile rather than a chip floating inside it. That only
+/// works in a tile: elsewhere, use [`ToolbarButton`].
+pub(crate) struct ToolCellButton {
+    icon: egui::Image<'static>,
+    tooltip: egui::WidgetText,
+    id_salt: Option<egui::Id>,
+    selected: bool,
+}
+
+impl ToolCellButton {
+    pub(crate) fn new(icon: egui::Image<'static>, tooltip: impl Into<egui::WidgetText>) -> Self {
+        Self {
+            icon,
+            tooltip: tooltip.into(),
+            id_salt: None,
+            selected: false,
+        }
+    }
+
+    pub(crate) fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    /// Give the clickable response a stable identity when its parent may be
+    /// rebuilt in a different order during an egui sizing pass.
+    pub(crate) fn id_salt(mut self, id_salt: impl Hash + std::fmt::Debug) -> Self {
+        self.id_salt = Some(egui::Id::new(id_salt));
+        self
+    }
+}
+
+impl egui::Widget for ToolCellButton {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let (auto_id, rect) = ui.allocate_space(Vec2::splat(TOOL_CELL_SIZE));
+        let id = self.id_salt.map_or(auto_id, |salt| ui.make_persistent_id(salt));
+        let response = ui.interact(rect, id, Sense::click());
+        let fill = if self.selected {
+            ui.visuals().selection.bg_fill
+        } else if response.hovered() {
+            ui.visuals().widgets.hovered.bg_fill
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, TOOL_CELL_CORNER_RADIUS, fill);
+
+        let icon_size = Vec2::splat(TOOL_ICON_SIZE);
+        let icon_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(icon_size, rect);
+        self.icon.fit_to_exact_size(icon_size).paint_at(ui, icon_rect);
+        response.on_hover_text(self.tooltip)
+    }
+}
+
+/// A vertical run of tool buttons drawn on one rounded tile.
+///
+/// A toolbar reads as clusters of related tools rather than a column of
+/// separate buttons: the tile is the cluster, and its buttons sit inside it
+/// with a little air around and between them.
+pub(crate) struct ToolbarGroup {
+    width: f32,
+}
+
+impl ToolbarGroup {
+    pub(crate) fn new() -> Self {
+        Self { width: TOOL_CELL_SIZE }
+    }
+
+    pub(crate) fn show<R>(self, ui: &mut Ui, add_buttons: impl FnOnce(&mut Ui) -> R) -> R {
+        // The tile has to be painted under the buttons, and its height is only
+        // known once they have been laid out, so its slot is reserved first.
+        let tile = ui.painter().add(egui::Shape::Noop);
+        let inner = ui.vertical_centered(|ui| {
+            ui.set_max_width(self.width);
+            ui.spacing_mut().item_spacing.y = GROUP_BUTTON_GAP;
+            add_buttons(ui)
+        });
+        let rows = inner.response.rect;
+        if rows.height() > 0.0 {
+            let tile_rect = egui::Rect::from_center_size(
+                egui::pos2(ui.max_rect().center().x, rows.center().y),
+                egui::vec2(self.width + GROUP_PADDING * 2.0, rows.height() + GROUP_PADDING * 2.0),
+            );
+            // The tile carries the panel colour, because it *is* the panel now:
+            // the toolbar's own background is transparent, so the tiles are all
+            // that separates the tools from the scene behind them.
+            let fill = ui.visuals().panel_fill;
+            ui.painter()
+                .set(tile, egui::Shape::rect_filled(tile_rect, egui::CornerRadius::same(GROUP_CORNER_RADIUS), fill));
+        }
+        inner.inner
     }
 }
 

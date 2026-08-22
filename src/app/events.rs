@@ -947,7 +947,6 @@ impl<'a> App<'a> {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),
                         _ => None,
                     };
-                    self.editor.canvas_context_line_weight_input = None;
                     self.editor.canvas_context_menu_open = true;
                     self.editor.canvas_context_menu_px = self.editor.cursor_screen_px;
                     self.redraw_requested = true;

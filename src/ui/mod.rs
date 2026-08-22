@@ -448,9 +448,13 @@ fn draw_ui(
     let main_menu_rect = egui::Rect::NOTHING;
 
     // --- Draw all toolbar panels ---
-    let top_toolbar_rect = elements::toolbars::draw_top_toolbar(root_ui, editor, project, commands, editor.can_undo, editor.can_redo);
+    // The status bar spans the window, so it is claimed first. The explorer
+    // comes next, which is what lets it run the full height between the menu
+    // and the status bar: every panel after it - the top toolbar included -
+    // starts at its right edge rather than passing over it.
     let status_bar_rect = elements::status_bar::draw_status_bar(root_ui, editor);
-    let explorer_rect = elements::explorer::draw_explorer(root_ui, editor, project, commands);
+    let explorer_rect = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
+    let top_toolbar_rect = elements::toolbars::draw_top_toolbar(root_ui, editor, project);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -910,13 +914,11 @@ fn draw_ui(
         elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands);
     }
 
-    let block_model_overlay = widgets::viewport::ColorScaleLegend::new("block_model_color_scale_legend", block_models, canvas_rect).show(root_ui.ctx(), editor, commands);
     let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
     if editor.show_scale_bar {
-        widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color, block_model_overlay);
+        widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
     }
 
-    elements::preferences::draw_preferences(root_ui, editor, commands);
     geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
 
     geometry_dirty

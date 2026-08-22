@@ -170,7 +170,9 @@ impl<'a> App<'a> {
         self.editor.fly_max_clip_span = preferences.fly_max_clip_span;
         self.configure_graphics_camera_preferences();
         self.editor.preferences_draft = Some(preferences);
-        userspace_log!(
+        // Preferences apply live from the explorer's properties panel, so this
+        // runs on every committed edit: too often for the activity console.
+        log::debug!(
             "Applied preferences (dark_mode={}, snap_rate={}, fps_cap={}, frame_counter={}, debug_chunks={})",
             preferences.dark_mode,
             preferences.snap_poll_rate,

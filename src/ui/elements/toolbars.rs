@@ -7,14 +7,57 @@ use crate::ui::{
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
-        toolbar::{ColorSquarePicker, HatchPicker, ToolbarButton},
+        toolbar::{ColorSquarePicker, HatchPicker, ToolCellButton, ToolbarButton, ToolbarGroup},
     },
 };
 
 pub(crate) const BOTTOM_TOOLBAR_HEIGHT: f32 = 32.0;
 
-/// Draw the top toolbar (save, undo/redo, layer combo, Z level, line/fill colors, weight, hatch).
-pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, can_undo: bool, can_redo: bool) -> egui::Rect {
+/// Space between the left toolbar's tiles. The tiles pad themselves, so the
+/// visible gap is this less the padding either side of it.
+const TOOL_GROUP_GAP: f32 = 16.0;
+
+/// Draw the explorer's own toolbar: the project-wide actions, sitting above
+/// the data tree rather than out over the viewport.
+pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>, can_undo: bool, can_redo: bool) {
+    egui::Panel::top("explorer_tools_strip").resizable(false).default_size(32.0).show(ui, |ui| {
+        let contents_id = ui.make_persistent_id("explorer_toolbar_buttons");
+        ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.add_space(4.0);
+                let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
+                let save = ui.add_enabled(
+                    has_unsaved,
+                    ToolbarButton::new(egui::Image::new(unthemed_icon!("save_project.svg")), "Save Project").id_salt("save_project"),
+                );
+                if save.clicked() {
+                    commands.push(UiCommand::SaveProject);
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                if ui
+                    .add_enabled(!project.projects.is_empty(), egui::Button::new("Download OMF"))
+                    .on_hover_text("Download the current project as an .omf file")
+                    .clicked()
+                {
+                    commands.push(UiCommand::DownloadProject);
+                }
+
+                let undo_btn = ui.add_enabled(can_undo, ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), "Undo").id_salt("undo"));
+                if undo_btn.clicked() {
+                    commands.push(UiCommand::Undo);
+                }
+                let redo_btn = ui.add_enabled(can_redo, ToolbarButton::new(egui::Image::new(themed_icon!(ui, "redo.svg")), "Redo").id_salt("redo"));
+                if redo_btn.clicked() {
+                    commands.push(UiCommand::Redo);
+                }
+            });
+        });
+    });
+}
+
+/// Draw the top toolbar (layer combo, Z level, line colour, hatch).
+pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) -> egui::Rect {
     egui::Panel::top("top_tools_strip")
         .resizable(false)
         .default_size(34.0)
@@ -26,37 +69,6 @@ pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, proj
             let contents_id = ui.make_persistent_id("top_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
                 ui.horizontal_centered(|ui| {
-                    let preferences = ui.add(ToolbarButton::new(egui::Image::new(themed_icon!(ui, "open_preferences.svg")), "Preferences").id_salt("preferences"));
-                    if preferences.clicked() && !editor.preferences_open {
-                        commands.push(UiCommand::OpenPreferences);
-                    }
-
-                    let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
-                    let save = ui.add_enabled(
-                        has_unsaved,
-                        ToolbarButton::new(egui::Image::new(unthemed_icon!("save_project.svg")), "Save Project").id_salt("save_project"),
-                    );
-                    if save.clicked() {
-                        commands.push(UiCommand::SaveProject);
-                    }
-
-                    #[cfg(target_arch = "wasm32")]
-                    if ui
-                        .add_enabled(!project.projects.is_empty(), egui::Button::new("Download OMF"))
-                        .on_hover_text("Download the current project as an .omf file")
-                        .clicked()
-                    {
-                        commands.push(UiCommand::DownloadProject);
-                    }
-
-                    let undo_btn = ui.add_enabled(can_undo, ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), "Undo").id_salt("undo"));
-                    if undo_btn.clicked() {
-                        commands.push(UiCommand::Undo);
-                    }
-                    let redo_btn = ui.add_enabled(can_redo, ToolbarButton::new(egui::Image::new(themed_icon!(ui, "redo.svg")), "Redo").id_salt("redo"));
-                    if redo_btn.clicked() {
-                        commands.push(UiCommand::Redo);
-                    }
                     ui.label("Layer: ");
                     let active_layers = project
                         .projects
@@ -107,13 +119,16 @@ pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, proj
         .rect
 }
 
-/// Draw the left toolbar (New layer, MakePoint, MakeLine, MakePoly, MakeCircle, MakeText, Move, OffsetElement, DrapeToTopology,
-/// RelimitLine, FuseIntoPolyline, ExplodePolyline, DeletePoints).
+/// Draw the left toolbar: the project action, the creation tools, the
+/// transform tools, the polyline edits and the destructive one, each cluster
+/// its own rounded tile.
 pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, editing_enabled: bool, project_active: bool, commands: &mut Vec<UiCommand>) -> egui::Rect {
     egui::Panel::left("left_tools_strip")
         .resizable(false)
         .show_separator_line(false)
-        .default_size(32.0)
+        // No background of its own: the tool tiles float over the scene.
+        .frame(egui::Frame::NONE)
+        .default_size(44.0)
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
@@ -121,10 +136,13 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                 .show(ui, |ui| {
                     let contents_id = ui.make_persistent_id("left_toolbar_buttons");
                     ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_enabled_ui(project_active, |ui| {
+                        ui.spacing_mut().item_spacing.y = TOOL_GROUP_GAP;
+                        ui.add_space(8.0);
+
+                        ui.add_enabled_ui(project_active, |ui| {
+                            ToolbarGroup::new().show(ui, |ui| {
                                 let new_layer = ui.add(
-                                    ToolbarButton::new(egui::Image::new(unthemed_icon!("layer.svg")), "New layer")
+                                    ToolCellButton::new(egui::Image::new(unthemed_icon!("layer.svg")), "New layer")
                                         .id_salt("new_layer")
                                         .selected(editor.new_layer_dialog_open),
                                 );
@@ -136,11 +154,11 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     }
                                 }
                             });
+                        });
 
-                            ui.add_space(12.0);
-
-                            ui.add_enabled_ui(editing_enabled, |ui| {
-                                tool_button(
+                        ui.add_enabled_ui(editing_enabled, |ui| {
+                            ToolbarGroup::new().show(ui, |ui| {
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "create_point.svg")),
                                     "Create Point",
@@ -148,8 +166,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::MakePoint,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "create_line.svg")),
                                     "Create Line",
@@ -157,8 +174,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::MakeLine,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "create_polyline.svg")),
                                     "Create Polyline",
@@ -166,8 +182,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::MakePoly,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "create_circle.svg")),
                                     "Create Circle",
@@ -175,8 +190,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::MakeCircle,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(unthemed_icon!("create_text.svg")),
                                     "Create Text",
@@ -184,12 +198,11 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::MakeText,
                                 );
+                            });
 
-                                ui.add_space(12.0);
-
-                                tool_button(ui, egui::Image::new(themed_icon!(ui, "move_element.svg")), "Move", editor, commands, ActiveTool::Move);
-
-                                tool_button(
+                            ToolbarGroup::new().show(ui, |ui| {
+                                tool_cell_button(ui, egui::Image::new(themed_icon!(ui, "move_element.svg")), "Move", editor, commands, ActiveTool::Move);
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "offset_element.svg")),
                                     "Offset",
@@ -197,8 +210,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::OffsetElement,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "drape_element.svg")),
                                     "Drape to Topology",
@@ -206,8 +218,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::DrapeToTopology,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(unthemed_icon!("auto_bench.svg")),
                                     "Auto-Bench",
@@ -215,8 +226,10 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::BatterBermOffset,
                                 );
+                            });
 
-                                tool_button(
+                            ToolbarGroup::new().show(ui, |ui| {
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "relimit_line.svg")),
                                     "Relimit Line",
@@ -224,8 +237,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::RelimitLine,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "fuse_lines.svg")),
                                     "Fuse Polylines",
@@ -233,8 +245,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::FuseIntoPolyline,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "chamfer_corners.svg")),
                                     "Chamfer Polyline Corners",
@@ -242,8 +253,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::Chamfer,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "create_bezier.svg")),
                                     "Bezier Polyline",
@@ -251,8 +261,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::Bezier,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(themed_icon!(ui, "split_at_points.svg")),
                                     "Split Polyline At Points",
@@ -260,8 +269,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::SplitAtPoints,
                                 );
-
-                                tool_button(
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(unthemed_icon!("explode_polyline.svg")),
                                     "Explode Polyline to Lines",
@@ -269,8 +277,10 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                                     commands,
                                     ActiveTool::ExplodePolyline,
                                 );
+                            });
 
-                                tool_button(
+                            ToolbarGroup::new().show(ui, |ui| {
+                                tool_cell_button(
                                     ui,
                                     egui::Image::new(unthemed_icon!("delete_element.svg")),
                                     "Delete Points",
@@ -505,6 +515,25 @@ pub(crate) fn tool_button(
 ) -> egui::Response {
     let selected = editor.active_tool == tool;
     let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("tool", tooltip)).selected(selected));
+
+    if response.clicked() {
+        commands.push(UiCommand::SetActiveTool(tool));
+    }
+
+    response
+}
+
+/// Draw a tool button inside a [`ToolbarGroup`] tile; sets `editor.active_tool` on click.
+pub(crate) fn tool_cell_button(
+    ui: &mut egui::Ui,
+    icon: egui::Image<'static>,
+    tooltip: &str,
+    editor: &mut EditorState,
+    commands: &mut Vec<UiCommand>,
+    tool: ActiveTool,
+) -> egui::Response {
+    let selected = editor.active_tool == tool;
+    let response = ui.add(ToolCellButton::new(icon, tooltip).id_salt(("tool", tooltip)).selected(selected));
 
     if response.clicked() {
         commands.push(UiCommand::SetActiveTool(tool));

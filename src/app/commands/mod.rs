@@ -653,8 +653,13 @@ impl<'a> App<'a> {
             }
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
             UiCommand::OpenPreferences => {
-                self.editor.reset_preferences_draft();
-                self.editor.preferences_open = true;
+                // Settings live in the explorer's properties panel; "open"
+                // means bringing its first settings tab to the front.
+                self.editor.active_property_tab = crate::ui::state::PropertyTab::Interface;
+                Ok(())
+            }
+            UiCommand::SelectBlockModel(id) => {
+                self.select_block_model(id);
                 Ok(())
             }
             UiCommand::RemoveTriangulation(id) => {

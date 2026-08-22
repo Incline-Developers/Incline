@@ -1235,7 +1235,6 @@ impl<'a> App<'a> {
                 name: model.name.clone(),
                 source_name: model.state.source_name.clone(),
                 visible: model.visible && model.state.loaded,
-                is_active: self.active_block_model == Some(model.id),
                 is_loaded: model.state.loaded,
                 dirty: model.state.is_dirty(),
                 _block_count: model.renderable_block_indices.len(),

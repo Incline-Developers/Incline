@@ -1,0 +1,492 @@
+//! The explorer's properties panel: application settings plus the properties
+//! of whatever is selected, switched between by the icon strip at its top.
+//!
+//! Sections are [`PropertyTab`]s. The four settings tabs are always present and
+//! apply live - every committed edit becomes an [`UiCommand::ApplyPreferences`],
+//! which saves the config file - so there is no draft to confirm or discard.
+//! The Block Model and Design tabs describe the current selection and only
+//! appear while there is something for them to describe.
+
+use crate::{
+    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel},
+    rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
+    ui::{
+        UiCommand,
+        state::{EditorState, PreferencesDraft, PropertyTab},
+        themed_icon, unthemed_icon,
+        widgets::{
+            menu::{MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32},
+            viewport::BlockModelProperties,
+        },
+    },
+};
+
+/// Width of the tab column down the panel's right edge.
+const TAB_COLUMN_WIDTH: f32 = 28.0;
+/// Height of one tab button.
+const TAB_BUTTON_HEIGHT: f32 = 26.0;
+/// Gap between the settings tabs and the selection tabs.
+const TAB_GROUP_GAP: f32 = 10.0;
+/// Width the labelled fields give their control, leaving room for the label in
+/// a panel far narrower than a dialog.
+const FIELD_WIDTH: f32 = 88.0;
+
+/// What the panel can show this frame, given the current selection.
+struct PropertyContext {
+    /// Selected block model to describe, if any.
+    block_model: Option<crate::model::block_model::BlockModelId>,
+    /// Selected document objects, in selection order.
+    objects: Vec<ObjectId>,
+    /// The subset of `objects` that are polylines.
+    polylines: Vec<ObjectId>,
+}
+
+impl PropertyContext {
+    fn tab_available(&self, tab: PropertyTab) -> bool {
+        match tab {
+            PropertyTab::BlockModel => self.block_model.is_some(),
+            PropertyTab::Design => !self.objects.is_empty(),
+            _ => true,
+        }
+    }
+}
+
+/// Draw the properties panel at the bottom of the explorer's side panel.
+pub(crate) fn draw_properties(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    block_models: &[OpenBlockModel],
+    document: &Document,
+    commands: &mut Vec<UiCommand>,
+    geometry_dirty: &mut bool,
+) {
+    let context = collect_context(editor, block_models, document);
+    // A selection tab whose selection has gone shows settings meanwhile, but
+    // stays the chosen tab: selecting another block model or design brings it
+    // straight back rather than making the user pick the icon again.
+    let shown_tab = if context.tab_available(editor.active_property_tab) {
+        editor.active_property_tab
+    } else {
+        PropertyTab::Interface
+    };
+
+    // The tab column sits on the tree's darker list surface; the properties
+    // themselves sit on the lighter panel fill, and the selected tab is filled
+    // with that same colour so it reads as continuous with its contents.
+    let content_fill = ui.visuals().panel_fill;
+    let column_fill = crate::ui::widgets::recessed_chrome_fill(ui);
+
+    // Half the side panel by default: enough for the longer settings tabs and
+    // the block-model colour ramp without the tree feeling squeezed. Only the
+    // first frame uses this; after that the panel remembers its dragged size.
+    let default_height = (ui.available_height() * 0.5).clamp(180.0, 640.0);
+    egui::Panel::bottom("explorer_properties")
+        .resizable(true)
+        .default_size(default_height)
+        .min_size(120.0)
+        .frame(egui::Frame::NONE.fill(content_fill))
+        .show(ui, |ui| {
+            // A panel ends up as tall as its contents report, and that height
+            // is what gets stored as its resizable size. Claim the whole
+            // allotted height so the panel keeps its default rather than
+            // collapsing onto the shortest tab's fields.
+            // A panel paints its frame around the rect its contents claim, and
+            // that rect is also what its resize handle stores. Claim the whole
+            // allotted height, or the fill stops partway down and the tree's
+            // darker surface shows through beneath the fields.
+            ui.set_min_height(ui.available_height());
+            egui::Panel::right("explorer_properties_tabs")
+                .exact_size(TAB_COLUMN_WIDTH)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(column_fill))
+                .show(ui, |ui| {
+                    ui.set_min_height(ui.available_height());
+                    draw_tab_strip(ui, editor, shown_tab, &context, content_fill);
+                });
+
+            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt("explorer_properties_scroll").auto_shrink([false; 2]).show(ui, |ui| {
+                    // Leave room for the scrollbar so the right-aligned controls
+                    // are never tucked underneath it.
+                    ui.set_max_width((ui.available_width() - 4.0).max(1.0));
+                    match shown_tab {
+                        PropertyTab::Interface => draw_interface_settings(ui, editor, commands),
+                        PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
+                        PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
+                        PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
+                        PropertyTab::BlockModel => draw_block_model_tab(ui, editor, block_models, &context, commands),
+                        PropertyTab::Design => draw_design_tab(ui, editor, document, &context, commands, geometry_dirty),
+                    }
+                });
+            });
+        });
+}
+
+fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], document: &Document) -> PropertyContext {
+    let selected_model = block_models
+        .iter()
+        .find(|model| editor.viewport_block_model_id == Some(model.id) && editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id)))
+        .or_else(|| block_models.iter().find(|model| editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id))))
+        .map(|model| model.id);
+    // Remember which model the tab describes, so a multi-model selection does
+    // not switch between them as the set is re-walked.
+    editor.viewport_block_model_id = selected_model;
+
+    let objects: Vec<ObjectId> = editor
+        .selected_handles
+        .iter()
+        .filter_map(|handle| match handle {
+            SceneEntityId::Object(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let polylines = objects
+        .iter()
+        .copied()
+        .filter(|&id| matches!(document.get_object(id), Some(crate::model::Object::Polyline { .. })))
+        .collect();
+
+    PropertyContext {
+        block_model: selected_model,
+        objects,
+        polylines,
+    }
+}
+
+fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, shown_tab: PropertyTab, context: &PropertyContext, content_fill: egui::Color32) {
+    // No leading space: the first tab starts flush with the panel's top edge,
+    // so its notch meets the separator above it when it is the selected one.
+    ui.spacing_mut().item_spacing.y = 1.0;
+    tab_button(ui, editor, shown_tab, PropertyTab::Interface, themed_icon!(ui, "open_preferences.svg"), content_fill);
+    tab_button(ui, editor, shown_tab, PropertyTab::Camera, themed_icon!(ui, "properties_camera.svg"), content_fill);
+    tab_button(
+        ui,
+        editor,
+        shown_tab,
+        PropertyTab::Performance,
+        themed_icon!(ui, "properties_performance.svg"),
+        content_fill,
+    );
+    tab_button(ui, editor, shown_tab, PropertyTab::Developer, themed_icon!(ui, "properties_developer.svg"), content_fill);
+    if context.block_model.is_some() || !context.objects.is_empty() {
+        ui.add_space(TAB_GROUP_GAP);
+    }
+    if context.block_model.is_some() {
+        tab_button(ui, editor, shown_tab, PropertyTab::BlockModel, unthemed_icon!("section_block_models.svg"), content_fill);
+    }
+    if !context.objects.is_empty() {
+        tab_button(ui, editor, shown_tab, PropertyTab::Design, unthemed_icon!("section_designs.svg"), content_fill);
+    }
+}
+
+/// One tab in the right-hand column.
+///
+/// The selected tab is filled with the properties background and squared off,
+/// so it reads as a notch cut straight through the column into the contents
+/// beside it. No tooltip: the icon column is small enough that a hover label
+/// covers its neighbours.
+fn tab_button(ui: &mut egui::Ui, editor: &mut EditorState, shown_tab: PropertyTab, tab: PropertyTab, icon: egui::ImageSource<'static>, content_fill: egui::Color32) {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), TAB_BUTTON_HEIGHT), egui::Sense::click());
+    let selected = shown_tab == tab;
+    if selected {
+        ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, content_fill);
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, content_fill.gamma_multiply(0.45));
+    }
+    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(16.0));
+    egui::Image::new(icon).fit_to_exact_size(icon_rect.size()).paint_at(ui, icon_rect);
+    if response.clicked() {
+        editor.active_property_tab = tab;
+    }
+}
+
+/// Whether a field's edit is finished, rather than mid-drag.
+///
+/// Preferences are written to the config file as they are applied, and object
+/// edits become undo entries, so a drag must land once rather than on every
+/// frame it moves.
+fn committed(response: &egui::Response) -> bool {
+    response.drag_stopped() || (response.changed() && !response.dragged())
+}
+
+/// Runs `add_fields` against the editor's preferences draft and applies it as
+/// soon as a field reports a finished edit.
+///
+/// The draft is held by the editor rather than rebuilt each frame because a
+/// `DragValue` computes each step from the value it is handed: one that reset
+/// to the unedited value every frame could never accumulate.
+fn settings_section(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    commands: &mut Vec<UiCommand>,
+    heading: &str,
+    add_fields: impl FnOnce(&mut egui::Ui, &mut PreferencesDraft) -> bool,
+) {
+    let saved = editor.current_preferences();
+    let draft = editor.preferences_draft.get_or_insert(saved);
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(heading).strong().color(ui.visuals().weak_text_color()));
+    ui.add_space(4.0);
+    let changed = add_fields(ui, draft);
+    let draft = *draft;
+
+    ui.add_space(10.0);
+    let defaults = PreferencesDraft::default();
+    if ui
+        .add_enabled(saved != defaults, egui::Button::new("Restore Defaults"))
+        .on_hover_text("Reset every setting, in all four tabs, to its default")
+        .clicked()
+    {
+        commands.push(UiCommand::ApplyPreferences(defaults));
+    } else if changed && draft != saved {
+        commands.push(UiCommand::ApplyPreferences(draft));
+    }
+    ui.add_space(6.0);
+}
+
+fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    settings_section(ui, editor, commands, "Interface", |ui, draft| {
+        let [r, g, b, _] = draft.renderer_background_color;
+        let mut background = egui::Color32::from_rgb(linear_to_srgb_byte(r), linear_to_srgb_byte(g), linear_to_srgb_byte(b));
+        let mut changed = false;
+        let response = MenuFieldColor32::new("Background", &mut background).show(ui);
+        if response.changed() {
+            draft.renderer_background_color = [
+                byte_to_linear_rgba(background.r()),
+                byte_to_linear_rgba(background.g()),
+                byte_to_linear_rgba(background.b()),
+                1.0,
+            ];
+        }
+        changed |= committed(&response);
+        changed |= committed(&MenuFieldBool::new("Dark mode", &mut draft.dark_mode).show(ui));
+        changed |= committed(&MenuFieldBool::new("Show console", &mut draft.show_console).show(ui));
+        changed |= committed(&MenuFieldBool::new("World axis gizmo", &mut draft.show_world_axis_gizmo).show(ui));
+        changed |= committed(&MenuFieldBool::new("XY grid", &mut draft.show_xy_grid).show(ui));
+        changed
+    });
+}
+
+fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    settings_section(ui, editor, commands, "Camera", |ui, draft| {
+        let mut changed = false;
+        ui.strong("Plan Mode");
+        ui.add_space(4.0);
+        changed |= committed(
+            &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
+                .speed(0.0001)
+                .max_decimals(4)
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldF64::new("Zoom sensitivity", &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
+                .speed(0.0001)
+                .max_decimals(4)
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.plan_invert_vertical_look).show(ui));
+        changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.plan_invert_horizontal_look).show(ui));
+        changed |= committed(&MenuFieldBool::new("Zoom to cursor", &mut draft.plan_zoom_towards_cursor).show(ui));
+
+        ui.add_space(12.0);
+        ui.strong("Fly Mode");
+        ui.add_space(4.0);
+        changed |= committed(
+            &MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
+                .suffix("°")
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
+                .speed(0.0001)
+                .max_decimals(4)
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.fly_invert_vertical_look).show(ui));
+        changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.fly_invert_horizontal_look).show(ui));
+        changed |= committed(
+            &MenuFieldF64::new("Near clip limit", &mut draft.fly_near_clip_limit, 0.01..=100.0)
+                .speed(0.01)
+                .suffix("m")
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldF64::new("Max clip span", &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
+                .speed(100.0)
+                .suffix("m")
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed
+    });
+}
+
+fn draw_performance_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    settings_section(ui, editor, commands, "Performance", |ui, draft| {
+        let mut changed = false;
+        changed |= committed(
+            &MenuFieldU32::new("Snap polling", &mut draft.snap_poll_rate, 5..=1000)
+                .suffix(" Hz")
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldU32::new("Frame rate cap", &mut draft.frame_rate_cap, 20..=1000)
+                .suffix(" FPS")
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldU32::new("Cap while resizing", &mut draft.resize_frame_rate_cap, 20..=1000)
+                .suffix(" FPS")
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldU32::new("Block model downscale", &mut draft.block_model_interaction_resolution_divisor, 1..=64)
+                .suffix("x")
+                .width(FIELD_WIDTH)
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldBool::new("Reflective block edges", &mut draft.show_block_model_boundary_highlights)
+                .help_text("Adds a view-dependent rim highlight at block and material boundaries. Leaving this off slightly reduces volume-rendering work.")
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldBool::new("Downscale rasters", &mut draft.downscale_raster_previews)
+                .help_text(
+                    "Limits newly loaded GeoTIFF previews to 4096 pixels on their longest side. Disable to use full resolution up to the GPU's texture limit, which uses more memory.",
+                )
+                .show(ui),
+        );
+        changed
+    });
+}
+
+fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    settings_section(ui, editor, commands, "Developer", |ui, draft| {
+        let mut changed = false;
+        changed |= committed(&MenuFieldBool::new("Frame counter", &mut draft.frame_counter_enabled).show(ui));
+        changed |= committed(
+            &MenuFieldBool::new("Colour GPU chunks", &mut draft.debug_chunk_coloring)
+                .help_text("Visualises the Morton spatial chunking used for frustum culling.")
+                .show(ui),
+        );
+        changed |= committed(
+            &MenuFieldBool::new("Camera clip planes", &mut draft.debug_clip_planes)
+                .help_text("Shows the live near and far projection distances in the status bar.")
+                .show(ui),
+        );
+        changed
+    });
+}
+
+fn draw_block_model_tab(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], context: &PropertyContext, commands: &mut Vec<UiCommand>) {
+    let Some(model) = context.block_model.and_then(|id| block_models.iter().find(|model| model.id == id)) else {
+        return;
+    };
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(&model.name).strong());
+    ui.add_space(4.0);
+    BlockModelProperties::new("block_model_properties", model).show(ui, editor, commands);
+    ui.add_space(6.0);
+}
+
+fn fill_style_label(style: FillStyle) -> &'static str {
+    match style {
+        FillStyle::Clear => "Clear",
+        FillStyle::Crosses => "Crosses",
+        FillStyle::Slashes => "Slashes",
+        FillStyle::Solid => "Solid",
+    }
+}
+
+fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, context: &PropertyContext, commands: &mut Vec<UiCommand>, geometry_dirty: &mut bool) {
+    ui.add_space(4.0);
+    let heading = match context.objects.as_slice() {
+        [id] => document.get_object(*id).map_or("Object", crate::model::Object::kind_name).to_owned(),
+        objects => format!("{} objects", objects.len()),
+    };
+    ui.label(egui::RichText::new(heading).strong());
+    ui.add_space(4.0);
+
+    // Fields describe the first selection and write to all of it, matching how
+    // the batch commands behave.
+    let first_color = context
+        .objects
+        .first()
+        .and_then(|&id| document.get_object(id))
+        .map(|object| document.object_rgba(object))
+        .unwrap_or([0.0; 4]);
+    let mut color32 = rgba_to_color32(first_color);
+    let response = MenuFieldColor32::new("Line colour", &mut color32).show(ui);
+    if committed(&response) {
+        commands.push(UiCommand::BatchSetObjectColor(context.objects.clone(), ObjectColor::Fixed(color32_to_rgba(color32))));
+        *geometry_dirty = true;
+    }
+
+    if context.polylines.is_empty() {
+        return;
+    }
+
+    let (first_closed, first_fill, first_line_weight) = match context.polylines.first().and_then(|&id| document.get_object(id)) {
+        Some(crate::model::Object::Polyline { closed, fill, line_weight, .. }) => (*closed, *fill, *line_weight),
+        _ => (false, FillStyle::Clear, 1.0),
+    };
+
+    let mut closed = first_closed;
+    MenuFieldCombo::new(
+        "design_shape",
+        "Shape",
+        &mut closed,
+        if first_closed { "Closed" } else { "Open" },
+        [(true, "Closed".into()), (false, "Open".into())],
+    )
+    .width(FIELD_WIDTH)
+    .show(ui);
+    if closed != first_closed {
+        commands.push(UiCommand::BatchSetPolylineClosed(context.polylines.clone(), closed));
+        *geometry_dirty = true;
+    }
+
+    let mut fill = first_fill;
+    MenuFieldCombo::new(
+        "design_fill",
+        "Fill",
+        &mut fill,
+        fill_style_label(first_fill),
+        [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
+    )
+    .width(FIELD_WIDTH)
+    .show(ui);
+    if fill != first_fill {
+        commands.push(UiCommand::BatchSetObjectFill(context.polylines.clone(), fill));
+        *geometry_dirty = true;
+    }
+
+    // Seed the in-progress value from the document whenever the selection
+    // changes; between those points the drag owns it.
+    if editor.design_line_weight_input.as_ref().is_none_or(|(object_ids, _)| object_ids != &context.polylines) {
+        editor.design_line_weight_input = Some((context.polylines.clone(), first_line_weight));
+    }
+    if let Some((_, line_weight)) = editor.design_line_weight_input.as_mut() {
+        let response = MenuFieldF32::new("Line weight", line_weight, 0.1..=20.0)
+            .help_text("Stroke width used to draw the selected polylines.")
+            .speed(0.1)
+            .width(FIELD_WIDTH)
+            .show(ui);
+        let line_weight = *line_weight;
+        if committed(&response) {
+            commands.push(UiCommand::BatchSetPolylineLineWeight(context.polylines.clone(), line_weight));
+            *geometry_dirty = true;
+        }
+    }
+    ui.add_space(6.0);
+}

@@ -1,15 +1,13 @@
 //! Object editing and viewport tool dialogs.
 
 use crate::{
-    model::{Axis, Document, FillStyle, ObjectColor, ObjectId},
+    model::{Axis, Document, ObjectId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
         themed_icon, unthemed_icon,
         widgets::{
-            context_menu::{
-                ContextMenu, ContextMenuAction, ContextMenuFieldColor32, ContextMenuFieldCombo, ContextMenuFieldF32, ContextMenuFieldSegmented, context_menu_separator,
-            },
+            context_menu::{ContextMenu, ContextMenuAction, ContextMenuFieldColor32, context_menu_separator},
             menu::{self, DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
@@ -46,15 +44,6 @@ pub(crate) fn draw_drape_selection_panel(ui: &mut egui::Ui, editor: &EditorState
         });
 }
 
-fn fill_style_label(style: FillStyle) -> &'static str {
-    match style {
-        FillStyle::Clear => "Clear",
-        FillStyle::Crosses => "Crosses",
-        FillStyle::Slashes => "Slashes",
-        FillStyle::Solid => "Solid",
-    }
-}
-
 /// Title for the canvas context menu, named after the kind of entity that is
 /// selected (e.g. "Triangulation Properties"). Selections spanning several
 /// kinds fall back to a generic label.
@@ -85,8 +74,9 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
 
 /// Draw the canvas right-click context menu for selected objects and triangulations.
 ///
-/// Provides controls for line/fill colour, polyline open/closed toggle,
-/// fill type, and line weight.  Updates `geometry_dirty` when changes are made.
+/// Actions only: an object's own values (colour, shape, fill, line weight) are
+/// edited in the explorer's Design properties tab. Updates `geometry_dirty`
+/// when changes are made.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_right_click_context(
     ui: &mut egui::Ui,
@@ -112,40 +102,17 @@ pub(crate) fn draw_right_click_context(
             })
             .collect();
 
-        let selected_polys: Vec<ObjectId> = selected_obj_ids
-            .iter()
-            .copied()
-            .filter(|&id| matches!(document.get_object(id), Some(crate::model::Object::Polyline { .. })))
-            .collect();
-
         let selected_drill_hole = editor.selected_handles.iter().find_map(|&h| match h {
             crate::model::SceneEntityId::DrillHole(id) => Some(id),
             _ => None,
         });
 
         let has_doc_objects = !selected_obj_ids.is_empty();
-        let has_polys = !selected_polys.is_empty();
         let has_tri = project.active_triangulation_for_menu.is_some() && editor.selected_handles.iter().any(|&h| matches!(h, crate::model::SceneEntityId::Triangulation(_)));
 
-        // --- Color picker ---
-        if has_doc_objects || has_tri {
-            if has_doc_objects {
-                let first_line_color = selected_obj_ids
-                    .first()
-                    .and_then(|&id| document.get_object(id))
-                    .map(|obj| document.object_rgba(obj))
-                    .unwrap_or([0.0; 4]);
-                let mut color32 = rgba_to_color32(first_line_color);
-                let color_resp = ContextMenuFieldColor32::new("Line Colour", &mut color32).show(ui);
-                if color_resp.drag_stopped() || (color_resp.changed() && !color_resp.dragged()) {
-                    let rgba = color32_to_rgba(color32);
-                    let new_color = ObjectColor::Fixed(rgba);
-                    commands.push(UiCommand::BatchSetObjectColor(selected_obj_ids.clone(), new_color));
-                    *geometry_dirty = true;
-                }
-            }
-
-            if has_tri && let Some((tri_id, mut face_color)) = project.active_triangulation_for_menu {
+        // --- Triangulation face colour ---
+        if has_tri {
+            if let Some((tri_id, mut face_color)) = project.active_triangulation_for_menu {
                 let mut color32 = rgba_to_color32(face_color);
                 let color_resp = ContextMenuFieldColor32::new("Face Colour", &mut color32).show(ui);
                 if color_resp.drag_stopped() || (color_resp.changed() && !color_resp.dragged()) {
@@ -163,64 +130,6 @@ pub(crate) fn draw_right_click_context(
             if ContextMenuAction::new("Colour by...").show(ui).clicked() {
                 commands.push(UiCommand::OpenDrillHoleColorDialog(drill_hole_id));
                 commands.push(UiCommand::CloseCanvasContextMenu);
-            }
-
-            context_menu_separator(ui);
-        }
-
-        // --- Polyline-specific controls ---
-        if has_polys {
-            let first_poly = selected_polys.first().and_then(|&id| document.get_object(id));
-            let (first_closed, first_fill, first_line_weight) = if let Some(crate::model::Object::Polyline { closed, fill, line_weight, .. }) = first_poly {
-                (*closed, *fill, *line_weight)
-            } else {
-                (false, FillStyle::Clear, 0.0)
-            };
-
-            // Open / Closed toggle
-            let mut is_closed = first_closed;
-            ContextMenuFieldSegmented::new("Shape", &mut is_closed, [(true, "Closed".into()), (false, "Open".into())]).show(ui);
-            if is_closed != first_closed {
-                commands.push(UiCommand::BatchSetPolylineClosed(selected_polys.clone(), is_closed));
-                *geometry_dirty = true;
-            }
-
-            context_menu_separator(ui);
-
-            // Fill dropdown
-            let mut fill = first_fill;
-            let old_fill = fill;
-            ContextMenuFieldCombo::new(
-                "ctx_fill_combo",
-                "Fill",
-                &mut fill,
-                fill_style_label(first_fill),
-                [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
-            )
-            .show(ui);
-            if fill != old_fill {
-                commands.push(UiCommand::BatchSetObjectFill(selected_polys.clone(), fill));
-                *geometry_dirty = true;
-            }
-
-            let line_weight_targets_changed = editor.canvas_context_line_weight_input.as_ref().is_none_or(|(object_ids, _)| object_ids != &selected_polys);
-            if line_weight_targets_changed {
-                editor.canvas_context_line_weight_input = Some((selected_polys.clone(), first_line_weight));
-            }
-
-            let mut committed_line_weight = None;
-            if let Some((_, line_weight_input)) = editor.canvas_context_line_weight_input.as_mut() {
-                let lw_resp = ContextMenuFieldF32::new("Line Weight", line_weight_input, 0.1..=20.0)
-                    .help_text("Stroke width used to draw the selected polylines.")
-                    .speed(0.1)
-                    .show(ui);
-                if lw_resp.drag_stopped() || (lw_resp.changed() && !lw_resp.dragged()) {
-                    committed_line_weight = Some(*line_weight_input);
-                }
-            }
-            if let Some(line_weight) = committed_line_weight {
-                commands.push(UiCommand::BatchSetPolylineLineWeight(selected_polys.clone(), line_weight));
-                *geometry_dirty = true;
             }
 
             context_menu_separator(ui);

@@ -712,10 +712,13 @@ pub(crate) struct EditorState {
     pub(crate) newer_release: Option<String>,
     /// Linear RGBA clear colour used behind the rendered scene.
     pub(crate) renderer_background_color: [f32; 4],
-    /// Unsaved values currently being edited in the Preferences window.
+    /// Values the properties panel's settings tabs are editing.
+    ///
+    /// Settings apply as each edit lands, so this only differs from the live
+    /// preferences while a `DragValue` is mid-drag - which is exactly why it
+    /// has to survive between frames. `None` means "no edit in flight": the
+    /// panel seeds it from the live values.
     pub(crate) preferences_draft: Option<PreferencesDraft>,
-    /// Whether the floating Preferences window is open.
-    pub(crate) preferences_open: bool,
     pub(crate) snap_poll_rate: u32,
     pub(crate) frame_rate_cap: u32,
     pub(crate) resize_frame_rate_cap: u32,
@@ -820,9 +823,9 @@ pub(crate) struct EditorState {
     /// Physical-pixel position where the canvas context menu was opened.
     pub(crate) canvas_context_menu_px: Option<(f32, f32)>,
     /// Selected polylines and the in-progress line-weight value for the
-    /// properties menu. The value must survive across frames while its
+    /// Design properties tab. The value must survive across frames while its
     /// `DragValue` is being dragged.
-    pub(crate) canvas_context_line_weight_input: Option<(Vec<ObjectId>, f32)>,
+    pub(crate) design_line_weight_input: Option<(Vec<ObjectId>, f32)>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
     /// Whether the selected polylines cross anywhere, refreshed by
@@ -1132,8 +1135,9 @@ pub(crate) struct EditorState {
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
+    /// Block model shown by the explorer's Block Model properties tab. Follows
+    /// the selection, and is remembered while that model stays selected.
     pub(crate) viewport_block_model_id: Option<BlockModelId>,
-    pub(crate) block_model_settings_collapsed: bool,
     pub(crate) block_model_variable_ranges: HashMap<(BlockModelId, String), Option<(f64, f64)>>,
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
@@ -1217,8 +1221,8 @@ pub(crate) struct EditorState {
     /// Which CP handle is hovered (0 = cp1, 1 = cp2), None if neither.
     pub(crate) bezier_hover_cp: Option<u8>,
     pub(crate) bezier_dialog_open: bool,
-    /// Determines what preferences to show in the Preferences window.
-    pub(crate) active_preference_category: PreferenceCategory,
+    /// Which section the explorer's properties panel is showing.
+    pub(crate) active_property_tab: PropertyTab,
     pub(crate) show_import: bool,
     pub(crate) show_export: bool,
     /// Whether the About dialog is open.
@@ -1279,7 +1283,6 @@ impl EditorState {
             || self.pending_discard_project.is_some()
             || self.pending_discard_layer.is_some()
             || self.show_about
-            || self.preferences_open
             || self.show_import
             || self.show_export
             || self.drill_hole_color_dialog.is_some()
@@ -1353,7 +1356,7 @@ impl EditorState {
         self.poly_finish_dialog_px = None;
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
-        self.canvas_context_line_weight_input = None;
+        self.design_line_weight_input = None;
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
@@ -1490,10 +1493,6 @@ impl EditorState {
         }
     }
 
-    pub(crate) fn reset_preferences_draft(&mut self) {
-        self.preferences_draft = Some(self.current_preferences());
-    }
-
     pub(crate) fn allocate_color_stop_id(&mut self) -> u64 {
         let id = self.next_color_stop_id;
         self.next_color_stop_id = self.next_color_stop_id.saturating_add(1);
@@ -1517,7 +1516,6 @@ impl EditorState {
             newer_release: None,
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             preferences_draft: None,
-            preferences_open: false,
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
             resize_frame_rate_cap: crate::app::io::default_resize_frame_rate_cap(),
@@ -1580,7 +1578,7 @@ impl EditorState {
             poly_finish_dialog_px: None,
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
-            canvas_context_line_weight_input: None,
+            design_line_weight_input: None,
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,
@@ -1752,7 +1750,6 @@ impl EditorState {
             point_cloud_tin_hole_fill: 0.0,
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
-            block_model_settings_collapsed: false,
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
@@ -1806,7 +1803,7 @@ impl EditorState {
             bezier_dragging_cp: None,
             bezier_hover_cp: None,
             bezier_dialog_open: false,
-            active_preference_category: PreferenceCategory::Interface,
+            active_property_tab: PropertyTab::Interface,
             show_import: false,
             show_export: false,
             show_about: false,
@@ -2036,7 +2033,10 @@ pub(crate) enum UiCommand {
     SetShowScaleBar(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
+    /// Bring the explorer's properties panel to the settings tabs.
     OpenPreferences,
+    /// Make one block model the selection, so its properties tab is shown.
+    SelectBlockModel(BlockModelId),
     SaveProject,
     #[cfg(target_arch = "wasm32")]
     DownloadProject,
@@ -2329,6 +2329,8 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::SetShowConsole(_)
             | Self::OpenPreferences
+            | Self::ApplyPreferences(_)
+            | Self::SelectBlockModel(_)
             | Self::BeginRenameLayer(_)
             | Self::PreviewMoveDelta(_)
             | Self::CancelChamfer
@@ -2423,7 +2425,6 @@ impl UiCommand {
             Self::SetShowXyGrid(enabled) => report("Set XY Grid", if *enabled { "Shown" } else { "Hidden" }.to_owned()),
             Self::SetShowScaleBar(enabled) => report("Set Scale Bar", if *enabled { "Shown" } else { "Hidden" }.to_owned()),
             Self::SetStandardView(view) => report("Set Standard View", format!("{view:?}")),
-            Self::ApplyPreferences(_) => report("Apply Preferences", "Settings updated".to_owned()),
             Self::SaveProject => report("Save Project", "Current project".to_owned()),
             Self::SaveAndReplaceProject => report("Save and Replace Project", "Current project".to_owned()),
             Self::DiscardAndReplaceProject => report("Discard and Replace Project", "Current project".to_owned()),
@@ -2618,7 +2619,6 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
     pub(crate) visible: bool,
-    pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
@@ -2667,12 +2667,19 @@ pub(crate) struct UiProjectView {
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
 }
 
-#[derive(PartialEq)]
-pub(crate) enum PreferenceCategory {
+/// A section of the explorer's properties panel.
+///
+/// The first four are the application settings, always available. The last two
+/// describe the current selection and only appear while there is something
+/// they apply to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
     Developer,
+    BlockModel,
+    Design,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
