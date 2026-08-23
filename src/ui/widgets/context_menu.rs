@@ -3,6 +3,11 @@
 //! These intentionally do not reuse the draggable dialog widgets in
 //! [`super::menu`]. Context menus have denser rows, flat actions, a subdued
 //! header, and remain anchored to the click position.
+//!
+//! Every right-click menu in the app is built from these: the viewport's own
+//! menu drives [`ContextMenu`] from editor state, while widget menus - the
+//! explorer tree, the console - go through [`context_menu_popup`], which is
+//! egui's context-menu popup wearing the same frame, header and rows.
 
 use std::{fmt::Debug, hash::Hash};
 
@@ -14,8 +19,8 @@ const CONTENT_VERTICAL_MARGIN: i8 = 4;
 const CORNER_RADIUS: u8 = 3;
 const FIELD_WIDTH: f32 = 108.0;
 
-// Keep the legacy draggable-menu positioning API compiled even though the one
-// context-menu caller moved here. Other draggable-menu behavior remains
+// Keep the legacy draggable-menu positioning API compiled even though the
+// context-menu callers moved here. Other draggable-menu behavior remains
 // completely independent from this module.
 const _: fn(super::menu::DragableMenu<'static>, egui::Pos2) -> super::menu::DragableMenu<'static> = super::menu::DragableMenu::default_pos;
 
@@ -63,33 +68,73 @@ impl ContextMenu {
                     .stroke(visuals.window_stroke())
                     .corner_radius(egui::CornerRadius::same(CORNER_RADIUS))
                     .shadow(visuals.popup_shadow)
-                    .show(ui, |ui| {
-                        ui.set_width(width);
-                        ui.set_min_width(width);
-                        ui.set_max_width(width);
-                        apply_compact_style(ui);
-
-                        let (header_rect, _) = ui.allocate_exact_size(egui::vec2(width, HEADER_HEIGHT), egui::Sense::hover());
-                        ui.painter().text(
-                            header_rect.left_center() + egui::vec2(f32::from(CONTENT_HORIZONTAL_MARGIN), 0.0),
-                            egui::Align2::LEFT_CENTER,
-                            title.text(),
-                            egui::FontId::proportional(11.0),
-                            visuals.weak_text_color(),
-                        );
-                        ui.painter().line_segment(
-                            [header_rect.left_bottom(), header_rect.right_bottom()],
-                            egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
-                        );
-
-                        egui::Frame::NONE
-                            .inner_margin(egui::Margin::symmetric(CONTENT_HORIZONTAL_MARGIN, CONTENT_VERTICAL_MARGIN))
-                            .show(ui, add_contents)
-                            .inner
-                    })
+                    .show(ui, |ui| draw_body(ui, &title, width, add_contents))
                     .inner
             })
     }
+}
+
+/// Show the same menu as [`ContextMenu`] as a widget's right-click popup.
+///
+/// Rows anchor to the pointer and close through `ui.close()`, exactly as
+/// egui's own [`egui::Response::context_menu`] does - only the frame, header
+/// and row metrics come from this module instead of the default menu style.
+pub(crate) fn context_menu_popup<R>(
+    response: &egui::Response,
+    title: impl Into<egui::WidgetText>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
+    let title = title.into();
+    let visuals = response.ctx.style_of(response.ctx.theme()).visuals.clone();
+    let frame = egui::Frame::new()
+        .fill(visuals.window_fill())
+        .stroke(visuals.window_stroke())
+        .corner_radius(egui::CornerRadius::same(CORNER_RADIUS))
+        .shadow(visuals.popup_shadow);
+    egui::Popup::context_menu(response)
+        .frame(frame)
+        .width(MENU_WIDTH)
+        .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+}
+
+/// Paint the header and run `add_contents` inside the menu's content margins.
+fn draw_body<R>(ui: &mut egui::Ui, title: &egui::WidgetText, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.set_width(width);
+    ui.set_min_width(width);
+    ui.set_max_width(width);
+    apply_compact_style(ui);
+    paint_header(ui, title.text(), width);
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(CONTENT_HORIZONTAL_MARGIN, CONTENT_VERTICAL_MARGIN))
+        .show(ui, add_contents)
+        .inner
+}
+
+/// Paint the subdued title row and its underline.
+///
+/// Titles carry item names, so the text is truncated to the menu width rather
+/// than allowed to spill past the frame.
+fn paint_header(ui: &mut egui::Ui, title: &str, width: f32) {
+    let visuals = ui.visuals().clone();
+    let (header_rect, _) = ui.allocate_exact_size(egui::vec2(width, HEADER_HEIGHT), egui::Sense::hover());
+    let margin = f32::from(CONTENT_HORIZONTAL_MARGIN);
+    let color = visuals.weak_text_color();
+    let mut job = egui::text::LayoutJob::single_section(
+        title.to_owned(),
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(11.0),
+            color,
+            ..Default::default()
+        },
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width((width - margin * 2.0).max(0.0));
+    let galley = ui.painter().layout_job(job);
+    let text_pos = egui::pos2(header_rect.left() + margin, header_rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text_pos, galley, color);
+    ui.painter().line_segment(
+        [header_rect.left_bottom(), header_rect.right_bottom()],
+        egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
+    );
 }
 
 fn apply_compact_style(ui: &mut egui::Ui) {
@@ -127,7 +172,6 @@ impl ContextMenuAction {
         self
     }
 
-    #[allow(dead_code)]
     pub(crate) fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self

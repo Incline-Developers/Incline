@@ -4,7 +4,10 @@ use std::{borrow::Cow, collections::HashSet, ops::Range, sync::Arc};
 
 use crate::{
     logging::{ConsoleEntry, ConsoleEntryId, ConsoleEntryState, ConsoleSeverity},
-    ui::{themed_icon, unthemed_icon},
+    ui::{
+        themed_icon, unthemed_icon,
+        widgets::context_menu::{ContextMenuAction, context_menu_popup},
+    },
 };
 
 #[derive(Clone, Default)]
@@ -288,12 +291,12 @@ fn draw_detail_row(
 }
 
 fn copy_context_menu(response: &egui::Response, entry: &ConsoleEntry, entries: &[ConsoleEntry]) {
-    response.context_menu(|ui| {
-        if ui.button("Copy message").clicked() {
+    context_menu_popup(response, &entry.title, |ui| {
+        if ContextMenuAction::new("Copy message").show(ui).clicked() {
             ui.ctx().copy_text(console_entry_text(entry));
             ui.close();
         }
-        if ui.button("Copy all").clicked() {
+        if ContextMenuAction::new("Copy all").show(ui).clicked() {
             ui.ctx().copy_text(console_text(entries));
             ui.close();
         }
