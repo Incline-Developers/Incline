@@ -186,22 +186,47 @@ impl Grip {
 /// should be free to sit wherever they open.
 pub(crate) fn paint_regions(ctx: &egui::Context, regions: impl IntoIterator<Item = Rect>) {
     let visuals = &ctx.global_style().visuals;
-    let fill = window_fill(visuals);
-    let mask = Stroke::new(MASK_WIDTH, fill);
-    let band = Stroke::new(SEAM_BAND_WIDTH, fill);
-    let outline = region_stroke(visuals);
     let painter = ctx.layer_painter(egui::LayerId::background());
     for claimed in regions {
         let region = region_rect(claimed);
         if !region.is_positive() {
             continue;
         }
-        // The band runs along the seam itself, the mask hugs the fill: between
-        // them the whole margin is covered, corners and line ends included.
-        painter.rect_stroke(claimed, 0, band, StrokeKind::Middle);
-        painter.rect_stroke(region, REGION_RADIUS, mask, StrokeKind::Outside);
-        painter.rect_stroke(region, REGION_RADIUS, outline, StrokeKind::Inside);
+        // Square: a panel's neighbour is another panel, so the far side of
+        // every seam is covered by a band of its own.
+        paint_region_chrome(&painter, visuals, region, 0);
     }
+}
+
+/// Round off a region that floats in a layer of its own instead of claiming a
+/// panel, painting into that layer rather than the background.
+///
+/// [`paint_regions`] works from the background layer, under everything the
+/// panels drew. A floating region is *above* that layer, so the gap around it
+/// and its outline have to be painted with its own painter or the fill it drew
+/// would be all that shows - square-cornered, with nothing to separate it from
+/// what it floats over. Call it after the fill.
+///
+/// The gap's outer corners are rounded too, because here it is a notch cut
+/// into one continuous surface rather than a seam between two panels - to the
+/// same radius, so the notch turns the same corner the fill inside it does.
+pub(crate) fn paint_floating_region(painter: &egui::Painter, visuals: &egui::Visuals, region: Rect) {
+    if region.is_positive() {
+        paint_region_chrome(painter, visuals, region, REGION_RADIUS);
+    }
+}
+
+/// The gap around a region's fill, its corners cut back, and its outline.
+///
+/// `gap_radius` rounds the far side of the gap: the outer edge of the band,
+/// where whatever the region sits against resumes.
+fn paint_region_chrome(painter: &egui::Painter, visuals: &egui::Visuals, region: Rect, gap_radius: u8) {
+    let fill = window_fill(visuals);
+    // The band runs along the seam itself, the mask hugs the fill: between
+    // them the whole margin is covered, corners and line ends included.
+    painter.rect_stroke(region.expand(f32::from(REGION_MARGIN)), gap_radius, Stroke::new(SEAM_BAND_WIDTH, fill), StrokeKind::Middle);
+    painter.rect_stroke(region, REGION_RADIUS, Stroke::new(MASK_WIDTH, fill), StrokeKind::Outside);
+    painter.rect_stroke(region, REGION_RADIUS, region_stroke(visuals), StrokeKind::Inside);
 }
 
 /// Mark every draggable seam with three dots, the way a drag handle is spelled

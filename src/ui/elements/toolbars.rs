@@ -30,10 +30,6 @@ const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "Cmd+" } else { "C
 /// Label for the shift modifier in tooltips.
 const SHIFT_MODIFIER: &str = "Shift+";
 
-/// Gap between the floating view tools and the viewport edges they hang off.
-/// Matches the orientation gizmo's margin, so the two share an edge.
-const TOOLS_EDGE_MARGIN: f32 = 16.0;
-
 /// Gap above the view tools when the gizmo that usually sits over them is
 /// hidden and they start at the top of the viewport.
 pub(crate) const TOOLS_TOP_MARGIN: f32 = 10.0;
@@ -362,11 +358,19 @@ pub(crate) fn view_tools_bounds(canvas_rect: egui::Rect, gizmo_visible: bool) ->
         canvas_rect.top() + TOOLS_TOP_MARGIN
     };
     let size = egui::vec2(TOOL_CELL_SIZE, VIEW_TOOL_CELLS as f32 * TOOL_CELL_SIZE);
-    egui::Rect::from_min_size(egui::pos2(canvas_rect.right() - TOOLS_EDGE_MARGIN - TOOL_CELL_SIZE, top), size)
+    // Flush against the viewport's right edge rather than floating a margin
+    // inside it: `draw_ui` paints the chrome gap around the other three sides,
+    // so the tile reads as a piece of chrome let into the edge rather than
+    // something parked on the scene.
+    egui::Rect::from_min_size(egui::pos2(canvas_rect.right() - TOOL_CELL_SIZE, top), size)
 }
 
-/// Draw the view tools: one floating tile under the viewport's orientation
-/// gizmo, and return the block it occupies.
+/// Draw the view tools: one tile hung off the viewport's right edge, under the
+/// orientation gizmo, and return the block it occupies.
+///
+/// The tile carries its own chrome - the gap around it, its rounded corners
+/// and its outline - because it floats above the layer the panels' regions are
+/// finished off in.
 ///
 /// The block matches what [`view_tools_bounds`] promised the overlays drawn
 /// before it. A viewport too short for the whole run clips the tile at its
@@ -493,6 +497,10 @@ pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
                 VIEW_TOOL_CELLS,
                 drawn.response.rect.height(),
             );
+            // Over the tile it has just drawn, so its corners are cut back and
+            // the gap parts the scene around it, the way a panel's region is
+            // finished off from the background layer.
+            crate::ui::chrome::paint_floating_region(ui.painter(), ui.visuals(), bounds);
         });
 
     bounds
