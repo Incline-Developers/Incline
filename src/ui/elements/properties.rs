@@ -4,20 +4,22 @@
 //! Sections are [`PropertyTab`]s. The four settings tabs are always present and
 //! apply live - every committed edit becomes an [`UiCommand::ApplyPreferences`],
 //! which saves the config file - so there is no draft to confirm or discard.
-//! The Block Model and Design tabs describe the last non-empty selection and
-//! only appear while there is something for them to describe; clearing the
-//! selection leaves them in place, as Blender's properties editor does with
-//! its active object.
+//! The Block Model, Triangulation and Design tabs describe the last non-empty
+//! selection and only appear while there is something for them to describe;
+//! clearing the selection leaves them in place, as Blender's properties editor
+//! does with its active object.
+
+use thousands::Separable;
 
 use crate::{
-    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel},
+    model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, triangulation::TriangulationId},
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
-        UiCommand,
+        UiCommand, UiProjectView,
         state::{EditorState, PreferencesDraft, PropertyTab},
         themed_icon, unthemed_icon,
         widgets::{
-            menu::{MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32},
+            menu::{MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
             viewport::BlockModelProperties,
         },
     },
@@ -43,6 +45,8 @@ const MIN_TREE_HEIGHT: f32 = 72.0;
 struct PropertyContext {
     /// Selected block model to describe, if any.
     block_model: Option<crate::model::block_model::BlockModelId>,
+    /// Selected triangulation to describe, if any.
+    triangulation: Option<TriangulationId>,
     /// Selected document objects, in selection order.
     objects: Vec<ObjectId>,
     /// The subset of `objects` that are polylines.
@@ -53,9 +57,16 @@ impl PropertyContext {
     fn tab_available(&self, tab: PropertyTab) -> bool {
         match tab {
             PropertyTab::BlockModel => self.block_model.is_some(),
+            PropertyTab::Triangulation => self.triangulation.is_some(),
             PropertyTab::Design => !self.objects.is_empty(),
             _ => true,
         }
+    }
+
+    /// Whether any tab describing a selection is showing, and so whether the
+    /// tab strip needs the gap that separates them from the settings tabs.
+    fn has_selection_tabs(&self) -> bool {
+        self.block_model.is_some() || self.triangulation.is_some() || !self.objects.is_empty()
     }
 }
 
@@ -68,15 +79,17 @@ pub(crate) const PANEL_ID: &str = "explorer_properties";
 /// A region of its own rather than the foot of the tree's: the two are
 /// separate surfaces, so the gap and the grip between them say the seam can be
 /// dragged. Returns the panel's bounding rect.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_properties(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
+    project: &UiProjectView,
     block_models: &[OpenBlockModel],
     document: &Document,
     commands: &mut Vec<UiCommand>,
     geometry_dirty: &mut bool,
 ) -> egui::Rect {
-    let context = collect_context(editor, block_models, document);
+    let context = collect_context(editor, project, block_models, document);
     // A selection tab whose selection has gone shows settings meanwhile, but
     // stays the chosen tab: selecting another block model or design brings it
     // straight back rather than making the user pick the icon again.
@@ -143,6 +156,7 @@ pub(crate) fn draw_properties(
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
                         PropertyTab::BlockModel => draw_block_model_tab(ui, editor, block_models, &context, commands),
+                        PropertyTab::Triangulation => draw_triangulation_tab(ui, project, &context, commands, geometry_dirty),
                         PropertyTab::Design => draw_design_tab(ui, editor, document, &context, commands, geometry_dirty),
                     }
                 });
@@ -152,7 +166,7 @@ pub(crate) fn draw_properties(
         .rect
 }
 
-fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], document: &Document) -> PropertyContext {
+fn collect_context(editor: &mut EditorState, project: &UiProjectView, block_models: &[OpenBlockModel], document: &Document) -> PropertyContext {
     // Only a selection that holds something replaces what the panel describes.
     // Clearing the selection leaves the last one in place, so the tabs stay
     // where they were instead of dropping the user back onto the settings -
@@ -166,6 +180,17 @@ fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], do
             .find(|model| editor.viewport_block_model_id == Some(model.id) && editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id)))
             .or_else(|| block_models.iter().find(|model| editor.selected_handles.contains(&SceneEntityId::BlockModel(model.id))))
             .map(|model| model.id);
+        editor.viewport_triangulation_id = project
+            .triangulations
+            .iter()
+            .find(|tri| editor.viewport_triangulation_id == Some(tri.id) && editor.selected_handles.contains(&SceneEntityId::Triangulation(tri.id)))
+            .or_else(|| {
+                project
+                    .triangulations
+                    .iter()
+                    .find(|tri| editor.selected_handles.contains(&SceneEntityId::Triangulation(tri.id)))
+            })
+            .map(|tri| tri.id);
         editor.property_objects = editor
             .selected_handles
             .iter()
@@ -181,6 +206,9 @@ fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], do
     editor.viewport_block_model_id = editor
         .viewport_block_model_id
         .filter(|id| block_models.iter().any(|model| model.id == *id && model.state.loaded));
+    editor.viewport_triangulation_id = editor
+        .viewport_triangulation_id
+        .filter(|id| project.triangulations.iter().any(|tri| tri.id == *id && tri.is_loaded));
     editor.property_objects.retain(|&id| document.get_object(id).is_some());
 
     let objects = editor.property_objects.clone();
@@ -192,6 +220,7 @@ fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], do
 
     PropertyContext {
         block_model: editor.viewport_block_model_id,
+        triangulation: editor.viewport_triangulation_id,
         objects,
         polylines,
     }
@@ -212,11 +241,14 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, shown_tab: Proper
         content_fill,
     );
     tab_button(ui, editor, shown_tab, PropertyTab::Developer, themed_icon!(ui, "properties_developer.svg"), content_fill);
-    if context.block_model.is_some() || !context.objects.is_empty() {
+    if context.has_selection_tabs() {
         ui.add_space(TAB_GROUP_GAP);
     }
     if context.block_model.is_some() {
         tab_button(ui, editor, shown_tab, PropertyTab::BlockModel, unthemed_icon!("section_block_models.svg"), content_fill);
+    }
+    if context.triangulation.is_some() {
+        tab_button(ui, editor, shown_tab, PropertyTab::Triangulation, unthemed_icon!("triangulation.svg"), content_fill);
     }
     if !context.objects.is_empty() {
         tab_button(ui, editor, shown_tab, PropertyTab::Design, unthemed_icon!("section_designs.svg"), content_fill);
@@ -440,6 +472,47 @@ fn draw_block_model_tab(ui: &mut egui::Ui, editor: &mut EditorState, block_model
     ui.add_space(4.0);
     BlockModelProperties::new("block_model_properties", model).show(ui, editor, commands);
     ui.add_space(6.0);
+}
+
+/// The Triangulation tab: what the selected surface is made of, and the face
+/// colour it is drawn with.
+fn draw_triangulation_tab(ui: &mut egui::Ui, project: &UiProjectView, context: &PropertyContext, commands: &mut Vec<UiCommand>, geometry_dirty: &mut bool) {
+    let Some(triangulation) = context.triangulation.and_then(|id| project.triangulations.iter().find(|tri| tri.id == id)) else {
+        return;
+    };
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(&triangulation.name).strong());
+    ui.add_space(4.0);
+
+    let mut color32 = rgba_to_color32(triangulation.color);
+    let response = MenuFieldColor32::new("Face colour", &mut color32).show(ui);
+    if committed(&response) {
+        commands.push(UiCommand::SetTriangulationColor(triangulation.id, color32_to_rgba(color32)));
+        *geometry_dirty = true;
+    }
+
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new("Mesh").strong().color(ui.visuals().weak_text_color()));
+    ui.add_space(4.0);
+    read_only_row(ui, "Vertices", &triangulation.vertex_count.separate_with_commas());
+    read_only_row(ui, "Triangles", &triangulation.triangle_count.separate_with_commas());
+    ui.add_space(6.0);
+}
+
+/// A labelled value the panel only reports, laid out like the editable fields
+/// beside it so the columns line up.
+fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    let row_height = ui.spacing().interact_size.y;
+    let row_width = ui.available_width();
+    ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(value).color(ui.visuals().weak_text_color()));
+        });
+        let label_width = ui.available_width();
+        ui.allocate_ui_with_layout(egui::vec2(label_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            menu_field_label(ui, label.into(), None);
+        });
+    });
 }
 
 fn fill_style_label(style: FillStyle) -> &'static str {

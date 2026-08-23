@@ -1200,6 +1200,11 @@ pub(crate) struct EditorState {
     /// by the last non-empty selection and kept after that selection is
     /// cleared, until the model is closed or another selection replaces it.
     pub(crate) viewport_block_model_id: Option<BlockModelId>,
+    /// Triangulation described by the explorer's Triangulation properties tab.
+    /// Kept after the selection that set it is cleared, exactly as
+    /// `viewport_block_model_id` is, until the surface is closed or another
+    /// selection replaces it.
+    pub(crate) viewport_triangulation_id: Option<TriangulationId>,
     pub(crate) block_model_variable_ranges: HashMap<(BlockModelId, String), Option<(f64, f64)>>,
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
@@ -1820,6 +1825,7 @@ impl EditorState {
             point_cloud_tin_hole_fill: 0.0,
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
+            viewport_triangulation_id: None,
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
@@ -2727,6 +2733,10 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
+    /// Face colour, shown and edited by the Triangulation properties tab.
+    pub(crate) color: [f32; 4],
+    pub(crate) vertex_count: usize,
+    pub(crate) triangle_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -2785,9 +2795,9 @@ pub(crate) struct UiProjectView {
 
 /// A section of the explorer's properties panel.
 ///
-/// The first four are the application settings, always available. The last two
-/// describe the current selection and only appear while there is something
-/// they apply to.
+/// The first four are the application settings, always available. The last
+/// three describe the current selection and only appear while there is
+/// something they apply to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
     Interface,
@@ -2795,6 +2805,7 @@ pub(crate) enum PropertyTab {
     Performance,
     Developer,
     BlockModel,
+    Triangulation,
     Design,
 }
 

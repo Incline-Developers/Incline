@@ -189,7 +189,7 @@ pub(crate) fn draw_explorer(
             ui.set_max_width(ui.available_width());
 
             // Claimed from the bottom before the tree fills what is left.
-            let properties_rect = draw_properties(ui, editor, block_models, document, commands, geometry_dirty);
+            let properties_rect = draw_properties(ui, editor, project, block_models, document, commands, geometry_dirty);
 
             let tree_rect = crate::ui::chrome::region_frame(ui.style()).fill(surface).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
             crate::ui::elements::toolbars::draw_explorer_toolbar(ui, editor, project, commands, can_undo, can_redo);

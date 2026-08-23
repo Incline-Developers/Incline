@@ -2,12 +2,11 @@
 
 use crate::{
     model::{Axis, Document, ObjectId},
-    rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
         themed_icon, unthemed_icon,
         widgets::{
-            context_menu::{ContextMenu, ContextMenuAction, ContextMenuFieldColor32, context_menu_separator},
+            context_menu::{ContextMenu, ContextMenuAction, context_menu_separator},
             menu::{self, DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
@@ -108,22 +107,6 @@ pub(crate) fn draw_right_click_context(
         });
 
         let has_doc_objects = !selected_obj_ids.is_empty();
-        let has_tri = project.active_triangulation_for_menu.is_some() && editor.selected_handles.iter().any(|&h| matches!(h, crate::model::SceneEntityId::Triangulation(_)));
-
-        // --- Triangulation face colour ---
-        if has_tri {
-            if let Some((tri_id, mut face_color)) = project.active_triangulation_for_menu {
-                let mut color32 = rgba_to_color32(face_color);
-                let color_resp = ContextMenuFieldColor32::new("Face Colour", &mut color32).show(ui);
-                if color_resp.drag_stopped() || (color_resp.changed() && !color_resp.dragged()) {
-                    face_color = color32_to_rgba(color32);
-                    commands.push(UiCommand::SetTriangulationColor(tri_id, face_color));
-                    *geometry_dirty = true;
-                }
-            }
-
-            context_menu_separator(ui);
-        }
 
         // --- Drill hole colouring ---
         if let Some(drill_hole_id) = selected_drill_hole {

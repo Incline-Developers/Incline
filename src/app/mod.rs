@@ -1273,6 +1273,9 @@ impl<'a> App<'a> {
                 is_active: self.active_triangulation == Some(tri.id),
                 is_loaded: tri.state.loaded,
                 dirty: tri.state.is_dirty(),
+                color: tri.color,
+                vertex_count: tri.mesh.vertex_count(),
+                triangle_count: tri.mesh.face_count(),
             })
             .collect::<Vec<_>>();
         let mut block_models = self
