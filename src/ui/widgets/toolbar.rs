@@ -73,9 +73,9 @@ pub(crate) const GROUP_CORNER_RADIUS: u8 = 3;
 const GROUP_BUTTON_GAP: f32 = 0.0;
 /// Side of a tool cell, which is also the tile's width: the buttons run edge
 /// to edge, so a selected tool's fill has no strip of tile left beside it.
-pub(crate) const TOOL_CELL_SIZE: f32 = 32.0;
+pub(crate) const TOOL_CELL_SIZE: f32 = 30.0;
 /// Side of the icon drawn inside a tool cell.
-const TOOL_ICON_SIZE: f32 = 20.0;
+const TOOL_ICON_SIZE: f32 = 19.0;
 /// Corner rounding on a tool cell's fill outside a tile, where it has no
 /// neighbours to sit flush against.
 const TOOL_CELL_CORNER_RADIUS: f32 = GROUP_CORNER_RADIUS as f32;
@@ -213,7 +213,7 @@ impl ToolbarGroup {
 
 /// Gap between the tiles of a [`ToolStack`], and between its columns. The tiles
 /// pad themselves, so the visible gap is this less the padding either side.
-pub(crate) const TOOL_GROUP_GAP: f32 = 16.0;
+pub(crate) const TOOL_GROUP_GAP: f32 = 8.0;
 
 /// Which way a [`ToolStack`] adds columns when it runs out of height.
 #[derive(Clone, Copy)]
