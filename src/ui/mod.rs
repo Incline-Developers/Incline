@@ -887,7 +887,7 @@ fn draw_ui(
     if editor.slice_mode_enabled {
         dialogs::editing::draw_slice_panel(root_ui, editor, commands, canvas_rect);
         widgets::viewport::ViewportMiniMap::new("slice_minimap", canvas_rect)
-            .clear_of(view_tools_rect)
+            .beside_tools(view_tools_rect)
             .show(root_ui.ctx(), editor, commands);
     }
     // Batter Berm

@@ -250,9 +250,14 @@ const SCALE_BAR_HEIGHT: f32 = 21.0;
 /// Gap between the embedded slice preview and whatever it sits beside: the
 /// viewport's right edge, or the view tools' block.
 const SLICE_PREVIEW_MARGIN: f32 = 10.0;
-/// Drop from the top of the viewport to the embedded slice preview, which
-/// clears the orientation gizmo above it.
+/// Drop from the top of the viewport to the embedded slice preview when there
+/// is no view tools block to line its top edge up with.
 const SLICE_PREVIEW_TOP: f32 = 104.0;
+/// Bounds on the embedded slice preview's side. It tracks the viewport's
+/// shorter side between them, so a small viewport still gets a usable preview
+/// and a large one is not handed most of the scene as a minimap.
+const SLICE_PREVIEW_MIN_SIZE: f32 = 160.0;
+const SLICE_PREVIEW_MAX_SIZE: f32 = 320.0;
 
 /// Clamps `raw_t` to `0..1` and, if that lands within `STOP_EPSILON` of an
 /// existing stop, nudges it just outside that stop's epsilon band.
@@ -1262,7 +1267,7 @@ impl ViewportLabel {
 pub(crate) struct ViewportMiniMap {
     id: egui::Id,
     viewport_rect: egui::Rect,
-    clear_of: egui::Rect,
+    tools_block: egui::Rect,
 }
 
 impl ViewportMiniMap {
@@ -1270,17 +1275,20 @@ impl ViewportMiniMap {
         Self {
             id: egui::Id::new(id_source),
             viewport_rect,
-            clear_of: egui::Rect::NOTHING,
+            tools_block: egui::Rect::NOTHING,
         }
     }
 
-    /// Keep the preview out from under a block of floating tools.
+    /// Line the preview up with the view tools' block and keep it out from
+    /// under them.
     ///
-    /// The preview is painted in the foreground order, above the view tools,
-    /// so it has to clear their tile itself rather than let paint order hide
-    /// them behind it.
-    pub(crate) fn clear_of(mut self, block: egui::Rect) -> Self {
-        self.clear_of = block;
+    /// The tools' own top moves with the orientation gizmo, so taking the top
+    /// edge from the block is what keeps the two lined up in both states. And
+    /// because the preview is painted in the foreground order, above the view
+    /// tools, it has to step aside from their tile itself rather than let
+    /// paint order hide them behind it.
+    pub(crate) fn beside_tools(mut self, block: egui::Rect) -> Self {
+        self.tools_block = block;
         self
     }
 
@@ -1292,17 +1300,26 @@ impl ViewportMiniMap {
             return;
         }
 
-        // Keep the embedded preview proportional to the main viewport. It is
-        // deliberately not user-resizable: resizing an egui window captures
-        // pointer interaction and makes the following middle-drag feel as if
-        // the 3D canvas needs to be focused again.
-        let preview_size = egui::vec2((self.viewport_rect.width() * 0.24).max(160.0), (self.viewport_rect.height() * 0.24).max(160.0));
-        let mut preview_pos = egui::pos2(
-            self.viewport_rect.right() - preview_size.x - SLICE_PREVIEW_MARGIN,
-            self.viewport_rect.top() + SLICE_PREVIEW_TOP,
-        );
-        if egui::Rect::from_min_size(preview_pos, preview_size).intersects(self.clear_of) {
-            preview_pos.x = (self.clear_of.left() - SLICE_PREVIEW_MARGIN - preview_size.x).max(self.viewport_rect.left());
+        // The preview is square - a slice is looked at from straight above, so
+        // neither axis deserves more room than the other - and it tracks the
+        // viewport's shorter side within fixed bounds. It is deliberately not
+        // user-resizable: resizing an egui window captures pointer interaction
+        // and makes the following middle-drag feel as if the 3D canvas needs
+        // to be focused again.
+        let top = if self.tools_block.is_positive() {
+            self.tools_block.top()
+        } else {
+            self.viewport_rect.top() + SLICE_PREVIEW_TOP
+        };
+        let side = (self.viewport_rect.width().min(self.viewport_rect.height()) * 0.24)
+            .clamp(SLICE_PREVIEW_MIN_SIZE, SLICE_PREVIEW_MAX_SIZE)
+            // Never hang off the bottom of the viewport, however short it is.
+            .min(self.viewport_rect.bottom() - SLICE_PREVIEW_MARGIN - top)
+            .max(1.0);
+        let preview_size = egui::vec2(side, side);
+        let mut preview_pos = egui::pos2(self.viewport_rect.right() - preview_size.x - SLICE_PREVIEW_MARGIN, top);
+        if egui::Rect::from_min_size(preview_pos, preview_size).intersects(self.tools_block) {
+            preview_pos.x = (self.tools_block.left() - SLICE_PREVIEW_MARGIN - preview_size.x).max(self.viewport_rect.left());
         }
         let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::ZERO);
         egui::Window::new("")
