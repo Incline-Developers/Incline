@@ -245,6 +245,14 @@ const SCALE_BAR_TARGET_WIDTH: f64 = 320.0;
 const SCALE_BAR_VIEWPORT_MARGIN: f32 = 10.0;
 const SCALE_BAR_LABEL_OVERHANG: f32 = 18.0;
 const SCALE_BAR_SEGMENT_FRACTIONS: [f64; 6] = [0.0, 0.05, 0.10, 0.25, 0.50, 1.0];
+/// Height of the scale bar's block: the bar itself and the labels under it.
+const SCALE_BAR_HEIGHT: f32 = 21.0;
+/// Gap between the embedded slice preview and whatever it sits beside: the
+/// viewport's right edge, or the view tools' block.
+const SLICE_PREVIEW_MARGIN: f32 = 10.0;
+/// Drop from the top of the viewport to the embedded slice preview, which
+/// clears the orientation gizmo above it.
+const SLICE_PREVIEW_TOP: f32 = 104.0;
 
 /// Clamps `raw_t` to `0..1` and, if that lands within `STOP_EPSILON` of an
 /// existing stop, nudges it just outside that stop's epsilon band.
@@ -1026,6 +1034,7 @@ impl<'a> BlockModelProperties<'a> {
 pub(crate) struct ViewportScaleBar {
     id: egui::Id,
     viewport_rect: egui::Rect,
+    clear_of: egui::Rect,
 }
 
 impl ViewportScaleBar {
@@ -1033,7 +1042,20 @@ impl ViewportScaleBar {
         Self {
             id: egui::Id::new(id_source),
             viewport_rect,
+            clear_of: egui::Rect::NOTHING,
         }
+    }
+
+    /// Keep the bar out from under a block of floating tools.
+    ///
+    /// The bar is painted in the background order, so anything floating over
+    /// the viewport covers it rather than the other way around. It normally
+    /// sits well below the view tools, but a window short enough to wrap them
+    /// into a second column brings that column down the right-hand edge to
+    /// meet it - so the bar steps aside instead.
+    pub(crate) fn clear_of(mut self, block: egui::Rect) -> Self {
+        self.clear_of = block;
+        self
     }
 
     pub(crate) fn show(self, ctx: &egui::Context, world_per_point: Option<f64>, viewport_background: [f32; 4]) {
@@ -1042,10 +1064,17 @@ impl ViewportScaleBar {
         };
         let distance = nice_scale_distance(world_per_point * SCALE_BAR_TARGET_WIDTH);
         let bar_width = (distance / world_per_point) as f32;
-        let anchor = egui::pos2(
+        let bar_size = egui::vec2(bar_width + SCALE_BAR_LABEL_OVERHANG * 2.0, SCALE_BAR_HEIGHT);
+        let mut anchor = egui::pos2(
             self.viewport_rect.right() - SCALE_BAR_VIEWPORT_MARGIN,
             self.viewport_rect.bottom() - SCALE_BAR_VIEWPORT_MARGIN,
         );
+        // The bar hangs off its bottom-right corner, so clearing the tools is
+        // a matter of moving that corner to their left - as far as the left of
+        // the viewport, past which there is nowhere better to be.
+        if egui::Rect::from_min_max(anchor - bar_size, anchor).intersects(self.clear_of) {
+            anchor.x = (self.clear_of.left() - SCALE_BAR_VIEWPORT_MARGIN).max(self.viewport_rect.left() + bar_size.x);
+        }
         let luminance = 0.2126 * viewport_background[0] + 0.7152 * viewport_background[1] + 0.0722 * viewport_background[2];
         let (ink, outline) = if luminance > 0.45 {
             (egui::Color32::BLACK, egui::Color32::WHITE)
@@ -1058,7 +1087,7 @@ impl ViewportScaleBar {
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .fixed_pos(anchor)
             .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_width + SCALE_BAR_LABEL_OVERHANG * 2.0, 21.0), egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(bar_size, egui::Sense::hover());
                 let painter = ui.painter();
 
                 let bar_rect = egui::Rect::from_min_size(rect.min + egui::vec2(SCALE_BAR_LABEL_OVERHANG, 1.0), egui::vec2(bar_width, 5.0));
@@ -1233,6 +1262,7 @@ impl ViewportLabel {
 pub(crate) struct ViewportMiniMap {
     id: egui::Id,
     viewport_rect: egui::Rect,
+    clear_of: egui::Rect,
 }
 
 impl ViewportMiniMap {
@@ -1240,7 +1270,19 @@ impl ViewportMiniMap {
         Self {
             id: egui::Id::new(id_source),
             viewport_rect,
+            clear_of: egui::Rect::NOTHING,
         }
+    }
+
+    /// Keep the preview out from under a block of floating tools.
+    ///
+    /// The preview is painted in the foreground order, above the view tools,
+    /// so it has to clear their band itself rather than let paint order hide
+    /// the stack behind it - and the band is as wide as the columns the
+    /// window's height wrapped the tools into, not always the one.
+    pub(crate) fn clear_of(mut self, block: egui::Rect) -> Self {
+        self.clear_of = block;
+        self
     }
 
     pub(crate) fn show(self, ctx: &egui::Context, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
@@ -1256,13 +1298,13 @@ impl ViewportMiniMap {
         // pointer interaction and makes the following middle-drag feel as if
         // the 3D canvas needs to be focused again.
         let preview_size = egui::vec2((self.viewport_rect.width() * 0.24).max(160.0), (self.viewport_rect.height() * 0.24).max(160.0));
-        // The preview is painted in the foreground order, above the floating
-        // view tools, so it has to clear their band along the right edge by
-        // itself rather than let paint order hide the stack behind it.
-        let preview_pos = egui::pos2(
-            (self.viewport_rect.right() - preview_size.x - 10.0 - crate::ui::elements::toolbars::VIEW_TOOLS_BAND_WIDTH).max(self.viewport_rect.left()),
-            self.viewport_rect.top() + 104.0,
+        let mut preview_pos = egui::pos2(
+            self.viewport_rect.right() - preview_size.x - SLICE_PREVIEW_MARGIN,
+            self.viewport_rect.top() + SLICE_PREVIEW_TOP,
         );
+        if egui::Rect::from_min_size(preview_pos, preview_size).intersects(self.clear_of) {
+            preview_pos.x = (self.clear_of.left() - SLICE_PREVIEW_MARGIN - preview_size.x).max(self.viewport_rect.left());
+        }
         let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::ZERO);
         egui::Window::new("")
             .id(self.id)

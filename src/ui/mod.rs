@@ -49,14 +49,6 @@ use crate::{
 pub(crate) const SELECTION_COLOR_F32: [f32; 4] = [0.0953, 0.3662, 1.0, 1.0];
 pub(crate) const SELECTION_COLOR: egui::Color32 = egui::Color32::from_rgb(87, 163, 255);
 
-/// Gap between the orientation gizmo and the view tools stacked under it. The
-/// gizmo's own artwork stops short of its rect, so this is wider than it looks
-/// on paper.
-const VIEW_TOOLS_GIZMO_GAP: f32 = 26.0;
-/// Gap above the view tools when the gizmo is hidden and they sit at the top
-/// of the viewport themselves.
-const VIEW_TOOLS_TOP_MARGIN: f32 = 10.0;
-
 /// Owned egui GUI state: context, winit bridge, and wgpu tessellation renderer.
 ///
 /// Created once at application startup; mutated each frame via `handle_event`
@@ -492,7 +484,6 @@ fn draw_ui(
     }
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
-    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, editing_enabled, project_active, commands);
 
     // --- Compute canvas rect (area not occupied by panels) ---
     let canvas_bottom = console_rect.map_or_else(
@@ -513,9 +504,19 @@ fn draw_ui(
     // The scene's own margin, claimed like the window's so a scroll over the
     // gap around the viewport reaches the interface rather than the camera.
     chrome::claim_gap(root_ui, "chrome_scene_edge");
-    // The view tools float over the scene rather than claiming a panel, so the
-    // canvas runs to the scene's right edge.
+    // Both tool stacks float over the scene rather than claiming a panel, so
+    // the scene is drawn out to its own edges. The canvas is what everything
+    // else that floats - the dialogs, the gizmo, the labels - lays itself out
+    // in, so it starts past the drawing tools' block, however many columns
+    // they wrapped into. The view tools are at the far end of that, so the
+    // canvas keeps its right edge and the two overlays that reach it dodge
+    // the stack themselves.
+    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, editing_enabled, project_active, commands, scene_rect);
     let canvas_rect = egui::Rect::from_min_max(egui::pos2(left_toolbar_rect.right().max(scene_rect.left()), scene_rect.top()), scene_rect.max);
+    // Where the view tools will land, before either they or the overlays that
+    // have to dodge them are drawn. They are the last thing drawn over the
+    // canvas, so an overlay that asked afterwards would be a frame behind.
+    let view_tools_rect = elements::toolbars::view_tools_bounds(canvas_rect, editor.show_world_axis_gizmo);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
@@ -883,7 +884,9 @@ fn draw_ui(
     // Slice view: config dock + top-down minimap
     if editor.slice_mode_enabled {
         dialogs::editing::draw_slice_panel(root_ui, editor, commands, canvas_rect);
-        widgets::viewport::ViewportMiniMap::new("slice_minimap", canvas_rect).show(root_ui.ctx(), editor, commands);
+        widgets::viewport::ViewportMiniMap::new("slice_minimap", canvas_rect)
+            .clear_of(view_tools_rect)
+            .show(root_ui.ctx(), editor, commands);
     }
     // Batter Berm
     if editor.active_tool == ActiveTool::BatterBermOffset && !editor.batter_berm_dialog_open {
@@ -944,21 +947,18 @@ fn draw_ui(
 
     // The view tools hang below the gizmo, or take its place at the top of the
     // viewport when it is switched off.
-    let gizmo_rect = if editor.show_world_axis_gizmo {
-        elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands)
-    } else {
-        egui::Rect::NOTHING
-    };
-    let view_tools_top = if gizmo_rect.is_positive() {
-        gizmo_rect.bottom() + VIEW_TOOLS_GIZMO_GAP
-    } else {
-        canvas_rect.top() + VIEW_TOOLS_TOP_MARGIN
-    };
-    elements::toolbars::draw_view_tools(root_ui, editor, commands, canvas_rect, view_tools_top);
+    if editor.show_world_axis_gizmo {
+        elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands);
+    }
+    elements::toolbars::draw_view_tools(root_ui, editor, commands, canvas_rect, editor.show_world_axis_gizmo);
 
     let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
     if editor.show_scale_bar {
-        widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
+        widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).clear_of(view_tools_rect).show(
+            root_ui.ctx(),
+            world_per_point,
+            editor.renderer_background_color,
+        );
     }
 
     geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);

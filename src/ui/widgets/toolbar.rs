@@ -211,6 +211,145 @@ impl ToolbarGroup {
     }
 }
 
+/// Gap between the tiles of a [`ToolStack`], and between its columns. The tiles
+/// pad themselves, so the visible gap is this less the padding either side.
+pub(crate) const TOOL_GROUP_GAP: f32 = 16.0;
+
+/// Which way a [`ToolStack`] adds columns when it runs out of height.
+#[derive(Clone, Copy)]
+pub(crate) enum ToolStackGrowth {
+    /// Away from the viewport's left edge: the drawing tools.
+    Rightwards,
+    /// Away from the viewport's right edge: the view tools.
+    Leftwards,
+}
+
+/// A floating column of tool tiles that wraps into further columns rather than
+/// running off the bottom of a short window.
+///
+/// Wrapping has to be decided before a tile is drawn, so the stack is told its
+/// groups' cell counts up front: every cell is one [`TOOL_CELL_SIZE`] square,
+/// so a group's height follows from its count without measuring anything. That
+/// also means the whole block's extent is known before the first tile is
+/// painted, which is what lets the stack sit in an [`egui::Area`] anchored on
+/// the block itself - the area's rect then covers the tiles wherever they
+/// wrapped to, so the pointer counts as over the interface across all of them.
+///
+/// The counts are declared once, in the slice; [`ToolStack::group`] walks it in
+/// order and a debug assertion catches a count that has drifted from the
+/// buttons its group actually draws.
+#[derive(Clone)]
+pub(crate) struct ToolStack<'a> {
+    /// Cell count of each group, in the order they are drawn.
+    groups: &'a [usize],
+    /// Index of the group [`ToolStack::group`] will place next.
+    index: usize,
+    /// Left edge of the first column; later columns step away from it.
+    first_column_left: f32,
+    /// Y the first tile of every column starts at.
+    top: f32,
+    /// Y the tiles must stay above.
+    bottom: f32,
+    growth: ToolStackGrowth,
+    /// Column the next tile goes in.
+    column: usize,
+    /// Y the next tile in this column starts at.
+    next_y: f32,
+}
+
+impl<'a> ToolStack<'a> {
+    /// `anchor` is the top-left of the first column, `bottom` the y the tiles
+    /// stay above, and `groups` the cell count of each group in draw order.
+    pub(crate) fn new(anchor: egui::Pos2, bottom: f32, growth: ToolStackGrowth, groups: &'a [usize]) -> Self {
+        Self {
+            groups,
+            index: 0,
+            first_column_left: anchor.x,
+            top: anchor.y,
+            bottom,
+            growth,
+            column: 0,
+            next_y: anchor.y,
+        }
+    }
+
+    /// The block the tiles will occupy, worked out by walking the same packing
+    /// the drawing pass does. Known before anything is drawn, so it can place
+    /// the area and tell the canvas what to stay clear of.
+    pub(crate) fn bounds(&self) -> egui::Rect {
+        let mut probe = self.clone();
+        let mut bounds = egui::Rect::NOTHING;
+        while probe.index < probe.groups.len() {
+            bounds = bounds.union(probe.place());
+        }
+        bounds
+    }
+
+    /// The rect of the next group, wrapping to the next column first if it
+    /// would not fit under the last one.
+    fn place(&mut self) -> egui::Rect {
+        let cells = self.groups[self.index];
+        self.index += 1;
+        let height = cells as f32 * TOOL_CELL_SIZE + cells.saturating_sub(1) as f32 * GROUP_BUTTON_GAP;
+        // A column is never left empty: a group taller than the whole stack
+        // has to overflow somewhere, and marching it sideways would only take
+        // the columns after it with it.
+        if self.next_y > self.top && self.next_y + height > self.bottom {
+            self.column += 1;
+            self.next_y = self.top;
+        }
+        let offset = self.column as f32 * (TOOL_CELL_SIZE + TOOL_GROUP_GAP);
+        let left = match self.growth {
+            ToolStackGrowth::Rightwards => self.first_column_left + offset,
+            ToolStackGrowth::Leftwards => self.first_column_left - offset,
+        };
+        let rect = egui::Rect::from_min_size(egui::pos2(left, self.next_y), egui::vec2(TOOL_CELL_SIZE, height));
+        self.next_y = rect.bottom() + TOOL_GROUP_GAP;
+        rect
+    }
+
+    /// Draw the stack in its own area, and return the block its tiles occupy.
+    ///
+    /// `clip` is the viewport the tiles belong to: the area is clipped to it,
+    /// and only the part of the stack inside it takes pointer input. The area
+    /// is deliberately not *constrained* to it - the stack has already placed
+    /// itself, and letting egui slide it as well would move the tiles out from
+    /// under the block the caller was handed.
+    pub(crate) fn show(mut self, ctx: &egui::Context, id: egui::Id, clip: egui::Rect, add_groups: impl FnOnce(&mut Self, &mut Ui)) -> egui::Rect {
+        let bounds = self.bounds();
+        egui::Area::new(id)
+            // Above egui's Background layer, or right clicks inside the buttons
+            // leak through to the viewport's orbit and context handling.
+            .order(egui::Order::Middle)
+            // `Area` is movable by default, which would give the whole stack a
+            // drag response and swallow middle-drag camera moves.
+            .movable(false)
+            .sense(Sense::hover())
+            .constrain_to(clip)
+            .constrain(false)
+            .fixed_pos(bounds.min)
+            .show(ctx, |ui| add_groups(&mut self, ui));
+        bounds
+    }
+
+    /// Draw one group of buttons on its own tile, in the place the stack's
+    /// packing gives it.
+    pub(crate) fn group<R>(&mut self, ui: &mut Ui, add_buttons: impl FnOnce(&mut Ui) -> R) -> R {
+        let rect = self.place();
+        let inner = ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)), |ui| {
+            ToolbarGroup::new().show(ui, add_buttons)
+        });
+        debug_assert!(
+            (inner.response.rect.height() - rect.height()).abs() < 1.0,
+            "tool group {} was declared {} cells tall but drew {} points of buttons",
+            self.index - 1,
+            self.groups[self.index - 1],
+            inner.response.rect.height(),
+        );
+        inner.inner
+    }
+}
+
 /// Paint a group's cell fills, rounding only the run's outer corners so the
 /// cells sit flush against each other.
 fn paint_cell_fills(ui: &Ui, cells: &[(egui::layers::ShapeIdx, egui::Rect, Color32)]) {
