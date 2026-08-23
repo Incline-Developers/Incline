@@ -72,7 +72,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.button("Default").clicked() {
+                        if ui.add(MenuButton::new("Default")).clicked() {
                             #[cfg(target_arch = "wasm32")]
                             let import_kind = editor.data_menu;
                             reset_import_defaults(editor, project);
@@ -127,7 +127,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             commands.push(command);
                             close_after_action = true;
                         }
-                        if ui.button("Default").clicked() {
+                        if ui.add(MenuButton::new("Default")).clicked() {
                             reset_export_defaults(editor, project);
                         }
                     },

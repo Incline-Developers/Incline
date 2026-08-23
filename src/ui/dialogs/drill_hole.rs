@@ -2,7 +2,7 @@ use crate::{
     model::drill_hole::{DrillColorPreset, DrillFieldKind, OpenDrillHoleDataset},
     ui::{
         state::{EditorState, UiCommand},
-        widgets::menu::{self, DragableMenu, MenuField, MenuFieldCombo},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo},
     },
 };
 
@@ -89,7 +89,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                         changed = true;
                     }
                     ui.horizontal(|ui| {
-                        if stops.len() < 12 && ui.button("Add stop").clicked() {
+                        if stops.len() < 12 && ui.add(MenuButton::new("Add stop")).clicked() {
                             let index = stops.len() / 2;
                             let left = stops[index.saturating_sub(1)];
                             let right = stops[index.min(stops.len() - 1)];
@@ -103,7 +103,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                             });
                             changed = true;
                         }
-                        if ui.button("Reset preset").clicked() {
+                        if ui.add(MenuButton::new("Reset preset")).clicked() {
                             commands.push(UiCommand::SetDrillHoleColorPreset { id, preset: dataset.color.preset });
                         }
                     });

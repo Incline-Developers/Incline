@@ -199,7 +199,7 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
                 apply = true;
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });
@@ -248,7 +248,7 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
             if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
                 apply = true;
             }
-            if ui.button("Cancel").clicked() || cancelled {
+            if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
                 close = true;
             }
         });
@@ -298,7 +298,7 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
             if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
                 apply = true;
             }
-            if ui.button("Cancel").clicked() || cancelled {
+            if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
                 close = true;
             }
         });
@@ -408,7 +408,6 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 } else {
                     egui::Color32::from_rgb(25, 95, 165)
                 };
-                let button_color = if ui.visuals().dark_mode { egui::Color32::from_rgb(45, 125, 205) } else { notice_color };
 
                 ui.add_space(8.0);
                 egui::Frame::new()
@@ -425,11 +424,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                                 ui.label(egui::RichText::new(format!("Currently installed: {}", crate::APP_RELEASE)).color(ui.visuals().weak_text_color()));
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let download = egui::Button::new(egui::RichText::new("Download").strong().color(egui::Color32::WHITE))
-                                    .fill(button_color)
-                                    .stroke(egui::Stroke::NONE)
-                                    .corner_radius(3.0);
-                                if ui.add_sized(egui::vec2(92.0, 30.0), download).clicked() {
+                                if ui.add(MenuButton::new("Download").primary().min_width(92.0)).clicked() {
                                     ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net/downloads/"));
                                 }
                             });
@@ -486,7 +481,7 @@ pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
                     });
                     editor.new_project_dialog_open = false;
                 }
-                if ui.button("Cancel").clicked() || cancelled {
+                if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
                     editor.new_project_dialog_open = false;
                 }
             });
@@ -515,7 +510,7 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
                     });
                     editor.new_layer_dialog_open = false;
                 }
-                if ui.button("Cancel").clicked() || cancelled {
+                if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
                     editor.new_layer_dialog_open = false;
                 }
             });
@@ -543,7 +538,7 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
             if (submitted || ui.add(MenuButton::new("Rename").primary().enabled(can_rename)).clicked()) && can_rename {
                 rename_to = Some(name_buf.trim().to_string());
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });
@@ -592,8 +587,8 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
         let apply_from_enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
         let cancel_from_escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let apply = ui.button("Apply").clicked() || apply_from_enter;
-            let cancel = ui.button(if editor.text_edit_created { "Discard" } else { "Cancel" }).clicked() || cancel_from_escape;
+            let apply = ui.add(MenuButton::new("Apply").primary()).clicked() || apply_from_enter;
+            let cancel = ui.add(MenuButton::new(if editor.text_edit_created { "Discard" } else { "Cancel" })).clicked() || cancel_from_escape;
             if apply {
                 commands.push(UiCommand::CommitTextEdit(
                     object_id,
@@ -617,11 +612,11 @@ pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<
     ViewportDockPanel::new("finish_poly_dialog", "Finish Polyline", viewport_rect).show(ui, |ui| {
         MenuField::new("Shape").show(ui, |ui, _| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Open").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new("Open").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::CommitStrokeOpen);
                     editor.poly_finish_dialog = false;
                 }
-                if ui.button("Closed").clicked() {
+                if ui.add(MenuButton::new("Closed")).clicked() {
                     commands.push(UiCommand::FinishPolyClose);
                     editor.poly_finish_dialog = false;
                 }
@@ -714,11 +709,11 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
             let can_pick_side = matches!(editor.offset_measure, OffsetMeasure::Height(HeightMode::AbsoluteRL)) || editor.offset_value_input.abs() > 1e-9;
             let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let pick_side_clicked = ui.add_enabled(can_pick_side, egui::Button::new("Pick Side")).clicked();
+                let pick_side_clicked = ui.add(MenuButton::new("Pick Side").enabled(can_pick_side)).clicked();
                 if can_pick_side && (pick_side_clicked || enter_pressed) {
                     queue_begin_offset_pick(commands, editor);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.add(MenuButton::new("Cancel")).clicked() {
                     commands.push(UiCommand::CancelOffset);
                 }
             });
@@ -835,7 +830,7 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                 if ui.add(MenuButton::new("Apply").primary().enabled(!editor.batter_berm_rings_world.is_empty())).clicked() {
                     commands.push(UiCommand::CommitBatterBerm);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.add(MenuButton::new("Cancel")).clicked() {
                     commands.push(UiCommand::CancelBatterBerm);
                 }
             });
@@ -941,13 +936,13 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 match editor.relimit_mode {
                     RelimitMode::Intersect => {
-                        if ui.button("Apply and Pick Target").clicked() {
+                        if ui.add(MenuButton::new("Apply and Pick Target").primary()).clicked() {
                             editor.relimit_dialog_open = false;
                             editor.relimit_waiting_for_pick = true;
                         }
                     }
                     RelimitMode::AbsoluteLength | RelimitMode::RelativeLength => {
-                        if ui.button("Apply").clicked()
+                        if ui.add(MenuButton::new("Apply").primary()).clicked()
                             && editor.relimit_value_input.is_finite()
                             && let Some(source_id) = editor.relimit_source_id
                         {
@@ -960,7 +955,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                         }
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.add(MenuButton::new("Cancel")).clicked() {
                     commands.push(UiCommand::CancelRelimit);
                 }
             });
@@ -992,7 +987,7 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
 
         ui.add_space(4.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Apply").clicked() {
+            if ui.add(MenuButton::new("Apply").primary()).clicked() {
                 commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
                     editor.move_panel_delta[0],
                     editor.move_panel_delta[1],
@@ -1000,7 +995,7 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
                 )));
                 editor.active_tool = ActiveTool::None;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.add(MenuButton::new("Cancel")).clicked() {
                 commands.push(UiCommand::CancelMoveDelta);
                 editor.active_tool = ActiveTool::None;
             }
@@ -1040,7 +1035,7 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
             if ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked() && can_apply {
                 commands.push(UiCommand::ApplyChamfer);
             }
-            if ui.button("Cancel").clicked() {
+            if ui.add(MenuButton::new("Cancel")).clicked() {
                 commands.push(UiCommand::CancelChamfer);
             }
         });
@@ -1138,7 +1133,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
             if can_apply && (apply_clicked || enter_pressed) {
                 commands.push(UiCommand::ApplyBezier);
             }
-            if ui.button("Cancel").clicked() {
+            if ui.add(MenuButton::new("Cancel")).clicked() {
                 commands.push(UiCommand::CancelBezier);
             }
         });
@@ -1165,7 +1160,7 @@ pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, comm
             .show(ui);
         ui.add_space(4.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Exit slice").clicked() {
+            if ui.add(MenuButton::new("Exit slice")).clicked() {
                 commands.push(UiCommand::SetSliceModeEnabled(false));
             }
         });

@@ -1294,12 +1294,6 @@ pub(crate) struct EditorState {
     pub(crate) show_export: bool,
     /// Whether the About dialog is open.
     pub(crate) show_about: bool,
-    /// Whether the debug widget gallery is open.
-    #[cfg(debug_assertions)]
-    pub(crate) widget_gallery_open: bool,
-    /// The throwaway values the widget gallery's controls edit.
-    #[cfg(debug_assertions)]
-    pub(crate) widget_gallery: crate::ui::dialogs::widget_gallery::WidgetGalleryState,
     /// What filetype should be selected in the import/export menu
     pub(crate) data_menu: DataMenu,
     pub(crate) import_source_menu: DataMenu,
@@ -1889,10 +1883,6 @@ impl EditorState {
             show_import: false,
             show_export: false,
             show_about: false,
-            #[cfg(debug_assertions)]
-            widget_gallery_open: false,
-            #[cfg(debug_assertions)]
-            widget_gallery: crate::ui::dialogs::widget_gallery::WidgetGalleryState::default(),
             data_menu: DataMenu::None,
             import_source_menu: DataMenu::None,
             import_source_paths: Vec::new(),

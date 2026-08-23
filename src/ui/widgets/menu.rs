@@ -7,13 +7,17 @@ pub(crate) const TITLE_BAR_HEIGHT: f32 = 30.0;
 const TITLE_BAR_HORIZONTAL_PADDING: f32 = 10.0;
 /// Side of the square the close cross is drawn inside.
 const CLOSE_BUTTON_SIZE: f32 = 20.0;
-/// Rounding of a floating menu's card. A touch softer than the panels'
-/// [`crate::ui::chrome`] radius: this one sits over the interface rather than
-/// tiling with it, so it reads as a card rather than another region.
-pub(crate) const MENU_CORNER_RADIUS: u8 = 5;
-/// Rounding shared by every control inside a menu - buttons, entry boxes,
-/// combo boxes, the toggle's track ends.
-const CONTROL_CORNER_RADIUS: u8 = 4;
+/// Rounding of a floating menu's card, and of every control inside it -
+/// buttons, entry boxes, combo boxes.
+///
+/// The toolbar tiles' radius, which the panels in [`crate::ui::chrome`] also
+/// take, so every rounded surface in the window is one family.
+pub(crate) const MENU_CORNER_RADIUS: u8 = super::toolbar::GROUP_CORNER_RADIUS;
+const CONTROL_CORNER_RADIUS: u8 = MENU_CORNER_RADIUS;
+/// Track of the sliding toggle a boolean field shows. Deliberately smaller
+/// than the row it sits in: it is a switch, not a button.
+const TOGGLE_WIDTH: f32 = 32.0;
+const TOGGLE_HEIGHT: f32 = 16.0;
 /// Height of a field row, and so of the control sitting in it.
 const ROW_HEIGHT: f32 = 24.0;
 /// Height of a [`MenuButton`]. The same as a field row, and the same as the
@@ -853,9 +857,7 @@ impl<'value> MenuFieldBool<'value> {
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, row_height| {
-            ui.add_sized([row_height * 1.8, row_height], SlidingToggle::new(value))
-        })
+        menu_field_row(ui, label, help_text, |ui, _| ui.add(SlidingToggle::new(value)))
     }
 }
 
@@ -871,10 +873,10 @@ impl<'value> SlidingToggle<'value> {
 
 impl egui::Widget for SlidingToggle<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let desired_size = ui.available_size_before_wrap();
-        let height = desired_size.y.max(ui.spacing().interact_size.y);
-        let width = desired_size.x.max(height * 1.8);
-        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+        // The track is a fixed size, but the row's full height stays clickable
+        // so the switch is no harder to hit than the fields above it.
+        let height = ui.spacing().interact_size.y.max(TOGGLE_HEIGHT);
+        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, height), egui::Sense::click());
 
         if response.clicked() {
             *self.value = !*self.value;
@@ -891,8 +893,8 @@ impl egui::Widget for SlidingToggle<'_> {
             // in the previous tab and replays a slide from its stale cached value.
             let value_id = egui::Id::new(self.value as *const bool as usize);
             let animation = ui.ctx().animate_bool_responsive(value_id, *self.value);
-            let radius = rect.height() / 2.0;
-            let track_rect = rect.shrink2(egui::vec2(1.0, 3.0));
+            let track_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
+            let radius = track_rect.height() / 2.0;
             let off_fill = ui.visuals().widgets.inactive.bg_fill;
             let on_fill = ui.visuals().selection.bg_fill;
             let track_fill = if *self.value { on_fill } else { off_fill };

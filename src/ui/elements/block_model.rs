@@ -199,7 +199,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             && editor.kriging_max_samples <= 64;
         ui.horizontal(|ui| {
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.block_model_create_open = false;
             }
             if ui.add(MenuButton::new("Create").primary().enabled(ready)).clicked() || (confirm && ready) {
@@ -332,7 +332,7 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
             && (editor.ore_filter_mode != OreFilterMode::Between || max.is_finite());
         ui.horizontal(|ui| {
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.ore_triangulation_open = false;
             }
             if ui.add(MenuButton::new("Create").primary().enabled(ready)).clicked() || (confirm && ready) {
