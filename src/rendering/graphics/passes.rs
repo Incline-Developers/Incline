@@ -434,6 +434,18 @@ impl<'a> Graphics<'a> {
             }
         }
 
+        // World XY plane at Z=0. Drawn before all scene geometry with depth
+        // writes off, so every object covers it regardless of which side of
+        // the plane it sits on - a surface below Z=0 reads as ground under
+        // the grid rather than being cut through by it. It is an editor-only
+        // aid: plot and slice-preview passes omit it.
+        if include_editor_overlays && editor.show_xy_grid && self.slice_view.is_none() {
+            render_pass.set_pipeline(&self.grid_render_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.grid_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
         // Point splats write depth, so they draw with the opaque geometry -
         // before the transparent surfaces that must blend over them.
         if !self.point_cloud_gpu.is_empty() {
@@ -625,17 +637,6 @@ impl<'a> Graphics<'a> {
                 render_pass.set_pipeline(&self.surface_render_pipeline);
                 render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             }
-        }
-
-        // World XY plane at Z=0. Draw it after
-        // opaque geometry so depth testing hides it behind objects above the
-        // plane, then let translucent surfaces blend over it below. It is an
-        // editor-only aid: plot and slice-preview passes omit it.
-        if include_editor_overlays && editor.show_xy_grid && self.slice_view.is_none() {
-            render_pass.set_pipeline(&self.grid_render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.grid_bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
         }
 
         if !self.triangulation_gpu.is_empty() {

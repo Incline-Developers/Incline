@@ -932,9 +932,9 @@ impl<'a> Graphics<'a> {
                 unclipped_depth: false,
                 conservative: false,
             },
-            // The grid is a depth-tested construction overlay, not an opaque
-            // floor: objects above it hide it, while it never occludes scene
-            // geometry that is rendered afterwards.
+            // The grid is a background construction overlay, not an opaque
+            // floor: it never writes depth and is drawn before scene
+            // geometry, so nothing in the scene is ever occluded by it.
             depth_stencil: Some(Self::depth_state(false, 0)),
             multisample: wgpu::MultisampleState {
                 count: sample_count,
