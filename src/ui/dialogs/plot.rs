@@ -7,7 +7,7 @@ use crate::{
     model::plot::{LegendEntry, Orientation, PaperSize, PlotLayout, PlotSpec, RectPx, SheetFurniture, TitleBlock, furniture, layout, max_dpi_for, sheet_furniture},
     ui::{
         state::{EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
     },
 };
 
@@ -516,7 +516,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     ui.horizontal(|ui| {
                         let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
                         let cancel_key = menu::dialog_cancel_pressed(ui.ctx());
-                        export = ui.add_enabled(valid, egui::Button::new("Export PNG...")).clicked() || (confirm_key && valid);
+                        export = ui.add(MenuButton::new("Export PNG...").primary().enabled(valid)).clicked() || (confirm_key && valid);
                         cancel = ui.button("Cancel").clicked() || cancel_key;
                     });
                     ui.weak("The PNG is written at the sheet's exact paper size and records its DPI, so it prints at true scale.");

@@ -96,6 +96,15 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                     if ui.checkbox(&mut show_console, "Show Console").changed() {
                         commands.push(UiCommand::SetShowConsole(show_console));
                     }
+
+                    // Transient debug state, so it is set here rather than
+                    // routed through a `UiCommand`, and it is not in the
+                    // native macOS menu: debug builds only.
+                    #[cfg(debug_assertions)]
+                    {
+                        ui.separator();
+                        ui.checkbox(&mut editor.widget_gallery_open, "Widget Gallery (Debug)");
+                    }
                 });
 
                 ui.menu_button("Design", |ui| {

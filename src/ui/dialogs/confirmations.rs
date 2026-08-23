@@ -2,30 +2,29 @@
 
 use crate::ui::{
     state::{EditorState, UiCommand, UiProjectView},
-    widgets::menu::{self, DragableMenu},
+    widgets::menu::{self, DragableMenu, MenuButton},
 };
 
 /// Draw the "Save before quit?" confirmation dialog.
 pub(crate) fn draw_exit_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, _editor: &mut EditorState) {
     let mut open = true;
     let title = "Exit: Unsaved Changes";
-    DragableMenu::new(title).open(&mut open).show(ui.ctx(), |ui| {
-        ui.set_width(280.);
+    DragableMenu::new(title).open(&mut open).min_width(360.0).show(ui.ctx(), |ui| {
+        ui.set_width(340.);
         #[cfg(not(target_arch = "wasm32"))]
         ui.label("Save the modified project before exiting?");
         #[cfg(target_arch = "wasm32")]
         ui.label("Save the modified project to browser storage before exiting?");
-        ui.add_space(10.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Save and Exit").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new("Save and Exit").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndExit);
             }
             // Discarding work stays mouse-only: Enter must never be the key
             // that throws away unsaved changes.
-            if ui.button("Exit Without Saving").clicked() {
+            if ui.add(MenuButton::new("Exit Without Saving")).clicked() {
                 commands.push(UiCommand::ExitWithoutSaving);
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 commands.push(UiCommand::CancelExit);
             }
         });
@@ -45,15 +44,14 @@ pub(crate) fn draw_replace_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<
     DragableMenu::new("Replace Project: Unsaved Changes").open(&mut open).min_width(340.0).show(ui.ctx(), |ui| {
         ui.set_max_width(340.0);
         ui.label("Save changes to the current project before replacing it?");
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Save").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new("Save").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndReplaceProject);
             }
-            if ui.button("Discard").clicked() {
+            if ui.add(MenuButton::new("Discard")).clicked() {
                 commands.push(UiCommand::DiscardAndReplaceProject);
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 commands.push(UiCommand::CancelProjectReplacement);
             }
         });
@@ -77,12 +75,11 @@ pub(crate) fn draw_lossy_save_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCom
                 ui.label(format!("• {warning}"));
             }
         });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Save Anyway").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new("Save Anyway").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::ConfirmLossyProjectSave);
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 commands.push(UiCommand::CancelLossyProjectSave);
             }
         });
@@ -99,16 +96,15 @@ pub(crate) fn draw_delete_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
     }
     let count = editor.selected_handles.iter().filter(|h| matches!(h, crate::model::SceneEntityId::Object(_))).count();
     let mut open = true;
-    DragableMenu::new("Delete Objects").open(&mut open).min_width(160.0).show(ui.ctx(), |ui| {
-        ui.set_max_width(160.);
+    DragableMenu::new("Delete Objects").open(&mut open).min_width(240.0).show(ui.ctx(), |ui| {
+        ui.set_max_width(240.);
         ui.label(format!("Are you sure you want to delete {count} selected item{}?", if count == 1 { "" } else { "s" }));
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            if ui.button("Delete").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new("Delete").danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::ConfirmDeleteSelection);
                 editor.delete_confirm_open = false;
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.delete_confirm_open = false;
             }
         });
@@ -126,12 +122,11 @@ pub(crate) fn draw_delete_layer_confirm_dialog(ui: &mut egui::Ui, commands: &mut
     let mut open = true;
     DragableMenu::new("Delete Layer").open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
         ui.label(format!("Delete layer '{name}' and all objects on it?\nThis cannot be undone."));
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Delete Layer").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new("Delete Layer").danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::DeleteLayer(layer_id));
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.pending_delete_layer = None;
             }
         });
@@ -175,15 +170,14 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
             } else {
                 format!("Save changes to '{name}' before closing it?")
             });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(if removing { "Save and Remove" } else { "Save and Close" }).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(if removing { "Save and Remove" } else { "Save and Close" }).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                 }
-                if ui.button(if removing { "Remove Without Saving" } else { "Close Without Saving" }).clicked() {
+                if ui.add(MenuButton::new(if removing { "Remove Without Saving" } else { "Close Without Saving" })).clicked() {
                     commands.push(UiCommand::CloseProjectForce(runtime_id));
                 }
-                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     commands.push(UiCommand::CancelCloseProject);
                 }
             });
@@ -195,22 +189,21 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
             } else {
                 format!("Save changes to '{name}' before closing it?")
             });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 if removing {
                     // Removing always discards, so it is deliberately not bound to Enter.
-                    if ui.button("Remove Project").clicked() {
+                    if ui.add(MenuButton::new("Remove Project").danger()).clicked() {
                         commands.push(UiCommand::CloseProjectForce(runtime_id));
                     }
                 } else {
-                    if ui.button("Save and Close").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    if ui.add(MenuButton::new("Save and Close").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                         commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                     }
-                    if ui.button("Close Without Saving").clicked() {
+                    if ui.add(MenuButton::new("Close Without Saving")).clicked() {
                         commands.push(UiCommand::CloseProjectForce(runtime_id));
                     }
                 }
-                if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     commands.push(UiCommand::CancelCloseProject);
                 }
             });
@@ -241,12 +234,11 @@ pub(crate) fn draw_discard_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<
             "Discard all unsaved changes to '{name}'?\n\
                  The last saved version is reloaded from disk. This cannot be undone."
         ));
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Discard Changes").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new("Discard Changes").danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::DiscardProjectChanges(runtime_id));
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.pending_discard_project = None;
             }
         });
@@ -271,12 +263,11 @@ pub(crate) fn draw_discard_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
                  The saved layer is reloaded from disk while changes to other layers are kept. \
                  This cannot be undone."
         ));
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Discard Changes").clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new("Discard Changes").danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::DiscardLayerChanges(layer_id));
             }
-            if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.pending_discard_layer = None;
             }
         });

@@ -2,7 +2,10 @@
 
 use crate::ui::{
     state::EditorState,
-    widgets::{menu::MenuFieldF64, viewport::ViewportDockPanel},
+    widgets::{
+        menu::{MenuButton, MenuFieldF64},
+        viewport::ViewportDockPanel,
+    },
 };
 
 /// Draw the Vertical Exaggeration adjustment dialog.
@@ -25,7 +28,7 @@ pub(crate) fn draw_vertical_exaggeration_dialog(ui: &mut egui::Ui, editor: &mut 
             let apply_from_enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             let cancel_from_escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let apply_clicked = ui.add(egui::Button::new("Apply")).clicked();
+                let apply_clicked = ui.add(MenuButton::new("Apply").primary()).clicked();
                 if apply_from_enter || apply_clicked {
                     editor.vertical_exaggeration = editor.vertical_exaggeration_input;
                     editor.vertical_exaggeration_dialog_open = false;

@@ -13,7 +13,7 @@ use crate::{
     },
     ui::{
         state::{DataMenu, EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
     },
 };
 
@@ -66,7 +66,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         let command = import_command(editor);
                         let confirm = menu::dialog_confirm_pressed(ui.ctx());
                         cancelled = menu::dialog_cancel_pressed(ui.ctx());
-                        if (ui.add_enabled(command.is_some(), egui::Button::new("Import")).clicked() || confirm)
+                        if (ui.add(MenuButton::new("Import").primary().enabled(command.is_some())).clicked() || confirm)
                             && let Some(command) = command
                         {
                             commands.push(command);
@@ -121,7 +121,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         let command = export_command(editor);
                         let confirm = menu::dialog_confirm_pressed(ui.ctx());
                         cancelled = menu::dialog_cancel_pressed(ui.ctx());
-                        if (ui.add_enabled(command.is_some(), egui::Button::new("Export")).clicked() || confirm)
+                        if (ui.add(MenuButton::new("Export").primary().enabled(command.is_some())).clicked() || confirm)
                             && let Some(command) = command
                         {
                             commands.push(command);

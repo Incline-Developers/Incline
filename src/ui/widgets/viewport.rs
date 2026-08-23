@@ -2,7 +2,10 @@ use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
-    ui::state::{EditorState, UiCommand},
+    ui::{
+        state::{EditorState, UiCommand},
+        widgets::menu,
+    },
 };
 
 /// A compact tool panel pinned inside the 3D viewport.
@@ -46,16 +49,26 @@ impl ViewportDockPanel {
             .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(pos)
             .show(ctx, |ui| {
-                egui::Frame::window(&ctx.global_style())
-                    .inner_margin(egui::Margin::symmetric(8, 6))
+                // The same card as a floating menu, minus the drag bar's close
+                // button: a docked tool panel is one of the menu family, and
+                // the fields inside it are the menu fields.
+                let surface = menu::menu_surface(ui.visuals());
+                egui::Frame::new()
+                    .fill(surface)
+                    .stroke(menu::menu_border(ui.visuals()))
+                    .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
                     .show(ui, |ui| {
+                        menu::apply_menu_style(ui, surface);
                         if self.min_width > 0.0 {
                             ui.set_min_width(self.min_width);
                         }
                         ui.set_max_width(self.max_width);
-                        ui.label(self.title);
-                        ui.add_space(4.0);
-                        add_contents(ui)
+                        let title_rect = ui.allocate_exact_size(egui::vec2(self.min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
+                        let inner = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8)).show(ui, add_contents).inner;
+                        let mut title_rect = title_rect;
+                        title_rect.max.x = ui.min_rect().right();
+                        menu::draw_menu_heading(ui, &self.title, title_rect, surface);
+                        inner
                     })
                     .inner
             });

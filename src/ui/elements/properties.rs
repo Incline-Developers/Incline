@@ -150,6 +150,10 @@ pub(crate) fn draw_properties(
                     // than the text: end it in an ellipsis rather than wrapping
                     // the fields apart.
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                    // The panel is built from the same menu fields the floating
+                    // menus are, so it takes the same control styling - keyed to
+                    // the panel's own surface rather than a card's.
+                    crate::ui::widgets::menu::apply_menu_style(ui, content_fill);
                     match shown_tab {
                         PropertyTab::Interface => draw_interface_settings(ui, editor, commands),
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),

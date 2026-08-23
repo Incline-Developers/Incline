@@ -9,7 +9,7 @@ use crate::{
     ui::{
         EditorState, UiCommand,
         state::OreFilterMode,
-        widgets::menu::{self, DragableMenu, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32, menu_field_label},
     },
 };
 
@@ -202,7 +202,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.block_model_create_open = false;
             }
-            if ui.add_enabled(ready, egui::Button::new("Create")).clicked() || (confirm && ready) {
+            if ui.add(MenuButton::new("Create").primary().enabled(ready)).clicked() || (confirm && ready) {
                 commands.push(UiCommand::ExecuteCreateBlockModel {
                     drill_hole_id: editor.kriging_drill_hole_id.unwrap(),
                     variables: editor.kriging_variables.clone(),
@@ -335,7 +335,7 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
             if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.ore_triangulation_open = false;
             }
-            if ui.add_enabled(ready, egui::Button::new("Create")).clicked() || (confirm && ready) {
+            if ui.add(MenuButton::new("Create").primary().enabled(ready)).clicked() || (confirm && ready) {
                 commands.push(UiCommand::ExecuteCreateOreTriangulation {
                     block_model_id: editor.ore_block_model_id.unwrap(),
                     variable: editor.ore_variable.clone(),

@@ -7,7 +7,7 @@
 
 use crate::ui::{
     state::EditorState,
-    widgets::menu::{self, DragableMenu},
+    widgets::menu::{self, DragableMenu, MenuButton},
 };
 
 /// Copyright line, kept in step with the one on the startup splash.
@@ -63,11 +63,8 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
             ui.add_space(4.0);
             ui.hyperlink_to("Read the full licence ↗", "https://www.gnu.org/licenses/gpl-3.0.html");
 
-            ui.add_space(10.0);
-            ui.separator();
             ui.add_space(6.0);
-
-            ui.label(egui::RichText::new("Third-party components").strong());
+            menu::menu_section(ui, "Third-party components");
             for (component, license) in THIRD_PARTY {
                 ui.label(egui::RichText::new(format!("• {component} — {license}")).small());
             }
@@ -78,22 +75,20 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
 
             ui.label(egui::RichText::new(TRADEMARK_NOTICE).small().weak());
 
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if ui.button("Website").clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
+            ui.add_space(6.0);
+            menu::menu_actions(ui, |ui| {
+                // Nothing here is confirmed or cancelled, so both keys dismiss.
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                let cancel = menu::dialog_cancel_pressed(ui.ctx());
+                if ui.add(MenuButton::new("Close").primary()).clicked() || confirm || cancel {
+                    editor.show_about = false;
                 }
-                if ui.button("Source Code").clicked() {
+                if ui.add(MenuButton::new("Source Code")).clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/Incline-Developers/Incline"));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Nothing here is confirmed or cancelled, so both keys dismiss.
-                    let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                    let cancel = menu::dialog_cancel_pressed(ui.ctx());
-                    if ui.button("Close").clicked() || confirm || cancel {
-                        editor.show_about = false;
-                    }
-                });
+                if ui.add(MenuButton::new("Website")).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
+                }
             });
         });
     if !open {

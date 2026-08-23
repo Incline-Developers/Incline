@@ -5,7 +5,7 @@ use crate::{
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
     },
 };
 
@@ -68,15 +68,7 @@ fn contour_control_width(ui: &egui::Ui) -> f32 {
 }
 
 fn tool_help_panel(ui: &mut egui::Ui, text: impl Into<String>) {
-    let width = ui.available_width();
-    egui::Frame::new()
-        .fill(ui.visuals().faint_bg_color)
-        .corner_radius(3.0)
-        .inner_margin(egui::Margin::symmetric(6, 4))
-        .show(ui, |ui| {
-            ui.set_width((width - 12.0).max(1.0));
-            ui.label(egui::RichText::new(text.into()).italics().weak());
-        });
+    menu::menu_note(ui, text);
 }
 
 /// Rough transient peak memory (bytes) for a terrain TIN build, dominated by the
@@ -117,7 +109,7 @@ fn centered_choice_buttons(ui: &mut egui::Ui, row_height: f32, choices: [(&str, 
         .allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.add_space(leading_space);
             for (index, (label, selected)) in choices.into_iter().enumerate() {
-                if ui.add_sized([BUTTON_WIDTH, row_height], egui::Button::new(label).selected(selected)).clicked() {
+                if ui.add(MenuButton::new(label).selected(selected).min_width(BUTTON_WIDTH)).clicked() {
                     clicked = Some(index);
                 }
             }
@@ -292,7 +284,7 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
             let ready = has_selection && !editor.tri_name_input.trim().is_empty();
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
             let cancel = menu::dialog_cancel_pressed(ui.ctx());
-            if ui.add_enabled(ready, egui::Button::new("Triangulate")).clicked() || (confirm && ready) {
+            if ui.add(MenuButton::new("Triangulate").primary().enabled(ready)).clicked() || (confirm && ready) {
                 let object_ids: Vec<ObjectId> = editor.tri_selected_object_ids.clone();
                 let name = editor.tri_name_input.trim().to_owned();
                 let surface_type = editor.tri_surface_type;
@@ -573,7 +565,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
 
             ui.horizontal(|ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                if (ui.add_enabled(can_run, egui::Button::new("Clip")).clicked() || (confirm && can_run))
+                if (ui.add(MenuButton::new("Clip").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(tri_id), Some(poly_id)) = (editor.tri_cut_poly_tri_id, editor.tri_cut_poly_object_id)
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationByPolyline {
@@ -693,7 +685,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
             ui.horizontal(|ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                if (ui.add_enabled(can_run, egui::Button::new("Slice")).clicked() || (confirm && can_run))
+                if (ui.add(MenuButton::new("Slice").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let Some(tri_id) = editor.tri_cut_z_tri_id
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationByZ {
@@ -832,7 +824,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 && !editor.tri_cut_surface_name_input.trim().is_empty();
             ui.horizontal(|ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                if (ui.add_enabled(can_run, egui::Button::new("Trim")).clicked() || (confirm && can_run))
+                if (ui.add(MenuButton::new("Trim").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(target_id), Some(reference_id)) = (editor.tri_cut_surface_target_id, editor.tri_cut_surface_reference_id)
                 {
                     commands.push(UiCommand::ExecuteCutTriangulationBySurface {
@@ -949,7 +941,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
 
             ui.horizontal(|ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
-                if (ui.add_enabled(can_run, egui::Button::new("Cut")).clicked() || (confirm && can_run))
+                if (ui.add(MenuButton::new("Cut").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(topology_id), Some(pit_shell_id)) = (editor.tri_cut_pitshell_topology_id, editor.tri_cut_pitshell_pitshell_id)
                 {
                     commands.push(UiCommand::ExecuteCutTopologyByPitShell {

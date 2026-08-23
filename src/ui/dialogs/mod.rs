@@ -13,6 +13,9 @@ pub(crate) mod files;
 pub(crate) mod import_export;
 pub(crate) mod plot;
 pub(crate) mod triangulation;
+/// Debug-only workbench for the menu widget family.
+#[cfg(debug_assertions)]
+pub(crate) mod widget_gallery;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MoveToAxisDialog {

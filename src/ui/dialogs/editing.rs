@@ -7,7 +7,7 @@ use crate::{
         themed_icon, unthemed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_separator},
-            menu::{self, DragableMenu, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
     },
@@ -37,7 +37,7 @@ pub(crate) fn draw_drape_selection_panel(ui: &mut egui::Ui, editor: &EditorState
         .show(ui.ctx(), |ui| {
             ui.label(format!("{selected_count} selected"));
             ui.add_space(6.0);
-            if ui.add_enabled(selected_count > 0, egui::Button::new("Confirm Selection")).clicked() {
+            if ui.add(MenuButton::new("Confirm Selection").primary().enabled(selected_count > 0)).clicked() {
                 commands.push(UiCommand::ConfirmDrapeSelection);
             }
         });
@@ -196,7 +196,7 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
         ui.horizontal(|ui| {
             let action_label = if dialog.copy { "Copy" } else { "Move" };
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
-            if ui.add_enabled(can_apply, egui::Button::new(action_label)).clicked() || (confirm && can_apply) {
+            if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
                 apply = true;
             }
             if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -245,7 +245,7 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
         let submitted = menu::dialog_confirm_pressed(ui.ctx());
         let cancelled = menu::dialog_cancel_pressed(ui.ctx());
         ui.horizontal(|ui| {
-            if (submitted || ui.add_enabled(can_apply, egui::Button::new("Apply")).clicked()) && can_apply {
+            if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
                 apply = true;
             }
             if ui.button("Cancel").clicked() || cancelled {
@@ -295,7 +295,7 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
         let submitted = menu::dialog_confirm_pressed(ui.ctx());
         let cancelled = menu::dialog_cancel_pressed(ui.ctx());
         ui.horizontal(|ui| {
-            if (submitted || ui.add_enabled(can_apply, egui::Button::new("Apply")).clicked()) && can_apply {
+            if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
                 apply = true;
             }
             if ui.button("Cancel").clicked() || cancelled {
@@ -480,7 +480,7 @@ pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
             let cancelled = menu::dialog_cancel_pressed(ui.ctx());
             ui.horizontal(|ui| {
-                if (submitted || ui.add_enabled(can_create, egui::Button::new("Create project")).clicked()) && can_create {
+                if (submitted || ui.add(MenuButton::new("Create project").primary().enabled(can_create)).clicked()) && can_create {
                     commands.push(UiCommand::CreateBrowserProject {
                         name: editor.new_project_name.trim().to_owned(),
                     });
@@ -508,7 +508,7 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
             let cancelled = menu::dialog_cancel_pressed(ui.ctx());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let create_clicked = ui.add_enabled(can_save, egui::Button::new("Create Layer")).clicked();
+                let create_clicked = ui.add(MenuButton::new("Create Layer").primary().enabled(can_save)).clicked();
                 if (submitted || create_clicked) && can_save {
                     commands.push(UiCommand::CreateLayer {
                         name: editor.new_layer_name.trim().to_string(),
@@ -540,7 +540,7 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         ui.horizontal(|ui| {
             let can_rename = !name_buf.trim().is_empty();
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            if (submitted || ui.add_enabled(can_rename, egui::Button::new("Rename")).clicked()) && can_rename {
+            if (submitted || ui.add(MenuButton::new("Rename").primary().enabled(can_rename)).clicked()) && can_rename {
                 rename_to = Some(name_buf.trim().to_string());
             }
             if ui.button("Cancel").clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -810,18 +810,16 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                     let button_width = (CONTROL_WIDTH - gap) * 0.5;
                     ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         if ui
-                            .add_sized(
-                                [button_width, row_height],
-                                egui::Button::new("Pit").selected(editor.batter_berm_mode == BatterBermMode::Pit),
-                            )
+                            .add(MenuButton::new("Pit").selected(editor.batter_berm_mode == BatterBermMode::Pit).min_width(button_width))
                             .clicked()
                         {
                             editor.batter_berm_mode = BatterBermMode::Pit;
                         }
                         if ui
-                            .add_sized(
-                                [button_width, row_height],
-                                egui::Button::new("Stockpile").selected(editor.batter_berm_mode == BatterBermMode::Stockpile),
+                            .add(
+                                MenuButton::new("Stockpile")
+                                    .selected(editor.batter_berm_mode == BatterBermMode::Stockpile)
+                                    .min_width(button_width),
                             )
                             .clicked()
                         {
@@ -834,7 +832,7 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
             ui.add_space(8.0);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(!editor.batter_berm_rings_world.is_empty(), egui::Button::new("Apply")).clicked() {
+                if ui.add(MenuButton::new("Apply").primary().enabled(!editor.batter_berm_rings_world.is_empty())).clicked() {
                     commands.push(UiCommand::CommitBatterBerm);
                 }
                 if ui.button("Cancel").clicked() {
@@ -1039,7 +1037,7 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Grey out when the displayed value is "0.00" (2 dp) - matches user perception.
             let can_apply = corner_picked && (editor.chamfer_radius * 100.0).round() > 0.0;
-            if ui.add_enabled(can_apply, egui::Button::new("Apply")).clicked() && can_apply {
+            if ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked() && can_apply {
                 commands.push(UiCommand::ApplyChamfer);
             }
             if ui.button("Cancel").clicked() {
@@ -1135,7 +1133,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
         ui.add_space(4.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let can_apply = both_selected;
-            let apply_clicked = ui.add_enabled(can_apply, egui::Button::new("Apply")).clicked();
+            let apply_clicked = ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked();
             let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
             if can_apply && (apply_clicked || enter_pressed) {
                 commands.push(UiCommand::ApplyBezier);
