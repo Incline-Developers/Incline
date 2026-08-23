@@ -202,11 +202,6 @@ pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, proj
 /// Id of the drawing toolbar's column panel.
 pub(crate) const LEFT_TOOLBAR_PANEL_ID: &str = "left_toolbar_panel";
 
-/// Gap between the drawing toolbar's columns, on a window too short to stand
-/// its tools in one. The region's own surface fills it, so it only has to keep
-/// two cells' fills from touching.
-const LEFT_TOOL_COLUMN_GAP: f32 = 4.0;
-
 /// What one of the drawing toolbar's buttons does when clicked.
 enum LeftToolAction {
     /// Open or close the new layer dialog.
@@ -302,11 +297,12 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
     // window, and a panel claims its width before anything is drawn in it - so
     // the packing is arithmetic, every cell being one square.
     let margins = 2.0 * f32::from(crate::ui::chrome::REGION_MARGIN);
+    // A column is filled before the next is started - ten tools in room for
+    // six wrap 6-4, not 5-5 - so the toolbar only reaches as far across the
+    // window as it has to.
     let rows = (((ui.available_height() - margins) / TOOL_CELL_SIZE) as usize).clamp(1, tools.len());
     let columns = tools.len().div_ceil(rows);
-    // Even columns, rather than full ones and a stub at the end.
-    let rows = tools.len().div_ceil(columns);
-    let width = columns as f32 * TOOL_CELL_SIZE + (columns - 1) as f32 * LEFT_TOOL_COLUMN_GAP + margins;
+    let width = columns as f32 * TOOL_CELL_SIZE + margins;
 
     egui::Panel::left(LEFT_TOOLBAR_PANEL_ID)
         .resizable(false)
@@ -318,7 +314,9 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
         .frame(crate::ui::chrome::region_frame(ui.style()).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(LEFT_TOOL_COLUMN_GAP, 0.0);
+                // Nothing between the columns: a wrap carries on down the next
+                // one rather than starting a block of its own.
+                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                 for column in tools.chunks(rows) {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
