@@ -37,6 +37,12 @@ const SHIFT_MODIFIER: &str = "Shift+";
 /// orientation gizmo's margin, so the stack and the gizmo share an edge.
 const VIEW_TOOLS_MARGIN: f32 = 16.0;
 
+/// Width of the band along the viewport's right edge that the floating view
+/// tools occupy: the tile column plus its margin. The tools sit in egui's
+/// middle order, so overlays painted above them have to inset themselves by
+/// this much instead of relying on paint order to stay clear of the stack.
+pub(crate) const VIEW_TOOLS_BAND_WIDTH: f32 = VIEW_TOOLS_MARGIN + TOOL_CELL_SIZE;
+
 /// Draw the explorer's header: the project-wide actions, sitting above the
 /// data tree rather than out over the viewport.
 ///

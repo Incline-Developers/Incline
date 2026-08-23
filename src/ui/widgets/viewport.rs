@@ -1256,8 +1256,11 @@ impl ViewportMiniMap {
         // pointer interaction and makes the following middle-drag feel as if
         // the 3D canvas needs to be focused again.
         let preview_size = egui::vec2((self.viewport_rect.width() * 0.24).max(160.0), (self.viewport_rect.height() * 0.24).max(160.0));
+        // The preview is painted in the foreground order, above the floating
+        // view tools, so it has to clear their band along the right edge by
+        // itself rather than let paint order hide the stack behind it.
         let preview_pos = egui::pos2(
-            (self.viewport_rect.right() - preview_size.x - 10.0).max(self.viewport_rect.left()),
+            (self.viewport_rect.right() - preview_size.x - 10.0 - crate::ui::elements::toolbars::VIEW_TOOLS_BAND_WIDTH).max(self.viewport_rect.left()),
             self.viewport_rect.top() + 104.0,
         );
         let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::ZERO);
