@@ -159,7 +159,7 @@ pub(crate) fn draw_right_click_context(
                 commands.push(UiCommand::HideSelection);
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
-            if ContextMenuAction::new("Freeze Selection").show(ui).clicked() {
+            if ContextMenuAction::new("Lock Selection").show(ui).clicked() {
                 *geometry_dirty |= editor.apply_action(crate::ui::state::EditorAction::FreezeSelection);
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }

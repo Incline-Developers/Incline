@@ -225,6 +225,7 @@ impl<'a> App<'a> {
         let entity = SceneEntityId::DrillHole(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
+        self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
         if self.editor.drill_hole_color_dialog == Some(id) {
@@ -238,6 +239,7 @@ impl<'a> App<'a> {
         let entity = SceneEntityId::DrillHole(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
+        self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
         let previous_len = self.drill_holes.len();

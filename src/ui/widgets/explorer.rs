@@ -66,15 +66,76 @@ pub(crate) fn explorer_note(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// Width reserved for one trailing toggle in an explorer row.
+const TOGGLE_WIDTH: f32 = 20.0;
+
+/// Drawn size of a toggle's glyph inside [`TOGGLE_WIDTH`].
+const TOGGLE_ICON: f32 = 14.0;
+
+/// The trailing visibility and edit-lock state of one explorer row.
+#[derive(Clone, Copy)]
+pub(crate) struct EntryToggles {
+    /// Whether the item currently draws in the viewport.
+    pub(crate) visible: bool,
+    /// Whether the item is locked against selection and editing.
+    pub(crate) locked: bool,
+    /// Unloaded items keep both icons in place, greyed out and inert, so rows
+    /// do not change width as items load and unload.
+    pub(crate) enabled: bool,
+}
+
+/// An explorer row's response, plus whichever trailing toggle was clicked.
+pub(crate) struct ExplorerEntryResponse {
+    /// The row's label, carrying selection clicks and the context menu.
+    pub(crate) response: egui::Response,
+    pub(crate) visibility_clicked: bool,
+    pub(crate) lock_clicked: bool,
+}
+
+/// One trailing icon toggle. Returns whether it was clicked.
+///
+/// `emphasis` draws the icon at full text strength rather than muted, and the
+/// disabled states fainter still. Each toggle emphasises the state that means
+/// "this row is doing something": an open eye for a drawn item, a shut
+/// padlock for a locked one.
+///
+/// No hover tooltip: these sit on every row of the tree, so one would pop up
+/// on any pass of the mouse over the panel. The icon brightening under the
+/// cursor is the affordance, and the row's context menu names both actions in
+/// words.
+fn entry_toggle(ui: &mut egui::Ui, icon: egui::ImageSource<'static>, emphasis: bool, enabled: bool, height: f32) -> bool {
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, height), sense);
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let tint = match (enabled, response.hovered(), emphasis) {
+            (false, ..) => visuals.weak_text_color().gamma_multiply(0.4),
+            (true, true, _) => visuals.strong_text_color(),
+            (true, false, true) => visuals.text_color(),
+            (true, false, false) => visuals.weak_text_color().gamma_multiply(0.7),
+        };
+        if enabled && response.hovered() {
+            let hover_fill = visuals.widgets.hovered.bg_fill;
+            ui.painter().rect_filled(rect.shrink2(egui::vec2(1.0, 3.0)), 3.0, hover_fill);
+        }
+        egui::Image::new(icon)
+            .tint(tint)
+            .paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(TOGGLE_ICON)));
+    }
+    enabled && response.clicked()
+}
+
 /// A label row used for entries in the explorer tree.
 ///
-/// Entries carry no icon of their own: the kind is named once by the section
-/// heading above them (see [`ExplorerHeader::icon`]).
+/// Entries carry no leading icon of their own: the kind is named once by the
+/// section heading above them (see [`ExplorerHeader::icon`]). Data rows do
+/// carry trailing visibility and lock toggles: see [`ExplorerEntry::toggles`].
 pub(crate) struct ExplorerEntry {
     id: egui::Id,
     title: egui::WidgetText,
     selected: bool,
     reserve_toggle_gutter: bool,
+    toggles: Option<EntryToggles>,
 }
 
 impl ExplorerEntry {
@@ -84,6 +145,7 @@ impl ExplorerEntry {
             title: title.into(),
             selected: false,
             reserve_toggle_gutter: false,
+            toggles: None,
         }
     }
 
@@ -91,15 +153,24 @@ impl ExplorerEntry {
         self.selected = selected;
         self
     }
-}
 
-impl egui::Widget for ExplorerEntry {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+    /// Show trailing eye and padlock toggles at the row's right edge.
+    pub(crate) fn toggles(mut self, toggles: EntryToggles) -> Self {
+        self.toggles = Some(toggles);
+        self
+    }
+
+    /// Lay the row out, returning its label response alongside the toggles.
+    ///
+    /// [`egui::Widget`] can only hand back the label response, so rows that
+    /// act on their toggles call this instead of `ui.add`.
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> ExplorerEntryResponse {
         let Self {
             id,
             title,
             selected,
             reserve_toggle_gutter,
+            toggles,
         } = self;
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
@@ -112,17 +183,70 @@ impl egui::Widget for ExplorerEntry {
                     ui.add_space(ui.spacing().indent);
                 }
                 ui.add_space(ENTRY_LABEL_GUTTER);
-                ui.add(
-                    egui::Button::new("")
-                        .left_text(title)
-                        .frame(false)
-                        .selected(selected)
-                        .min_size(egui::vec2(ui.available_width(), height)),
-                )
+                // The label claims everything the toggles do not, so a long
+                // name truncates against them rather than pushing them off.
+                //
+                // The width has to come from a nested allocation rather than
+                // `Button::min_size`: a button sizes its text against the
+                // whole of `ui.available_width()` and treats `min_size` only
+                // as a floor, so the name would truncate at the row's edge and
+                // shove the toggles past it - which is what stopped the panel
+                // from being dragged narrower than its longest entry.
+                let label_width = (ui.available_width() - if toggles.is_some() { 2.0 * TOGGLE_WIDTH } else { 0.0 }).max(0.0);
+                let response = ui
+                    .allocate_ui_with_layout(egui::vec2(label_width, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Button::new("")
+                                .left_text(title)
+                                .frame(false)
+                                .selected(selected)
+                                .min_size(egui::vec2(label_width, height)),
+                        )
+                    })
+                    .inner;
+                let (visibility_clicked, lock_clicked) = match toggles {
+                    Some(EntryToggles { visible, locked, enabled }) => {
+                        let visibility_clicked = entry_toggle(
+                            ui,
+                            if visible {
+                                crate::ui::unthemed_icon!("entry_visible.svg")
+                            } else {
+                                crate::ui::unthemed_icon!("entry_hidden.svg")
+                            },
+                            visible,
+                            enabled,
+                            height,
+                        );
+                        let lock_clicked = entry_toggle(
+                            ui,
+                            if locked {
+                                crate::ui::unthemed_icon!("entry_locked.svg")
+                            } else {
+                                crate::ui::unthemed_icon!("entry_unlocked.svg")
+                            },
+                            locked,
+                            enabled,
+                            height,
+                        );
+                        (visibility_clicked, lock_clicked)
+                    }
+                    None => (false, false),
+                };
+                ExplorerEntryResponse {
+                    response,
+                    visibility_clicked,
+                    lock_clicked,
+                }
             })
             .inner
         })
         .inner
+    }
+}
+
+impl egui::Widget for ExplorerEntry {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        self.show(ui).response
     }
 }
 
@@ -289,7 +413,17 @@ impl ExplorerHeader {
                     // full height rather than letting the icon set it.
                     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         let icon_response = icon.map(|icon| ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(16.0, 16.0)).sense(egui::Sense::click())));
-                        let label = ui.add(egui::Button::new(text).frame(false).sense(egui::Sense::click()));
+                        // The label claims the rest of the row rather than
+                        // just its text, so clicking - or right-clicking, for
+                        // the section menu - anywhere along the heading hits
+                        // a widget that senses it.
+                        let label = ui.add(
+                            egui::Button::new("")
+                                .left_text(text)
+                                .frame(false)
+                                .sense(egui::Sense::click())
+                                .min_size(egui::vec2(ui.available_width(), height)),
+                        );
                         match icon_response {
                             Some(icon_response) => icon_response.union(label),
                             None => label,

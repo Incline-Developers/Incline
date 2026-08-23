@@ -143,6 +143,20 @@ impl EditorState {
         }
     }
 
+    /// Lock or unlock one scene entity by name. Layer locks go through
+    /// [`Self::locked_layers`] instead, and both are folded into
+    /// `frozen_handles` by `App::invalidate_geometry`.
+    pub(crate) fn set_entity_locked(&mut self, handle: SceneEntityId, locked: bool) {
+        if locked {
+            self.explicitly_frozen.insert(handle);
+            self.frozen_handles.insert(handle);
+            self.selected_handles.remove(&handle);
+        } else {
+            self.explicitly_frozen.remove(&handle);
+            self.frozen_handles.remove(&handle);
+        }
+    }
+
     /// Order-independent fingerprint of every editor field baked into the
     /// static document geometry (selection colour, hidden/frozen skips,
     /// translucency, tool highlights).
@@ -687,7 +701,21 @@ pub(crate) struct EditorState {
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
+    ///
+    /// Derived: the union of [`Self::explicitly_frozen`] and every design
+    /// object sitting on a layer in [`Self::locked_layers`], recomputed by
+    /// `App::invalidate_geometry`. Everything that filters picks, snaps and
+    /// marquee hits reads this one set, so layer locks need no separate check.
     pub(crate) frozen_handles: HashSet<SceneEntityId>,
+    /// Entities the user froze by name: Display > Freeze Selection, or the
+    /// explorer's per-row padlock.
+    pub(crate) explicitly_frozen: HashSet<SceneEntityId>,
+    /// Design layers locked against selection and editing.
+    pub(crate) locked_layers: HashSet<LayerId>,
+    /// Rasters locked against draping and deletion. Rasters are not scene
+    /// entities, so their lock is enforced in the explorer's menus rather than
+    /// through [`Self::frozen_handles`].
+    pub(crate) locked_rasters: HashSet<RasterTextureId>,
     /// Entities dimmed toward the background colour.
     pub(crate) translucent_handles: HashSet<SceneEntityId>,
     /// Show wireframes on all topology meshes. Selected topology meshes always
@@ -1340,6 +1368,9 @@ impl EditorState {
         self.selected_handles.clear();
         self.hidden_handles.clear();
         self.frozen_handles.clear();
+        self.explicitly_frozen.clear();
+        self.locked_layers.clear();
+        self.locked_rasters.clear();
         self.translucent_handles.clear();
         self.active_layer = None;
         self.active_tool = ActiveTool::None;
@@ -1510,6 +1541,9 @@ impl EditorState {
             selected_handles: HashSet::new(),
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
+            explicitly_frozen: HashSet::new(),
+            locked_layers: HashSet::new(),
+            locked_rasters: HashSet::new(),
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
@@ -1852,8 +1886,9 @@ impl EditorState {
                 let newly_frozen = std::mem::take(&mut self.selected_handles);
                 let count = newly_frozen.len();
                 self.frozen_handles.extend(newly_frozen.iter().copied());
+                self.explicitly_frozen.extend(newly_frozen.iter().copied());
                 self.tri_selected_object_ids.retain(|object_id| !newly_frozen.contains(&SceneEntityId::Object(*object_id)));
-                crate::logging::report_completed_action(CommandReportSpec::new("Freeze Selection", format!("{count} object(s)")), format!("Froze {count} object(s)"));
+                crate::logging::report_completed_action(CommandReportSpec::new("Lock Selection", format!("{count} object(s)")), format!("Locked {count} object(s)"));
                 // Deselecting removes selection highlights and can move a
                 // cached stroke between scene streams, so rebuild geometry.
                 count > 0
@@ -1992,6 +2027,8 @@ pub(crate) enum UiCommand {
     LoadRaster(RasterTextureId),
     UnloadRaster(RasterTextureId),
     ToggleRasterVisible(RasterTextureId),
+    /// Lock/unlock a raster against draping, undraping and deletion.
+    ToggleRasterLocked(RasterTextureId),
     RemoveRaster(RasterTextureId),
     DrapeRaster(RasterTextureId),
     UndrapeRaster(RasterTextureId),
@@ -2076,6 +2113,16 @@ pub(crate) enum UiCommand {
     CancelMoveDelta,
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
+    /// Show/hide a design layer without unloading it.
+    ToggleLayerVisible(LayerId),
+    /// Lock/unlock every object on a design layer against selection and editing.
+    ToggleLayerLocked(LayerId),
+    /// Lock/unlock one scene entity against selection and editing.
+    ToggleEntityLocked(SceneEntityId),
+    /// Show or hide every loaded item in one explorer section.
+    SetSectionVisible(ExplorerSection, bool),
+    /// Lock or unlock every loaded item in one explorer section.
+    SetSectionLocked(ExplorerSection, bool),
     SelectAllObjectsInLayer(LayerId),
     ActivateTriangulation(TriangulationId),
     ToggleTriangulationVisible(TriangulationId),
@@ -2166,7 +2213,6 @@ pub(crate) enum UiCommand {
     },
     RemoveTriangulation(TriangulationId),
     HideSelection,
-    RevealAllElements,
     ZoomToExtents,
     /// Dialog "Apply" pressed - begin the canvas side-pick phase.
     BeginOffsetPick {
@@ -2400,6 +2446,7 @@ impl UiCommand {
             Self::LoadRaster(id) => report("Load Raster", format!("{id:?}")),
             Self::UnloadRaster(id) => report("Unload Raster", format!("{id:?}")),
             Self::ToggleRasterVisible(id) => report("Set Raster Visibility", format!("{id:?}")),
+            Self::ToggleRasterLocked(id) => report("Set Raster Lock", format!("{id:?}")),
             Self::RemoveRaster(id) => report("Remove Raster", format!("{id:?}")),
             Self::DrapeRaster(id) => report("Drape Raster", format!("{id:?}")),
             Self::UndrapeRaster(id) => report("Undrape Raster", format!("{id:?}")),
@@ -2451,6 +2498,11 @@ impl UiCommand {
             Self::ApplyMoveDelta(delta) => report("Move Selection", format!("{delta}")),
             Self::LoadLayer(id) => report("Set Layer Visibility", format!("{id:?} shown")),
             Self::UnloadLayer(id) => report("Set Layer Visibility", format!("{id:?} hidden")),
+            Self::ToggleLayerVisible(id) => report("Set Layer Visibility", format!("{id:?}")),
+            Self::ToggleLayerLocked(id) => report("Set Layer Lock", format!("{id:?}")),
+            Self::ToggleEntityLocked(handle) => report("Set Entity Lock", format!("{handle:?}")),
+            Self::SetSectionVisible(section, visible) => report(if *visible { "Reveal All" } else { "Hide All" }, format!("{} section", section.label())),
+            Self::SetSectionLocked(section, locked) => report(if *locked { "Lock All" } else { "Unlock All" }, format!("{} section", section.label())),
             Self::SelectAllObjectsInLayer(id) => report("Select Layer Objects", format!("{id:?}")),
             Self::ActivateTriangulation(id) => report("Set Current Triangulation", format!("{id:?}")),
             Self::ToggleTriangulationVisible(id) => report("Set Triangulation Visibility", format!("{id:?}")),
@@ -2484,7 +2536,6 @@ impl UiCommand {
             Self::ExportPlotSheet => report("Export Engineering Drawing", "Choose a destination".to_owned()),
             Self::RemoveTriangulation(id) => report("Remove Triangulation", format!("{id:?}")),
             Self::HideSelection => report("Hide Selection", "Selected scene elements".to_owned()),
-            Self::RevealAllElements => report("Reveal All Elements", "All scene elements shown".to_owned()),
             Self::ZoomToExtents => report("Zoom to Extents", "Preserve view angle".to_owned()),
             Self::BeginOffsetPick { object_ids, .. } => report("Offset", format!("{} object(s)", object_ids.len())),
             Self::RelimitLineResize { source_id, .. } => report("Relimit Line", format!("{source_id:?}")),
@@ -2524,6 +2575,9 @@ pub(crate) struct UiFrameOutput {
 pub(crate) struct UiLayerEntry {
     pub(crate) id: LayerId,
     pub(crate) name: String,
+    /// Drawn in the viewport. Independent of loading: an unloaded layer keeps
+    /// the visibility it will come back with.
+    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
 }
@@ -2575,6 +2629,35 @@ impl UiProjectEntry {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.dirty
+        }
+    }
+}
+
+/// One collapsible group of the explorer tree, as targeted by the bulk
+/// show/hide/lock actions on its heading's right-click menu.
+///
+/// Projects are deliberately absent: neither visibility nor locking means
+/// anything for a project file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExplorerSection {
+    Designs,
+    Triangulations,
+    Rasters,
+    PointClouds,
+    BlockModels,
+    DrillHoles,
+}
+
+impl ExplorerSection {
+    /// Heading text, used to name the section in console reports.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Designs => "Designs",
+            Self::Triangulations => "Triangulations",
+            Self::Rasters => "Rasters",
+            Self::PointClouds => "Point Clouds",
+            Self::BlockModels => "Block Models",
+            Self::DrillHoles => "Drill Holes",
         }
     }
 }

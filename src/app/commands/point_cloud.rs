@@ -224,6 +224,7 @@ impl<'a> App<'a> {
         let entity = SceneEntityId::PointCloud(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
+        self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
         self.invalidate_topology_bounds_and_redraw();
@@ -234,6 +235,7 @@ impl<'a> App<'a> {
         let entity = SceneEntityId::PointCloud(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
+        self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
         let previous_len = self.point_clouds.len();

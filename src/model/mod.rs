@@ -770,6 +770,17 @@ impl Document {
         }
     }
 
+    /// Set a layer's viewport visibility. Returns the new state, or `None`
+    /// when the layer no longer exists.
+    pub(crate) fn set_layer_visible(&mut self, id: LayerId, visible: bool) -> Option<bool> {
+        let layer = self.layers.iter_mut().find(|layer| layer.id == id)?;
+        if layer.visible != visible {
+            layer.visible = visible;
+            self.touch();
+        }
+        Some(visible)
+    }
+
     pub(crate) fn layer_id_by_name(&self, name: &str) -> Option<LayerId> {
         self.layers.iter().find(|layer| layer.name == name).map(|layer| layer.id)
     }

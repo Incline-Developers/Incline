@@ -205,6 +205,7 @@ impl<'a> App<'a> {
         for handle in object_handles {
             self.editor.selected_handles.remove(&handle);
             self.editor.hidden_handles.remove(&handle);
+            self.editor.explicitly_frozen.remove(&handle);
             self.editor.frozen_handles.remove(&handle);
             self.editor.translucent_handles.remove(&handle);
         }
@@ -212,6 +213,51 @@ impl<'a> App<'a> {
             self.editor.active_layer = None;
         }
         userspace_log!("Unloaded layer {:?}", layer_id);
+        self.invalidate_geometry();
+    }
+
+    /// Show or hide a loaded layer without unloading it.
+    ///
+    /// Unlike load/unload this keeps the layer's objects in the scene
+    /// document, so snapping targets and selection sets survive the toggle.
+    pub(crate) fn toggle_layer_visible(&mut self, layer_id: LayerId) {
+        self.activate_project_for_layer(layer_id);
+        let Some(document) = self.workspace.active_document_mut() else {
+            return;
+        };
+        let Some(layer) = document.layer(layer_id) else {
+            return;
+        };
+        let (name, visible) = (layer.name.clone(), !layer.visible);
+        document.set_layer_visible(layer_id, visible);
+        userspace_log!("{} layer '{}'", if visible { "Shown" } else { "Hidden" }, name);
+        self.invalidate_geometry();
+    }
+
+    /// Lock or unlock every object on a layer against selection and editing.
+    ///
+    /// The lock is held per layer; `invalidate_geometry` expands it onto the
+    /// individual object handles that picking and snapping test.
+    pub(crate) fn toggle_layer_locked(&mut self, layer_id: LayerId) {
+        self.activate_project_for_layer(layer_id);
+        let name = self
+            .workspace
+            .active_project()
+            .and_then(|project| project.project.document.layer(layer_id))
+            .map(|layer| layer.name.clone());
+        let Some(name) = name else {
+            return;
+        };
+        let locked = !self.editor.locked_layers.remove(&layer_id);
+        if locked {
+            self.editor.locked_layers.insert(layer_id);
+            // A locked layer cannot be the drawing target, and nothing on it
+            // may stay selected.
+            if self.editor.active_layer == Some(layer_id) {
+                self.editor.active_layer = None;
+            }
+        }
+        userspace_log!("{} layer '{}'", if locked { "Locked" } else { "Unlocked" }, name);
         self.invalidate_geometry();
     }
 }

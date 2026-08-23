@@ -279,6 +279,10 @@ pub(crate) struct App<'a> {
     /// `ProjectStore::composite_key()` of the last `scene_document` build;
     /// `None` forces the next invalidation to rebuild.
     scene_document_key: Option<u64>,
+    /// Composite + locked-layer fingerprint of the last expansion of
+    /// `EditorState::locked_layers` onto `EditorState::frozen_handles`, so
+    /// invalidation only walks the document when one of the two changed.
+    layer_lock_key: Option<(u64, u64)>,
     /// Selection + composite fingerprint behind `EditorState::selection_has_intersections`,
     /// so the intersection scan only reruns when the selection or the documents change.
     intersection_availability_key: Option<u64>,
@@ -386,6 +390,7 @@ impl<'a> Default for App<'a> {
             snap_index: ObjectSnapIndex::default(),
             snap_index_dirty: false,
             scene_document_key: None,
+            layer_lock_key: None,
             intersection_availability_key: None,
             history: crate::model::History::new(),
             modifiers: ModifiersState::empty(),
@@ -868,10 +873,52 @@ impl<'a> App<'a> {
             // BVH build is the expensive part.
             self.snap_index_dirty = true;
         }
+        self.expand_layer_locks(composite_key);
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.invalidate_geometry();
         }
         self.redraw_requested = true;
+    }
+
+    /// Mirror `EditorState::locked_layers` onto the individual object handles
+    /// in `frozen_handles`.
+    ///
+    /// Picking, snapping and marquee selection all filter on that one set, so
+    /// expanding the layer lock here keeps a layer lock from needing its own
+    /// check at each of those sites. Objects frozen by name
+    /// (`explicitly_frozen`) survive the rebuild; everything else on an
+    /// unlocked layer is released.
+    ///
+    /// Walking the document is only worth doing when the lock set or the
+    /// document contents actually changed, which is what `layer_lock_key`
+    /// tracks - with no layer locked (the usual case) the whole pass is two
+    /// hashes and a `retain` over a small set.
+    fn expand_layer_locks(&mut self, composite_key: u64) {
+        let locked_key = self.editor.locked_layers.iter().fold(self.editor.locked_layers.len() as u64, |acc, layer| {
+            let mut hasher = DefaultHasher::new();
+            layer.hash(&mut hasher);
+            acc ^ hasher.finish()
+        });
+        if self.layer_lock_key == Some((composite_key, locked_key)) {
+            return;
+        }
+        self.layer_lock_key = Some((composite_key, locked_key));
+        self.editor
+            .frozen_handles
+            .retain(|handle| !matches!(handle, SceneEntityId::Object(_)) || self.editor.explicitly_frozen.contains(handle));
+        if self.editor.locked_layers.is_empty() {
+            return;
+        }
+        let Some(project) = self.workspace.active_project() else {
+            return;
+        };
+        for object in project.project.document.objects() {
+            if self.editor.locked_layers.contains(&object.layer()) {
+                let handle = SceneEntityId::Object(object.id());
+                self.editor.frozen_handles.insert(handle);
+                self.editor.selected_handles.remove(&handle);
+            }
+        }
     }
 
     /// Request a redraw for topology-only style/selection changes without
@@ -1068,6 +1115,7 @@ impl<'a> App<'a> {
             for layer in project.project.document.layers() {
                 layer.id.hash(&mut hasher);
                 layer.name.hash(&mut hasher);
+                layer.visible.hash(&mut hasher);
             }
         }
 
@@ -1158,6 +1206,7 @@ impl<'a> App<'a> {
                         .map(|layer| UiLayerEntry {
                             id: layer.id,
                             name: layer.name.clone(),
+                            visible: layer.visible,
                             is_loaded: project.loaded_layers.contains(&layer.id),
                             dirty: dirty_layers.contains(&layer.id),
                         })
@@ -1220,7 +1269,7 @@ impl<'a> App<'a> {
                 id: tri.id,
                 name: tri.name.clone(),
                 source_name: tri.state.source_name.clone(),
-                visible: tri.visible && tri.state.loaded && !self.editor.hidden_handles.contains(&tri.entity_id()),
+                visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
                 is_active: self.active_triangulation == Some(tri.id),
                 is_loaded: tri.state.loaded,
                 dirty: tri.state.is_dirty(),
@@ -1233,7 +1282,7 @@ impl<'a> App<'a> {
                 id: model.id,
                 name: model.name.clone(),
                 source_name: model.state.source_name.clone(),
-                visible: model.visible && model.state.loaded,
+                visible: model.visible,
                 is_loaded: model.state.loaded,
                 dirty: model.state.is_dirty(),
                 _block_count: model.renderable_block_indices.len(),
@@ -1247,7 +1296,7 @@ impl<'a> App<'a> {
                 id: dataset.id,
                 name: dataset.name.clone(),
                 source_name: dataset.state.source_name.clone(),
-                visible: dataset.visible && dataset.state.loaded,
+                visible: dataset.visible,
                 is_loaded: dataset.state.loaded,
                 dirty: dataset.state.is_dirty(),
                 hole_count: dataset.dataset.holes.len(),
@@ -1261,7 +1310,7 @@ impl<'a> App<'a> {
                 id: cloud.id,
                 name: cloud.name.clone(),
                 source_name: cloud.state.source_name.clone(),
-                visible: cloud.visible && cloud.state.loaded,
+                visible: cloud.visible,
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.points.len(),
@@ -1275,7 +1324,7 @@ impl<'a> App<'a> {
                 id: raster.id,
                 name: raster.name.clone(),
                 source_name: raster.state.source_name.clone(),
-                visible: raster.visible && raster.state.loaded,
+                visible: raster.visible,
                 is_loaded: raster.state.loaded,
                 dirty: raster.state.is_dirty(),
                 is_draped: draped_raster_ids.contains(&raster.id),

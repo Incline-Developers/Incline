@@ -89,6 +89,7 @@ impl<'a> App<'a> {
     fn clear_triangulation_entity_state(&mut self, handle: crate::model::SceneEntityId) {
         self.editor.selected_handles.remove(&handle);
         self.editor.hidden_handles.remove(&handle);
+        self.editor.explicitly_frozen.remove(&handle);
         self.editor.frozen_handles.remove(&handle);
         self.editor.translucent_handles.remove(&handle);
     }

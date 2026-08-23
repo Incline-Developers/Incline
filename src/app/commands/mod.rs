@@ -8,6 +8,7 @@ pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
 pub(crate) mod raster; // Handles georeferenced image textures.
+pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
@@ -186,6 +187,13 @@ impl<'a> App<'a> {
                 self.toggle_raster_visible(id);
                 Ok(())
             }
+            UiCommand::ToggleRasterLocked(id) => {
+                if !self.editor.locked_rasters.remove(&id) {
+                    self.editor.locked_rasters.insert(id);
+                }
+                self.redraw_requested = true;
+                Ok(())
+            }
             UiCommand::RemoveRaster(id) => {
                 self.remove_raster(id);
                 Ok(())
@@ -258,48 +266,6 @@ impl<'a> App<'a> {
             }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
-                Ok(())
-            }
-            UiCommand::RevealAllElements => {
-                if let Some(document) = self.workspace.active_document_mut() {
-                    document.reveal_all_objects();
-                }
-                let mut asset_changed = false;
-                for tri in &mut self.triangulations {
-                    if !tri.visible {
-                        tri.visible = true;
-                        tri.state.touch();
-                        asset_changed = true;
-                    }
-                }
-                for model in &mut self.block_models {
-                    if !model.visible {
-                        model.visible = true;
-                        model.state.touch();
-                        asset_changed = true;
-                    }
-                }
-                for dataset in &mut self.drill_holes {
-                    if !dataset.visible {
-                        dataset.visible = true;
-                        dataset.state.touch();
-                        asset_changed = true;
-                    }
-                }
-                for cloud in &mut self.point_clouds {
-                    if !cloud.visible {
-                        cloud.visible = true;
-                        cloud.state.touch();
-                        asset_changed = true;
-                    }
-                }
-                if asset_changed {
-                    self.touch_active_project_content();
-                }
-                self.editor.hidden_handles.clear();
-                self.editor.frozen_handles.clear();
-                self.editor.translucent_handles.clear();
-                self.invalidate_geometry();
                 Ok(())
             }
             UiCommand::RequestExit => self.request_exit(),
@@ -387,6 +353,28 @@ impl<'a> App<'a> {
             }
             UiCommand::UnloadLayer(layer) => {
                 self.unload_layer(layer);
+                Ok(())
+            }
+            UiCommand::ToggleLayerVisible(layer) => {
+                self.toggle_layer_visible(layer);
+                Ok(())
+            }
+            UiCommand::ToggleLayerLocked(layer) => {
+                self.toggle_layer_locked(layer);
+                Ok(())
+            }
+            UiCommand::SetSectionVisible(section, visible) => {
+                self.set_section_visible(section, visible);
+                Ok(())
+            }
+            UiCommand::SetSectionLocked(section, locked) => {
+                self.set_section_locked(section, locked);
+                Ok(())
+            }
+            UiCommand::ToggleEntityLocked(handle) => {
+                let locked = !self.editor.frozen_handles.contains(&handle);
+                self.editor.set_entity_locked(handle, locked);
+                self.invalidate_geometry();
                 Ok(())
             }
             UiCommand::SelectAllObjectsInLayer(layer) => {

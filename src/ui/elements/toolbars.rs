@@ -3,7 +3,7 @@
 
 use crate::ui::{
     EditorState, UiProjectView, color32_to_rgba, rgba_to_color32,
-    state::{ActiveTool, CursorMode, EditorAction, UiCommand, UiProjectEntry},
+    state::{ActiveTool, CursorMode, UiCommand, UiProjectEntry},
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
@@ -493,8 +493,12 @@ pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
         });
 }
 
-/// Draw the bottom toolbar (reveal/hide/freeze selection, cursor mode, measure distance).
-pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, geometry_dirty: &mut bool, commands: &mut Vec<UiCommand>) -> egui::Rect {
+/// Draw the bottom toolbar (cursor mode, measure distance).
+///
+/// Visibility and locking are per-item concerns now, so they live on the
+/// explorer's rows rather than as whole-scene toolbar actions: see
+/// `ExplorerEntry::toggles`.
+pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
         .default_size(BOTTOM_TOOLBAR_HEIGHT)
@@ -502,30 +506,6 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, g
             let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
                 ui.horizontal_centered(|ui| {
-                    let reveal_all = action_button(ui, egui::Image::new(unthemed_icon!("reveal_all.svg")), "Reveal all elements");
-                    if reveal_all {
-                        commands.push(UiCommand::RevealAllElements);
-                    }
-                    *geometry_dirty |= reveal_all;
-
-                    ui.add_enabled_ui(!editor.slice_mode_enabled, |ui| {
-                        let hide_selection = action_button(ui, egui::Image::new(themed_icon!(ui, "hide_selection.svg")), "Hide selection");
-                        if hide_selection {
-                            commands.push(UiCommand::HideSelection);
-                        }
-                        *geometry_dirty |= hide_selection;
-
-                        *geometry_dirty |= editor_action_button(
-                            ui,
-                            egui::Image::new(unthemed_icon!("freeze_selection.svg")),
-                            "Freeze selection",
-                            editor,
-                            EditorAction::FreezeSelection,
-                        );
-                    });
-
-                    ui.add_space(12.);
-
                     cursor_mode_button(ui, egui::Image::new(themed_icon!(ui, "cursor_select.svg")), "Cursor: Regular", editor, CursorMode::Select);
 
                     cursor_mode_button(
@@ -628,15 +608,6 @@ pub(crate) fn cursor_mode_button(ui: &mut egui::Ui, icon: egui::Image<'static>, 
     }
 
     response
-}
-
-/// Draw a selection action button.  Returns `true` if the action was applied.
-pub(crate) fn editor_action_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, action: EditorAction) -> bool {
-    action_button(ui, icon, tooltip) && editor.apply_action(action)
-}
-
-fn action_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str) -> bool {
-    ui.add(ToolbarButton::new(icon, tooltip).id_salt(("editor_action", tooltip))).clicked()
 }
 
 fn shifted_up(ui: &mut egui::Ui, amount: f32, add_contents: impl FnOnce(&mut egui::Ui)) {

@@ -478,7 +478,7 @@ fn draw_ui(
         root_ui.skip_ahead_auto_ids(1);
     }
 
-    let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, &mut geometry_dirty, commands);
+    let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
     let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, editing_enabled, project_active, commands);
 
     // --- Compute canvas rect (area not occupied by panels) ---
