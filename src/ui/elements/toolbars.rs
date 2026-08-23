@@ -128,7 +128,9 @@ pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, editor: &mut EditorState,
 pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) -> egui::Rect {
     egui::Panel::top("top_tools_strip")
         .resizable(false)
+        .show_separator_line(false)
         .default_size(TOOLBAR_STRIP_HEIGHT)
+        .frame(crate::ui::chrome::region_frame(ui.style()))
         .show(ui, |ui| {
             // Keep the automatic ids below this point independent of the
             // parent panel's layout pass. egui may rerun a frame for sizing;
@@ -501,7 +503,9 @@ pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
+        .show_separator_line(false)
         .default_size(BOTTOM_TOOLBAR_HEIGHT)
+        .frame(crate::ui::chrome::region_frame(ui.style()))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {

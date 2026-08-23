@@ -11,7 +11,7 @@ pub(crate) mod viewport;
 /// Panel colours sit near the ends of the range, where a gamma-space lerp
 /// toward black or white moves too little to be predictable. Counting levels
 /// gives the same visible step in either theme.
-fn shifted(color: egui::Color32, delta: i16) -> egui::Color32 {
+pub(crate) fn shifted(color: egui::Color32, delta: i16) -> egui::Color32 {
     let shift = |channel: u8| (i16::from(channel) + delta).clamp(0, 255) as u8;
     egui::Color32::from_rgb(shift(color.r()), shift(color.g()), shift(color.b()))
 }

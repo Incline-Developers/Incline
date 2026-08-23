@@ -137,10 +137,27 @@ fn section_heading_menu(response: &egui::Response, section: ExplorerSection, loa
     });
 }
 
+/// Id of the explorer's column panel. Shared with [`crate::ui::chrome`],
+/// which reads the panel's resize interaction to light up its grip.
+pub(crate) const PANEL_ID: &str = "explorer_panel";
+
+/// What the explorer column claimed, and the two regions drawn inside it.
+pub(crate) struct ExplorerLayout {
+    /// The whole column, gaps included: what the panels drawn after it lay out
+    /// against.
+    pub(crate) column: egui::Rect,
+    /// What the data tree claimed, the toolbar strip above it included.
+    pub(crate) tree: egui::Rect,
+    /// What the properties panel below the tree claimed.
+    pub(crate) properties: egui::Rect,
+}
+
 /// Draw the left explorer panel.
 ///
 /// Shows the active project path, the collapsible data sections, and the
-/// properties panel below them. Returns the panel's bounding rect.
+/// properties panel below them. The column itself has no surface: the tree and
+/// the properties are separate regions inside it, with the window background
+/// showing through the seam between them.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_explorer(
     ui: &mut egui::Ui,
@@ -150,26 +167,32 @@ pub(crate) fn draw_explorer(
     document: &Document,
     commands: &mut Vec<UiCommand>,
     geometry_dirty: &mut bool,
-) -> egui::Rect {
+) -> ExplorerLayout {
     // Read before the panel closure borrows the editor for the tree.
     let (can_undo, can_redo) = (editor.can_undo, editor.can_redo);
     // The tree's lit rows are the properties panel's background, so the two
     // halves of the side panel share one palette.
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    egui::Panel::left("explorer_panel")
+    let column = egui::Panel::left(PANEL_ID)
         .resizable(true)
+        .show_separator_line(false)
         .default_size(280.0)
         // The properties panel below the tree lays its fields out at a fixed
         // minimum width; keep the panel wide enough to hold them rather than
         // clipping their right-hand controls.
         .min_size(220.0)
-        .frame(egui::Frame::side_top_panel(ui.style()).fill(surface).inner_margin(egui::Margin::ZERO))
+        // The column is only a container for the two regions inside it; each
+        // of those carries its own surface, rounding and gap.
+        .frame(egui::Frame::NONE)
         .show(ui, |ui| {
             // Prevent content from forcing the panel wider than the user has dragged it.
             ui.set_max_width(ui.available_width());
 
+            // Claimed from the bottom before the tree fills what is left.
+            let properties_rect = draw_properties(ui, editor, block_models, document, commands, geometry_dirty);
+
+            let tree_rect = crate::ui::chrome::region_frame(ui.style()).fill(surface).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
             crate::ui::elements::toolbars::draw_explorer_toolbar(ui, editor, project, commands, can_undo, can_redo);
-            draw_properties(ui, editor, block_models, document, commands, geometry_dirty);
 
             // The tree only reads editor state. Destructuring here keeps the
             // row closures below from capturing `editor` mutably, which the
@@ -824,7 +847,17 @@ pub(crate) fn draw_explorer(
 
                 paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
             });
-        })
-        .response
-        .rect
+            })
+            .response
+            .rect;
+
+            (tree_rect, properties_rect)
+        });
+
+    let (tree, properties) = column.inner;
+    ExplorerLayout {
+        column: column.response.rect,
+        tree,
+        properties,
+    }
 }

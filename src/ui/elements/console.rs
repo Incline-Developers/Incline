@@ -34,16 +34,28 @@ struct ConsolePresentationCache {
     rows: Arc<[PresentationRow]>,
 }
 
+/// Id of the console panel. Shared with [`crate::ui::chrome`], which reads
+/// the panel's resize interaction to light up its grip.
+pub(crate) const PANEL_ID: &str = "Console";
+
+/// Shortest the console may be dragged. Below this its rows stop fitting and
+/// the panel would be pushed past the window edge by its own contents.
+const MIN_HEIGHT: f32 = 64.0;
+
 /// Draw the console content, filling the remaining UI area.
 ///
 /// Returns the panel's bounding rect.
 pub(crate) fn draw_console(ui: &mut egui::Ui, max_height: f32, snapshot: &crate::logging::ConsoleSnapshot) -> egui::Rect {
     let (log_revision, entries) = snapshot;
     let surface_fill = ui.visuals().extreme_bg_color;
-    egui::Panel::bottom("Console")
+    egui::Panel::bottom(PANEL_ID)
         .resizable(true)
+        .show_separator_line(false)
+        // Never a minimum above the maximum: a window short enough to squeeze
+        // the console below its minimum leaves it whatever is going.
+        .min_size(MIN_HEIGHT.min(max_height))
         .max_size(max_height)
-        .frame(egui::Frame::new().fill(surface_fill))
+        .frame(crate::ui::chrome::region_frame(ui.style()).fill(surface_fill).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("console_contents");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
@@ -80,6 +92,11 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, max_height: f32, snapshot: &crate:
                     egui::ScrollArea::vertical()
                         .id_salt("console_scroll_area")
                         .auto_shrink([false; 2])
+                        // A `ScrollArea` claims 64pt of height by default even
+                        // when the panel has less to give, and the overflow
+                        // pushes the panel past the window edge as the user
+                        // drags it shorter. Let it take what the panel has.
+                        .min_scrolled_height(0.0)
                         .stick_to_bottom(!expanded_this_frame)
                         .show_rows(ui, row_height, rows.len(), |ui, visible| {
                             for row in &rows[visible] {

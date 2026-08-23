@@ -65,8 +65,9 @@ impl egui::Widget for ToolbarButton {
     }
 }
 
-/// Corner rounding on a toolbar group's tile.
-const GROUP_CORNER_RADIUS: u8 = 3;
+/// Corner rounding on a toolbar group's tile. Shared with the window chrome
+/// (`ui::chrome`), so every rounded surface in the window reads as one family.
+pub(crate) const GROUP_CORNER_RADIUS: u8 = 3;
 /// Gap between the buttons stacked inside a tile. None: the cells butt up
 /// against each other so a run of them reads as one block.
 const GROUP_BUTTON_GAP: f32 = 0.0;

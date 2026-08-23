@@ -3,6 +3,7 @@
 //! The `Gui` struct owns the egui context, winit state, and wgpu renderer.
 //! `render()` processes input, calls `draw_ui()`, and feeds paint jobs back to wgpu.
 
+pub(crate) mod chrome;
 pub(crate) mod dialogs;
 pub(crate) mod elements;
 pub(crate) mod fonts;
@@ -444,6 +445,12 @@ fn draw_ui(
 ) -> bool {
     let mut geometry_dirty = false;
 
+    // The window background sits behind every panel, but its shape depends on
+    // where the scene ends up, which is only known once they have all been
+    // drawn. Reserve its place at the back of the frame now and fill it in at
+    // the end: see `chrome::paint_window_background`.
+    let window_background = root_ui.painter().add(egui::Shape::Noop);
+
     // --- Panel layout: compute rects for all fixed panels ---
     let project_active = project.has_active_project;
     let editing_enabled = project.has_active_project && editor.active_layer.is_some() && !editor.fly_mode_enabled && !editor.slice_mode_enabled;
@@ -461,7 +468,13 @@ fn draw_ui(
     // and the status bar: every panel after it - the top toolbar included -
     // starts at its right edge rather than passing over it.
     let status_bar_rect = elements::status_bar::draw_status_bar(root_ui, editor);
-    let explorer_rect = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
+
+    // Everything between those two bars is a rounded region with a gap of
+    // window background around it. The bars themselves span the window and
+    // stay square, so the regions start half a gap inside what is left of it.
+    chrome::claim_gap(root_ui, "chrome_window_edge");
+
+    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
     let top_toolbar_rect = elements::toolbars::draw_top_toolbar(root_ui, editor, project);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
@@ -486,12 +499,23 @@ fn draw_ui(
         || status_bar_rect.top().min(bottom_toolbar_rect.top()),
         |rect| status_bar_rect.top().min(bottom_toolbar_rect.top()).min(rect.top()),
     );
-    // The view tools float over the scene rather than claiming a panel, so the
-    // canvas runs to the window's right edge.
-    let canvas_rect = egui::Rect::from_min_max(
-        egui::pos2(explorer_rect.right().max(left_toolbar_rect.right()), main_menu_rect.bottom().max(top_toolbar_rect.bottom())),
-        egui::pos2(root_ui.max_rect().right(), canvas_bottom),
+    // The scene is a region like any other, so it takes the same gap around it
+    // as its neighbours do. The left toolbar has no surface of its own - its
+    // tiles float over the scene - so the scene runs behind it, out to the
+    // explorer's edge.
+    // What is left of the root ui is the canvas, so its right edge is already
+    // inside the window-edge gap the chrome claimed.
+    let scene_claimed = egui::Rect::from_min_max(
+        egui::pos2(explorer.column.right(), main_menu_rect.bottom().max(top_toolbar_rect.bottom())),
+        egui::pos2(root_ui.available_rect_before_wrap().right(), canvas_bottom),
     );
+    let scene_rect = chrome::region_rect(scene_claimed);
+    // The scene's own margin, claimed like the window's so a scroll over the
+    // gap around the viewport reaches the interface rather than the camera.
+    chrome::claim_gap(root_ui, "chrome_scene_edge");
+    // The view tools float over the scene rather than claiming a panel, so the
+    // canvas runs to the scene's right edge.
+    let canvas_rect = egui::Rect::from_min_max(egui::pos2(left_toolbar_rect.right().max(scene_rect.left()), scene_rect.top()), scene_rect.max);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
@@ -938,6 +962,28 @@ fn draw_ui(
     }
 
     geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
+
+    // --- Window chrome ---
+    // Last, so the corner masks cut back everything the regions drew into
+    // their corners - nested panel fills, the tree's banding, the scene and
+    // its overlays alike.
+    let ctx = root_ui.ctx().clone();
+    chrome::paint_window_background(&ctx, window_background, scene_rect);
+    let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
+    chrome::paint_regions(
+        &ctx,
+        [explorer.tree, explorer.properties, top_toolbar_rect, bottom_toolbar_rect, console_claimed, scene_claimed],
+    );
+    // The explorer's column is dragged as a whole, so its grip is centred on
+    // the tree and the properties panel together rather than on either.
+    chrome::paint_grips(
+        &ctx,
+        [
+            chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
+            chrome::Grip::new(explorer.properties, chrome::Edge::Top, elements::properties::PANEL_ID),
+            chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
+        ],
+    );
 
     geometry_dirty
 }

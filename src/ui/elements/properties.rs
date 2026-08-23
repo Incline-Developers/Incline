@@ -59,7 +59,15 @@ impl PropertyContext {
     }
 }
 
+/// Id of the properties panel. Shared with [`crate::ui::chrome`], which reads
+/// the panel's resize interaction to light up its grip.
+pub(crate) const PANEL_ID: &str = "explorer_properties";
+
 /// Draw the properties panel at the bottom of the explorer's side panel.
+///
+/// A region of its own rather than the foot of the tree's: the two are
+/// separate surfaces, so the gap and the grip between them say the seam can be
+/// dragged. Returns the panel's bounding rect.
 pub(crate) fn draw_properties(
     ui: &mut egui::Ui,
     editor: &mut EditorState,
@@ -67,7 +75,7 @@ pub(crate) fn draw_properties(
     document: &Document,
     commands: &mut Vec<UiCommand>,
     geometry_dirty: &mut bool,
-) {
+) -> egui::Rect {
     let context = collect_context(editor, block_models, document);
     // A selection tab whose selection has gone shows settings meanwhile, but
     // stays the chosen tab: selecting another block model or design brings it
@@ -92,12 +100,13 @@ pub(crate) fn draw_properties(
     // Never take the last of the tree's height: a short window would otherwise
     // leave it with a sliver the section headers spill straight out of.
     let max_height = (available_height - MIN_TREE_HEIGHT).max(MIN_HEIGHT);
-    egui::Panel::bottom("explorer_properties")
+    egui::Panel::bottom(PANEL_ID)
         .resizable(true)
         .default_size(default_height)
         .min_size(MIN_HEIGHT)
         .max_size(max_height)
-        .frame(egui::Frame::NONE.fill(content_fill))
+        .show_separator_line(false)
+        .frame(crate::ui::chrome::region_frame(ui.style()).fill(content_fill).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             // A panel ends up as tall as its contents report, and that height
             // is what gets stored as its resizable size. Claim the whole
@@ -138,7 +147,9 @@ pub(crate) fn draw_properties(
                     }
                 });
             });
-        });
+        })
+        .response
+        .rect
 }
 
 fn collect_context(editor: &mut EditorState, block_models: &[OpenBlockModel], document: &Document) -> PropertyContext {
