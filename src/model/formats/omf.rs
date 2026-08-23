@@ -9,9 +9,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Cursor, Seek, SeekFrom, Write},
+    io::{Cursor, Seek, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
@@ -888,10 +888,10 @@ fn encode_png(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Read OMF 2 directly, translating OMF 1 to an in-memory OMF 2 archive first.
+/// Read an OMF 2 container.
 pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) -> Result<ImportBundle> {
     progress.set_fraction(0.0);
-    let bytes = normalize_version(bytes).with_context(|| format!("read OMF container {source_name}"))?;
+    reject_omf1(&bytes).with_context(|| format!("read OMF container {source_name}"))?;
     let mut reader = omf_crate::file::Reader::new(bytes).context("open OMF archive")?;
     reader.set_limits(omf_crate::file::Limits {
         json_bytes: Some(64 * 1024 * 1024),
@@ -942,36 +942,18 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
     decoder.finish()
 }
 
-/// Shared seekable output used because the upstream OMF1 converter consumes
-/// its writer without returning it.
-#[derive(Clone, Default)]
-struct SharedBuffer(Arc<Mutex<Cursor<Vec<u8>>>>);
-
-impl Write for SharedBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().map_err(|_| std::io::Error::other("OMF conversion buffer poisoned"))?.write(buf)
+/// OMF 1 containers open with this magic and an `OMF-v...` version string.
+/// Incline reads OMF 2 only, so they are named in the error rather than left
+/// to fail later as an unrecognised archive.
+fn reject_omf1(bytes: &[u8]) -> Result<()> {
+    const OMF1_MAGIC: [u8; 4] = [0x84, 0x83, 0x82, 0x81];
+    if !bytes.starts_with(&OMF1_MAGIC) {
+        return Ok(());
     }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.lock().map_err(|_| std::io::Error::other("OMF conversion buffer poisoned"))?.flush()
-    }
-}
-
-impl Seek for SharedBuffer {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.0.lock().map_err(|_| std::io::Error::other("OMF conversion buffer poisoned"))?.seek(pos)
-    }
-}
-
-fn normalize_version(bytes: Vec<u8>) -> Result<Vec<u8>> {
-    let mut cursor = Cursor::new(bytes.as_slice());
-    if !omf_crate::omf1::detect(&mut cursor).context("detect OMF version")? {
-        return Ok(bytes);
-    }
-    let output = SharedBuffer::default();
-    omf_crate::omf1::Converter::new().convert(bytes, output.clone()).context("translate OMF 1 to OMF 2")?;
-    let guard = output.0.lock().map_err(|_| anyhow::anyhow!("OMF conversion buffer poisoned"))?;
-    Ok(guard.get_ref().clone())
+    let version = String::from_utf8_lossy(bytes.get(4..36).unwrap_or_default());
+    let version = version.trim_end_matches('\0');
+    let detail = if version.starts_with("OMF-") { format!(" ({version})") } else { String::new() };
+    bail!("This is an OMF 1 file{detail}. Incline reads OMF 2 only; re-export it as OMF 2 from the application that wrote it.");
 }
 
 struct Decoder<'a, R: omf_crate::file::ReadAt> {

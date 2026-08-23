@@ -33,7 +33,7 @@ glam = { version = "0.33.5", features = ["serde"] }
 laz = { version = "0.12.2", features = ["parallel"] }
 log = "0.4.33"
 lyon = "1.0.19"
-omf = { git = "https://github.com/gmggroup/omf-rust.git", rev = "64d305790b3415618a01f00a94cd914acd0b80ba" }
+omf = { git = "https://github.com/gmggroup/omf-rust.git", rev = "64d305790b3415618a01f00a94cd914acd0b80ba", default-features = false, features = ["image", "parquet"] }
 png = "0.18.1"
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
