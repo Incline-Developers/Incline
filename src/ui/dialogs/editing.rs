@@ -539,19 +539,21 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         });
 }
 
-/// Draw the rename layer floating dialog.
-pub(crate) fn draw_rename_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
-    let Some((layer_id, _)) = editor.renaming_layer else {
+/// Draw the rename floating dialog for whichever explorer item is being renamed.
+pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let Some((target, _)) = editor.renaming_item else {
         return;
     };
     // Work on a local copy of the name buffer to avoid borrow conflicts inside the closure.
-    let mut name_buf = editor.renaming_layer.as_ref().map(|(_, n)| n.clone()).unwrap_or_default();
+    let mut name_buf = editor.renaming_item.as_ref().map(|(_, n)| n.clone()).unwrap_or_default();
     let mut close = false;
     let mut rename_to: Option<String> = None;
     let mut open = true;
-    DragableMenu::new("Rename Layer").open(&mut open).show(ui.ctx(), |ui| {
-        ui.set_max_width(230.);
-        MenuFieldText::new("New name", &mut name_buf).width(160.0).hint_text("Required").show(ui);
+    DragableMenu::new(format!("Rename {}", target.kind_label())).open(&mut open).show(ui.ctx(), |ui| {
+        // `menu_field_row` gives the entry its requested width and leaves the
+        // rest of the row to the label, so the extra width here is the label's.
+        ui.set_max_width(380.);
+        MenuFieldText::new("New name", &mut name_buf).width(260.0).hint_text("Required").show(ui);
         ui.horizontal(|ui| {
             let can_rename = !name_buf.trim().is_empty();
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
@@ -564,13 +566,13 @@ pub(crate) fn draw_rename_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         });
     });
     // Write the edited buffer back.
-    if let Some((_, ref mut buf)) = editor.renaming_layer {
+    if let Some((_, ref mut buf)) = editor.renaming_item {
         *buf = name_buf;
     }
     if let Some(new_name) = rename_to {
-        commands.push(UiCommand::RenameLayer { layer_id, new_name });
+        commands.push(UiCommand::RenameItem { target, new_name });
     } else if close || !open {
-        editor.renaming_layer = None;
+        editor.renaming_item = None;
     }
 }
 

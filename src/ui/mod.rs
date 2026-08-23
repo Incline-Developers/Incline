@@ -795,9 +795,9 @@ fn draw_ui(
         dialogs::editing::draw_create_layer_dialog(root_ui, commands, editor, project, canvas_rect);
     }
 
-    // Rename Layer
-    if editor.renaming_layer.is_some() {
-        dialogs::editing::draw_rename_layer_dialog(root_ui, commands, editor);
+    // Rename an explorer item
+    if editor.renaming_item.is_some() {
+        dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
     }
 
     // Drape to Topology

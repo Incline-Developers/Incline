@@ -691,6 +691,35 @@ impl Default for MoveGizmoScreen {
     }
 }
 
+/// Explorer item whose name is being edited.
+///
+/// Design layers live in the `Document` and rename through the undo history;
+/// every other kind is an App-owned project item renamed in place, so the one
+/// dialog has to carry which of the two it is addressing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RenameTarget {
+    Layer(LayerId),
+    Triangulation(TriangulationId),
+    Raster(RasterTextureId),
+    PointCloud(PointCloudId),
+    BlockModel(BlockModelId),
+    DrillHole(DrillHoleId),
+}
+
+impl RenameTarget {
+    /// Human-readable kind, used for the dialog title and console reports.
+    pub(crate) fn kind_label(self) -> &'static str {
+        match self {
+            Self::Layer(_) => "Layer",
+            Self::Triangulation(_) => "Triangulation",
+            Self::Raster(_) => "Raster",
+            Self::PointCloud(_) => "Point Cloud",
+            Self::BlockModel(_) => "Block Model",
+            Self::DrillHole(_) => "Drill Holes",
+        }
+    }
+}
+
 /// Central mutable editor state.
 ///
 /// Shared between the render pipeline and every UI draw call. Fields are grouped
@@ -803,8 +832,8 @@ pub(crate) struct EditorState {
     pub(crate) new_project_name: String,
     pub(crate) new_layer_dialog_open: bool,
     pub(crate) new_layer_name: String,
-    /// Active layer rename: (layer_id, name_buffer).
-    pub(crate) renaming_layer: Option<(LayerId, String)>,
+    /// Active explorer rename: (target, name_buffer).
+    pub(crate) renaming_item: Option<(RenameTarget, String)>,
     /// Layer awaiting destructive deletion confirmation: (layer_id, display_name).
     pub(crate) pending_delete_layer: Option<(LayerId, String)>,
     /// Vertices accumulated for an in-progress MakeLine / MakePoly stroke.
@@ -1324,7 +1353,7 @@ impl EditorState {
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
             || self.new_layer_dialog_open
-            || self.renaming_layer.is_some()
+            || self.renaming_item.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
             || self.tri_cut_poly_open
@@ -1379,7 +1408,7 @@ impl EditorState {
             self.new_project_dialog_open = false;
         }
         self.new_layer_dialog_open = false;
-        self.renaming_layer = None;
+        self.renaming_item = None;
         self.pending_delete_layer = None;
         self.pending_discard_layer = None;
         self.selection_box_start_px = None;
@@ -1594,7 +1623,7 @@ impl EditorState {
             new_project_name: String::new(),
             new_layer_dialog_open: false,
             new_layer_name: "design".to_owned(),
-            renaming_layer: None,
+            renaming_item: None,
             pending_delete_layer: None,
             pending_stroke: Vec::new(),
             circle_draft: None,
@@ -2097,11 +2126,11 @@ pub(crate) enum UiCommand {
     RequestDeleteLayer(LayerId),
     DeleteLayer(LayerId),
     DuplicateLayer(LayerId),
-    RenameLayer {
-        layer_id: LayerId,
+    RenameItem {
+        target: RenameTarget,
         new_name: String,
     },
-    BeginRenameLayer(LayerId),
+    BeginRenameItem(RenameTarget),
     /// Preview the move delta without committing (updates the live document view).
     PreviewMoveDelta(DVec3),
     /// Apply a world-space delta to all selected objects.
@@ -2381,7 +2410,7 @@ impl UiCommand {
             | Self::SetShowConsole(_)
             | Self::ApplyPreferences(_)
             | Self::SelectBlockModel(_)
-            | Self::BeginRenameLayer(_)
+            | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
             | Self::CancelChamfer
             | Self::CancelBezier
@@ -2492,7 +2521,7 @@ impl UiCommand {
             Self::DiscardLayerChanges(id) => report("Discard Layer Changes", format!("{id:?}")),
             Self::DeleteLayer(id) => report("Delete Layer", format!("{id:?}")),
             Self::DuplicateLayer(id) => report("Duplicate Layer", format!("{id:?}")),
-            Self::RenameLayer { layer_id, new_name } => report("Rename Layer", format!("{layer_id:?} to “{new_name}”")),
+            Self::RenameItem { target, new_name } => report(&format!("Rename {}", target.kind_label()), format!("{target:?} to “{new_name}”")),
             Self::ApplyChamfer => report("Chamfer", "Apply to selection".to_owned()),
             Self::ApplyBezier => report("Create Bezier Curve", "Apply to selection".to_owned()),
             Self::ApplyMoveDelta(delta) => report("Move Selection", format!("{delta}")),

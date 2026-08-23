@@ -8,6 +8,7 @@ pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
 pub(crate) mod raster; // Handles georeferenced image textures.
+pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod text; // Handles text editing commands
@@ -298,53 +299,23 @@ impl<'a> App<'a> {
                 self.duplicate_layer(layer_id);
                 Ok(())
             }
-            UiCommand::BeginRenameLayer(layer_id) => {
-                self.activate_project_for_layer(layer_id);
-                let current_name = self
-                    .workspace
-                    .active_project()
-                    .and_then(|p| p.project.document.layer(layer_id))
-                    .map(|l| l.name.clone())
-                    .unwrap_or_default();
-                self.editor.renaming_layer = Some((layer_id, current_name));
+            UiCommand::BeginRenameItem(target) => {
+                if let crate::ui::state::RenameTarget::Layer(layer_id) = target {
+                    self.activate_project_for_layer(layer_id);
+                }
+                let current_name = self.rename_target_name(target).unwrap_or_default();
+                self.editor.renaming_item = Some((target, current_name));
                 Ok(())
             }
-            UiCommand::RenameLayer { layer_id, new_name } => {
-                self.activate_project_for_layer(layer_id);
-                let Some((before, is_loaded)) = self.workspace.active_project().and_then(|project| {
-                    project
-                        .project
-                        .document
-                        .layer(layer_id)
-                        .map(|layer| (layer.name.clone(), project.loaded_layers.contains(&layer_id)))
-                }) else {
-                    self.editor.renaming_layer = None;
-                    return Ok(());
-                };
-                if before != new_name {
-                    if is_loaded {
-                        self.editor.active_layer = Some(layer_id);
-                        if let Some(project) = self.workspace.active_project_mut() {
-                            self.history.execute(
-                                &mut project.project.document,
-                                crate::model::Command::RenameLayer {
-                                    id: layer_id,
-                                    before,
-                                    after: new_name,
-                                },
-                            );
-                        }
-                    } else {
-                        self.history.clear();
-                        if self.editor.active_layer == Some(layer_id) {
-                            self.editor.active_layer = None;
-                        }
-                        if let Some(project) = self.workspace.active_project_mut() {
-                            project.project.document.rename_layer(layer_id, new_name);
-                        }
+            UiCommand::RenameItem { target, new_name } => {
+                match target {
+                    crate::ui::state::RenameTarget::Layer(layer_id) => {
+                        self.activate_project_for_layer(layer_id);
+                        self.rename_layer(layer_id, new_name);
                     }
+                    _ => self.rename_project_item(target, new_name),
                 }
-                self.editor.renaming_layer = None;
+                self.editor.renaming_item = None;
                 Ok(())
             }
             UiCommand::LoadLayer(layer) => {

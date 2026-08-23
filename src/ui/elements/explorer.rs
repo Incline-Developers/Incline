@@ -15,7 +15,7 @@ use crate::{
         EditorState, UiCommand, UiProjectView,
         elements::properties::draw_properties,
         fonts::bold,
-        state::ExplorerSection,
+        state::{ExplorerSection, RenameTarget},
         unthemed_icon,
         widgets::explorer::{EntryToggles, ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
     },
@@ -357,7 +357,7 @@ pub(crate) fn draw_explorer(
                                     ui.close();
                                 }
                                 if ui.add_enabled(!layer_locked, egui::Button::new("Rename")).clicked() {
-                                    commands.push(UiCommand::BeginRenameLayer(layer_id));
+                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Layer(layer_id)));
                                     ui.close();
                                 }
                                 if ui.button("Duplicate").clicked() {
@@ -459,6 +459,10 @@ pub(crate) fn draw_explorer(
                                     commands.push(UiCommand::ExportTriangulationAs(tri_id, crate::model::formats::MeshFormat::Obj));
                                     ui.close();
                                 }
+                                if ui.add_enabled(!tri_locked, egui::Button::new("Rename")).clicked() {
+                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Triangulation(tri_id)));
+                                    ui.close();
+                                }
                                 ui.separator();
                                 if ui.add_enabled(!tri_locked, egui::Button::new("Delete from Project")).clicked() {
                                     commands.push(UiCommand::RemoveTriangulation(tri_id));
@@ -553,6 +557,10 @@ pub(crate) fn draw_explorer(
                                     commands.push(UiCommand::ClearActiveTriangulationRaster);
                                     ui.close();
                                 }
+                                if ui.add_enabled(!raster_locked, egui::Button::new("Rename")).clicked() {
+                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Raster(raster.id)));
+                                    ui.close();
+                                }
                                 ui.separator();
                                 if ui.add_enabled(!raster_locked, egui::Button::new("Delete from Project")).clicked() {
                                     commands.push(UiCommand::RemoveRaster(raster.id));
@@ -627,6 +635,10 @@ pub(crate) fn draw_explorer(
                                     }
                                 } else if ui.button("Load").clicked() {
                                     commands.push(UiCommand::LoadPointCloud(point_cloud.id));
+                                    ui.close();
+                                }
+                                if ui.add_enabled(!cloud_locked, egui::Button::new("Rename")).clicked() {
+                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::PointCloud(point_cloud.id)));
                                     ui.close();
                                 }
                                 ui.separator();
@@ -714,6 +726,10 @@ pub(crate) fn draw_explorer(
                                     commands.push(UiCommand::LoadBlockModel(block_model.id));
                                     ui.close();
                                 }
+                                if ui.add_enabled(!model_locked, egui::Button::new("Rename")).clicked() {
+                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::BlockModel(block_model.id)));
+                                    ui.close();
+                                }
                                 ui.separator();
                                 if ui.add_enabled(!model_locked, egui::Button::new("Delete from Project")).clicked() {
                                     commands.push(UiCommand::RemoveBlockModel(block_model.id));
@@ -790,6 +806,10 @@ pub(crate) fn draw_explorer(
                                     }
                                 } else if ui.button("Load").clicked() {
                                     commands.push(UiCommand::LoadDrillHole(dataset.id));
+                                    ui.close();
+                                }
+                                if ui.add_enabled(!dataset_locked, egui::Button::new("Rename")).clicked() {
+                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::DrillHole(dataset.id)));
                                     ui.close();
                                 }
                                 ui.separator();
