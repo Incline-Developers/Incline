@@ -31,7 +31,7 @@ const REGION_RADIUS: u8 = crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
 /// Two neighbours therefore sit `2 * REGION_MARGIN` apart, and [`region_area`]
 /// insets the window edge by the same amount, so every gap in the window is
 /// one width.
-const REGION_MARGIN: i8 = 3;
+pub(crate) const REGION_MARGIN: i8 = 3;
 
 /// Width of the ring painted around a region to cut its corners back to
 /// [`REGION_RADIUS`].

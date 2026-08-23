@@ -7,7 +7,7 @@ use crate::ui::{
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
-        toolbar::{ColorSquarePicker, HatchPicker, TOOL_CELL_SIZE, ToolCellButton, ToolStack, ToolStackGrowth, ToolbarButton},
+        toolbar::{ColorSquarePicker, HatchPicker, TOOL_CELL_SIZE, ToolCellButton, ToolbarButton, ToolbarGroup, tool_cell_run},
     },
 };
 
@@ -30,18 +30,16 @@ const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "Cmd+" } else { "C
 /// Label for the shift modifier in tooltips.
 const SHIFT_MODIFIER: &str = "Shift+";
 
-/// Gap between a floating tool stack and the viewport edges it hangs off.
-/// Matches the orientation gizmo's margin, so the view tools and the gizmo
-/// share an edge, and the drawing tools sit as far inside the scene's left
-/// edge as the view tools do inside its right.
+/// Gap between the floating view tools and the viewport edges they hang off.
+/// Matches the orientation gizmo's margin, so the two share an edge.
 const TOOLS_EDGE_MARGIN: f32 = 16.0;
 
-/// Gap above a tool stack that starts at the top of the viewport: the drawing
-/// tools always, and the view tools when the gizmo above them is hidden.
+/// Gap above the view tools when the gizmo that usually sits over them is
+/// hidden and they start at the top of the viewport.
 pub(crate) const TOOLS_TOP_MARGIN: f32 = 10.0;
 
-/// A viewport smaller than this in either direction has no room to float tools
-/// over at all.
+/// A viewport smaller than this in either direction has no room to float the
+/// view tools over at all.
 const MIN_TOOLS_VIEWPORT: f32 = 120.0;
 
 /// Gap between the orientation gizmo and the view tools stacked under it. The
@@ -49,14 +47,9 @@ const MIN_TOOLS_VIEWPORT: f32 = 120.0;
 /// on paper.
 const VIEW_TOOLS_GIZMO_GAP: f32 = 26.0;
 
-/// Cells in each of the drawing tools' groups, in the order they are drawn:
-/// the project action, the creation tools, the transform tools, the polyline
-/// edits, and the destructive one.
-const LEFT_TOOL_GROUPS: [usize; 5] = [1, 5, 4, 6, 1];
-
-/// Cells in each of the view tools' groups: the camera moves, the display
-/// toggles, and the viewing modes.
-const VIEW_TOOL_GROUPS: [usize; 3] = [3, 3, 2];
+/// Cells in the view tools' tile: the camera moves, the display toggles and
+/// the viewing modes, all on one surface.
+const VIEW_TOOL_CELLS: usize = 8;
 
 /// Draw the explorer's header: the project-wide actions, sitting above the
 /// data tree rather than out over the viewport.
@@ -210,205 +203,154 @@ pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, proj
         .rect
 }
 
-/// Draw the drawing tools: a floating stack of tiles down the viewport's left
-/// edge - the project action, the creation tools, the transform tools, the
-/// polyline edits and the destructive one, each cluster its own tile - and
-/// return the block they occupy.
-///
-/// A stack rather than a panel, so the tools float over the scene the way the
-/// view tools do on the other side, and wrap into a further column instead of
-/// scrolling when the window is too short to stand them all in one.
-pub(crate) fn draw_left_toolbar(
-    ui: &mut egui::Ui,
-    editor: &mut EditorState,
-    editing_enabled: bool,
-    project_active: bool,
-    commands: &mut Vec<UiCommand>,
-    scene_rect: egui::Rect,
-) -> egui::Rect {
-    if scene_rect.width() < MIN_TOOLS_VIEWPORT || scene_rect.height() < MIN_TOOLS_VIEWPORT {
-        return egui::Rect::NOTHING;
-    }
+/// Id of the drawing toolbar's column panel.
+pub(crate) const LEFT_TOOLBAR_PANEL_ID: &str = "left_toolbar_panel";
 
-    let anchor = egui::pos2(scene_rect.left() + TOOLS_EDGE_MARGIN, scene_rect.top() + TOOLS_TOP_MARGIN);
-    let bottom = scene_rect.bottom() - TOOLS_EDGE_MARGIN;
-    // A group greys out from inside its own tile rather than by wrapping the
-    // stack in `add_enabled_ui`: the tile is the toolbar's backdrop rather than
-    // one of its tools, so it stays opaque while the tools on it fade.
-    ToolStack::new(anchor, bottom, ToolStackGrowth::Rightwards, &LEFT_TOOL_GROUPS).show(ui.ctx(), egui::Id::new("left_tools"), scene_rect, |stack, ui| {
-        stack.group(ui, |ui| {
-            if !project_active {
-                ui.disable();
-            }
-            let new_layer = ui.add(
-                ToolCellButton::new(egui::Image::new(unthemed_icon!("layer.svg")), "New layer")
-                    .id_salt("new_layer")
-                    .selected(editor.new_layer_dialog_open),
-            );
-            if new_layer.clicked() {
-                editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
-                if editor.new_layer_dialog_open {
-                    editor.new_layer_name = "design".to_owned();
-                    commands.push(UiCommand::SetActiveTool(ActiveTool::None));
-                }
-            }
-        });
+/// Gap between the drawing toolbar's columns, on a window too short to stand
+/// its tools in one. The region's own surface fills it, so it only has to keep
+/// two cells' fills from touching.
+const LEFT_TOOL_COLUMN_GAP: f32 = 4.0;
 
-        stack.group(ui, |ui| {
-            if !editing_enabled {
-                ui.disable();
-            }
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "create_point.svg")),
-                "Create Point",
-                editor,
-                commands,
-                ActiveTool::MakePoint,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "create_line.svg")),
-                "Create Line",
-                editor,
-                commands,
-                ActiveTool::MakeLine,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "create_polyline.svg")),
-                "Create Polyline",
-                editor,
-                commands,
-                ActiveTool::MakePoly,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "create_circle.svg")),
-                "Create Circle",
-                editor,
-                commands,
-                ActiveTool::MakeCircle,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(unthemed_icon!("create_text.svg")),
-                "Create Text",
-                editor,
-                commands,
-                ActiveTool::MakeText,
-            );
-        });
-
-        stack.group(ui, |ui| {
-            if !editing_enabled {
-                ui.disable();
-            }
-            tool_cell_button(ui, egui::Image::new(themed_icon!(ui, "move_element.svg")), "Move", editor, commands, ActiveTool::Move);
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "offset_element.svg")),
-                "Offset",
-                editor,
-                commands,
-                ActiveTool::OffsetElement,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "drape_element.svg")),
-                "Drape to Topology",
-                editor,
-                commands,
-                ActiveTool::DrapeToTopology,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(unthemed_icon!("auto_bench.svg")),
-                "Auto-Bench",
-                editor,
-                commands,
-                ActiveTool::BatterBermOffset,
-            );
-        });
-
-        stack.group(ui, |ui| {
-            if !editing_enabled {
-                ui.disable();
-            }
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "relimit_line.svg")),
-                "Relimit Line",
-                editor,
-                commands,
-                ActiveTool::RelimitLine,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "fuse_lines.svg")),
-                "Fuse Polylines",
-                editor,
-                commands,
-                ActiveTool::FuseIntoPolyline,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "chamfer_corners.svg")),
-                "Chamfer Polyline Corners",
-                editor,
-                commands,
-                ActiveTool::Chamfer,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "create_bezier.svg")),
-                "Bezier Polyline",
-                editor,
-                commands,
-                ActiveTool::Bezier,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(themed_icon!(ui, "split_at_points.svg")),
-                "Split Polyline At Points",
-                editor,
-                commands,
-                ActiveTool::SplitAtPoints,
-            );
-            tool_cell_button(
-                ui,
-                egui::Image::new(unthemed_icon!("explode_polyline.svg")),
-                "Explode Polyline to Lines",
-                editor,
-                commands,
-                ActiveTool::ExplodePolyline,
-            );
-        });
-
-        stack.group(ui, |ui| {
-            if !editing_enabled {
-                ui.disable();
-            }
-            tool_cell_button(
-                ui,
-                egui::Image::new(unthemed_icon!("delete_element.svg")),
-                "Delete Points",
-                editor,
-                commands,
-                ActiveTool::DeletePoints,
-            );
-        });
-    })
+/// What one of the drawing toolbar's buttons does when clicked.
+enum LeftToolAction {
+    /// Open or close the new layer dialog.
+    NewLayer,
+    /// Make this the active tool.
+    Tool(ActiveTool),
 }
 
-/// The stack the view tools occupy, worked out without drawing anything.
+/// One button in the drawing toolbar's run.
+struct LeftTool {
+    icon: egui::Image<'static>,
+    tooltip: &'static str,
+    action: LeftToolAction,
+    /// Whether the tool can be used at all this frame.
+    enabled: bool,
+}
+
+/// The drawing tools in the order they are drawn: the project action, the
+/// creation tools, the transform tools, the polyline edits, and the
+/// destructive one.
+///
+/// One flat list rather than clusters: the column is a single run of cells, so
+/// what a tool belongs to is its neighbours' business, not a tile's.
+fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
+    let tool = |icon: egui::ImageSource<'static>, tooltip: &'static str, tool: ActiveTool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action: LeftToolAction::Tool(tool),
+        enabled: editing_enabled,
+    };
+    vec![
+        LeftTool {
+            icon: egui::Image::new(unthemed_icon!("layer.svg")),
+            tooltip: "New layer",
+            action: LeftToolAction::NewLayer,
+            enabled: project_active,
+        },
+        tool(themed_icon!(ui, "create_point.svg"), "Create Point", ActiveTool::MakePoint),
+        tool(themed_icon!(ui, "create_line.svg"), "Create Line", ActiveTool::MakeLine),
+        tool(themed_icon!(ui, "create_polyline.svg"), "Create Polyline", ActiveTool::MakePoly),
+        tool(themed_icon!(ui, "create_circle.svg"), "Create Circle", ActiveTool::MakeCircle),
+        tool(unthemed_icon!("create_text.svg"), "Create Text", ActiveTool::MakeText),
+        tool(themed_icon!(ui, "move_element.svg"), "Move", ActiveTool::Move),
+        tool(themed_icon!(ui, "offset_element.svg"), "Offset", ActiveTool::OffsetElement),
+        tool(themed_icon!(ui, "drape_element.svg"), "Drape to Topology", ActiveTool::DrapeToTopology),
+        tool(unthemed_icon!("auto_bench.svg"), "Auto-Bench", ActiveTool::BatterBermOffset),
+        tool(themed_icon!(ui, "relimit_line.svg"), "Relimit Line", ActiveTool::RelimitLine),
+        tool(themed_icon!(ui, "fuse_lines.svg"), "Fuse Polylines", ActiveTool::FuseIntoPolyline),
+        tool(themed_icon!(ui, "chamfer_corners.svg"), "Chamfer Polyline Corners", ActiveTool::Chamfer),
+        tool(themed_icon!(ui, "create_bezier.svg"), "Bezier Polyline", ActiveTool::Bezier),
+        tool(themed_icon!(ui, "split_at_points.svg"), "Split Polyline At Points", ActiveTool::SplitAtPoints),
+        tool(unthemed_icon!("explode_polyline.svg"), "Explode Polyline to Lines", ActiveTool::ExplodePolyline),
+        tool(unthemed_icon!("delete_element.svg"), "Delete Points", ActiveTool::DeletePoints),
+    ]
+}
+
+/// Draw one cell of the drawing toolbar's run.
+///
+/// A tool greys out on its own rather than the run being wrapped in a single
+/// `add_enabled_ui`: the run is one block now, and whether a cell is usable is
+/// a question about that tool rather than about the toolbar.
+fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let selected = match tool.action {
+        LeftToolAction::NewLayer => editor.new_layer_dialog_open,
+        LeftToolAction::Tool(active) => editor.active_tool == active,
+    };
+    let button = ToolCellButton::new(tool.icon.clone(), tool.tooltip).id_salt(("left_tool", tool.tooltip)).selected(selected);
+    if !ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner.clicked() {
+        return;
+    }
+    match tool.action {
+        LeftToolAction::NewLayer => {
+            editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
+            if editor.new_layer_dialog_open {
+                editor.new_layer_name = "design".to_owned();
+                commands.push(UiCommand::SetActiveTool(ActiveTool::None));
+            }
+        }
+        LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
+    }
+}
+
+/// Draw the drawing tools down a docked column between the explorer and the
+/// scene, and return what it claimed.
+///
+/// A panel rather than tiles floating over the viewport, so the tools sit
+/// flush against the scene's edge and carry the same chrome as every other
+/// panel: the column is one region, running the full height the panels around
+/// it leave, with its run of cells at the top.
+pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, editing_enabled: bool, project_active: bool, commands: &mut Vec<UiCommand>) -> egui::Rect {
+    let tools = left_tools(ui, editing_enabled, project_active);
+    // The run wraps into further columns rather than off the bottom of a short
+    // window, and a panel claims its width before anything is drawn in it - so
+    // the packing is arithmetic, every cell being one square.
+    let margins = 2.0 * f32::from(crate::ui::chrome::REGION_MARGIN);
+    let rows = (((ui.available_height() - margins) / TOOL_CELL_SIZE) as usize).clamp(1, tools.len());
+    let columns = tools.len().div_ceil(rows);
+    // Even columns, rather than full ones and a stub at the end.
+    let rows = tools.len().div_ceil(columns);
+    let width = columns as f32 * TOOL_CELL_SIZE + (columns - 1) as f32 * LEFT_TOOL_COLUMN_GAP + margins;
+
+    egui::Panel::left(LEFT_TOOLBAR_PANEL_ID)
+        .resizable(false)
+        .show_separator_line(false)
+        .exact_size(width)
+        // No padding on the region: the cells run edge to edge, so a selected
+        // tool's fill reaches its rounded corners the way it used to reach a
+        // tile's.
+        .frame(crate::ui::chrome::region_frame(ui.style()).inner_margin(egui::Margin::ZERO))
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(LEFT_TOOL_COLUMN_GAP, 0.0);
+                for column in tools.chunks(rows) {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        tool_cell_run(ui, |ui| {
+                            for tool in column {
+                                draw_left_tool(ui, tool, editor, commands);
+                            }
+                        });
+                    });
+                }
+            });
+        })
+        .response
+        .rect
+}
+
+/// The tile the view tools occupy, worked out without drawing anything, or
+/// [`egui::Rect::NOTHING`] when the viewport is too small to float them over.
 ///
 /// The tools sit in egui's middle order, so the overlays painted above them
-/// have to keep clear of the stack themselves rather than rely on paint order.
-/// Where the tools land is arithmetic - the gizmo's corner, and how many
-/// columns the viewport's height wraps them into - so those overlays can ask
-/// for this frame's block before either they or the tools are drawn.
-pub(crate) fn view_tools_stack(canvas_rect: egui::Rect, gizmo_visible: bool) -> ToolStack<'static> {
+/// have to keep clear of the tile themselves rather than rely on paint order.
+/// Where it lands is arithmetic - the gizmo's corner, and one cell per tool -
+/// so those overlays can ask for this frame's block before either they or the
+/// tools are drawn.
+pub(crate) fn view_tools_bounds(canvas_rect: egui::Rect, gizmo_visible: bool) -> egui::Rect {
+    if canvas_rect.width() < MIN_TOOLS_VIEWPORT || canvas_rect.height() < MIN_TOOLS_VIEWPORT {
+        return egui::Rect::NOTHING;
+    }
     let gizmo_rect = if gizmo_visible {
         crate::ui::elements::cursors::orientation_gizmo_rect(canvas_rect)
     } else {
@@ -419,128 +361,141 @@ pub(crate) fn view_tools_stack(canvas_rect: egui::Rect, gizmo_visible: bool) -> 
     } else {
         canvas_rect.top() + TOOLS_TOP_MARGIN
     };
-    let anchor = egui::pos2(canvas_rect.right() - TOOLS_EDGE_MARGIN - TOOL_CELL_SIZE, top);
-    ToolStack::new(anchor, canvas_rect.bottom() - TOOLS_EDGE_MARGIN, ToolStackGrowth::Leftwards, &VIEW_TOOL_GROUPS)
+    let size = egui::vec2(TOOL_CELL_SIZE, VIEW_TOOL_CELLS as f32 * TOOL_CELL_SIZE);
+    egui::Rect::from_min_size(egui::pos2(canvas_rect.right() - TOOLS_EDGE_MARGIN - TOOL_CELL_SIZE, top), size)
 }
 
-/// The block the view tools occupy, or [`egui::Rect::NOTHING`] when the
-/// viewport is too small to float them over.
-pub(crate) fn view_tools_bounds(canvas_rect: egui::Rect, gizmo_visible: bool) -> egui::Rect {
-    if canvas_rect.width() < MIN_TOOLS_VIEWPORT || canvas_rect.height() < MIN_TOOLS_VIEWPORT {
-        return egui::Rect::NOTHING;
-    }
-    view_tools_stack(canvas_rect, gizmo_visible).bounds()
-}
-
-/// Draw the view tools: a floating stack of tiles under the viewport's
-/// orientation gizmo.
+/// Draw the view tools: one floating tile under the viewport's orientation
+/// gizmo, and return the block it occupies.
 ///
-/// The stack wraps towards the middle of the viewport, so a window too short
-/// for the whole run puts the overflow in a second column beside it rather
-/// than off the bottom edge. The block it occupies is returned, and matches
-/// what [`view_tools_bounds`] promised the overlays drawn before it.
+/// The block matches what [`view_tools_bounds`] promised the overlays drawn
+/// before it. A viewport too short for the whole run clips the tile at its
+/// bottom edge rather than moving the tools somewhere the overlays are not
+/// expecting them.
 pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, canvas_rect: egui::Rect, gizmo_visible: bool) -> egui::Rect {
-    if canvas_rect.width() < MIN_TOOLS_VIEWPORT || canvas_rect.height() < MIN_TOOLS_VIEWPORT {
+    let bounds = view_tools_bounds(canvas_rect, gizmo_visible);
+    if !bounds.is_positive() {
         return egui::Rect::NOTHING;
     }
 
-    view_tools_stack(canvas_rect, gizmo_visible).show(ui.ctx(), egui::Id::new("view_tools"), canvas_rect, |stack, ui| {
-        stack.group(ui, |ui| {
-            let response = ui.add(ToolCellButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view").id_salt("reset_view"));
-            if response.clicked() {
-                commands.push(UiCommand::ResetView);
-            }
+    egui::Area::new(egui::Id::new("view_tools"))
+        // Above egui's Background layer, or right clicks inside the buttons
+        // leak through to the viewport's orbit and context handling.
+        .order(egui::Order::Middle)
+        // `Area` is movable by default, which would give the whole tile a drag
+        // response and swallow middle-drag camera moves.
+        .movable(false)
+        .sense(egui::Sense::hover())
+        // Clipped to the viewport, but deliberately not *constrained* to it:
+        // the tile has already placed itself, and letting egui slide it as
+        // well would move the tools out from under the block the caller was
+        // handed.
+        .constrain_to(canvas_rect)
+        .constrain(false)
+        .fixed_pos(bounds.min)
+        .show(ui.ctx(), |ui| {
+            let drawn = ui.scope_builder(egui::UiBuilder::new().max_rect(bounds).layout(egui::Layout::top_down(egui::Align::Center)), |ui| {
+                ToolbarGroup::new().show(ui, |ui| {
+                    let response = ui.add(ToolCellButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view").id_salt("reset_view"));
+                    if response.clicked() {
+                        commands.push(UiCommand::ResetView);
+                    }
 
-            let response = ui.add(ToolCellButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents").id_salt("zoom_to_extents"));
-            if response.clicked() {
-                commands.push(UiCommand::ZoomToExtents);
-            }
+                    let response = ui.add(ToolCellButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents").id_salt("zoom_to_extents"));
+                    if response.clicked() {
+                        commands.push(UiCommand::ZoomToExtents);
+                    }
 
-            let response = ui.add(
-                ToolCellButton::new(
-                    egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
-                    format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
-                )
-                .id_salt("vertical_exaggeration")
-                .selected(editor.vertical_exaggeration != 1.0),
+                    let response = ui.add(
+                        ToolCellButton::new(
+                            egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
+                            format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
+                        )
+                        .id_salt("vertical_exaggeration")
+                        .selected(editor.vertical_exaggeration != 1.0),
+                    );
+                    if response.clicked() {
+                        editor.vertical_exaggeration_input = editor.vertical_exaggeration;
+                        editor.vertical_exaggeration_dialog_open = true;
+                    }
+
+                    let response = ui.add(
+                        ToolCellButton::new(
+                            egui::Image::new(unthemed_icon!("toggle_xray.svg")),
+                            if editor.xray_enabled { "Disable X-Ray Vision" } else { "Enable X-Ray Vision" },
+                        )
+                        .id_salt("xray")
+                        .selected(editor.xray_enabled),
+                    );
+                    if response.clicked() {
+                        editor.xray_enabled = !editor.xray_enabled;
+                    }
+
+                    let response = ui.add(
+                        ToolCellButton::new(
+                            egui::Image::new(unthemed_icon!("toggle_points.svg")),
+                            if editor.show_points { "Hide Points" } else { "Show Points" },
+                        )
+                        .id_salt("show_points")
+                        .selected(editor.show_points),
+                    );
+                    if response.clicked() {
+                        commands.push(UiCommand::SetShowPoints(!editor.show_points));
+                    }
+
+                    let response = ui.add(
+                        ToolCellButton::new(
+                            egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
+                            if editor.topology_wireframes_enabled { "Hide Wireframes" } else { "Show Wireframes" },
+                        )
+                        .id_salt("wireframes")
+                        .selected(editor.topology_wireframes_enabled),
+                    );
+                    if response.clicked() {
+                        commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
+                    }
+
+                    // Vertical slice view: arm the two-click line placement, or
+                    // exit the mode if it is already active.
+                    let slice_engaged = editor.slice_mode_enabled || editor.active_tool == ActiveTool::VerticalSlice;
+                    let response = ui.add(
+                        ToolCellButton::new(
+                            egui::Image::new(unthemed_icon!("slice_view.svg")),
+                            if editor.slice_mode_enabled { "Exit Slice View" } else { "Vertical Slice View" },
+                        )
+                        .id_salt("vertical_slice")
+                        .selected(slice_engaged),
+                    );
+                    if response.clicked() {
+                        if editor.slice_mode_enabled {
+                            commands.push(UiCommand::SetSliceModeEnabled(false));
+                        } else {
+                            commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
+                        }
+                    }
+
+                    let response = ui.add(
+                        ToolCellButton::new(
+                            egui::Image::new(unthemed_icon!("fly_mode.svg")),
+                            if editor.fly_mode_enabled { "Disable Flying Mode" } else { "Enable Flying Mode" },
+                        )
+                        .id_salt("fly_mode")
+                        .selected(editor.fly_mode_enabled),
+                    );
+                    if response.clicked() {
+                        commands.push(UiCommand::SetFlyModeEnabled(!editor.fly_mode_enabled));
+                    }
+                });
+            });
+            debug_assert!(
+                (drawn.response.rect.height() - bounds.height()).abs() < 1.0,
+                "the view tools' tile was declared {} cells tall but drew {} points of buttons",
+                VIEW_TOOL_CELLS,
+                drawn.response.rect.height(),
             );
-            if response.clicked() {
-                editor.vertical_exaggeration_input = editor.vertical_exaggeration;
-                editor.vertical_exaggeration_dialog_open = true;
-            }
         });
 
-        stack.group(ui, |ui| {
-            let response = ui.add(
-                ToolCellButton::new(
-                    egui::Image::new(unthemed_icon!("toggle_xray.svg")),
-                    if editor.xray_enabled { "Disable X-Ray Vision" } else { "Enable X-Ray Vision" },
-                )
-                .id_salt("xray")
-                .selected(editor.xray_enabled),
-            );
-            if response.clicked() {
-                editor.xray_enabled = !editor.xray_enabled;
-            }
-
-            let response = ui.add(
-                ToolCellButton::new(
-                    egui::Image::new(unthemed_icon!("toggle_points.svg")),
-                    if editor.show_points { "Hide Points" } else { "Show Points" },
-                )
-                .id_salt("show_points")
-                .selected(editor.show_points),
-            );
-            if response.clicked() {
-                commands.push(UiCommand::SetShowPoints(!editor.show_points));
-            }
-
-            let response = ui.add(
-                ToolCellButton::new(
-                    egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
-                    if editor.topology_wireframes_enabled { "Hide Wireframes" } else { "Show Wireframes" },
-                )
-                .id_salt("wireframes")
-                .selected(editor.topology_wireframes_enabled),
-            );
-            if response.clicked() {
-                commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
-            }
-        });
-
-        stack.group(ui, |ui| {
-            // Vertical slice view: arm the two-click line placement, or
-            // exit the mode if it is already active.
-            let slice_engaged = editor.slice_mode_enabled || editor.active_tool == ActiveTool::VerticalSlice;
-            let response = ui.add(
-                ToolCellButton::new(
-                    egui::Image::new(unthemed_icon!("slice_view.svg")),
-                    if editor.slice_mode_enabled { "Exit Slice View" } else { "Vertical Slice View" },
-                )
-                .id_salt("vertical_slice")
-                .selected(slice_engaged),
-            );
-            if response.clicked() {
-                if editor.slice_mode_enabled {
-                    commands.push(UiCommand::SetSliceModeEnabled(false));
-                } else {
-                    commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
-                }
-            }
-
-            let response = ui.add(
-                ToolCellButton::new(
-                    egui::Image::new(unthemed_icon!("fly_mode.svg")),
-                    if editor.fly_mode_enabled { "Disable Flying Mode" } else { "Enable Flying Mode" },
-                )
-                .id_salt("fly_mode")
-                .selected(editor.fly_mode_enabled),
-            );
-            if response.clicked() {
-                commands.push(UiCommand::SetFlyModeEnabled(!editor.fly_mode_enabled));
-            }
-        });
-    })
+    bounds
 }
 
 /// Draw the bottom toolbar (cursor mode, measure distance).
@@ -623,25 +578,6 @@ pub(crate) fn tool_button(
 ) -> egui::Response {
     let selected = editor.active_tool == tool;
     let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("tool", tooltip)).selected(selected));
-
-    if response.clicked() {
-        commands.push(UiCommand::SetActiveTool(tool));
-    }
-
-    response
-}
-
-/// Draw a tool button inside a [`ToolbarGroup`] tile; sets `editor.active_tool` on click.
-pub(crate) fn tool_cell_button(
-    ui: &mut egui::Ui,
-    icon: egui::Image<'static>,
-    tooltip: &str,
-    editor: &mut EditorState,
-    commands: &mut Vec<UiCommand>,
-    tool: ActiveTool,
-) -> egui::Response {
-    let selected = editor.active_tool == tool;
-    let response = ui.add(ToolCellButton::new(icon, tooltip).id_salt(("tool", tooltip)).selected(selected));
 
     if response.clicked() {
         commands.push(UiCommand::SetActiveTool(tool));

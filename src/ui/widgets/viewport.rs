@@ -1277,9 +1277,8 @@ impl ViewportMiniMap {
     /// Keep the preview out from under a block of floating tools.
     ///
     /// The preview is painted in the foreground order, above the view tools,
-    /// so it has to clear their band itself rather than let paint order hide
-    /// the stack behind it - and the band is as wide as the columns the
-    /// window's height wrapped the tools into, not always the one.
+    /// so it has to clear their tile itself rather than let paint order hide
+    /// them behind it.
     pub(crate) fn clear_of(mut self, block: egui::Rect) -> Self {
         self.clear_of = block;
         self

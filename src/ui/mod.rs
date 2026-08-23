@@ -485,34 +485,36 @@ fn draw_ui(
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
 
+    // The drawing tools are a docked column between the explorer and the
+    // scene, so they are claimed before the scene's rect is worked out: what
+    // they leave is where it starts. The column is one region the full height
+    // of the workspace, like the explorer beside it.
+    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, editing_enabled, project_active, commands);
+
     // --- Compute canvas rect (area not occupied by panels) ---
     let canvas_bottom = console_rect.map_or_else(
         || status_bar_rect.top().min(bottom_toolbar_rect.top()),
         |rect| status_bar_rect.top().min(bottom_toolbar_rect.top()).min(rect.top()),
     );
     // The scene is a region like any other, so it takes the same gap around it
-    // as its neighbours do. The left toolbar has no surface of its own - its
-    // tiles float over the scene - so the scene runs behind it, out to the
-    // explorer's edge.
-    // What is left of the root ui is the canvas, so its right edge is already
+    // as its neighbours do.
+    // What is left of the root ui is the canvas, so its edges are already
     // inside the window-edge gap the chrome claimed.
     let scene_claimed = egui::Rect::from_min_max(
-        egui::pos2(explorer.column.right(), main_menu_rect.bottom().max(top_toolbar_rect.bottom())),
+        egui::pos2(root_ui.available_rect_before_wrap().left(), main_menu_rect.bottom().max(top_toolbar_rect.bottom())),
         egui::pos2(root_ui.available_rect_before_wrap().right(), canvas_bottom),
     );
     let scene_rect = chrome::region_rect(scene_claimed);
     // The scene's own margin, claimed like the window's so a scroll over the
     // gap around the viewport reaches the interface rather than the camera.
     chrome::claim_gap(root_ui, "chrome_scene_edge");
-    // Both tool stacks float over the scene rather than claiming a panel, so
-    // the scene is drawn out to its own edges. The canvas is what everything
-    // else that floats - the dialogs, the gizmo, the labels - lays itself out
-    // in, so it starts past the drawing tools' block, however many columns
-    // they wrapped into. The view tools are at the far end of that, so the
-    // canvas keeps its right edge and the two overlays that reach it dodge
-    // the stack themselves.
-    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, editing_enabled, project_active, commands, scene_rect);
-    let canvas_rect = egui::Rect::from_min_max(egui::pos2(left_toolbar_rect.right().max(scene_rect.left()), scene_rect.top()), scene_rect.max);
+    // The view tools still float over the scene rather than claiming a panel,
+    // so the scene is drawn out to its own edges. The canvas is what
+    // everything that floats - the dialogs, the gizmo, the labels - lays
+    // itself out in; the view tools are at the far end of it, so the canvas
+    // keeps its right edge and the two overlays that reach it dodge the tile
+    // themselves.
+    let canvas_rect = scene_rect;
     // Where the view tools will land, before either they or the overlays that
     // have to dodge them are drawn. They are the last thing drawn over the
     // canvas, so an overlay that asked afterwards would be a frame behind.
@@ -972,7 +974,15 @@ fn draw_ui(
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
     chrome::paint_regions(
         &ctx,
-        [explorer.tree, explorer.properties, top_toolbar_rect, bottom_toolbar_rect, console_claimed, scene_claimed],
+        [
+            explorer.tree,
+            explorer.properties,
+            top_toolbar_rect,
+            left_toolbar_rect,
+            bottom_toolbar_rect,
+            console_claimed,
+            scene_claimed,
+        ],
     );
     // The explorer's column is dragged as a whole, so its grip is centred on
     // the tree and the properties panel together rather than on either.
