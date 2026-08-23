@@ -570,7 +570,64 @@ pub(crate) fn menu_note(ui: &mut egui::Ui, text: impl Into<String>) {
         });
 }
 
-const MENU_FIELD_WIDTH: f32 = 120.0;
+/// Bounds on the width a field's control takes when the caller has not asked
+/// for a particular one.
+///
+/// The floor keeps an entry box usable in a narrow docked panel; the ceiling
+/// stops a wide dialog from stretching a number box across the whole card.
+const MENU_FIELD_MIN_WIDTH: f32 = 100.0;
+const MENU_FIELD_MAX_WIDTH: f32 = 260.0;
+
+/// The width every field in one menu gives its control.
+///
+/// Two columns that fill the row between them: the labels take what the
+/// *widest* of them needs, and the controls take the rest. The widest is
+/// measured across the rows drawn into this container on the previous frame
+/// and remembered against the container's id, so every row lands on the same
+/// column however long its own label is - and a menu with short labels does
+/// not leave a band of dead space down its middle. A container being drawn for
+/// the first time falls back to halving the row.
+///
+/// `label_needs` is what this row's own label would like, and joins the
+/// measurement for the next frame; rows that draw their own label (a read-only
+/// value, a vector triple) pass theirs through [`label_needs`] so they line up
+/// with the fields around them.
+pub(crate) fn field_column(ui: &egui::Ui, label_needs: f32) -> f32 {
+    let id = ui.id().with("menu_field_column");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let widest_label = ui.ctx().memory_mut(|memory| {
+        let (last_pass, running, settled) = memory.data.get_temp::<(u64, f32, f32)>(id).unwrap_or((u64::MAX, 0.0, 0.0));
+        // A new pass promotes what the last one measured and starts again.
+        let (running, settled) = if last_pass == pass { (running, settled) } else { (0.0, running) };
+        let running = running.max(label_needs);
+        memory.data.insert_temp(id, (pass, running, settled));
+        settled
+    });
+    let row_width = ui.available_width();
+    let width = if widest_label > 0.0 {
+        row_width - widest_label - ui.spacing().item_spacing.x
+    } else {
+        row_width * 0.5
+    };
+    width.clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH)
+}
+
+/// Width a label needs to be drawn in full, including its help marker's slot.
+pub(crate) fn label_needs(ui: &egui::Ui, label: &str, has_help_text: bool) -> f32 {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let text = ui
+        .ctx()
+        .fonts_mut(|fonts| fonts.layout_no_wrap(label.to_owned(), font_id, egui::Color32::PLACEHOLDER))
+        .size()
+        .x;
+    text + if has_help_text { HELP_MARKER_SIZE + ui.spacing().item_spacing.x } else { 0.0 }
+}
+
+/// [`field_column`] for a row that owns its label rather than passing it to
+/// [`MenuField`].
+pub(crate) fn field_column_for(ui: &egui::Ui, label: &str, has_help_text: bool) -> f32 {
+    field_column(ui, label_needs(ui, label, has_help_text))
+}
 
 /// A labelled menu row for controls that do not fit one of the standard field types.
 pub(crate) struct MenuField {
@@ -592,7 +649,10 @@ impl MenuField {
         self
     }
 
-    pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_field: impl FnOnce(&mut egui::Ui, f32) -> R) -> R {
+    /// `add_field` is given the row's height and the width of the column the
+    /// menu's controls share, so a custom control fills the same column the
+    /// standard fields do.
+    pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_field: impl FnOnce(&mut egui::Ui, f32, f32) -> R) -> R {
         menu_field_row(ui, self.label, self.help_text, add_field)
     }
 }
@@ -604,7 +664,7 @@ pub(crate) struct MenuFieldFilePicker<'paths> {
     paths: &'paths [PathBuf],
     empty_text: egui::WidgetText,
     button_text: egui::WidgetText,
-    width: f32,
+    width: Option<f32>,
 }
 
 impl<'paths> MenuFieldFilePicker<'paths> {
@@ -615,7 +675,7 @@ impl<'paths> MenuFieldFilePicker<'paths> {
             paths,
             empty_text: "No file chosen".into(),
             button_text: "Choose...".into(),
-            width: MENU_FIELD_WIDTH,
+            width: None,
         }
     }
 
@@ -635,7 +695,7 @@ impl<'paths> MenuFieldFilePicker<'paths> {
     }
 
     pub(crate) fn width(mut self, width: f32) -> Self {
-        self.width = width;
+        self.width = Some(width);
         self
     }
 
@@ -649,7 +709,8 @@ impl<'paths> MenuFieldFilePicker<'paths> {
             width,
         } = self;
         let text = selected_file_label(paths, empty_text);
-        menu_field_row(ui, label, help_text, |ui, row_height| {
+        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+            let width = width.unwrap_or(column_width);
             let inner = ui.horizontal(|ui| {
                 let clicked = ui.add(MenuButton::new(button_text).min_width(row_height * 3.8)).clicked();
                 ui.add_sized([width, row_height], egui::Label::new(text).truncate());
@@ -680,15 +741,16 @@ fn selected_file_label(paths: &[PathBuf], empty_text: egui::WidgetText) -> egui:
 /// Size of the round help marker drawn beside a label.
 const HELP_MARKER_SIZE: f32 = 14.0;
 
-fn menu_field_row<R>(ui: &mut egui::Ui, label: egui::WidgetText, help_text: Option<egui::WidgetText>, add_field: impl FnOnce(&mut egui::Ui, f32) -> R) -> R {
+fn menu_field_row<R>(ui: &mut egui::Ui, label: egui::WidgetText, help_text: Option<egui::WidgetText>, add_field: impl FnOnce(&mut egui::Ui, f32, f32) -> R) -> R {
     let row_height = ui.spacing().interact_size.y;
     let row_width = ui.available_width();
+    let column_width = field_column(ui, label_needs(ui, label.text(), help_text.is_some()));
 
     // The control claims its width first and the label takes what is left, so
     // a label too long for the row ends in an ellipsis instead of running on
     // underneath the control.
     ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let inner = add_field(ui, row_height);
+        let inner = add_field(ui, row_height, column_width);
         let label_width = ui.available_width();
         ui.allocate_ui_with_layout(egui::vec2(label_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             menu_field_label(ui, label, help_text);
@@ -744,7 +806,7 @@ macro_rules! menu_field_float {
             help_text: Option<egui::WidgetText>,
             value: &'value mut $value_type,
             range: std::ops::RangeInclusive<$value_type>,
-            width: f32,
+            width: Option<f32>,
             speed: f64,
             suffix: String,
             max_decimals: usize,
@@ -758,7 +820,7 @@ macro_rules! menu_field_float {
                     help_text: None,
                     value,
                     range,
-                    width: MENU_FIELD_WIDTH,
+                    width: None,
                     speed: 0.1,
                     suffix: String::new(),
                     max_decimals: 2,
@@ -766,7 +828,7 @@ macro_rules! menu_field_float {
             }
 
             pub(crate) fn width(mut self, width: f32) -> Self {
-                self.width = width;
+                self.width = Some(width);
                 self
             }
 
@@ -801,9 +863,9 @@ macro_rules! menu_field_float {
                     suffix,
                     max_decimals,
                 } = self;
-                menu_field_row(ui, label, help_text, |ui, row_height| {
+                menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
                     ui.add_sized(
-                        [width, row_height],
+                        [width.unwrap_or(column_width), row_height],
                         egui::DragValue::new(value).speed(speed).range(range).suffix(suffix).max_decimals(max_decimals),
                     )
                 })
@@ -821,6 +883,7 @@ macro_rules! menu_field_float {
                     max_decimals,
                 } = self;
                 let row_height = ui.spacing().interact_size.y;
+                let width = width.unwrap_or_else(|| field_column(ui, label_needs(ui, label.text(), help_text.is_some())));
                 menu_field_label(ui, label, help_text);
                 ui.add_sized(
                     [width, row_height],
@@ -857,7 +920,7 @@ impl<'value> MenuFieldBool<'value> {
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, _| ui.add(SlidingToggle::new(value)))
+        menu_field_row(ui, label, help_text, |ui, _, _| ui.add(SlidingToggle::new(value)))
     }
 }
 
@@ -915,7 +978,7 @@ pub(crate) struct MenuFieldU32<'value> {
     help_text: Option<egui::WidgetText>,
     value: &'value mut u32,
     range: std::ops::RangeInclusive<u32>,
-    width: f32,
+    width: Option<f32>,
     speed: f32,
     suffix: String,
 }
@@ -928,14 +991,14 @@ impl<'value> MenuFieldU32<'value> {
             help_text: None,
             value,
             range,
-            width: MENU_FIELD_WIDTH,
+            width: None,
             speed: 1.,
             suffix: String::new(),
         }
     }
 
     pub(crate) fn width(mut self, width: f32) -> Self {
-        self.width = width;
+        self.width = Some(width);
         self
     }
 
@@ -964,8 +1027,11 @@ impl<'value> MenuFieldU32<'value> {
             speed,
             suffix,
         } = self;
-        menu_field_row(ui, label, help_text, |ui, row_height| {
-            ui.add_sized([width, row_height], egui::DragValue::new(value).speed(speed).range(range).suffix(suffix))
+        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+            ui.add_sized(
+                [width.unwrap_or(column_width), row_height],
+                egui::DragValue::new(value).speed(speed).range(range).suffix(suffix),
+            )
         })
     }
 }
@@ -975,7 +1041,7 @@ pub(crate) struct MenuFieldText<'value> {
     label: egui::WidgetText,
     help_text: Option<egui::WidgetText>,
     value: &'value mut String,
-    width: f32,
+    width: Option<f32>,
     hint: egui::WidgetText,
 }
 
@@ -985,13 +1051,13 @@ impl<'value> MenuFieldText<'value> {
             label: label.into(),
             help_text: None,
             value,
-            width: MENU_FIELD_WIDTH,
+            width: None,
             hint: egui::WidgetText::default(),
         }
     }
 
     pub(crate) fn width(mut self, width: f32) -> Self {
-        self.width = width;
+        self.width = Some(width);
         self
     }
 
@@ -1013,8 +1079,8 @@ impl<'value> MenuFieldText<'value> {
             width,
             hint,
         } = self;
-        menu_field_row(ui, label, help_text, |ui, row_height| {
-            ui.add_sized([width, row_height], egui::TextEdit::singleline(value).hint_text(hint))
+        menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
+            ui.add_sized([width.unwrap_or(column_width), row_height], egui::TextEdit::singleline(value).hint_text(hint))
         })
     }
 }
@@ -1037,7 +1103,7 @@ impl<'value> MenuFieldColor32<'value> {
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, _| ui.color_edit_button_srgba(value))
+        menu_field_row(ui, label, help_text, |ui, _, _| ui.color_edit_button_srgba(value))
     }
 }
 
@@ -1064,7 +1130,7 @@ impl<'value> MenuFieldRgba<'value> {
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, _| ui.color_edit_button_rgba_premultiplied(value))
+        menu_field_row(ui, label, help_text, |ui, _, _| ui.color_edit_button_rgba_premultiplied(value))
     }
 }
 
@@ -1076,7 +1142,7 @@ pub(crate) struct MenuFieldCombo<'value, T> {
     value: &'value mut T,
     selected_text: egui::WidgetText,
     options: Vec<(T, egui::WidgetText)>,
-    width: f32,
+    width: Option<f32>,
 }
 
 impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
@@ -1094,12 +1160,12 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             value,
             selected_text: selected_text.into(),
             options: options.into_iter().collect(),
-            width: MENU_FIELD_WIDTH,
+            width: None,
         }
     }
 
     pub(crate) fn width(mut self, width: f32) -> Self {
-        self.width = width;
+        self.width = Some(width);
         self
     }
 
@@ -1118,7 +1184,8 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             options,
             width,
         } = self;
-        menu_field_row(ui, label, help_text, |ui, _| {
+        menu_field_row(ui, label, help_text, |ui, _, column_width| {
+            let width = width.unwrap_or(column_width);
             let selected_tooltip = selected_text.text().to_owned();
             let mut selection_changed = false;
             let mut response = egui::ComboBox::from_id_salt(id)

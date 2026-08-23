@@ -19,9 +19,9 @@ pub(crate) fn draw_exit_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
             if ui.add(MenuButton::new("Save and Exit").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndExit);
             }
-            // Discarding work stays mouse-only: Enter must never be the key
-            // that throws away unsaved changes.
-            if ui.add(MenuButton::new("Exit Without Saving")).clicked() {
+            // Red, and mouse-only: Enter must never be the key that throws
+            // away unsaved changes.
+            if ui.add(MenuButton::new("Exit Without Saving").danger()).clicked() {
                 commands.push(UiCommand::ExitWithoutSaving);
             }
             if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {

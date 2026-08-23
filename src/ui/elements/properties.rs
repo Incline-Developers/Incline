@@ -33,7 +33,6 @@ const TAB_BUTTON_HEIGHT: f32 = 26.0;
 const TAB_GROUP_GAP: f32 = 10.0;
 /// Width the labelled fields give their control, leaving room for the label in
 /// a panel far narrower than a dialog.
-const FIELD_WIDTH: f32 = 88.0;
 /// Shortest the panel may be dragged, and the height it keeps when the side
 /// panel is too short to honour [`MIN_TREE_HEIGHT`] as well.
 const MIN_HEIGHT: f32 = 120.0;
@@ -356,14 +355,12 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
             &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
                 .speed(0.0001)
                 .max_decimals(4)
-                .width(FIELD_WIDTH)
                 .show(ui),
         );
         changed |= committed(
             &MenuFieldF64::new("Zoom sensitivity", &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
                 .speed(0.0001)
                 .max_decimals(4)
-                .width(FIELD_WIDTH)
                 .show(ui),
         );
         changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.plan_invert_vertical_look).show(ui));
@@ -373,17 +370,11 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
         ui.add_space(12.0);
         ui.strong("Fly Mode");
         ui.add_space(4.0);
-        changed |= committed(
-            &MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
-                .suffix("°")
-                .width(FIELD_WIDTH)
-                .show(ui),
-        );
+        changed |= committed(&MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0).suffix("°").show(ui));
         changed |= committed(
             &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
                 .speed(0.0001)
                 .max_decimals(4)
-                .width(FIELD_WIDTH)
                 .show(ui),
         );
         changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.fly_invert_vertical_look).show(ui));
@@ -392,14 +383,12 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
             &MenuFieldF64::new("Near clip limit", &mut draft.fly_near_clip_limit, 0.01..=100.0)
                 .speed(0.01)
                 .suffix("m")
-                .width(FIELD_WIDTH)
                 .show(ui),
         );
         changed |= committed(
             &MenuFieldF64::new("Max clip span", &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
                 .speed(100.0)
                 .suffix("m")
-                .width(FIELD_WIDTH)
                 .show(ui),
         );
         changed
@@ -409,28 +398,12 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
 fn draw_performance_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     settings_section(ui, editor, commands, "Performance", |ui, draft| {
         let mut changed = false;
-        changed |= committed(
-            &MenuFieldU32::new("Snap polling", &mut draft.snap_poll_rate, 5..=1000)
-                .suffix(" Hz")
-                .width(FIELD_WIDTH)
-                .show(ui),
-        );
-        changed |= committed(
-            &MenuFieldU32::new("Frame rate cap", &mut draft.frame_rate_cap, 20..=1000)
-                .suffix(" FPS")
-                .width(FIELD_WIDTH)
-                .show(ui),
-        );
-        changed |= committed(
-            &MenuFieldU32::new("Cap while resizing", &mut draft.resize_frame_rate_cap, 20..=1000)
-                .suffix(" FPS")
-                .width(FIELD_WIDTH)
-                .show(ui),
-        );
+        changed |= committed(&MenuFieldU32::new("Snap polling", &mut draft.snap_poll_rate, 5..=1000).suffix(" Hz").show(ui));
+        changed |= committed(&MenuFieldU32::new("Frame rate cap", &mut draft.frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
+        changed |= committed(&MenuFieldU32::new("Cap while resizing", &mut draft.resize_frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
         changed |= committed(
             &MenuFieldU32::new("Block model downscale", &mut draft.block_model_interaction_resolution_divisor, 1..=64)
                 .suffix("x")
-                .width(FIELD_WIDTH)
                 .show(ui),
         );
         changed |= committed(
@@ -508,8 +481,11 @@ fn draw_triangulation_tab(ui: &mut egui::Ui, project: &UiProjectView, context: &
 fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
     let row_height = ui.spacing().interact_size.y;
     let row_width = ui.available_width();
+    // The same column width the fields resolve for themselves, or the values
+    // would not line up under them.
+    let value_width = crate::ui::widgets::menu::field_column_for(ui, label, false);
     ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(value_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new(value).color(ui.visuals().weak_text_color()));
         });
         let label_width = ui.available_width();
@@ -569,7 +545,6 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         if first_closed { "Closed" } else { "Open" },
         [(true, "Closed".into()), (false, "Open".into())],
     )
-    .width(FIELD_WIDTH)
     .show(ui);
     if closed != first_closed {
         commands.push(UiCommand::BatchSetPolylineClosed(context.polylines.clone(), closed));
@@ -584,7 +559,6 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         fill_style_label(first_fill),
         [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
     )
-    .width(FIELD_WIDTH)
     .show(ui);
     if fill != first_fill {
         commands.push(UiCommand::BatchSetObjectFill(context.polylines.clone(), fill));
@@ -600,7 +574,6 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         let response = MenuFieldF32::new("Line weight", line_weight, 0.1..=20.0)
             .help_text("Stroke width used to draw the selected polylines.")
             .speed(0.1)
-            .width(FIELD_WIDTH)
             .show(ui);
         let line_weight = *line_weight;
         if committed(&response) {

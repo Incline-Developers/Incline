@@ -20,7 +20,6 @@ pub(crate) fn draw_vertical_exaggeration_dialog(ui: &mut egui::Ui, editor: &mut 
             ui.add_space(8.0);
             let response = MenuFieldF64::new("Z scale ratio", &mut editor.vertical_exaggeration_input, 0.1..=20.)
                 .max_decimals(1)
-                .width(100.)
                 .speed(0.1)
                 .suffix("x")
                 .show(ui);

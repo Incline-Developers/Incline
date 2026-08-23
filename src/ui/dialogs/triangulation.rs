@@ -155,7 +155,7 @@ fn triangulation_picker_field_with_width(
     width: f32,
 ) -> bool {
     let mut pick_clicked = false;
-    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height| {
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
         let selector_width = width - ui.spacing().item_spacing.x - PICK_BUTTON_WIDTH;
         ui.allocate_ui_with_layout(egui::vec2(width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             egui::ComboBox::from_id_salt(id_source)
@@ -279,8 +279,7 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
             .width(PICK_SELECTOR_WIDTH)
             .hint_text("triangulation name")
             .show(ui);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             let ready = has_selection && !editor.tri_name_input.trim().is_empty();
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
             let cancel = menu::dialog_cancel_pressed(ui.ctx());
@@ -328,8 +327,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                      triangulation. This can shift the generated surface locally by up to 5 cm; \
                      the source polylines are unchanged.",
             );
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 if ui.add(MenuButton::new("Weld & Retry").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::ExecuteCreateTriangulationWithWeld {
                         name: failure.name.clone(),
@@ -356,8 +354,7 @@ pub(crate) fn draw_tri_create_failure_dialog(ui: &mut egui::Ui, editor: &mut Edi
                      segments will be ignored as breaklines and the surface will interpolate \
                      through those areas. The source polylines are unchanged.",
             );
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 if ui.add(MenuButton::new("Generate Upper Surface").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::ExecuteCreateTriangulationUpperSurface {
                         name: failure.name.clone(),
@@ -489,7 +486,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                     "A closed polyline whose XY boundary defines the clipping area. Use Pick to \
                      select it in the viewport.",
                 )
-                .show(ui, |ui, row_height| {
+                .show(ui, |ui, row_height, _| {
                     let poly_label = if editor.tri_cut_poly_object_id.is_some() {
                         editor.tri_cut_poly_object_name.as_str()
                     } else {
@@ -518,7 +515,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
                     "Keep inside discards surface outside the polyline. Keep outside cuts a \
                      polyline-shaped hole from the surface.",
                 )
-                .show(ui, |ui, row_height| {
+                .show(ui, |ui, row_height, _| {
                     let (response, clicked) = centered_choice_buttons(
                         ui,
                         row_height,
@@ -563,7 +560,7 @@ pub(crate) fn draw_cut_poly_dialog(ui: &mut egui::Ui, editor: &mut EditorState, 
 
             let can_run = editor.tri_cut_poly_tri_id.is_some() && editor.tri_cut_poly_object_id.is_some() && !editor.tri_cut_poly_name_input.trim().is_empty();
 
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if (ui.add(MenuButton::new("Clip").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(tri_id), Some(poly_id)) = (editor.tri_cut_poly_tri_id, editor.tri_cut_poly_object_id)
@@ -638,7 +635,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     "Minimum and maximum elevations retained in the output surface. The minimum \
                      must be below the maximum.",
                 )
-                .show(ui, |ui, row_height| {
+                .show(ui, |ui, row_height, _| {
                     let width = picker_control_width(ui);
                     let gap = ui.spacing().item_spacing.x;
                     let field_width = (width - gap) * 0.5;
@@ -683,7 +680,7 @@ pub(crate) fn draw_cut_z_dialog(ui: &mut egui::Ui, editor: &mut EditorState, pro
             let valid_z_range = z_min.is_finite() && z_max.is_finite() && z_min < z_max;
             let can_run = editor.tri_cut_z_tri_id.is_some() && valid_z_range && !editor.tri_cut_z_name_input.trim().is_empty();
 
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if (ui.add(MenuButton::new("Slice").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let Some(tri_id) = editor.tri_cut_z_tri_id
@@ -783,7 +780,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                     "Choose which side of the reference topology to remove from the surface \
                      within their shared XY area.",
                 )
-                .show(ui, |ui, row_height| {
+                .show(ui, |ui, row_height, _| {
                     let (response, clicked) = centered_choice_buttons(
                         ui,
                         row_height,
@@ -822,7 +819,7 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 && editor.tri_cut_surface_reference_id.is_some()
                 && editor.tri_cut_surface_target_id != editor.tri_cut_surface_reference_id
                 && !editor.tri_cut_surface_name_input.trim().is_empty();
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if (ui.add(MenuButton::new("Trim").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(target_id), Some(reference_id)) = (editor.tri_cut_surface_target_id, editor.tri_cut_surface_reference_id)
@@ -939,7 +936,7 @@ pub(crate) fn draw_cut_topology_to_pit_shell_dialog(ui: &mut egui::Ui, editor: &
 
             let can_run = editor.tri_cut_pitshell_topology_id.is_some() && editor.tri_cut_pitshell_pitshell_id.is_some() && !editor.tri_cut_pitshell_name_input.trim().is_empty();
 
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if (ui.add(MenuButton::new("Cut").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(topology_id), Some(pit_shell_id)) = (editor.tri_cut_pitshell_topology_id, editor.tri_cut_pitshell_pitshell_id)
@@ -1053,7 +1050,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                 && editor.tri_include_solid_shape_id.is_some()
                 && editor.tri_include_solid_topology_id != editor.tri_include_solid_shape_id
                 && !editor.tri_include_solid_name_input.trim().is_empty();
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if (ui.add(MenuButton::new("Merge").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let (Some(topology_id), Some(shape_id)) = (editor.tri_include_solid_topology_id, editor.tri_include_solid_shape_id)
@@ -1132,7 +1129,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                     "Minor controls ordinary contours. Major controls emphasized contours and \
                      must use an interval at least as large as Minor.",
                 )
-                .show(ui, |ui, row_height| {
+                .show(ui, |ui, row_height, _| {
                     let width = control_width;
                     let gap = ui.spacing().item_spacing.x;
                     let colour_width = ui.spacing().interact_size.x;
@@ -1171,7 +1168,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                     "When enabled, generate contours only between the specified minimum and \
                      maximum elevations.",
                 )
-                .show(ui, |ui, row_height| {
+                .show(ui, |ui, row_height, _| {
                     let width = control_width;
                     ui.allocate_ui_with_layout(
                         egui::vec2(width, row_height),
@@ -1288,7 +1285,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                 && (editor.tri_contour_target_layer.is_some()
                     || (!new_layer_name.is_empty() && !new_layer_name_conflicts));
 
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 if (ui.add(MenuButton::new("Generate").primary().enabled(can_run)).clicked() || (confirm && can_run))
                     && let Some(tri_id) = editor.tri_contour_tri_id
@@ -1501,8 +1498,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
             .width(220.0)
             .hint_text("Surface")
             .show(ui);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             let can_run = selected.is_some() && !editor.point_cloud_tin_name_input.trim().is_empty() && memory_ok;
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
             if (ui.add(MenuButton::new("Generate").primary().enabled(can_run)).clicked() || (confirm && can_run))

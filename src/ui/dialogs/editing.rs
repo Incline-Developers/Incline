@@ -182,18 +182,22 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
 
     DragableMenu::new("Move to Layer").open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
         ui.set_max_width(280.0);
-        MenuField::new("Action").show(ui, |ui, _| {
+        // Added in reverse: a field row lays its control out from the right.
+        MenuField::new("Action").show(ui, |ui, _, _| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut dialog.copy, false, "Move");
-                ui.selectable_value(&mut dialog.copy, true, "Copy");
+                if ui.add(MenuButton::new("Copy").selected(dialog.copy).min_width(64.0)).clicked() {
+                    dialog.copy = true;
+                }
+                if ui.add(MenuButton::new("Move").selected(!dialog.copy).min_width(64.0)).clicked() {
+                    dialog.copy = false;
+                }
             })
             .response
         });
         MenuFieldCombo::new("move_to_layer_target", "Layer", &mut dialog.target_layer, selected_label, layer_options)
             .width(180.0)
             .show(ui);
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             let action_label = if dialog.copy { "Copy" } else { "Move" };
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
             if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
@@ -244,7 +248,7 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
         ui.add_space(4.0);
         let submitted = menu::dialog_confirm_pressed(ui.ctx());
         let cancelled = menu::dialog_cancel_pressed(ui.ctx());
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
                 apply = true;
             }
@@ -294,7 +298,7 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
         ui.add_space(4.0);
         let submitted = menu::dialog_confirm_pressed(ui.ctx());
         let cancelled = menu::dialog_cancel_pressed(ui.ctx());
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
                 apply = true;
             }
@@ -474,7 +478,7 @@ pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<U
             MenuFieldText::new("Project name", &mut editor.new_project_name).hint_text("Required").show(ui);
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
             let cancelled = menu::dialog_cancel_pressed(ui.ctx());
-            ui.horizontal(|ui| {
+            menu::menu_actions(ui, |ui| {
                 if (submitted || ui.add(MenuButton::new("Create project").primary().enabled(can_create)).clicked()) && can_create {
                     commands.push(UiCommand::CreateBrowserProject {
                         name: editor.new_project_name.trim().to_owned(),
@@ -532,7 +536,7 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         // rest of the row to the label, so the extra width here is the label's.
         ui.set_max_width(380.);
         MenuFieldText::new("New name", &mut name_buf).width(260.0).hint_text("Required").show(ui);
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             let can_rename = !name_buf.trim().is_empty();
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
             if (submitted || ui.add(MenuButton::new("Rename").primary().enabled(can_rename)).clicked()) && can_rename {
@@ -610,7 +614,7 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
 /// Draw the polyline finish dialog (Close / Leave open / Cancel) near the cursor.
 pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
     ViewportDockPanel::new("finish_poly_dialog", "Finish Polyline", viewport_rect).show(ui, |ui| {
-        MenuField::new("Shape").show(ui, |ui, _| {
+        MenuField::new("Shape").show(ui, |ui, _, _| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add(MenuButton::new("Open").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::CommitStrokeOpen);
@@ -655,7 +659,7 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                     "Choose whether the entered value is distance along the slope, horizontal \
                      width, or vertical height.",
                 )
-                .show(ui, |ui, _| {
+                .show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, "Distance");
                         ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, "Width");
@@ -672,7 +676,7 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                         "Relative applies a vertical change to every point. Absolute RL projects \
                          every point onto one target elevation.",
                     )
-                    .show(ui, |ui, _| {
+                    .show(ui, |ui, _, _| {
                         ui.horizontal(|ui| {
                             ui.selectable_value(mode, HeightMode::Relative, "Relative (+/-)");
                             ui.selectable_value(mode, HeightMode::AbsoluteRL, "Absolute RL");
@@ -800,7 +804,7 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
 
             MenuField::new("Type")
                 .help_text("Pit steps inward and down; Stockpile steps inward and up.")
-                .show(ui, |ui, row_height| {
+                .show(ui, |ui, row_height, _| {
                     let gap = ui.spacing().item_spacing.x;
                     let button_width = (CONTROL_WIDTH - gap) * 0.5;
                     ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -852,7 +856,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                     "Intersect moves one endpoint to another line. Absolute sets the final line \
                      length. Relative adds or subtracts length.",
                 )
-                .show(ui, |ui, _| {
+                .show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
                         ui.selectable_value(
                             &mut editor.relimit_mode,
@@ -914,7 +918,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                         .help_text(
                             "Select the endpoint that changes; the other endpoint remains fixed.",
                         )
-                        .show(ui, |ui, _| {
+                        .show(ui, |ui, _, _| {
                             ui.horizontal(|ui| {
                                 ui.selectable_value(
                                     &mut editor.relimit_resize_end,
@@ -1044,7 +1048,7 @@ pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, co
 
 fn draw_bezier_xyz(ui: &mut egui::Ui, label: &'static str, help_text: &'static str, point: &mut [f64; 3]) {
     const TOTAL_WIDTH: f32 = 270.0;
-    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height| {
+    MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let value_width = (TOTAL_WIDTH - ui.spacing().item_spacing.x * 2.0) / 3.0;
         ui.horizontal(|ui| {
@@ -1088,7 +1092,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
                         "Choose which of the two polyline paths between the selected vertices \
                              will be replaced. Length includes elevation and curved edges.",
                     )
-                    .show(ui, |ui, row_height| {
+                    .show(ui, |ui, row_height, _| {
                         ui.horizontal(|ui| {
                             if ui
                                 .add_sized([82.0, row_height], egui::Button::selectable(!editor.bezier_replace_longer, "Shortest"))

@@ -30,7 +30,6 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
             let field_options =
                 std::iter::once((None, "Uniform white".into())).chain(dataset.dataset.fields.iter().map(|field| (Some(field.key.clone()), field.label.clone().into())));
             if MenuFieldCombo::new(("drill_hole_field", id), "Field", &mut active_field, active_label, field_options)
-                .width(250.0)
                 .show(ui)
                 .changed()
             {
@@ -55,7 +54,6 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                         dataset.color.preset.label(),
                         DrillColorPreset::ALL.map(|preset| (preset, preset.label().into())),
                     )
-                    .width(250.0)
                     .show(ui)
                     .changed()
                     {
@@ -68,7 +66,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     let mut remove = None;
                     let can_remove = stops.len() > 2;
                     for (index, stop) in stops.iter_mut().enumerate() {
-                        MenuField::new(format!("Stop {}", index + 1)).show(ui, |ui, _| {
+                        MenuField::new(format!("Stop {}", index + 1)).show(ui, |ui, _, _| {
                             changed |= egui::color_picker::color_edit_button_rgb(ui, &mut stop.color).changed();
                             let actual = if (*max - *min).abs() <= f64::EPSILON {
                                 *min
@@ -117,7 +115,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     let mut categories = dataset.color.categories.clone();
                     let mut changed = false;
                     for category in &mut categories {
-                        MenuField::new(&category.value).show(ui, |ui, _| {
+                        MenuField::new(&category.value).show(ui, |ui, _, _| {
                             changed |= egui::color_picker::color_edit_button_rgb(ui, &mut category.color).changed();
                         });
                     }

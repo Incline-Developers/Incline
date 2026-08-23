@@ -16,17 +16,10 @@ use crate::{
 pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     let mut open = true;
     DragableMenu::new("Create Block Model").open(&mut open).min_width(390.0).show(ui.ctx(), |ui| {
-        egui::Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .corner_radius(3.0)
-            .inner_margin(egui::Margin::symmetric(6, 4))
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("Ordinary Kriging estimates numeric drill-hole intervals at each block centre using a spherical variogram.")
-                        .italics()
-                        .weak(),
-                );
-            });
+        menu::menu_note(
+            ui,
+            "Ordinary Kriging estimates numeric drill-hole intervals at each block centre using a spherical variogram.",
+        );
         ui.add_space(4.0);
 
         let selected_label = editor
@@ -42,7 +35,6 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             drill_holes.iter().map(|dataset| (Some(dataset.id), dataset.name.clone().into())),
         )
         .help_text("Loaded Drill Holes collection containing numeric interval values.")
-        .width(240.0)
         .show(ui)
         .changed();
 
@@ -73,6 +65,9 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             labels => format!("{} variables selected", labels.len()),
         };
         let mut variable_changed = false;
+        // Resolved out here: inside the row's own `ui` the column would be
+        // measured against this row alone rather than the whole dialog.
+        let column_width = menu::field_column_for(ui, "Estimate variables", true);
         ui.horizontal(|ui| {
             menu_field_label(
                 ui,
@@ -82,7 +77,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 egui::ComboBox::from_id_salt("kriging_variables")
                     .selected_text(selected_text)
-                    .width(240.0)
+                    .width(column_width)
                     .show_ui(ui, |ui| {
                         ui.horizontal(|ui| {
                             if ui.small_button("Select all").clicked() {
@@ -119,7 +114,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             let spread = max - min;
             editor.kriging_sill = (spread * spread / 12.0).max(1.0e-6);
         }
-        MenuFieldText::new("Output name", &mut editor.kriging_name_input).width(240.0).show(ui);
+        MenuFieldText::new("Output name", &mut editor.kriging_name_input).show(ui);
 
         ui.separator();
         ui.strong("Block grid");
@@ -165,23 +160,18 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
         ui.strong("Spherical variogram and search");
         MenuFieldF64::new("Range / search radius", &mut editor.kriging_range, 0.001..=f64::MAX)
             .help_text("Samples farther than this distance are excluded; covariance reaches zero at this range.")
-            .width(130.0)
             .show(ui);
         MenuFieldF64::new("Partial sill", &mut editor.kriging_sill, 0.000001..=f64::MAX)
             .help_text("Spatially correlated variance contributed by the spherical model. Together with the nugget, it sets covariance at zero distance.")
-            .width(130.0)
             .show(ui);
         MenuFieldF64::new("Nugget", &mut editor.kriging_nugget, 0.0..=f64::MAX)
             .help_text("Variance at effectively zero separation caused by measurement error or variation below the sampling scale. Use zero when no nugget effect is intended.")
-            .width(130.0)
             .show(ui);
         MenuFieldU32::new("Minimum samples", &mut editor.kriging_min_samples, 1..=64)
             .help_text("Minimum nearby samples required to estimate a block. Blocks with fewer samples inside the search radius are left empty.")
-            .width(100.0)
             .show(ui);
         MenuFieldU32::new("Maximum samples", &mut editor.kriging_max_samples, 1..=64)
             .help_text("Maximum nearest samples used for each block. Lower values run faster; higher values can smooth estimates and increase computation time.")
-            .width(100.0)
             .show(ui);
 
         let ready = editor.kriging_drill_hole_id.is_some()
@@ -197,11 +187,8 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             && editor.kriging_min_samples > 0
             && editor.kriging_min_samples <= editor.kriging_max_samples
             && editor.kriging_max_samples <= 64;
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
-            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
-                editor.block_model_create_open = false;
-            }
             if ui.add(MenuButton::new("Create").primary().enabled(ready)).clicked() || (confirm && ready) {
                 commands.push(UiCommand::ExecuteCreateBlockModel {
                     drill_hole_id: editor.kriging_drill_hole_id.unwrap(),
@@ -217,6 +204,9 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
                     max_samples: editor.kriging_max_samples,
                 });
             }
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                editor.block_model_create_open = false;
+            }
         });
     });
     if !open {
@@ -225,12 +215,24 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
 }
 
 fn vector_fields(ui: &mut egui::Ui, label: &str, help_text: &str, value: &mut glam::DVec3, range: std::ops::RangeInclusive<f64>) {
+    // Three boxes sharing the column the fields above them use, so the grid
+    // rows line up with the rest of the dialog rather than sizing themselves
+    // to whatever numbers they happen to hold.
+    let row_height = ui.spacing().interact_size.y;
+    let gap = ui.spacing().item_spacing.x;
+    let each = ((menu::field_column_for(ui, label, true) - gap * 2.0) / 3.0).max(36.0);
     ui.horizontal(|ui| {
         menu_field_label(ui, label.into(), Some(help_text.into()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(egui::DragValue::new(&mut value.z).range(range.clone()).prefix("Z ").speed(1.0).max_decimals(3));
-            ui.add(egui::DragValue::new(&mut value.y).range(range.clone()).prefix("Y ").speed(1.0).max_decimals(3));
-            ui.add(egui::DragValue::new(&mut value.x).range(range).prefix("X ").speed(1.0).max_decimals(3));
+            ui.add_sized(
+                [each, row_height],
+                egui::DragValue::new(&mut value.z).range(range.clone()).prefix("Z ").speed(1.0).max_decimals(3),
+            );
+            ui.add_sized(
+                [each, row_height],
+                egui::DragValue::new(&mut value.y).range(range.clone()).prefix("Y ").speed(1.0).max_decimals(3),
+            );
+            ui.add_sized([each, row_height], egui::DragValue::new(&mut value.x).range(range).prefix("X ").speed(1.0).max_decimals(3));
         });
     });
 }
@@ -272,7 +274,6 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
             selected_label,
             block_models.iter().map(|model| (Some(model.id), model.name.clone().into())),
         )
-        .width(230.0)
         .show(ui);
 
         let variables: Vec<String> = editor
@@ -295,7 +296,6 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
             variable_label.as_str(),
             variables.iter().map(|name| (name.clone(), name.clone().into())),
         )
-        .width(230.0)
         .show(ui);
 
         let mode_label = match editor.ore_filter_mode {
@@ -314,14 +314,13 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
                 (OreFilterMode::Between, "Between".into()),
             ],
         )
-        .width(160.0)
         .show(ui);
 
-        MenuFieldF64::new("Threshold / min", &mut editor.ore_min_input, f64::MIN..=f64::MAX).width(120.0).show(ui);
+        MenuFieldF64::new("Threshold / min", &mut editor.ore_min_input, f64::MIN..=f64::MAX).show(ui);
         if editor.ore_filter_mode == OreFilterMode::Between {
-            MenuFieldF64::new("Max", &mut editor.ore_max_input, f64::MIN..=f64::MAX).width(120.0).show(ui);
+            MenuFieldF64::new("Max", &mut editor.ore_max_input, f64::MIN..=f64::MAX).show(ui);
         }
-        MenuFieldText::new("Output name", &mut editor.ore_name_input).width(230.0).show(ui);
+        MenuFieldText::new("Output name", &mut editor.ore_name_input).show(ui);
 
         let min = editor.ore_min_input;
         let max = editor.ore_max_input;
@@ -330,11 +329,8 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
             && !editor.ore_name_input.trim().is_empty()
             && min.is_finite()
             && (editor.ore_filter_mode != OreFilterMode::Between || max.is_finite());
-        ui.horizontal(|ui| {
+        menu::menu_actions(ui, |ui| {
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
-            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
-                editor.ore_triangulation_open = false;
-            }
             if ui.add(MenuButton::new("Create").primary().enabled(ready)).clicked() || (confirm && ready) {
                 commands.push(UiCommand::ExecuteCreateOreTriangulation {
                     block_model_id: editor.ore_block_model_id.unwrap(),
@@ -344,6 +340,9 @@ pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut Edit
                     max: if editor.ore_filter_mode == OreFilterMode::Between { max } else { min },
                     name: editor.ore_name_input.trim().to_owned(),
                 });
+            }
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                editor.ore_triangulation_open = false;
             }
         });
     });

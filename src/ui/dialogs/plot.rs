@@ -513,7 +513,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     ui.add_space(6.0);
                     ui.separator();
                     let valid = layout(&dialog.spec(Vec::new())).is_ok();
-                    ui.horizontal(|ui| {
+                    menu::menu_actions(ui, |ui| {
                         let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
                         let cancel_key = menu::dialog_cancel_pressed(ui.ctx());
                         export = ui.add(MenuButton::new("Export PNG...").primary().enabled(valid)).clicked() || (confirm_key && valid);
