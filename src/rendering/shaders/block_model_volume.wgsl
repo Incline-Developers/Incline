@@ -4,6 +4,9 @@ struct CameraUniform {
     cam_position: vec4<f32>,
     viewport: vec4<f32>,
     inv_view_proj: mat4x4<f32>,
+    // xy: viewport rect offset in physical pixels within the full-window
+    // `scene_depth` target - see `fs_main`.
+    viewport_origin: vec4<f32>,
 };
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
@@ -394,9 +397,13 @@ fn fetch_cell_payload(slot: u32, bs: u32, local: u32) -> u32 {
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // camera.viewport.w carries the render scale (<1 while interacting): the
     // raycaster draws into a `viewport.xy * render_scale` sub-rect that is
-    // upscaled afterwards. `frag_coord` is in that sub-rect's space, so the
-    // full-screen ray for this fragment uses the scaled dims, and the
-    // full-resolution depth texel is at `frag_coord / render_scale`.
+    // upscaled afterwards. `frag_coord` is in that sub-rect's own 0-based
+    // space, so the full-screen ray for this fragment uses the scaled dims,
+    // and the full-resolution depth texel is at
+    // `frag_coord / render_scale + viewport_origin` - `scene_depth` is the
+    // whole (toolbar-occluded) window's depth buffer, not just the visible
+    // viewport, so the offset this sub-rect starts at within it must be added
+    // back before indexing.
     let render_scale = select(camera.viewport.w, 1.0, camera.viewport.w <= 0.0);
     let scaled_dims = camera.viewport.xy * render_scale;
     let uv = frag_coord.xy / max(scaled_dims, vec2<f32>(1.0));
@@ -445,7 +452,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let motion_quality = max(camera.viewport.z, 1.0);
     let lod_len = volume.lod.x * max(volume.options.y, 1.0e-6) / motion_quality;
 
-    let pixel = vec2<i32>(frag_coord.xy / render_scale);
+    let pixel = vec2<i32>(frag_coord.xy / render_scale + camera.viewport_origin.xy);
     let opaque_depth = textureLoad(scene_depth, pixel, 0);
     var t = volume_entry;
     var t_exit = volume_exit;

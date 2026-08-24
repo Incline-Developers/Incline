@@ -1,31 +1,26 @@
 @group(0) @binding(0)
 var accum: texture_2d<f32>;
 
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
 @vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
     var positions = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -3.0),
         vec2<f32>(-1.0, 1.0),
         vec2<f32>(3.0, 1.0),
     );
-    let pos = positions[vertex_index];
-    var out: VertexOutput;
-    out.clip_position = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = pos * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
-    return out;
+    return vec4<f32>(positions[vertex_index], 0.0, 1.0);
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(@builtin(position) fragment_position: vec4<f32>) -> @location(0) vec4<f32> {
+    // `accum` is sized and positioned to match the full render target this
+    // pass draws into (both this pass and the one that filled `accum` set the
+    // same viewport), so the fragment's own absolute position already indexes
+    // it correctly - no UV rescale needed.
     let size = textureDimensions(accum);
     let pixel = vec2<i32>(
-        clamp(i32(in.uv.x * f32(size.x)), 0, i32(size.x) - 1),
-        clamp(i32(in.uv.y * f32(size.y)), 0, i32(size.y) - 1),
+        clamp(i32(fragment_position.x), 0, i32(size.x) - 1),
+        clamp(i32(fragment_position.y), 0, i32(size.y) - 1),
     );
     let sum = textureLoad(accum, pixel, 0);
     if (sum.a <= 0.000001) {

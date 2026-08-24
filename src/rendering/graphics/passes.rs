@@ -351,6 +351,20 @@ impl<'a> Graphics<'a> {
         !self.projection.is_perspective() && self.camera.forward().z <= -(1.0 - 1.0e-6)
     }
 
+    /// Clamp a viewport rect against the current render target size. `viewport`
+    /// reflects last frame's UI layout (see `apply_canvas_rect`), so it can be
+    /// briefly stale by a frame relative to a resize that landed this tick -
+    /// this guards every `set_viewport` call against going out of bounds.
+    fn clamp_viewport_rect(&self, viewport: ViewportRect) -> (u32, u32, u32, u32) {
+        let target_width = self.config.width.max(1);
+        let target_height = self.config.height.max(1);
+        let x = viewport.x.min(target_width - 1);
+        let y = viewport.y.min(target_height - 1);
+        let width = viewport.width.min(target_width - x).max(1);
+        let height = viewport.height.min(target_height - y).max(1);
+        (x, y, width, height)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_scene_pass(
         &mut self,
@@ -396,16 +410,7 @@ impl<'a> Graphics<'a> {
             multiview_mask: None,
         });
 
-        // `viewport` reflects last frame's UI layout (see `apply_canvas_rect`),
-        // so it can be briefly stale by a frame relative to a resize that
-        // landed this tick - clamp it against the actual target size rather
-        // than risk an out-of-bounds `set_viewport`.
-        let target_width = self.config.width.max(1);
-        let target_height = self.config.height.max(1);
-        let vp_x = viewport.x.min(target_width - 1);
-        let vp_y = viewport.y.min(target_height - 1);
-        let vp_width = viewport.width.min(target_width - vp_x).max(1);
-        let vp_height = viewport.height.min(target_height - vp_y).max(1);
+        let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
         render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
 
         // Block model chunks carry their own AABB, so cheaply skip GPU draw
@@ -733,8 +738,8 @@ impl<'a> Graphics<'a> {
                     })
             });
         self.update_block_model_optional_targets(needs_transparency_target, needs_volume_target);
-        self.render_volume_block_models(encoder, view, editor, block_models, &frustum, include_editor_overlays);
-        self.render_fallback_transparent_block_models(encoder, view, editor, block_models, &frustum);
+        self.render_volume_block_models(encoder, view, viewport, editor, block_models, &frustum, include_editor_overlays);
+        self.render_fallback_transparent_block_models(encoder, view, viewport, editor, block_models, &frustum);
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Document Transparency and Overlay Render Pass"),
@@ -759,6 +764,10 @@ impl<'a> Graphics<'a> {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        // A new `wgpu::RenderPass` doesn't inherit the first pass's viewport -
+        // reapply it, or this pass's document/edge/overlay geometry renders
+        // unclipped across the whole window instead of the visible canvas.
+        render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
 
         if editor.xray_enabled {
             // X-ray deliberately bypasses scene depth and stays above all
@@ -862,10 +871,12 @@ impl<'a> Graphics<'a> {
         self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, false, None);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_volume_block_models(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        viewport: ViewportRect,
         editor: &EditorState,
         block_models: &[OpenBlockModel],
         frustum: &Frustum,
@@ -1063,6 +1074,8 @@ impl<'a> Graphics<'a> {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
+        upscale_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
         upscale_pass.set_pipeline(&self.block_model_volume_upscale_pipeline);
         upscale_pass.set_bind_group(0, &volume_target.bind_group, &[]);
         upscale_pass.draw(0..3, 0..1);
@@ -1072,6 +1085,7 @@ impl<'a> Graphics<'a> {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        viewport: ViewportRect,
         editor: &EditorState,
         block_models: &[OpenBlockModel],
         frustum: &Frustum,
@@ -1136,6 +1150,8 @@ impl<'a> Graphics<'a> {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
+            transparency_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
             transparency_pass.set_pipeline(&self.block_model_transparency_fallback_pipeline);
             transparency_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             transparency_pass.set_bind_group(2, &transparency_targets.transparency_fallback_bind_groups[0], &[]);
@@ -1170,6 +1186,8 @@ impl<'a> Graphics<'a> {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
+        composite_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
         composite_pass.set_pipeline(&self.block_model_transparency_composite_pipeline);
         composite_pass.set_bind_group(0, &transparency_targets.composite_bind_groups[0], &[]);
         composite_pass.draw(0..3, 0..1);
