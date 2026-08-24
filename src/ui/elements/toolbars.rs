@@ -48,20 +48,31 @@ const VIEW_TOOLS_GIZMO_GAP: f32 = 26.0;
 const VIEW_TOOL_CELLS: usize = 8;
 
 /// Draw the explorer's header: the project-wide actions, sitting above the
-/// data tree rather than out over the viewport.
+/// data tree rather than out over the viewport, and return what it claimed.
 ///
 /// The floating view tools group their buttons onto tiles, because out there a
 /// tile is all that separates a tool from the scene behind it. A docked strip
 /// already has a surface, so it groups by spacing alone: related buttons close
 /// together, a wider gap between clusters. The button metrics, rounding and
 /// hover fills are shared, so the two toolbars read as one family. The strip
-/// is as tall as the viewport's top toolbar, and shares its default panel
-/// fill and separator line, so the two read as one family across the split.
-pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, can_undo: bool, can_redo: bool) {
+/// is a region of its own at the top of the explorer column, as tall as the
+/// viewport's top toolbar beside it, so the two read as one row across the
+/// split with the same gap under them.
+pub(crate) fn draw_explorer_toolbar(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    commands: &mut Vec<UiCommand>,
+    can_undo: bool,
+    can_redo: bool,
+) -> egui::Rect {
     egui::Panel::top("explorer_tools_strip")
         .resizable(false)
+        .show_separator_line(false)
         .default_size(TOOLBAR_STRIP_HEIGHT)
-        .frame(egui::Frame::NONE.fill(ui.visuals().panel_fill).inner_margin(egui::Margin::symmetric(STRIP_MARGIN, 0)))
+        // Only the sides are padded: the strip is exactly as tall as its
+        // buttons need, and the gap around the region is its spacing.
+        .frame(crate::ui::chrome::region_frame(ui.style()).inner_margin(egui::Margin::symmetric(STRIP_MARGIN, 0)))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("explorer_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
@@ -71,7 +82,7 @@ pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, editor: &mut EditorState,
                     let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
                     let save = ui.add_enabled(
                         has_unsaved,
-                        ToolbarButton::new(egui::Image::new(unthemed_icon!("save_project.svg")), format!("Save Project ({PRIMARY_MODIFIER}S)")).id_salt("save_project"),
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "save_project.svg")), format!("Save Project ({PRIMARY_MODIFIER}S)")).id_salt("save_project"),
                     );
                     if save.clicked() {
                         commands.push(UiCommand::SaveProject);
@@ -131,7 +142,9 @@ pub(crate) fn draw_explorer_toolbar(ui: &mut egui::Ui, editor: &mut EditorState,
                     }
                 });
             });
-        });
+        })
+        .response
+        .rect
 }
 
 /// Draw the top toolbar (layer combo, Z level, line colour, hatch).

@@ -144,12 +144,14 @@ fn section_heading_menu(response: &egui::Response, section: ExplorerSection, loa
 /// which reads the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "explorer_panel";
 
-/// What the explorer column claimed, and the two regions drawn inside it.
+/// What the explorer column claimed, and the three regions drawn inside it.
 pub(crate) struct ExplorerLayout {
     /// The whole column, gaps included: what the panels drawn after it lay out
     /// against.
     pub(crate) column: egui::Rect,
-    /// What the data tree claimed, the toolbar strip above it included.
+    /// What the project toolbar strip at the top of the column claimed.
+    pub(crate) toolbar: egui::Rect,
+    /// What the data tree claimed.
     pub(crate) tree: egui::Rect,
     /// What the properties panel below the tree claimed.
     pub(crate) properties: egui::Rect,
@@ -158,9 +160,9 @@ pub(crate) struct ExplorerLayout {
 /// Draw the left explorer panel.
 ///
 /// Shows the active project path, the collapsible data sections, and the
-/// properties panel below them. The column itself has no surface: the tree and
-/// the properties are separate regions inside it, with the window background
-/// showing through the seam between them.
+/// properties panel below them. The column itself has no surface: the toolbar
+/// strip, the tree and the properties are separate regions inside it, with the
+/// window background showing through the seams between them.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_explorer(
     ui: &mut egui::Ui,
@@ -191,11 +193,12 @@ pub(crate) fn draw_explorer(
             // Prevent content from forcing the panel wider than the user has dragged it.
             ui.set_max_width(ui.available_width());
 
-            // Claimed from the bottom before the tree fills what is left.
+            // Claimed from the top, then the bottom, before the tree fills
+            // what is left between them.
+            let toolbar_rect = crate::ui::elements::toolbars::draw_explorer_toolbar(ui, editor, project, commands, can_undo, can_redo);
             let properties_rect = draw_properties(ui, editor, project, block_models, document, commands, geometry_dirty);
 
             let tree_rect = crate::ui::chrome::region_frame(ui.style()).fill(surface).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
-            crate::ui::elements::toolbars::draw_explorer_toolbar(ui, editor, project, commands, can_undo, can_redo);
 
             // The tree only reads editor state. Destructuring here keeps the
             // row closures below from capturing `editor` mutably, which the
@@ -854,12 +857,13 @@ pub(crate) fn draw_explorer(
             .response
             .rect;
 
-            (tree_rect, properties_rect)
+            (toolbar_rect, tree_rect, properties_rect)
         });
 
-    let (tree, properties) = column.inner;
+    let (toolbar, tree, properties) = column.inner;
     ExplorerLayout {
         column: column.response.rect,
+        toolbar,
         tree,
         properties,
     }

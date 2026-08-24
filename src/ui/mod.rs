@@ -1000,6 +1000,7 @@ fn draw_ui(
     chrome::paint_regions(
         &ctx,
         [
+            explorer.toolbar,
             explorer.tree,
             explorer.properties,
             top_toolbar_rect,
