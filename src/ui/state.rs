@@ -76,7 +76,7 @@ impl Default for PreferencesDraft {
     fn default() -> Self {
         Self {
             renderer_background_color: crate::app::io::default_renderer_background_color(),
-            dark_mode: false,
+            dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
@@ -768,7 +768,7 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
-    /// Use dark UI visuals and icons instead of the default light theme.
+    /// Use dark UI visuals and icons (the default) instead of the light theme.
     pub(crate) dark_mode: bool,
     /// Show the console underneath the bottom toolbar.
     pub(crate) show_console: bool,
@@ -1605,7 +1605,7 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
-            dark_mode: false,
+            dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),

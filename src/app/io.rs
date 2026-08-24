@@ -50,6 +50,10 @@ pub(crate) const fn default_panel_chrome() -> bool {
     true
 }
 
+pub(crate) const fn default_dark_mode() -> bool {
+    true
+}
+
 pub(crate) const fn default_show_console() -> bool {
     true
 }
@@ -100,7 +104,7 @@ pub(crate) struct Session {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Config {
     /// Use egui's dark visuals and the dark UI icon set.
-    #[serde(default)]
+    #[serde(default = "default_dark_mode")]
     pub(crate) dark_mode: bool,
     /// Show the console pannel
     #[serde(default = "default_show_console")]
@@ -166,7 +170,7 @@ pub(crate) struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            dark_mode: false,
+            dark_mode: default_dark_mode(),
             show_console: default_show_console(),
             panel_chrome: default_panel_chrome(),
             renderer_background_color: default_renderer_background_color(),
