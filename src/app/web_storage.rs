@@ -27,7 +27,6 @@ pub(crate) struct BrowserProjectSummary {
 #[serde(deny_unknown_fields)]
 pub(crate) struct BrowserSessionProjects {
     pub(crate) projects: Vec<BrowserProjectSummary>,
-    pub(crate) current_project: Option<BrowserProjectRecord>,
 }
 
 #[derive(Serialize)]
@@ -116,19 +115,15 @@ export async function inclineSaveSession(sessionJson) {
 
 export async function inclineLoadSessionProjects() {
     const db = await openInclineDb();
-    const sessionTx = db.transaction("session", "readonly");
-    const session = await requestValue(sessionTx.objectStore("session").get("last"));
     const projectTx = db.transaction("projects", "readonly");
     const records = await requestValue(projectTx.objectStore("projects").getAll());
     // Old JSON-design records intentionally remain in IndexedDB but are not
     // treated as native projects after the OMF-first migration.
     const omfProjects = records.filter(record => Array.isArray(record.omf_bytes));
-    const currentProject = session?.current_project_id
-        ? omfProjects.find(record => record.id === session.current_project_id) || null
-        : null;
+    // Only the catalog is returned: startup opens no project, so the session's
+    // current project is never decoded here.
     return JSON.stringify({
         projects: omfProjects.map(record => ({ id: record.id, name: record.name })),
-        current_project: currentProject,
     });
 }
 

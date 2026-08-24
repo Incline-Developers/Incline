@@ -39,8 +39,10 @@ use winit::{
     window::{CursorIcon, Icon, Window},
 };
 
+#[cfg(target_arch = "wasm32")]
+use crate::app::commands::omf::ViewOnOpen;
 use crate::{
-    app::commands::{file::PendingFileDialog, omf::ViewOnOpen},
+    app::commands::file::PendingFileDialog,
     model::{
         Document, LayerId, Object, ObjectId, SceneEntityId,
         block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
@@ -1393,7 +1395,9 @@ impl<'a> App<'a> {
         view
     }
 
-    /// Restore the tracked native project catalog and reopen its active entry.
+    /// Restore the tracked native project catalog for the startup dialog's
+    /// recent list. The previously active project is deliberately *not*
+    /// reopened: startup always begins with no active project.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn load_session_projects(&mut self, session: &io::Session) {
         self.tracked_project_paths.clear();
@@ -1402,18 +1406,6 @@ impl<'a> App<'a> {
         }
         if let Some(path) = session.current_project_path.clone() {
             self.track_project_path(path);
-        }
-        let Some(path) = session.current_project_path.as_ref().filter(|path| path.is_file()).cloned() else {
-            return;
-        };
-        let result = std::fs::read(&path).map_err(anyhow::Error::from).and_then(|bytes| {
-            let source_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("project.omf").to_owned();
-            let progress = crate::model::progress::Progress::new();
-            crate::model::formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0)).map(|bundle| (source_name, bundle))
-        });
-        match result {
-            Ok((source_name, bundle)) => self.apply_opened_omf_bundle(Some(path), source_name, bundle, ViewOnOpen::Fit),
-            Err(error) => log::warn!("Failed to reopen session project: {error:#}"),
         }
     }
 
@@ -1627,25 +1619,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             }
             AppEvent::BrowserProjectsRestored(result) => match result {
                 Ok(restored) => {
+                    // Only the catalog is restored; startup always begins with
+                    // no active project, so the session's current project is
+                    // left for the startup dialog to offer.
                     self.tracked_browser_projects = restored.projects;
-                    if let Some(record) = restored.current_project {
-                        let source_name = format!("{}.omf", record.name.trim_end_matches(".omf"));
-                        let progress = crate::model::progress::Progress::new();
-                        match crate::model::formats::omf::from_bytes(&source_name, record.omf_bytes, &progress.phase(0.0, 1.0)) {
-                            Ok(bundle) => {
-                                self.apply_opened_omf_bundle(None, source_name, bundle, ViewOnOpen::Fit);
-                                if let Some(project) = self.workspace.active_project_mut() {
-                                    project.id = record.id;
-                                    project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(record.id);
-                                }
-                                // `set_active_project` persists before the
-                                // restored browser identity is attached.
-                                self.persist_session();
-                                userspace_log!("Restored browser project '{}'.", record.name);
-                            }
-                            Err(error) => userspace_warn!("Could not restore browser project '{}': {error:#}", record.name),
-                        }
-                    }
                 }
                 Err(error) => userspace_warn!("Could not restore the browser project: {error}"),
             },
