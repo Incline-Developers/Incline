@@ -4,8 +4,8 @@
 //! Painted rather than assembled from `egui::ProgressBar`, for three reasons:
 //! an indeterminate task has to animate without reading as "done" (egui only
 //! shimmers the *filled* part, so a marquee chunk is the only honest shape for
-//! it), the fill carries scrolling diagonal stripes while work is actually
-//! running, and the task label rides inside the bar, switching colour where it
+//! it), the fill carries a static diagonal hatch rather than a flat shade,
+//! and the task label rides inside the bar, switching colour where it
 //! crosses the fill edge instead of being drawn twice over two backgrounds.
 
 use thousands::Separable;
@@ -47,31 +47,35 @@ const BAR_TEXT_INSET: f32 = 6.0;
 const MARQUEE_FRACTION: f32 = 0.3;
 /// Seconds for one full there-and-back sweep of the marquee chunk.
 const MARQUEE_PERIOD: f64 = 2.0;
-/// Fraction of the marquee chunk's width spent fading in at each of its ends.
-/// A determinate fill sits against the ends of the bar; the chunk has nothing
-/// to sit against, so it softens its own edges instead.
-const MARQUEE_FADE: f32 = 0.35;
 
 /// Spacing between the diagonal stripes over the fill, in points.
-const STRIPE_PERIOD: f32 = 12.0;
-/// Width of one stripe, as a fraction of the spacing.
+const STRIPE_PERIOD: f32 = 14.0;
+/// Width of one stripe, as a fraction of the spacing. A half means a stripe
+/// and the gap after it are the same width.
 const STRIPE_DUTY: f32 = 0.5;
-/// Speed the stripes travel along the bar at, in points per second.
-const STRIPE_SPEED: f64 = 22.0;
 /// Opacity of a stripe over the fill. Barely there: the stripes are meant to
-/// register as motion, not as a pattern.
-const STRIPE_ALPHA: u8 = 28;
+/// give the fill some texture, not to read as a pattern in their own right.
+const STRIPE_ALPHA: u8 = 14;
 
-/// Top of the fill's vertical gradient.
-const FILL_TOP: egui::Color32 = egui::Color32::from_rgb(0x5B, 0xD6, 0x69);
-/// Bottom of the fill's vertical gradient.
-const FILL_BOTTOM: egui::Color32 = egui::Color32::from_rgb(0x2C, 0x9B, 0x41);
-/// Bright line drawn down the leading edge of a partial fill, so the boundary
-/// the bar is advancing reads as an edge rather than as where the colour stops.
-const FILL_EDGE: egui::Color32 = egui::Color32::from_rgb(0x9B, 0xF0, 0xA4);
-/// Text colour over the fill. The fill is a mid green in either theme, so the
-/// text over it is dark in either theme.
-const TEXT_ON_FILL: egui::Color32 = egui::Color32::from_gray(0x0F);
+/// Every shade in the bar is the toolbar's own grey, moved this many levels
+/// off it: the empty track, the line around it, the fill, and the leading edge
+/// of a partial fill. The bar is a readout in the corner of the toolbar rather
+/// than something to look at, so the whole widget stays within a narrow band
+/// of the surface it sits on - it should be findable, not conspicuous.
+const TRACK_SHIFT_DARK: i16 = -8;
+const TRACK_SHIFT_LIGHT: i16 = -12;
+const TRACK_STROKE_SHIFT_DARK: i16 = -16;
+const TRACK_STROKE_SHIFT_LIGHT: i16 = -24;
+/// The fill, top and bottom of its gradient. A handful of levels the other
+/// side of the surface from the track, so it separates from the track without
+/// either of them separating from the toolbar.
+const FILL_SHIFT_DARK: (i16, i16) = (4, -2);
+const FILL_SHIFT_LIGHT: (i16, i16) = (-24, -30);
+/// The leading edge of a partial fill, so the boundary the bar is advancing
+/// reads as an edge rather than as where the shade stops. One step past the
+/// fill, not a highlight.
+const EDGE_SHIFT_DARK: i16 = 14;
+const EDGE_SHIFT_LIGHT: i16 = -42;
 
 /// Text style inside the bar: the same as the status bar's readouts, which is
 /// what the bar reads as now that it is as tall as the strip it sits in.
@@ -96,17 +100,16 @@ pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState) {
         Some(message) => match message.progress {
             Some(progress) => {
                 let progress = progress.clamp(0.0, 1.0);
-                draw_bar(ui, &bar_status_text(progress, message.units), &message.text, BarFill::Fraction(progress), true);
+                draw_bar(ui, &bar_status_text(progress, message.units), &message.text, BarFill::Fraction(progress));
             }
-            None => draw_bar(ui, "", &message.text, BarFill::Marquee, true),
+            None => draw_bar(ui, "", &message.text, BarFill::Marquee),
         },
-        // Idle: hold the last task at 100%, with the stripes parked - a bar
-        // that keeps animating after its task ended is just a distraction, and
-        // a still one costs no repaints.
+        // Idle: hold the last task at 100%. Nothing about the parked bar
+        // moves, so it costs no repaints.
         None => {
             if let Some(finished) = &editor.last_finished_task {
                 let status = bar_status_text(1.0, finished.total_units.map(|total| (total, total)));
-                draw_bar(ui, &status, &format!("{}: Finished", finished.text), BarFill::Fraction(1.0), false);
+                draw_bar(ui, &status, &format!("{}: Finished", finished.text), BarFill::Fraction(1.0));
             }
         }
     }
@@ -142,9 +145,8 @@ fn bar_size(ui: &egui::Ui) -> egui::Vec2 {
 /// Paint the bar itself.
 ///
 /// Both texts ride inside it: `task` against its left end, `status`
-/// (percentage and item counts) against its right. `running` drives the
-/// stripes, which only travel while a task is actually working.
-fn draw_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill, running: bool) {
+/// (percentage and item counts) against its right.
+fn draw_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill) {
     let size = bar_size(ui);
     if size.x < BAR_HIDE_WIDTH {
         return;
@@ -159,9 +161,15 @@ fn draw_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill, running:
 
     let visuals = ui.visuals();
     let surface = visuals.panel_fill;
-    let track = shifted(surface, if visuals.dark_mode { -18 } else { -26 });
-    let track_stroke = shifted(surface, if visuals.dark_mode { -30 } else { -44 });
+    let track = shifted(surface, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
+    let track_stroke = shifted(surface, if visuals.dark_mode { TRACK_STROKE_SHIFT_DARK } else { TRACK_STROKE_SHIFT_LIGHT });
     let text_on_track = visuals.text_color();
+    // The fill is the panel's own grey, a few levels off the track. Over
+    // something that close the text only needs to firm up, never invert.
+    let (top_shift, bottom_shift) = if visuals.dark_mode { FILL_SHIFT_DARK } else { FILL_SHIFT_LIGHT };
+    let fill_colors = (shifted(surface, top_shift), shifted(surface, bottom_shift));
+    let fill_edge = shifted(surface, if visuals.dark_mode { EDGE_SHIFT_DARK } else { EDGE_SHIFT_LIGHT });
+    let text_on_fill = visuals.strong_text_color();
 
     let filled = match fill {
         BarFill::Fraction(fraction) => {
@@ -178,22 +186,25 @@ fn draw_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill, running:
             egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(width, rect.height()))
         }
     };
-    let fades = matches!(fill, BarFill::Marquee);
+    let marquee = matches!(fill, BarFill::Marquee);
 
     let painter = ui.painter().clone();
     painter.rect_filled(rect, BAR_CORNER_RADIUS, track);
 
     if filled.width() > 0.5 {
-        paint_fill(&painter, filled, if fades { filled.width() * MARQUEE_FADE } else { 0.0 });
-        if running {
-            ui.ctx().request_repaint();
-            let phase = (ui.input(|i| i.time) * STRIPE_SPEED) as f32;
-            paint_stripes(&painter.with_clip_rect(filled), rect, phase);
-        }
-        // Only where the fill stops short of the end of the bar: at 100% the
-        // edge is the bar's own, and a line down it would read as a seam.
-        if filled.right() < rect.right() - 0.5 {
-            painter.vline(filled.right() - 0.5, filled.y_range(), egui::Stroke::new(1.0, FILL_EDGE));
+        paint_fill(&painter, filled, fill_colors);
+        // The stripes are texture on the fill, not an animation: they are
+        // pinned to the bar, so a determinate fill uncovers them as it grows
+        // and the marquee chunk slides over them. Nothing here asks for a
+        // repaint, which is what lets the app go idle once a task ends.
+        paint_stripes(&painter.with_clip_rect(filled), rect);
+        // Only on a determinate fill, and only where it stops short of the end
+        // of the bar: at 100% the edge is the bar's own, and a line down it
+        // would read as a seam. The marquee chunk has no advancing boundary to
+        // mark, so a line down one of its ends reads as an artefact rather
+        // than as an edge.
+        if !marquee && filled.right() < rect.right() - 0.5 {
+            painter.vline(filled.right() - 0.5, filled.y_range(), egui::Stroke::new(1.0, fill_edge));
         }
     }
 
@@ -211,7 +222,7 @@ fn draw_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill, running:
         let galley = painter.layout_no_wrap(status.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
         let status_left = rect.right() - BAR_TEXT_INSET - galley.size().x;
         let pos = egui::pos2(status_left, rect.center().y - galley.size().y / 2.0);
-        paint_two_tone(&painter, rect, filled, galley, pos, text_on_track);
+        paint_two_tone(&painter, rect, filled, galley, pos, text_on_track, text_on_fill);
         task_right = status_left - BAR_TEXT_INSET;
     }
     if !task.is_empty() {
@@ -221,56 +232,49 @@ fn draw_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill, running:
         job.wrap = egui::text::TextWrapping::truncate_at_width(task_right - rect.left() - BAR_TEXT_INSET);
         let galley = painter.layout_job(job);
         let pos = egui::pos2(rect.left() + BAR_TEXT_INSET, rect.center().y - galley.size().y / 2.0);
-        paint_two_tone(&painter, rect, filled, galley, pos, text_on_track);
+        paint_two_tone(&painter, rect, filled, galley, pos, text_on_track, text_on_fill);
     }
 }
 
 /// Draw one galley twice - once over the fill and once over the bare track -
 /// so a word straddling the fill edge stays legible on both sides of it.
-fn paint_two_tone(painter: &egui::Painter, rect: egui::Rect, filled: egui::Rect, galley: std::sync::Arc<egui::Galley>, pos: egui::Pos2, on_track: egui::Color32) {
+fn paint_two_tone(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    filled: egui::Rect,
+    galley: std::sync::Arc<egui::Galley>,
+    pos: egui::Pos2,
+    on_track: egui::Color32,
+    on_fill: egui::Color32,
+) {
     painter.with_clip_rect(painter.clip_rect().intersect(rect)).galley(pos, galley.clone(), on_track);
-    painter.with_clip_rect(painter.clip_rect().intersect(filled)).galley(pos, galley, TEXT_ON_FILL);
+    painter.with_clip_rect(painter.clip_rect().intersect(filled)).galley(pos, galley, on_fill);
 }
 
-/// The fill's vertical gradient over `rect`, fading out over `fade` points at
-/// each end when it has ends of its own (the marquee chunk).
-fn paint_fill(painter: &egui::Painter, rect: egui::Rect, fade: f32) {
-    // Positions across the fill and the opacity at each, as a run of columns:
-    // one quad between each neighbouring pair.
-    let faded_ends = [(rect.left(), 0.0), (rect.left() + fade, 1.0), (rect.right() - fade, 1.0), (rect.right(), 0.0)];
-    let square_ends = [(rect.left(), 1.0), (rect.right(), 1.0)];
-    let stops: &[(f32, f32)] = if fade > 0.5 { &faded_ends } else { &square_ends };
-
+/// The fill's vertical gradient over `rect`, from `top` to `bottom`.
+fn paint_fill(painter: &egui::Painter, rect: egui::Rect, (top, bottom): (egui::Color32, egui::Color32)) {
     let mut mesh = egui::Mesh::default();
-    for pair in stops.windows(2) {
-        let [(left, left_alpha), (right, right_alpha)] = pair else { continue };
-        quad(
-            &mut mesh,
-            [
-                (egui::pos2(*left, rect.top()), faded(FILL_TOP, *left_alpha)),
-                (egui::pos2(*right, rect.top()), faded(FILL_TOP, *right_alpha)),
-                (egui::pos2(*right, rect.bottom()), faded(FILL_BOTTOM, *right_alpha)),
-                (egui::pos2(*left, rect.bottom()), faded(FILL_BOTTOM, *left_alpha)),
-            ],
-        );
-    }
+    quad(
+        &mut mesh,
+        [(rect.left_top(), top), (rect.right_top(), top), (rect.right_bottom(), bottom), (rect.left_bottom(), bottom)],
+    );
     painter.add(egui::Shape::mesh(mesh));
 }
 
-/// Stripes leaning across the bar at 45 degrees, offset along it by `phase`.
+/// Stripes leaning across the bar at 45 degrees.
 ///
 /// Drawn across the whole bar and left to the caller's clip rect: a stripe
 /// overhangs the fill by the bar's height at the top and the bottom, so it
 /// can't be laid out against the fill's edges directly.
-fn paint_stripes(painter: &egui::Painter, rect: egui::Rect, phase: f32) {
+fn paint_stripes(painter: &egui::Painter, rect: egui::Rect) {
     let lean = rect.height();
     let width = STRIPE_PERIOD * STRIPE_DUTY;
     let color = faded(egui::Color32::WHITE, f32::from(STRIPE_ALPHA) / 255.0);
 
     let mut mesh = egui::Mesh::default();
-    // Start a full stripe's lean and period to the left of the bar, so the one
-    // scrolling into view is already whole when it arrives.
-    let mut left = rect.left() - lean - STRIPE_PERIOD + phase.rem_euclid(STRIPE_PERIOD);
+    // Start a full stripe's lean to the left of the bar, so the first one to
+    // cross into it is already whole.
+    let mut left = rect.left() - lean - STRIPE_PERIOD;
     while left < rect.right() + STRIPE_PERIOD {
         quad(
             &mut mesh,
