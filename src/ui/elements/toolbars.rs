@@ -18,6 +18,10 @@ pub(crate) const BOTTOM_TOOLBAR_HEIGHT: f32 = 32.0;
 const TOOLBAR_STRIP_HEIGHT: f32 = 34.0;
 /// Space between a docked strip's edge and its buttons.
 const STRIP_MARGIN: i8 = 6;
+/// Space between the bottom strip's edge and its buttons. Tighter than
+/// [`STRIP_MARGIN`], and the same on every side, so the strip reads as a
+/// sleeve around the run of buttons rather than a frame with a border.
+const BOTTOM_STRIP_MARGIN: i8 = 2;
 /// Gap between buttons in the same cluster of a docked strip.
 const STRIP_BUTTON_GAP: f32 = 2.0;
 /// Gap between two clusters of buttons in a docked strip. The floating tiles'
@@ -527,7 +531,10 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
         .resizable(false)
         .show_separator_line(false)
         .default_size(BOTTOM_TOOLBAR_HEIGHT)
-        .frame(crate::ui::chrome::region_frame(ui.style()))
+        // An even sleeve on all four sides: the buttons carry their own fill,
+        // so the strip is only the surface they sit on, not a frame around
+        // them - the space beside the first button matches the space over it.
+        .frame(crate::ui::chrome::region_frame(ui.style()).inner_margin(egui::Margin::same(BOTTOM_STRIP_MARGIN)))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
