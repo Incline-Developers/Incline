@@ -40,6 +40,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
+    pub(crate) panel_chrome: bool,
     pub(crate) show_world_axis_gizmo: bool,
     pub(crate) show_xy_grid: bool,
     pub(crate) snap_poll_rate: u32,
@@ -77,6 +78,7 @@ impl Default for PreferencesDraft {
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: false,
             show_console: crate::app::io::default_show_console(),
+            panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: crate::app::io::default_show_xy_grid(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
@@ -770,6 +772,9 @@ pub(crate) struct EditorState {
     pub(crate) dark_mode: bool,
     /// Show the console underneath the bottom toolbar.
     pub(crate) show_console: bool,
+    /// Dress the panels as rounded regions parted by a gap of window
+    /// background. Off, they sit flush and square: see `ui::chrome`.
+    pub(crate) panel_chrome: bool,
     /// Show the world-space axis gizmo in the top-right of the viewport.
     pub(crate) show_world_axis_gizmo: bool,
     /// Show the construction grid on the world XY plane at Z=0.
@@ -1557,6 +1562,7 @@ impl EditorState {
             renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
+            panel_chrome: self.panel_chrome,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
             show_xy_grid: self.show_xy_grid,
             snap_poll_rate: self.snap_poll_rate,
@@ -1601,6 +1607,7 @@ impl EditorState {
             show_points: false,
             dark_mode: false,
             show_console: crate::app::io::default_show_console(),
+            panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),

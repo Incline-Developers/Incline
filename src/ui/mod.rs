@@ -461,6 +461,10 @@ fn draw_ui(
 ) -> bool {
     let mut geometry_dirty = false;
 
+    // Before any panel is claimed: every region reads the preference back off
+    // the context as it is drawn. See `chrome::set_enabled`.
+    chrome::set_enabled(root_ui.ctx(), editor.panel_chrome);
+
     // The window background sits behind every panel, but its shape depends on
     // where the scene ends up, which is only known once they have all been
     // drawn. Reserve its place at the back of the frame now and fill it in at
@@ -528,7 +532,7 @@ fn draw_ui(
         egui::pos2(root_ui.available_rect_before_wrap().left(), main_menu_rect.bottom().max(top_toolbar_rect.bottom())),
         egui::pos2(root_ui.available_rect_before_wrap().right(), canvas_bottom),
     );
-    let scene_rect = chrome::region_rect(scene_claimed);
+    let scene_rect = chrome::region_rect(root_ui.ctx(), scene_claimed);
     // The scene's own margin, claimed like the window's so a scroll over the
     // gap around the viewport reaches the interface rather than the camera.
     chrome::claim_gap(root_ui, "chrome_scene_edge");

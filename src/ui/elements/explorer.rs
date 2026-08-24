@@ -180,7 +180,7 @@ pub(crate) fn draw_explorer(
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
     let column = egui::Panel::left(PANEL_ID)
         .resizable(true)
-        .show_separator_line(false)
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .default_size(280.0)
         // The properties panel below the tree lays its fields out at a fixed
         // minimum width; keep the panel wide enough to hold them rather than
@@ -198,7 +198,7 @@ pub(crate) fn draw_explorer(
             let toolbar_rect = crate::ui::elements::toolbars::draw_explorer_toolbar(ui, editor, project, commands, can_undo, can_redo);
             let properties_rect = draw_properties(ui, editor, project, block_models, document, commands, geometry_dirty);
 
-            let tree_rect = crate::ui::chrome::region_frame(ui.style()).fill(surface).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
+            let tree_rect = crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
 
             // The tree only reads editor state. Destructuring here keeps the
             // row closures below from capturing `editor` mutably, which the

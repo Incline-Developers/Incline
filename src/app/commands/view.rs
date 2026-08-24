@@ -5,6 +5,7 @@ impl<'a> App<'a> {
         crate::app::io::save_config(&crate::app::io::Config {
             dark_mode: self.editor.dark_mode,
             show_console: self.editor.show_console,
+            panel_chrome: self.editor.panel_chrome,
             show_world_axis_gizmo: self.editor.show_world_axis_gizmo,
             show_xy_grid: self.editor.show_xy_grid,
             show_scale_bar: self.editor.show_scale_bar,
@@ -111,6 +112,7 @@ impl<'a> App<'a> {
         crate::app::io::save_config(&crate::app::io::Config {
             dark_mode: preferences.dark_mode,
             show_console: preferences.show_console,
+            panel_chrome: preferences.panel_chrome,
             show_world_axis_gizmo: preferences.show_world_axis_gizmo,
             show_xy_grid: preferences.show_xy_grid,
             show_scale_bar: self.editor.show_scale_bar,
@@ -139,6 +141,7 @@ impl<'a> App<'a> {
 
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
+        self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
         self.editor.show_xy_grid = preferences.show_xy_grid;
         self.editor.renderer_background_color = preferences.renderer_background_color;

@@ -117,8 +117,8 @@ pub(crate) fn draw_properties(
         .default_size(default_height)
         .min_size(MIN_HEIGHT)
         .max_size(max_height)
-        .show_separator_line(false)
-        .frame(crate::ui::chrome::region_frame(ui.style()).fill(content_fill).inner_margin(egui::Margin::ZERO))
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .frame(crate::ui::chrome::region_frame(ui).fill(content_fill).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             // A panel ends up as tall as its contents report, and that height
             // is what gets stored as its resizable size. Claim the whole
@@ -340,6 +340,7 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         changed |= committed(&response);
         changed |= committed(&MenuFieldBool::new("Dark mode", &mut draft.dark_mode).show(ui));
         changed |= committed(&MenuFieldBool::new("Show console", &mut draft.show_console).show(ui));
+        changed |= committed(&MenuFieldBool::new("Panel chrome", &mut draft.panel_chrome).show(ui));
         changed |= committed(&MenuFieldBool::new("World axis gizmo", &mut draft.show_world_axis_gizmo).show(ui));
         changed |= committed(&MenuFieldBool::new("XY grid", &mut draft.show_xy_grid).show(ui));
         changed

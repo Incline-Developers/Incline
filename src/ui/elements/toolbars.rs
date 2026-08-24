@@ -72,11 +72,11 @@ pub(crate) fn draw_explorer_toolbar(
 ) -> egui::Rect {
     egui::Panel::top("explorer_tools_strip")
         .resizable(false)
-        .show_separator_line(false)
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .default_size(TOOLBAR_STRIP_HEIGHT)
         // Only the sides are padded: the strip is exactly as tall as its
         // buttons need, and the gap around the region is its spacing.
-        .frame(crate::ui::chrome::region_frame(ui.style()).inner_margin(egui::Margin::symmetric(STRIP_MARGIN, 0)))
+        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::symmetric(STRIP_MARGIN, 0)))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("explorer_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
@@ -155,9 +155,9 @@ pub(crate) fn draw_explorer_toolbar(
 pub(crate) fn draw_top_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) -> egui::Rect {
     egui::Panel::top("top_tools_strip")
         .resizable(false)
-        .show_separator_line(false)
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .default_size(TOOLBAR_STRIP_HEIGHT)
-        .frame(crate::ui::chrome::region_frame(ui.style()))
+        .frame(crate::ui::chrome::region_frame(ui))
         .show(ui, |ui| {
             // Keep the automatic ids below this point independent of the
             // parent panel's layout pass. egui may rerun a frame for sizing;
@@ -313,7 +313,7 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
     // The run wraps into further columns rather than off the bottom of a short
     // window, and a panel claims its width before anything is drawn in it - so
     // the packing is arithmetic, every cell being one square.
-    let margins = 2.0 * f32::from(crate::ui::chrome::REGION_MARGIN);
+    let margins = 2.0 * crate::ui::chrome::margin(ui.ctx());
     // A column is filled before the next is started - ten tools in room for
     // six wrap 6-4, not 5-5 - so the toolbar only reaches as far across the
     // window as it has to.
@@ -323,12 +323,12 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
 
     egui::Panel::left(LEFT_TOOLBAR_PANEL_ID)
         .resizable(false)
-        .show_separator_line(false)
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .exact_size(width)
         // No padding on the region: the cells run edge to edge, so a selected
         // tool's fill reaches its rounded corners the way it used to reach a
         // tile's.
-        .frame(crate::ui::chrome::region_frame(ui.style()).inner_margin(egui::Margin::ZERO))
+        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 // Nothing between the columns: a wrap carries on down the next
@@ -529,12 +529,12 @@ pub(crate) fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
-        .show_separator_line(false)
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .default_size(BOTTOM_TOOLBAR_HEIGHT)
         // An even sleeve on all four sides: the buttons carry their own fill,
         // so the strip is only the surface they sit on, not a frame around
         // them - the space beside the first button matches the space over it.
-        .frame(crate::ui::chrome::region_frame(ui.style()).inner_margin(egui::Margin::same(BOTTOM_STRIP_MARGIN)))
+        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::same(BOTTOM_STRIP_MARGIN)))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {

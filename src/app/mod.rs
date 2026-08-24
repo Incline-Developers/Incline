@@ -516,6 +516,7 @@ impl<'a> App<'a> {
     fn apply_config(&mut self, config: io::Config) {
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
+        self.editor.panel_chrome = config.panel_chrome;
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
         self.editor.show_xy_grid = config.show_xy_grid;
         self.editor.show_scale_bar = config.show_scale_bar;

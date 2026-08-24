@@ -53,12 +53,12 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, max_height: f32, snapshot: &crate:
     let surface_fill = ui.visuals().extreme_bg_color;
     egui::Panel::bottom(PANEL_ID)
         .resizable(true)
-        .show_separator_line(false)
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         // Never a minimum above the maximum: a window short enough to squeeze
         // the console below its minimum leaves it whatever is going.
         .min_size(MIN_HEIGHT.min(max_height))
         .max_size(max_height)
-        .frame(crate::ui::chrome::region_frame(ui.style()).fill(surface_fill).inner_margin(egui::Margin::ZERO))
+        .frame(crate::ui::chrome::region_frame(ui).fill(surface_fill).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             let contents_id = ui.make_persistent_id("console_contents");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {

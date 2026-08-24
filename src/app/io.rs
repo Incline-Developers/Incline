@@ -46,6 +46,10 @@ pub(crate) const fn default_show_scale_bar() -> bool {
     false
 }
 
+pub(crate) const fn default_panel_chrome() -> bool {
+    true
+}
+
 pub(crate) const fn default_show_console() -> bool {
     true
 }
@@ -101,6 +105,10 @@ pub(crate) struct Config {
     /// Show the console pannel
     #[serde(default = "default_show_console")]
     pub(crate) show_console: bool,
+    /// Round the panels off and part them with a gap. Off, they sit flush and
+    /// square with a separator line between them.
+    #[serde(default = "default_panel_chrome")]
+    pub(crate) panel_chrome: bool,
     /// Linear RGBA clear colour used behind the rendered scene.
     #[serde(default = "default_renderer_background_color")]
     pub(crate) renderer_background_color: [f32; 4],
@@ -160,6 +168,7 @@ impl Default for Config {
         Self {
             dark_mode: false,
             show_console: default_show_console(),
+            panel_chrome: default_panel_chrome(),
             renderer_background_color: default_renderer_background_color(),
             snap_poll_rate: default_snap_poll_rate(),
             frame_rate_cap: default_frame_rate_cap(),

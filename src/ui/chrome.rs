@@ -15,10 +15,16 @@
 //! A new top-level panel joins the look in two steps: take [`region_frame`]
 //! and hand its rect to the [`paint_regions`] call at the end of `draw_ui`.
 //! Panels nested inside one do neither - the region they sit in is what gets
-//! rounded. Separator lines are worth turning off on a region: the gap already
-//! separates it from its neighbour, and the mask covers where the line lands.
+//! rounded. A region asks [`show_separator_line`] whether to draw egui's line
+//! on its claimed edge rather than suppressing it outright: with the chrome on
+//! the gap already separates it from its neighbour and the mask covers where
+//! the line lands, but with the chrome off that line is all there is.
+//!
+//! The whole look is one preference - see [`set_enabled`]. Turned off, every
+//! function here degrades to the plain panel it dresses up: no gap, no
+//! rounding, no mask, no grips.
 
-use egui::{Color32, Rect, Shape, Stroke, StrokeKind};
+use egui::{Color32, Id, Rect, Shape, Stroke, StrokeKind};
 
 /// Corner radius of a region: the toolbar tiles' rounding, so the panels and
 /// the tools floating over the scene read as one family. Blender rounds its
@@ -28,10 +34,11 @@ const REGION_RADIUS: u8 = crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
 
 /// Gap each region leaves around its own fill.
 ///
-/// Two neighbours therefore sit `2 * REGION_MARGIN` apart, and [`region_area`]
+/// Two neighbours therefore sit `2 * REGION_MARGIN` apart, and [`region_rect`]
 /// insets the window edge by the same amount, so every gap in the window is
-/// one width.
-pub(crate) const REGION_MARGIN: i8 = 3;
+/// one width. Read it through [`margin`], which is nothing while the chrome is
+/// off.
+const REGION_MARGIN: i8 = 3;
 
 /// Width of the ring painted around a region to cut its corners back to
 /// [`REGION_RADIUS`].
@@ -56,6 +63,47 @@ const SEAM_BAND_WIDTH: f32 = 5.0;
 const GRIP_DOT_RADIUS: f32 = 1.25;
 /// Distance between the centres of a grip's dots.
 const GRIP_DOT_SPACING: f32 = 5.0;
+
+/// Where the preference lives between being set and being read.
+fn enabled_id() -> Id {
+    Id::new("chrome_enabled")
+}
+
+/// Turn the chrome on or off for the rest of the frame.
+///
+/// Called once at the top of `draw_ui`, before any panel is claimed. The
+/// panels that sit in a region are drawn from all over the interface and most
+/// of them never see `EditorState`, so the preference rides on the context
+/// rather than being threaded through every one of them.
+pub(crate) fn set_enabled(ctx: &egui::Context, enabled: bool) {
+    ctx.data_mut(|data| data.insert_temp(enabled_id(), enabled));
+}
+
+/// Whether the chrome is being painted, as [`set_enabled`] last left it.
+///
+/// On until told otherwise, so a context nobody has set it on - a test, an
+/// early frame - looks the way the application does.
+pub(crate) fn enabled(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp(enabled_id())).unwrap_or(true)
+}
+
+/// The gap a region leaves around its fill: [`REGION_MARGIN`], or nothing at
+/// all while the chrome is off, which is what collapses the whole layout back
+/// to flush panels.
+pub(crate) fn margin(ctx: &egui::Context) -> f32 {
+    if enabled(ctx) { f32::from(REGION_MARGIN) } else { 0.0 }
+}
+
+/// Whether a top-level panel should draw egui's separator line along the edge
+/// it claimed.
+///
+/// Never while the chrome is on: the gap parts the regions, and
+/// [`paint_regions`] paints the line out anyway. With the chrome off it is the
+/// only thing left between one panel and the next, so it comes back. Nested
+/// panels are not regions and pass `false` themselves.
+pub(crate) fn show_separator_line(ui: &egui::Ui) -> bool {
+    !enabled(ui.ctx())
+}
 
 /// Colour of the gap between regions: the window showing through behind them.
 ///
@@ -83,8 +131,13 @@ fn region_stroke(visuals: &egui::Visuals) -> Stroke {
 /// Nested panels inside a region take plain frames; only the outermost frame
 /// is rounded, and [`paint_regions`] cuts back whatever the children paint
 /// over its corners.
-pub(crate) fn region_frame(style: &egui::Style) -> egui::Frame {
-    egui::Frame::side_top_panel(style).corner_radius(REGION_RADIUS).outer_margin(REGION_MARGIN)
+pub(crate) fn region_frame(ui: &egui::Ui) -> egui::Frame {
+    let frame = egui::Frame::side_top_panel(ui.style());
+    if enabled(ui.ctx()) {
+        frame.corner_radius(REGION_RADIUS).outer_margin(REGION_MARGIN)
+    } else {
+        frame
+    }
 }
 
 /// Claim half a gap of window background around whatever `ui` lays out next.
@@ -99,14 +152,12 @@ pub(crate) fn region_frame(style: &egui::Style) -> egui::Frame {
 /// meant for the gap - and `salt` keeps the two calls' panel ids apart.
 pub(crate) fn claim_gap(ui: &mut egui::Ui, salt: &str) {
     // Not resizable, and no separator: a spacer is chrome, not something the
-    // user can grab.
-    let spacer = |panel: egui::Panel| {
-        panel
-            .exact_size(f32::from(REGION_MARGIN))
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(egui::Frame::NONE)
-    };
+    // user can grab. With the chrome off they are shown at zero width rather
+    // than skipped, because a panel that is not shown is one child fewer on
+    // the root ui - and every panel after it would take a different auto id,
+    // losing the sizes the user had dragged.
+    let width = margin(ui.ctx());
+    let spacer = move |panel: egui::Panel| panel.exact_size(width).resizable(false).show_separator_line(false).frame(egui::Frame::NONE);
     spacer(egui::Panel::top(egui::Id::new((salt, "top")))).show(ui, |_| {});
     spacer(egui::Panel::bottom(egui::Id::new((salt, "bottom")))).show(ui, |_| {});
     spacer(egui::Panel::left(egui::Id::new((salt, "left")))).show(ui, |_| {});
@@ -118,8 +169,8 @@ pub(crate) fn claim_gap(ui: &mut egui::Ui, salt: &str) {
 /// A panel's rect covers the outer margin its frame reserved, so the visible
 /// surface is that much smaller on every side, and the claimed edge itself is
 /// the seam its neighbour's margin ends at.
-pub(crate) fn region_rect(claimed: Rect) -> Rect {
-    claimed.shrink(f32::from(REGION_MARGIN))
+pub(crate) fn region_rect(ctx: &egui::Context, claimed: Rect) -> Rect {
+    claimed.shrink(margin(ctx))
 }
 
 /// Window background for everything outside the scene.
@@ -133,6 +184,10 @@ pub(crate) fn region_rect(claimed: Rect) -> Rect {
 /// `painter.add(Shape::Noop)` on the background layer first and hand it back
 /// here.
 pub(crate) fn paint_window_background(ctx: &egui::Context, index: egui::layers::ShapeIdx, scene_rect: Rect) {
+    // Nothing shows between flush panels, so the reserved shape stays a no-op.
+    if !enabled(ctx) {
+        return;
+    }
     let window = ctx.viewport_rect();
     let fill = window_fill(&ctx.global_style().visuals);
     let bands = [
@@ -185,10 +240,13 @@ impl Grip {
 /// menus, tooltips and the floating dialogs, which are areas of their own and
 /// should be free to sit wherever they open.
 pub(crate) fn paint_regions(ctx: &egui::Context, regions: impl IntoIterator<Item = Rect>) {
+    if !enabled(ctx) {
+        return;
+    }
     let visuals = &ctx.global_style().visuals;
     let painter = ctx.layer_painter(egui::LayerId::background());
     for claimed in regions {
-        let region = region_rect(claimed);
+        let region = region_rect(ctx, claimed);
         if !region.is_positive() {
             continue;
         }
@@ -211,8 +269,16 @@ pub(crate) fn paint_regions(ctx: &egui::Context, regions: impl IntoIterator<Item
 /// into one continuous surface rather than a seam between two panels - to the
 /// same radius, so the notch turns the same corner the fill inside it does.
 pub(crate) fn paint_floating_region(painter: &egui::Painter, visuals: &egui::Visuals, region: Rect) {
-    if region.is_positive() {
+    if !region.is_positive() {
+        return;
+    }
+    if enabled(painter.ctx()) {
         paint_region_chrome(painter, visuals, region, REGION_RADIUS);
+    } else {
+        // No gap to notch out of the scene, but the tile still has to read as
+        // a tile over it: its own fill is rounded either way, so the outline
+        // that separates it from the scene turns the same corner it does.
+        painter.rect_stroke(region, REGION_RADIUS, region_stroke(visuals), StrokeKind::Inside);
     }
 }
 
@@ -240,6 +306,11 @@ fn paint_region_chrome(painter: &egui::Painter, visuals: &egui::Visuals, region:
 /// Call after [`paint_regions`]: a region's mask and band both reach across
 /// the seam, so dots painted any earlier would be cut in half.
 pub(crate) fn paint_grips(ctx: &egui::Context, grips: impl IntoIterator<Item = Grip>) {
+    // With the chrome off there is no gap to sit them in, and the separator
+    // lines mark the seams instead.
+    if !enabled(ctx) {
+        return;
+    }
     let (resting, active) = grip_colors(&ctx.global_style().visuals);
     let painter = ctx.layer_painter(egui::LayerId::background());
     for grip in grips {
