@@ -1036,6 +1036,11 @@ fn draw_global_dialogs(
         dialogs::confirmations::draw_delete_layer_confirm_dialog(root_ui, commands, editor);
     }
 
+    // Delete explorer item confirmation (triangulation, raster, point cloud, block model, drill hole)
+    if editor.pending_delete_item.is_some() {
+        dialogs::confirmations::draw_delete_item_confirm_dialog(root_ui, commands, editor);
+    }
+
     // Dirty project close confirmation
     if editor.pending_close_project.is_some() {
         dialogs::confirmations::draw_close_project_dialog(root_ui, commands, editor, project);

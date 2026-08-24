@@ -136,6 +136,31 @@ pub(crate) fn draw_delete_layer_confirm_dialog(ui: &mut egui::Ui, commands: &mut
     }
 }
 
+/// Draw the confirmation dialog shown before deleting a non-layer explorer
+/// item (triangulation, raster, point cloud, block model, or drill hole dataset).
+pub(crate) fn draw_delete_item_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let Some((target, name)) = editor.pending_delete_item.clone() else {
+        return;
+    };
+    let kind = target.kind_label();
+    let mut open = true;
+    DragableMenu::new(format!("Delete {kind}")).open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
+        ui.label(format!("Delete '{name}' from the project?\nThis cannot be undone."));
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new(format!("Delete {kind}")).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                commands.push(target.remove_command());
+                editor.pending_delete_item = None;
+            }
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                editor.pending_delete_item = None;
+            }
+        });
+    });
+    if !open {
+        editor.pending_delete_item = None;
+    }
+}
+
 /// Draw the confirmation dialog shown before closing a dirty project.
 pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
     let Some(runtime_id) = editor.pending_close_project else {

@@ -491,7 +491,7 @@ pub(crate) fn draw_explorer(
                                 }
                                 context_menu_separator(ui);
                                 if ContextMenuAction::new("Delete from Project").enabled(!tri_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RemoveTriangulation(tri_id));
+                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::Triangulation(tri_id)));
                                     ui.close();
                                 }
                             });
@@ -589,7 +589,7 @@ pub(crate) fn draw_explorer(
                                 }
                                 context_menu_separator(ui);
                                 if ContextMenuAction::new("Delete from Project").enabled(!raster_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RemoveRaster(raster.id));
+                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::Raster(raster.id)));
                                     ui.close();
                                 }
                             });
@@ -669,7 +669,7 @@ pub(crate) fn draw_explorer(
                                 }
                                 context_menu_separator(ui);
                                 if ContextMenuAction::new("Delete from Project").enabled(!cloud_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RemovePointCloud(point_cloud.id));
+                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::PointCloud(point_cloud.id)));
                                     ui.close();
                                 }
                             });
@@ -758,7 +758,7 @@ pub(crate) fn draw_explorer(
                                 }
                                 context_menu_separator(ui);
                                 if ContextMenuAction::new("Delete from Project").enabled(!model_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RemoveBlockModel(block_model.id));
+                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::BlockModel(block_model.id)));
                                     ui.close();
                                 }
                             });
@@ -840,7 +840,7 @@ pub(crate) fn draw_explorer(
                                 }
                                 context_menu_separator(ui);
                                 if ContextMenuAction::new("Delete from Project").enabled(!dataset_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RemoveDrillHole(dataset.id));
+                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::DrillHole(dataset.id)));
                                     ui.close();
                                 }
                             });

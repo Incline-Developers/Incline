@@ -718,6 +718,19 @@ impl RenameTarget {
             Self::DrillHole(_) => "Drill Holes",
         }
     }
+
+    /// The command that actually performs deletion of this item, issued once
+    /// the delete-confirmation dialog is accepted.
+    pub(crate) fn remove_command(self) -> UiCommand {
+        match self {
+            Self::Layer(id) => UiCommand::DeleteLayer(id),
+            Self::Triangulation(id) => UiCommand::RemoveTriangulation(id),
+            Self::Raster(id) => UiCommand::RemoveRaster(id),
+            Self::PointCloud(id) => UiCommand::RemovePointCloud(id),
+            Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
+            Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
+        }
+    }
 }
 
 /// Central mutable editor state.
@@ -836,6 +849,9 @@ pub(crate) struct EditorState {
     pub(crate) renaming_item: Option<(RenameTarget, String)>,
     /// Layer awaiting destructive deletion confirmation: (layer_id, display_name).
     pub(crate) pending_delete_layer: Option<(LayerId, String)>,
+    /// Non-layer explorer item (triangulation, raster, point cloud, block
+    /// model, drill hole dataset) awaiting destructive deletion confirmation.
+    pub(crate) pending_delete_item: Option<(RenameTarget, String)>,
     /// Vertices accumulated for an in-progress MakeLine / MakePoly stroke.
     pub(crate) pending_stroke: Vec<DVec3>,
     pub(crate) circle_draft: Option<CircleDraft>,
@@ -1346,6 +1362,7 @@ impl EditorState {
             || self.lossy_save_confirm_open
             || self.delete_confirm_open
             || self.pending_delete_layer.is_some()
+            || self.pending_delete_item.is_some()
             || self.pending_close_project.is_some()
             || self.pending_discard_project.is_some()
             || self.pending_discard_layer.is_some()
@@ -1415,6 +1432,7 @@ impl EditorState {
         self.new_layer_dialog_open = false;
         self.renaming_item = None;
         self.pending_delete_layer = None;
+        self.pending_delete_item = None;
         self.pending_discard_layer = None;
         self.selection_box_start_px = None;
         self.selection_box_current_px = None;
@@ -1630,6 +1648,7 @@ impl EditorState {
             new_layer_name: "design".to_owned(),
             renaming_item: None,
             pending_delete_layer: None,
+            pending_delete_item: None,
             pending_stroke: Vec::new(),
             circle_draft: None,
             measurement_start: None,
@@ -2131,6 +2150,8 @@ pub(crate) enum UiCommand {
     DiscardLayerChanges(LayerId),
     RequestDeleteLayer(LayerId),
     DeleteLayer(LayerId),
+    /// Open the destructive-deletion confirmation for a non-layer explorer item.
+    RequestDeleteItem(RenameTarget),
     DuplicateLayer(LayerId),
     RenameItem {
         target: RenameTarget,
@@ -2449,7 +2470,8 @@ impl UiCommand {
             | Self::OpenDrillHoleColorDialog(_)
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
-            | Self::RequestDeleteLayer(_) => None,
+            | Self::RequestDeleteLayer(_)
+            | Self::RequestDeleteItem(_) => None,
 
             #[cfg(target_arch = "wasm32")]
             Self::ClearBrowserImportSelection(_) => None,
