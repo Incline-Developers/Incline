@@ -177,6 +177,7 @@ impl<'a> App<'a> {
         let graphics = self.graphics.as_ref()?;
         let vp = graphics.view_proj();
         let screen = graphics.screen_size_pub();
+        let cursor_px = graphics.window_to_viewport_px(cursor_px);
         let threshold = PICK_THRESHOLD_PX * 2.0;
 
         let dist_sq = |world: DVec3| -> Option<f64> {
@@ -217,6 +218,7 @@ impl<'a> App<'a> {
         let (Some(graphics), Some(cursor)) = (self.graphics.as_ref(), self.editor.cursor_screen_px) else {
             return false;
         };
+        let cursor = graphics.window_to_viewport_px(cursor);
         let Some(screen_point) = pick::world_to_screen(&graphics.view_proj(), world, graphics.screen_size_pub()) else {
             return false;
         };

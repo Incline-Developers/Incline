@@ -13,7 +13,7 @@ use super::{BlockModelTransparencyTargets, BlockModelVolumeTarget, Graphics, Ren
 use crate::{
     model::{Document, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, point_cloud::OpenPointCloud, raster::OpenRasterTexture, triangulation::OpenTriangulation},
     rendering::camera::{Camera, CameraUniform, Projection},
-    ui::state::{EditorState, fitted_slice_preview_zoom},
+    ui::state::{EditorState, ViewportRect, fitted_slice_preview_zoom},
 };
 
 /// Fingerprint of everything a slice preview renders besides its own camera:
@@ -663,7 +663,18 @@ impl<'a> Graphics<'a> {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Embedded top-down full scene encoder"),
         });
-        self.render_scene_pass(&mut encoder, &preview.view, editor, triangulations, block_models, drill_holes, point_clouds, rasters, false);
+        self.render_scene_pass(
+            &mut encoder,
+            &preview.view,
+            ViewportRect::full(self.size.width, self.size.height),
+            editor,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            false,
+        );
 
         let plan_center = [center.x - self.scene_origin.x, center.y - self.scene_origin.y];
         let transform = OverlayTransform {
@@ -837,7 +848,18 @@ impl<'a> Graphics<'a> {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Top-down full scene encoder"),
         });
-        self.render_scene_pass(&mut encoder, &view, editor, triangulations, block_models, drill_holes, point_clouds, rasters, false);
+        self.render_scene_pass(
+            &mut encoder,
+            &view,
+            ViewportRect::full(self.size.width, self.size.height),
+            editor,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            false,
+        );
 
         let plan_center = [center.x - self.scene_origin.x, center.y - self.scene_origin.y];
         let transform = OverlayTransform {

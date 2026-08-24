@@ -192,7 +192,18 @@ impl<'a> Graphics<'a> {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera_uniform));
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Plot Map Encoder") });
-        self.render_scene_pass(&mut encoder, view, editor, triangulations, block_models, drill_holes, point_clouds, rasters, false);
+        self.render_scene_pass(
+            &mut encoder,
+            view,
+            ViewportRect::full(width, height),
+            editor,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            false,
+        );
         self.queue.submit([encoder.finish()]);
 
         std::mem::swap(&mut self.camera, &mut camera);

@@ -27,7 +27,7 @@ impl<'a> App<'a> {
             &self.editor.frozen_handles,
             &graphics.view_proj(),
             graphics.screen_size_pub(),
-            cursor_px,
+            graphics.window_to_viewport_px(cursor_px),
             PICK_THRESHOLD_PX * 2.5,
         );
 

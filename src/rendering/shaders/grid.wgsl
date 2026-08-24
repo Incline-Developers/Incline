@@ -8,6 +8,10 @@ struct CameraUniform {
     cam_position: vec4<f32>,
     viewport: vec4<f32>,
     inv_view_proj: mat4x4<f32>,
+    // xy: viewport rect offset in physical pixels within the render target -
+    // `@builtin(position)` is target-relative, not viewport-relative, so this
+    // must be subtracted before treating a fragment's position as 0-based.
+    viewport_origin: vec4<f32>,
 };
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
@@ -108,10 +112,15 @@ fn line_alpha(scene_xy: vec2<f32>, spacing: f32, opacity: f32, world_per_pixel: 
 
 @fragment
 fn fs_main(@builtin(position) fragment_position: vec4<f32>) -> FragmentOutput {
+    // `fragment_position` is relative to the render target, which for the
+    // main window is the whole (toolbar-occluded) surface - rebase it to the
+    // viewport sub-rect `camera.viewport` itself describes before using it as
+    // a 0-based screen coordinate.
+    let screen_xy = fragment_position.xy - camera.viewport_origin.xy;
     let viewport = max(camera.viewport.xy, vec2<f32>(1.0));
     let ndc = vec2<f32>(
-        fragment_position.x / viewport.x * 2.0 - 1.0,
-        1.0 - fragment_position.y / viewport.y * 2.0,
+        screen_xy.x / viewport.x * 2.0 - 1.0,
+        1.0 - screen_xy.y / viewport.y * 2.0,
     );
     let hit = plane_point(ndc);
     if hit.w < -1.0e20 {
@@ -165,10 +174,10 @@ fn fs_main(@builtin(position) fragment_position: vec4<f32>) -> FragmentOutput {
     // along each line is kept at scene zero to avoid large-coordinate loss.
     let x_axis_base = vec3<f32>(0.0, -grid.origin_plane.y, grid.origin_plane.z);
     let y_axis_base = vec3<f32>(-grid.origin_plane.x, 0.0, grid.origin_plane.z);
-    let y_axis_alpha = projected_axis_coverage(fragment_position.xy, y_axis_base, vec3<f32>(0.0, 1.0, 0.0)) * grid.y_axis_color.a;
+    let y_axis_alpha = projected_axis_coverage(screen_xy, y_axis_base, vec3<f32>(0.0, 1.0, 0.0)) * grid.y_axis_color.a;
     premultiplied = grid.y_axis_color.rgb * y_axis_alpha + premultiplied * (1.0 - y_axis_alpha);
     alpha = y_axis_alpha + alpha * (1.0 - y_axis_alpha);
-    let x_axis_alpha = projected_axis_coverage(fragment_position.xy, x_axis_base, vec3<f32>(1.0, 0.0, 0.0)) * grid.x_axis_color.a;
+    let x_axis_alpha = projected_axis_coverage(screen_xy, x_axis_base, vec3<f32>(1.0, 0.0, 0.0)) * grid.x_axis_color.a;
     premultiplied = grid.x_axis_color.rgb * x_axis_alpha + premultiplied * (1.0 - x_axis_alpha);
     alpha = x_axis_alpha + alpha * (1.0 - x_axis_alpha);
 

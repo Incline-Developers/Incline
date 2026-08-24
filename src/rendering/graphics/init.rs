@@ -1413,6 +1413,7 @@ impl<'a> Graphics<'a> {
             config,
             sample_count,
             size,
+            viewport_rect: ViewportRect::full(size.width, size.height),
             lyon_buffer,
             lyon_vertex_capacity: 1,
             lyon_index_capacity: 1,
@@ -1485,8 +1486,6 @@ impl<'a> Graphics<'a> {
     pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.mark_interaction();
-            self.projection.resize(new_size.width, new_size.height);
-            self.camera_uniform.update_viewport(new_size.width, new_size.height);
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
@@ -1514,5 +1513,18 @@ impl<'a> Graphics<'a> {
             // the entire document here makes interactive resize needlessly laggy.
             self.overlay_dirty = true;
         }
+    }
+
+    /// Apply the visible scene sub-rect computed by this frame's egui layout,
+    /// for use starting next frame (the scene pass runs before egui layout,
+    /// so it's always one frame behind - see `frame::render`).
+    pub(super) fn apply_canvas_rect(&mut self, rect: ViewportRect) {
+        if rect.width == 0 || rect.height == 0 || rect == self.viewport_rect {
+            return;
+        }
+        self.viewport_rect = rect;
+        self.projection.resize(rect.width, rect.height);
+        self.camera_uniform.update_viewport(rect.width, rect.height);
+        self.camera_uniform.set_viewport_origin(rect.x, rect.y);
     }
 }

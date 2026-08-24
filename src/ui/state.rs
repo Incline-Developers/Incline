@@ -2618,6 +2618,28 @@ impl UiCommand {
     }
 }
 
+/// A pixel rect in physical (not logical/points) coordinates - typically the
+/// portion of the window the 3D scene is actually visible through, once the
+/// toolbars and status bar around it are accounted for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ViewportRect {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+impl ViewportRect {
+    pub(crate) fn full(width: u32, height: u32) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+}
+
 /// Output produced by a single UI frame.
 pub(crate) struct UiFrameOutput {
     /// Delay requested by egui for its next frame. `None` means egui has no
@@ -2625,6 +2647,11 @@ pub(crate) struct UiFrameOutput {
     pub(crate) repaint_after: Option<std::time::Duration>,
     pub(crate) geometry_dirty: bool,
     pub(crate) commands: Vec<UiCommand>,
+    /// The scene canvas rect from this frame's layout, in physical pixels -
+    /// one frame stale by the time the renderer consumes it, since the scene
+    /// pass runs before this frame's egui layout. See
+    /// `Graphics::apply_canvas_rect`.
+    pub(crate) canvas_rect: ViewportRect,
 }
 
 /// One loaded layer shown in the explorer tree.

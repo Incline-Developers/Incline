@@ -163,6 +163,7 @@ impl<'a> Graphics<'a> {
     }
 
     pub(crate) fn set_mouse_location(&mut self, mouse_loc: (f32, f32)) -> bool {
+        let mouse_loc = self.window_to_viewport_px(mouse_loc);
         let previous_mouse_loc = self.camera_controller.mouse_loc;
         self.camera_controller.mouse_loc = mouse_loc;
 
@@ -175,8 +176,32 @@ impl<'a> Graphics<'a> {
         false
     }
 
+    /// Convert a window-space physical pixel coordinate (e.g. a raw winit
+    /// cursor position, or `EditorState::cursor_screen_px`) into the
+    /// viewport-relative space `screen_size()`/`view_proj()` operate in.
+    pub(crate) fn window_to_viewport_px(&self, px: (f32, f32)) -> (f32, f32) {
+        (px.0 - self.viewport_rect.x as f32, px.1 - self.viewport_rect.y as f32)
+    }
+
+    /// Convert a viewport-relative pixel coordinate back to window space, for
+    /// values that end up compared against raw cursor positions or drawn by
+    /// egui (which lays out in window space).
+    pub(crate) fn viewport_to_window_px(&self, px: (f32, f32)) -> (f32, f32) {
+        (px.0 + self.viewport_rect.x as f32, px.1 + self.viewport_rect.y as f32)
+    }
+
+    /// Project a world point to a window-space physical pixel, for UI/tool
+    /// overlays that egui draws or that are hit-tested against a raw cursor
+    /// position. Internal camera-ray picking should use `screen_size()`
+    /// directly instead, since it already compares against the
+    /// viewport-relative `camera_controller.mouse_loc`.
+    pub(crate) fn world_to_window_px(&self, view_proj: &DMat4, world: DVec3) -> Option<(f32, f32)> {
+        let px = crate::rendering::pick::world_to_screen(view_proj, world, self.screen_size())?;
+        Some(self.viewport_to_window_px((px.x as f32, px.y as f32)))
+    }
+
     pub(super) fn screen_size(&self) -> Size {
-        (self.size.width as f32, self.size.height as f32)
+        (self.viewport_rect.width as f32, self.viewport_rect.height as f32)
     }
 
     pub(crate) fn zoom(&self) -> f64 {
@@ -418,7 +443,7 @@ impl<'a> Graphics<'a> {
     /// Return design entities whose rendered geometry is fully enclosed by a
     /// physical-pixel selection rectangle.
     pub(crate) fn entities_in_screen_rect(&self, start_px: (f32, f32), end_px: (f32, f32), frozen: &HashSet<SceneEntityId>) -> Vec<SceneEntityId> {
-        let rect = ScreenRect::new(start_px, end_px);
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
         let view_proj = self.view_proj();
         let screen = self.screen_size();
         let mut hits = Vec::new();
@@ -472,7 +497,7 @@ impl<'a> Graphics<'a> {
     /// Cross-select entities whose visible rendered geometry touches the box,
     /// including a box wholly inside a fill or text quad.
     pub(crate) fn entities_touching_screen_rect(&self, start_px: (f32, f32), end_px: (f32, f32), frozen: &HashSet<SceneEntityId>) -> Vec<SceneEntityId> {
-        let rect = ScreenRect::new(start_px, end_px);
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
         let view_proj = self.view_proj();
         let screen = self.screen_size();
         let mut hits = Vec::new();
@@ -1085,6 +1110,6 @@ impl<'a> Graphics<'a> {
         // void fallback pivot even though its screen X/Y is perfectly valid.
         // Project without the geometry helper's depth-range rejection so the
         // marker remains visible throughout the orbit.
-        crate::rendering::pick::world_to_screen_unclipped_depth(&view_proj, marker, screen).map(|v| (v.x as f32, v.y as f32))
+        crate::rendering::pick::world_to_screen_unclipped_depth(&view_proj, marker, screen).map(|v| self.viewport_to_window_px((v.x as f32, v.y as f32)))
     }
 }

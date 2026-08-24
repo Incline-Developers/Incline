@@ -200,7 +200,7 @@ impl<'a> App<'a> {
             return;
         };
         let Some((candidate_index, _)) = crate::rendering::graphics::projections::projected_relimit_candidate_nearest_cursor(
-            cursor,
+            graphics.window_to_viewport_px(cursor),
             &self.editor.relimit_candidates,
             source_start,
             source_end,

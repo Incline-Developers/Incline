@@ -356,6 +356,7 @@ impl<'a> Graphics<'a> {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        viewport: ViewportRect,
         editor: &EditorState,
         triangulations: &[OpenTriangulation],
         block_models: &[OpenBlockModel],
@@ -395,13 +396,25 @@ impl<'a> Graphics<'a> {
             multiview_mask: None,
         });
 
+        // `viewport` reflects last frame's UI layout (see `apply_canvas_rect`),
+        // so it can be briefly stale by a frame relative to a resize that
+        // landed this tick - clamp it against the actual target size rather
+        // than risk an out-of-bounds `set_viewport`.
+        let target_width = self.config.width.max(1);
+        let target_height = self.config.height.max(1);
+        let vp_x = viewport.x.min(target_width - 1);
+        let vp_y = viewport.y.min(target_height - 1);
+        let vp_width = viewport.width.min(target_width - vp_x).max(1);
+        let vp_height = viewport.height.min(target_height - vp_y).max(1);
+        render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
+
         // Block model chunks carry their own AABB, so cheaply skip GPU draw
         // calls for chunks that are entirely outside the current view
         // instead of always uploading/drawing every renderable block.
         let view_proj = glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj);
         let frustum = Frustum::from_view_proj(view_proj);
         let point_billboard_axes = point_billboard_axes(view_proj);
-        let viewport = glam::vec2(self.size.width.max(1) as f32, self.size.height.max(1) as f32);
+        let viewport_dims = glam::vec2(vp_width as f32, vp_height as f32);
 
         // Developer chunk-debug view: colour each surface chunk distinctly and
         // report how many chunks survive frustum culling.
@@ -475,16 +488,16 @@ impl<'a> Graphics<'a> {
                     // Projected bounds are conservative and include raster
                     // padding. Unlike a separate plane test, an uncertain box
                     // at the eye plane returns `None` and is always retained.
-                    let projected = aabb_scissor_rect(&view_proj, bounds_min, bounds_max, self.size.width.max(1) as f32, self.size.height.max(1) as f32);
+                    let projected = aabb_scissor_rect(&view_proj, bounds_min, bounds_max, viewport_dims.x, viewport_dims.y);
                     if projected.is_some_and(|(_, _, width, height)| width == 0 || height == 0) {
                         continue;
                     }
                     let desired_estimates = projected
-                        .zip(projected_aabb_pixel_size(&view_proj, bounds_min, bounds_max, viewport))
+                        .zip(projected_aabb_pixel_size(&view_proj, bounds_min, bounds_max, viewport_dims))
                         .map(|(scissor, full_projected_size)| {
-                            let projected_size = point_lod_projected_size(scissor, full_projected_size, viewport);
+                            let projected_size = point_lod_projected_size(scissor, full_projected_size, viewport_dims);
                             let center = (bounds_min + bounds_max) * 0.5;
-                            let splat_pixels = projected_world_splat_size(view_proj, center, cached.point_size, point_billboard_axes, viewport);
+                            let splat_pixels = projected_world_splat_size(view_proj, center, cached.point_size, point_billboard_axes, viewport_dims);
                             let projected_area_estimate = desired_point_splats(projected_size.x, projected_size.y, splat_pixels);
                             // Correct the area estimate's uniform-point
                             // assumption using the chunk's measured spacing:
@@ -909,11 +922,12 @@ impl<'a> Graphics<'a> {
         // scene. The target is full-size; we fill only the top-left sub-rect so
         // the scale can change per frame with no reallocation. Keeping the two
         // in lockstep: the raycast shader derives the same sub-rect from
-        // `camera.viewport.xy * render_scale`, and the upscale samples exactly
-        // that region.
+        // `camera.viewport.xy * render_scale` - that uniform tracks the visible
+        // scene viewport (see `apply_canvas_rect`), not the swapchain, so this
+        // must too.
         let render_scale = self.camera_uniform.render_scale();
-        let scaled_width = (self.config.width as f32 * render_scale).max(1.0);
-        let scaled_height = (self.config.height as f32 * render_scale).max(1.0);
+        let scaled_width = (self.viewport_rect.width as f32 * render_scale).max(1.0);
+        let scaled_height = (self.viewport_rect.height as f32 * render_scale).max(1.0);
         self.queue
             .write_buffer(&volume_target.params_buffer, 0, bytemuck::cast_slice(&[scaled_width, scaled_height, 0.0f32, 0.0f32]));
 

@@ -165,18 +165,18 @@ impl<'a> App<'a> {
             &self.editor.frozen_handles,
             &graphics.view_proj(),
             graphics.screen_size_pub(),
-            cursor_px,
+            graphics.window_to_viewport_px(cursor_px),
             PICK_THRESHOLD_PX * 2.0,
             pick::VertexPickFilter::DeletablePolyline,
         )?;
         let ObjectPoint::Vertex(vertex_index) = point else {
             return None;
         };
-        let screen_pos = pick::world_to_screen(&graphics.view_proj(), world, graphics.screen_size_pub())?;
+        let screen_px = graphics.world_to_window_px(&graphics.view_proj(), world)?;
         Some(DeleteVertexHit {
             object_id,
             vertex_index,
-            screen_px: (screen_pos.x as f32, screen_pos.y as f32),
+            screen_px,
             world,
         })
     }
@@ -305,15 +305,15 @@ impl<'a> App<'a> {
             &self.editor.frozen_handles,
             &graphics.view_proj(),
             graphics.screen_size_pub(),
-            cursor_px,
+            graphics.window_to_viewport_px(cursor_px),
             MOVE_VERTEX_PICK_PX * scale_factor,
             pick::VertexPickFilter::AnyEditable,
         )?;
-        let screen_pos = pick::world_to_screen(&graphics.view_proj(), world, graphics.screen_size_pub())?;
+        let screen_px = graphics.world_to_window_px(&graphics.view_proj(), world)?;
         Some(MoveVertexHit {
             object_id,
             point,
-            screen_px: (screen_pos.x as f32, screen_pos.y as f32),
+            screen_px,
             world,
         })
     }

@@ -32,7 +32,7 @@ use crate::{
     },
     ui::{
         Gui,
-        state::{CursorMode, EditorState, UiFrameOutput, UiProjectView},
+        state::{CursorMode, EditorState, UiFrameOutput, UiProjectView, ViewportRect},
     },
 };
 
@@ -270,6 +270,10 @@ pub(crate) struct Graphics<'a> {
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) sample_count: u32,
     pub(super) size: winit::dpi::PhysicalSize<u32>,
+    /// The sub-rect of the window the scene is actually visible through, once
+    /// the toolbars/status bar around it are accounted for. Sourced from
+    /// egui's layout one frame behind, via `apply_canvas_rect`.
+    pub(super) viewport_rect: ViewportRect,
     pub(super) lyon_buffer: VertexBuffers<Vertex, u32>,
     pub(super) lyon_vertex_capacity: usize,
     pub(super) lyon_index_capacity: usize,

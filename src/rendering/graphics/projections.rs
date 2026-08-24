@@ -169,31 +169,24 @@ impl<'a> Graphics<'a> {
     /// Project the Move gizmo around `center` using the live camera.
     fn project_move_gizmo(&self, center: DVec3) -> MoveGizmoScreen {
         let view_proj = self.view_proj();
-        let screen = self.screen_size();
         build_move_gizmo(
             center,
             self.camera.forward(),
             self.camera.up(),
             (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
-            |world| crate::rendering::pick::world_to_screen(&view_proj, world, screen).map(|p| (p.x as f32, p.y as f32)),
+            |world| self.world_to_window_px(&view_proj, world),
         )
     }
 
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document) {
         if let Some(failure) = &editor.tri_create_failure {
             let vp = self.view_proj();
-            let screen = self.screen_size();
-            editor.tri_create_diagnostic_markers_screen_px = failure
-                .diagnostic
-                .markers_world
-                .iter()
-                .filter_map(|&point| crate::rendering::pick::world_to_screen(&vp, point, screen).map(|projected| (projected.x as f32, projected.y as f32)))
-                .collect();
+            editor.tri_create_diagnostic_markers_screen_px = failure.diagnostic.markers_world.iter().filter_map(|&point| self.world_to_window_px(&vp, point)).collect();
             editor.tri_create_diagnostic_segments_screen_px = failure
                 .diagnostic
                 .segments_world
                 .iter()
-                .map(|segment| segment.map(|point| crate::rendering::pick::world_to_screen(&vp, point, screen).map(|projected| (projected.x as f32, projected.y as f32))))
+                .map(|segment| segment.map(|point| self.world_to_window_px(&vp, point)))
                 .collect();
         } else {
             editor.tri_create_diagnostic_markers_screen_px.clear();
@@ -202,19 +195,10 @@ impl<'a> Graphics<'a> {
 
         if editor.offset_awaiting_side_pick {
             let vp = self.view_proj();
-            let screen = self.screen_size();
             // One entry per source vertex: a clipped vertex must keep its
             // slot so guide pairing and preview ranges stay index-aligned.
-            editor.offset_source_screen_px = editor
-                .offset_source_world
-                .iter()
-                .map(|&p| crate::rendering::pick::world_to_screen(&vp, p, screen).map(|sp| (sp.x as f32, sp.y as f32)))
-                .collect();
-            editor.offset_preview_screen_px = editor
-                .offset_preview_world
-                .iter()
-                .map(|&p| crate::rendering::pick::world_to_screen(&vp, p, screen).map(|sp| (sp.x as f32, sp.y as f32)))
-                .collect();
+            editor.offset_source_screen_px = editor.offset_source_world.iter().map(|&p| self.world_to_window_px(&vp, p)).collect();
+            editor.offset_preview_screen_px = editor.offset_preview_world.iter().map(|&p| self.world_to_window_px(&vp, p)).collect();
         } else {
             editor.offset_source_screen_px.clear();
             editor.offset_preview_screen_px.clear();
@@ -223,20 +207,11 @@ impl<'a> Graphics<'a> {
 
         if editor.batter_berm_dialog_open && !editor.batter_berm_rings_world.is_empty() {
             let vp = self.view_proj();
-            let screen = self.screen_size();
-            editor.batter_berm_source_screen_px = editor
-                .batter_berm_source_world
-                .iter()
-                .map(|&p| crate::rendering::pick::world_to_screen(&vp, p, screen).map(|sp| (sp.x as f32, sp.y as f32)))
-                .collect();
+            editor.batter_berm_source_screen_px = editor.batter_berm_source_world.iter().map(|&p| self.world_to_window_px(&vp, p)).collect();
             editor.batter_berm_rings_screen_px = editor
                 .batter_berm_rings_world
                 .iter()
-                .map(|ring| {
-                    ring.iter()
-                        .map(|&p| crate::rendering::pick::world_to_screen(&vp, p, screen).map(|sp| (sp.x as f32, sp.y as f32)))
-                        .collect()
-                })
+                .map(|ring| ring.iter().map(|&p| self.world_to_window_px(&vp, p)).collect())
                 .collect();
         } else {
             editor.batter_berm_source_screen_px.clear();
@@ -301,8 +276,7 @@ impl<'a> Graphics<'a> {
         if editor.active_tool == ActiveTool::Chamfer {
             use crate::app::commands::drawing::chamfer::chamfer_corner;
             let vp = self.view_proj();
-            let screen = self.screen_size();
-            let project = |w: DVec3| -> Option<(f32, f32)> { crate::rendering::pick::world_to_screen(&vp, w, screen).map(|s| (s.x as f32, s.y as f32)) };
+            let project = |w: DVec3| -> Option<(f32, f32)> { self.world_to_window_px(&vp, w) };
 
             let corner_data = editor.chamfer_poly_id.and_then(|oid| {
                 let ci = editor.chamfer_corner_index?;
@@ -379,8 +353,7 @@ impl<'a> Graphics<'a> {
         if editor.active_tool == ActiveTool::Bezier {
             use crate::app::commands::drawing::bezier::{bezier_eval, directed_span_points};
             let vp = self.view_proj();
-            let screen = self.screen_size();
-            let project = |w: DVec3| -> Option<(f32, f32)> { crate::rendering::pick::world_to_screen(&vp, w, screen).map(|s| (s.x as f32, s.y as f32)) };
+            let project = |w: DVec3| -> Option<(f32, f32)> { self.world_to_window_px(&vp, w) };
 
             if let Some(oid) = editor.bezier_poly_id {
                 if let Some(Object::Polyline { verts, closed, .. }) = document.get_object(oid) {
@@ -443,13 +416,9 @@ impl<'a> Graphics<'a> {
 
         if editor.active_tool == ActiveTool::SplitAtPoints {
             let vp = self.view_proj();
-            let screen = self.screen_size();
             if let Some(oid) = editor.split_poly_id {
                 if let Some(Object::Polyline { verts, .. }) = document.get_object(oid) {
-                    editor.split_poly_verts_screen_px = verts
-                        .iter()
-                        .map(|v| crate::rendering::pick::world_to_screen(&vp, v.pos, screen).map(|sp| (sp.x as f32, sp.y as f32)))
-                        .collect();
+                    editor.split_poly_verts_screen_px = verts.iter().map(|v| self.world_to_window_px(&vp, v.pos)).collect();
                 } else {
                     editor.split_poly_verts_screen_px.clear();
                 }
@@ -474,14 +443,15 @@ impl<'a> Graphics<'a> {
                     Some(Object::Polyline { verts, .. }) if verts.len() >= 2 => Some((verts.first()?.pos, verts.last()?.pos)),
                     _ => None,
                 })
-                && let Some((index, (from, to))) = projected_relimit_candidate_nearest_cursor(cursor, &editor.relimit_candidates, start, end, &vp, screen)
+                && let Some((index, (from, to))) =
+                    projected_relimit_candidate_nearest_cursor(self.window_to_viewport_px(cursor), &editor.relimit_candidates, start, end, &vp, screen)
                 && let Some(candidate) = editor.relimit_candidates.get(index)
             {
                 editor.relimit_hover_end = candidate.end;
                 editor.relimit_intersection_3d = Some(candidate.target);
                 editor.relimit_preview_is_extension = candidate.is_extension;
-                editor.relimit_preview_from_px = Some(from);
-                editor.relimit_preview_to_px = Some(to);
+                editor.relimit_preview_from_px = Some(self.viewport_to_window_px(from));
+                editor.relimit_preview_to_px = Some(self.viewport_to_window_px(to));
             }
 
             let show = editor.relimit_dialog_open && matches!(editor.relimit_mode, RelimitMode::AbsoluteLength | RelimitMode::RelativeLength);
@@ -492,7 +462,7 @@ impl<'a> Graphics<'a> {
                             TrimEnd::Start => verts.first()?.pos,
                             TrimEnd::End => verts.last()?.pos,
                         };
-                        crate::rendering::pick::world_to_screen(&vp, v, screen).map(|s| (s.x as f32, s.y as f32))
+                        self.world_to_window_px(&vp, v)
                     } else {
                         None
                     }

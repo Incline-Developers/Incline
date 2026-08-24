@@ -24,6 +24,9 @@ pub(super) struct PendingScreenshot {
     padded_bytes_per_row: u32,
     width: u32,
     height: u32,
+    /// The visible-viewport sub-rect of the (full-window-sized) capture to
+    /// keep when encoding the PNG - see `encode_mapped_png`.
+    crop: ViewportRect,
     format: wgpu::TextureFormat,
     target: ScreenshotTarget,
 }
@@ -73,7 +76,18 @@ impl<'a> Graphics<'a> {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.render_scene_pass(encoder, &view, editor, triangulations, block_models, drill_holes, point_clouds, rasters, true);
+        self.render_scene_pass(
+            encoder,
+            &view,
+            self.viewport_rect,
+            editor,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            true,
+        );
 
         let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         // On wasm `wgpu::Buffer` is not Send+Sync; the Arc never crosses threads
@@ -107,6 +121,7 @@ impl<'a> Graphics<'a> {
             padded_bytes_per_row,
             width,
             height,
+            crop: self.viewport_rect,
             format: self.config.format.add_srgb_suffix(),
             target,
         }
@@ -196,13 +211,33 @@ fn encode_mapped_png(capture: &PendingScreenshot) -> Result<Vec<u8>> {
     for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel[3] = 255;
     }
+
+    // The capture covers the full window; keep only the visible-viewport
+    // sub-rect (`crop`), clamped defensively in case it's a frame stale
+    // relative to a resize that just landed - see `Graphics::apply_canvas_rect`.
+    let crop_x = capture.crop.x.min(capture.width.saturating_sub(1)) as usize;
+    let crop_y = capture.crop.y.min(capture.height.saturating_sub(1)) as usize;
+    let crop_width = (capture.crop.width.min(capture.width - crop_x as u32)).max(1) as usize;
+    let crop_height = (capture.crop.height.min(capture.height - crop_y as u32)).max(1) as usize;
+    let full_frame = crop_x == 0 && crop_y == 0 && crop_width == capture.width as usize && crop_height == capture.height as usize;
+    let cropped = if full_frame {
+        rgba
+    } else {
+        let mut out = Vec::with_capacity(crop_width * crop_height * 4);
+        for row in 0..crop_height {
+            let start = ((crop_y + row) * capture.width as usize + crop_x) * 4;
+            out.extend_from_slice(&rgba[start..start + crop_width * 4]);
+        }
+        out
+    };
+
     let mut bytes = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut bytes, capture.width, capture.height);
+        let mut encoder = png::Encoder::new(&mut bytes, crop_width as u32, crop_height as u32);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;
-        writer.write_image_data(&rgba)?;
+        writer.write_image_data(&cropped)?;
         writer.finish()?;
     }
     Ok(bytes)

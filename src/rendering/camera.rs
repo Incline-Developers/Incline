@@ -252,6 +252,15 @@ pub(crate) struct CameraUniform {
     cam_position: [f32; 4],
     viewport: [f32; 4],
     inv_view_proj: [[f32; 4]; 4],
+    /// xy: the viewport rect's offset in physical pixels within whatever
+    /// target it's rendered into - `@builtin(position)` in a fragment shader
+    /// reports pixels in the *target's* space, not the viewport sub-rect's
+    /// own space, so a shader reconstructing a screen-relative position (the
+    /// XY grid) needs to subtract this first. Zero for every render target
+    /// that's filled from its own origin (plots, slice previews, the offscreen
+    /// volume raycast target) - only the main window's toolbar-bounded canvas
+    /// has a nonzero offset. zw: unused padding.
+    viewport_origin: [f32; 4],
 }
 
 impl CameraUniform {
@@ -262,6 +271,7 @@ impl CameraUniform {
             cam_position: [0.; 4],
             viewport: [1.0, 1.0, 0.0, 0.0],
             inv_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            viewport_origin: [0.0; 4],
         }
     }
 
@@ -283,6 +293,14 @@ impl CameraUniform {
 
     pub(crate) fn update_viewport(&mut self, width: u32, height: u32) {
         self.viewport = [width.max(1) as f32, height.max(1) as f32, self.viewport[2], self.viewport[3]];
+    }
+
+    /// Set the viewport rect's offset - see `viewport_origin`. Callers that
+    /// render into their own dedicated, origin-filled target (everything
+    /// except the main window's canvas) should leave this at its default of
+    /// zero rather than calling it.
+    pub(crate) fn set_viewport_origin(&mut self, x: u32, y: u32) {
+        self.viewport_origin = [x as f32, y as f32, 0.0, 0.0];
     }
 
     /// Interaction-quality knobs packed into the otherwise-unused `viewport.zw`

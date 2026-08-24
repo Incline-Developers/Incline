@@ -40,7 +40,7 @@ use crate::{
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
         fonts::setup_custom_fonts,
-        state::{ActiveTool, EditorState, UiCommand, UiFrameOutput, UiProjectView, UiTriangulationEntry},
+        state::{ActiveTool, EditorState, UiCommand, UiFrameOutput, UiProjectView, UiTriangulationEntry, ViewportRect},
         widgets::viewport::ViewportLabel,
     },
 };
@@ -158,8 +158,19 @@ impl Gui {
             world_per_physical_pixel,
             console_snapshot: &console_snapshot,
         };
+        let mut canvas_rect_logical = egui::Rect::NOTHING;
         let full_output = self.ctx.run_ui(raw_input, |ui| {
-            geometry_dirty |= draw_ui(ui, editor, document, project, block_models, drill_holes, &mut commands, frame_context);
+            geometry_dirty |= draw_ui(
+                ui,
+                editor,
+                document,
+                project,
+                block_models,
+                drill_holes,
+                &mut commands,
+                frame_context,
+                &mut canvas_rect_logical,
+            );
         });
 
         let repaint_after = full_output
@@ -211,10 +222,22 @@ impl Gui {
             self.renderer.free_texture(id);
         }
 
+        let canvas_rect = if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
+            ViewportRect {
+                x: (canvas_rect_logical.min.x * pixels_per_point).round().max(0.0) as u32,
+                y: (canvas_rect_logical.min.y * pixels_per_point).round().max(0.0) as u32,
+                width: ((canvas_rect_logical.width() * pixels_per_point).round().max(1.0)) as u32,
+                height: ((canvas_rect_logical.height() * pixels_per_point).round().max(1.0)) as u32,
+            }
+        } else {
+            ViewportRect::full(screen_size[0], screen_size[1])
+        };
+
         UiFrameOutput {
             repaint_after,
             geometry_dirty,
             commands,
+            canvas_rect,
         }
     }
 }
@@ -434,6 +457,7 @@ fn draw_ui(
     drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
     commands: &mut Vec<UiCommand>,
     frame_context: UiFrameContext<'_>,
+    canvas_rect_out: &mut egui::Rect,
 ) -> bool {
     let mut geometry_dirty = false;
 
@@ -515,6 +539,7 @@ fn draw_ui(
     // keeps its right edge and the two overlays that reach it dodge the tile
     // themselves.
     let canvas_rect = scene_rect;
+    *canvas_rect_out = canvas_rect;
     // Where the view tools will land, before either they or the overlays that
     // have to dodge them are drawn. They are the last thing drawn over the
     // canvas, so an overlay that asked afterwards would be a frame behind.

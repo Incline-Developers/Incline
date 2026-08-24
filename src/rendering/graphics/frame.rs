@@ -341,7 +341,18 @@ impl<'a> Graphics<'a> {
 
         if let Some(cache_view) = self.scene_cache.as_ref().map(|cache| cache.view.clone()) {
             if render_scene {
-                self.render_scene_pass(&mut encoder, &cache_view, editor, triangulations, block_models, drill_holes, point_clouds, rasters, true);
+                self.render_scene_pass(
+                    &mut encoder,
+                    &cache_view,
+                    self.viewport_rect,
+                    editor,
+                    triangulations,
+                    block_models,
+                    drill_holes,
+                    point_clouds,
+                    rasters,
+                    true,
+                );
                 self.scene_cache_key = Some(scene_key);
             }
             let cache_texture = self.scene_cache.as_ref().expect("cache view came from a cache target").texture.clone();
@@ -365,7 +376,18 @@ impl<'a> Graphics<'a> {
                 },
             );
         } else {
-            self.render_scene_pass(&mut encoder, &view, editor, triangulations, block_models, drill_holes, point_clouds, rasters, true);
+            self.render_scene_pass(
+                &mut encoder,
+                &view,
+                self.viewport_rect,
+                editor,
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                rasters,
+                true,
+            );
         }
 
         // One-shot viewport export: re-render the scene (without the egui
@@ -389,7 +411,7 @@ impl<'a> Graphics<'a> {
         let orbit_marker_screen = self.orbit_marker_screen_pos();
         let camera_forward = self.camera.forward();
         let camera_up = self.camera.up();
-        let world_per_physical_pixel = (!self.projection.is_perspective()).then(|| 2.0 * self.projection.zoom / f64::from(self.size.height.max(1)));
+        let world_per_physical_pixel = (!self.projection.is_perspective()).then(|| 2.0 * self.projection.zoom / f64::from(self.viewport_rect.height.max(1)));
         let ui_output = self.gui.render(
             &self.window,
             &self.device,
@@ -407,6 +429,10 @@ impl<'a> Graphics<'a> {
             [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],
             world_per_physical_pixel,
         );
+        // Apply this frame's egui layout for next frame's scene pass - the
+        // scene renders before egui lays out, so it's always one frame behind
+        // (see `apply_canvas_rect`).
+        self.apply_canvas_rect(ui_output.canvas_rect);
         if ui_output.geometry_dirty {
             self.invalidate_geometry();
         }

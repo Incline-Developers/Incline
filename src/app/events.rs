@@ -420,16 +420,17 @@ impl<'a> App<'a> {
                         // valid vertex.
                         if self.editor.chamfer_corner_index.is_none()
                             && let Some(cursor_px) = self.editor.cursor_screen_px
+                            && let Some(graphics) = self.graphics.as_ref()
                         {
-                            let vp = self.graphics.as_ref().map(|g| g.view_proj()).unwrap_or_default();
-                            let screen = self.graphics.as_ref().map(|g| g.screen_size_pub()).unwrap_or_default();
+                            let vp = graphics.view_proj();
+                            let screen = graphics.screen_size_pub();
                             let nearest = crate::rendering::pick::pick_nearest_vertex(
                                 &self.scene_document,
                                 &self.editor.hidden_handles,
                                 &self.editor.frozen_handles,
                                 &vp,
                                 screen,
-                                cursor_px,
+                                graphics.window_to_viewport_px(cursor_px),
                                 crate::app::PICK_THRESHOLD_PX * 2.5,
                             );
                             let hover_px = nearest.and_then(|(oid, _vi, world)| {
@@ -446,7 +447,7 @@ impl<'a> App<'a> {
                                 if !is_closed_polyline {
                                     return None;
                                 }
-                                crate::rendering::pick::world_to_screen(&vp, world, screen).map(|s| (s.x as f32, s.y as f32))
+                                graphics.world_to_window_px(&vp, world)
                             });
                             if hover_px != self.editor.chamfer_hover_corner_px {
                                 self.editor.chamfer_hover_corner_px = hover_px;

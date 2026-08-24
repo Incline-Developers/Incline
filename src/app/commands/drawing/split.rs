@@ -73,6 +73,7 @@ impl<'a> App<'a> {
 
         let vp = graphics.view_proj();
         let screen = graphics.screen_size_pub();
+        let cursor_px = graphics.window_to_viewport_px(cursor_px);
         let cursor = glam::DVec2::new(f64::from(cursor_px.0), f64::from(cursor_px.1));
         let mut best_dist = (PICK_THRESHOLD_PX * 2.5) as f64;
         let mut best_idx = None;
