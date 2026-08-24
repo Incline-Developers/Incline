@@ -1,5 +1,5 @@
 //! Four toolbar panels: top (layer/Z/line/fill settings), left (drawing tools),
-//! right (viewport controls), bottom (selection actions + cursor mode).
+//! right (viewport controls), bottom (cursor mode, measuring, task progress).
 
 use crate::ui::{
     EditorState, UiProjectView, color32_to_rgba, rgba_to_color32,
@@ -578,6 +578,13 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                             commands,
                             ActiveTool::MeasureBatterAngle,
                         );
+                    });
+
+                    // Task progress hugs the right end of the strip, out of the
+                    // way of the tools and with room to say what is running -
+                    // the status bar had neither.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        crate::ui::widgets::progress::draw_task_progress(ui, editor);
                     });
                 });
             });

@@ -3,6 +3,7 @@
 pub(crate) mod context_menu;
 pub(crate) mod explorer;
 pub(crate) mod menu;
+pub(crate) mod progress;
 pub(crate) mod toolbar;
 pub(crate) mod viewport;
 
