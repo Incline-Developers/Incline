@@ -1414,6 +1414,7 @@ impl<'a> Graphics<'a> {
             sample_count,
             size,
             viewport_rect: ViewportRect::full(size.width, size.height),
+            startup_view_offset: Some(DVec2::ZERO),
             lyon_buffer,
             lyon_vertex_capacity: 1,
             lyon_index_capacity: 1,

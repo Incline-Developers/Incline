@@ -433,6 +433,9 @@ impl<'a> Graphics<'a> {
         // scene renders before egui lays out, so it's always one frame behind
         // (see `apply_canvas_rect`).
         self.apply_canvas_rect(ui_output.canvas_rect);
+        // Keep the startup view framed on the window the splash is centred
+        // on, until the splash goes - see `track_startup_view_framing`.
+        self.track_startup_view_framing(project.needs_startup_dialog);
         if ui_output.geometry_dirty {
             self.invalidate_geometry();
         }

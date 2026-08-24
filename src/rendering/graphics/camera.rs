@@ -204,6 +204,62 @@ impl<'a> Graphics<'a> {
         (self.viewport_rect.width as f32, self.viewport_rect.height as f32)
     }
 
+    /// How far the view has to slide for what sits at the centre of the scene
+    /// region to sit at the centre of the window instead, in viewport pixels.
+    fn window_centring_offset_px(&self) -> DVec2 {
+        let window_centre = DVec2::new(f64::from(self.size.width), f64::from(self.size.height)) / 2.0;
+        let viewport_centre = DVec2::new(
+            f64::from(self.viewport_rect.x) + f64::from(self.viewport_rect.width) / 2.0,
+            f64::from(self.viewport_rect.y) + f64::from(self.viewport_rect.height) / 2.0,
+        );
+        window_centre - viewport_centre
+    }
+
+    /// Slide the view by `shift` viewport pixels, the camera moving the other
+    /// way from the content it shows. Orthographic only: under perspective a
+    /// pixel is not a fixed world distance.
+    fn translate_view_by_pixels(&mut self, shift: DVec2) {
+        if self.projection.is_perspective() {
+            return;
+        }
+        let world_per_pixel = 2.0 * self.projection.zoom / f64::from(self.viewport_rect.height.max(1));
+        let forward = self.camera.forward();
+        let right = forward.cross(self.camera.up()).normalize_or_zero();
+        let up = right.cross(forward).normalize_or_zero();
+        self.camera.translate((up * shift.y - right * shift.x) * world_per_pixel);
+    }
+
+    /// Frame the origin on the centre of the window rather than the centre of
+    /// the scene region, for as long as the startup splash is up.
+    ///
+    /// The splash is centred on the window, but the scene is only the part of
+    /// the window the panels leave, so the origin behind the splash would sit
+    /// off to one side of it by half of what the panels take. Only the
+    /// difference from the offset already applied is panned each frame, which
+    /// matters because the first frame's layout is provisional - egui settles
+    /// the panel sizes a frame or two later, and a one-shot taken on frame 0
+    /// bakes in a rect that no longer exists. Tracking the layout also keeps
+    /// the framing right if a panel is dragged while the splash is up.
+    ///
+    /// When the splash goes, so does the tracking, for good: the camera keeps
+    /// the framing it has, so nothing moves under the user at that moment.
+    pub(super) fn track_startup_view_framing(&mut self, splash_visible: bool) {
+        let Some(applied) = self.startup_view_offset else {
+            return;
+        };
+        if !splash_visible {
+            self.startup_view_offset = None;
+            return;
+        }
+        let wanted = self.window_centring_offset_px();
+        // Sub-pixel corrections are not worth a camera move, but they are
+        // worth remembering, or they accumulate into one that is.
+        if (wanted - applied).abs().max_element() >= 0.5 {
+            self.translate_view_by_pixels(wanted - applied);
+            self.startup_view_offset = Some(wanted);
+        }
+    }
+
     pub(crate) fn zoom(&self) -> f64 {
         self.projection.zoom
     }
@@ -638,7 +694,8 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
 
-        let (center, zoom) = match scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden) {
+        let bounds = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+        let (center, zoom) = match bounds {
             Some((min, max)) => {
                 let center = (min + max) * 0.5;
                 let size = max - min;
@@ -664,6 +721,12 @@ impl<'a> Graphics<'a> {
             zoom
         };
         self.camera.reset_to_plan_view(center, camera_distance);
+        // Nothing to frame means the origin is all there is to look at, so it
+        // belongs where the startup view puts it, not at the centre of the
+        // scene region - see `track_startup_view_framing`.
+        if bounds.is_none() {
+            self.translate_view_by_pixels(self.window_centring_offset_px());
+        }
         self.scene_origin = center;
         self.triangulation_gpu.clear();
         self.block_model_gpu.clear();

@@ -2493,6 +2493,9 @@ impl<'a> App<'a> {
             self.persist_session();
             userspace_log!("Closed project runtime id {runtime_id}");
             self.invalidate_geometry();
+            // The scene the camera was framed on is gone, and the splash is
+            // back: reset to the same view the app starts on.
+            self.fit_view_to_extents();
             return;
         }
         self.history.remove_project(runtime_id);

@@ -99,6 +99,13 @@ impl Camera {
         self.sync_angles_from_forward();
     }
 
+    /// Slide position and target together, leaving orientation and the
+    /// distance between them - and so the zoom derived from it - alone.
+    pub(crate) fn translate(&mut self, delta: DVec3) {
+        self.position += delta;
+        self.target += delta;
+    }
+
     /// Centre the current view on `center` without changing its orientation.
     /// The camera distance tracks the orthographic half-height because the
     /// controller derives the projection zoom from that distance each frame.

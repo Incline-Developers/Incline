@@ -274,6 +274,10 @@ pub(crate) struct Graphics<'a> {
     /// the toolbars/status bar around it are accounted for. Sourced from
     /// egui's layout one frame behind, via `apply_canvas_rect`.
     pub(super) viewport_rect: ViewportRect,
+    /// The window-centring offset, in viewport pixels, that the startup view
+    /// currently carries - see `track_startup_view_framing`. `None` once the
+    /// startup splash has gone, which is what retires the tracking.
+    pub(super) startup_view_offset: Option<DVec2>,
     pub(super) lyon_buffer: VertexBuffers<Vertex, u32>,
     pub(super) lyon_vertex_capacity: usize,
     pub(super) lyon_index_capacity: usize,
