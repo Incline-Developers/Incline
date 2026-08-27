@@ -104,11 +104,12 @@ pub(crate) fn draw_properties(
     let content_fill = ui.visuals().panel_fill;
     let column_fill = crate::ui::widgets::recessed_chrome_fill(ui);
 
-    // Half the side panel by default: enough for the longer settings tabs and
-    // the block-model colour ramp without the tree feeling squeezed. Only the
-    // first frame uses this; after that the panel remembers its dragged size.
+    // A third of the side panel by default: enough for the longer settings
+    // tabs and the block-model colour ramp without the tree feeling squeezed.
+    // Only the first frame uses this; after that the panel remembers its
+    // dragged size.
     let available_height = ui.available_height();
-    let default_height = (available_height * 0.5).clamp(180.0, 640.0);
+    let default_height = (available_height / 3.0).clamp(180.0, 640.0);
     // Never take the last of the tree's height: a short window would otherwise
     // leave it with a sliver the section headers spill straight out of.
     let max_height = (available_height - MIN_TREE_HEIGHT).max(MIN_HEIGHT);
