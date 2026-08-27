@@ -51,7 +51,7 @@ pub(crate) const fn default_panel_chrome() -> bool {
 }
 
 pub(crate) const fn default_dark_mode() -> bool {
-    true
+    false
 }
 
 pub(crate) const fn default_show_console() -> bool {

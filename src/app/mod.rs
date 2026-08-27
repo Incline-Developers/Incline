@@ -458,10 +458,6 @@ impl<'a> App<'a> {
                 None
             }
             MacMenuAction::RequestExit => Some(UiCommand::RequestExit),
-            MacMenuAction::ToggleXyGrid => Some(UiCommand::SetShowXyGrid(!self.editor.show_xy_grid)),
-            MacMenuAction::ToggleScaleBar => Some(UiCommand::SetShowScaleBar(!self.editor.show_scale_bar)),
-            MacMenuAction::ToggleDarkMode => Some(UiCommand::SetDarkMode(!self.editor.dark_mode)),
-            MacMenuAction::ToggleConsole => Some(UiCommand::SetShowConsole(!self.editor.show_console)),
             MacMenuAction::InsertPointsAtIntersections => Some(UiCommand::InsertPointsAtIntersections),
             MacMenuAction::OpenInsertPointAtElevation => Some(UiCommand::OpenInsertPointAtElevationDialog),
             MacMenuAction::OpenMoveToX => Some(UiCommand::OpenMoveToAxisDialog(crate::model::Axis::X)),

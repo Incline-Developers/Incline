@@ -1,4 +1,4 @@
-//! Top application menu bar (File, View, Design, Triangulation, Survey, Geology).
+//! Top application menu bar (File, Project, Design, Triangulation, Raster, Point Cloud, Block Model, Drill Holes).
 
 use crate::{
     model::{Axis, SceneEntityId},
@@ -76,26 +76,8 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                     }
                 });
 
-                ui.menu_button("View", |ui| {
-                    let mut show_xy_grid = editor.show_xy_grid;
-                    if ui.checkbox(&mut show_xy_grid, "Show XY Grid").changed() {
-                        commands.push(UiCommand::SetShowXyGrid(show_xy_grid));
-                    }
-
-                    let mut show_scale_bar = editor.show_scale_bar;
-                    if ui.checkbox(&mut show_scale_bar, "Show Scale Bar").changed() {
-                        commands.push(UiCommand::SetShowScaleBar(show_scale_bar));
-                    }
-
-                    let mut dark_mode = editor.dark_mode;
-                    if ui.checkbox(&mut dark_mode, "Dark Mode").changed() {
-                        commands.push(UiCommand::SetDarkMode(dark_mode));
-                    }
-
-                    let mut show_console = editor.show_console;
-                    if ui.checkbox(&mut show_console, "Show Console").changed() {
-                        commands.push(UiCommand::SetShowConsole(show_console));
-                    }
+                ui.add_enabled_ui(false, |ui| {
+                    ui.menu_button("Project", |_ui| {});
                 });
 
                 ui.menu_button("Design", |ui| {
@@ -159,7 +141,11 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                     }
                 });
 
-                ui.menu_button("Survey", |ui| {
+                ui.add_enabled_ui(false, |ui| {
+                    ui.menu_button("Raster", |_ui| {});
+                });
+
+                ui.menu_button("Point Cloud", |ui| {
                     if ui
                         .add_enabled(project.point_clouds.iter().any(|cloud| cloud.is_loaded), egui::Button::new("Generate Terrain TIN..."))
                         .clicked()
@@ -169,7 +155,7 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                     }
                 });
 
-                ui.menu_button("Geology", |ui| {
+                ui.menu_button("Block Model", |ui| {
                     if ui
                         .add_enabled(project.drill_holes.iter().any(|dataset| dataset.is_loaded), egui::Button::new("Create Block Model..."))
                         .clicked()
@@ -181,6 +167,10 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                         commands.push(UiCommand::OpenCreateOreTriangulation);
                         ui.close();
                     }
+                });
+
+                ui.add_enabled_ui(false, |ui| {
+                    ui.menu_button("Drill Holes", |_ui| {});
                 });
             });
         })

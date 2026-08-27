@@ -300,6 +300,7 @@ fn settings_section(
     commands: &mut Vec<UiCommand>,
     heading: &str,
     add_fields: impl FnOnce(&mut egui::Ui, &mut PreferencesDraft) -> bool,
+    restore_defaults: Option<fn(&mut PreferencesDraft)>,
 ) {
     let saved = editor.current_preferences();
     let draft = editor.preferences_draft.get_or_insert(saved);
@@ -309,136 +310,195 @@ fn settings_section(
     let changed = add_fields(ui, draft);
     let draft = *draft;
 
-    ui.add_space(10.0);
-    let defaults = PreferencesDraft::default();
-    if ui
-        .add_enabled(saved != defaults, egui::Button::new("Restore Defaults"))
-        .on_hover_text("Reset every setting, in all four tabs, to its default")
-        .clicked()
-    {
-        commands.push(UiCommand::ApplyPreferences(defaults));
+    if let Some(reset_tab) = restore_defaults {
+        ui.add_space(10.0);
+        let mut restored = draft;
+        reset_tab(&mut restored);
+        if ui
+            .add_enabled(draft != restored, egui::Button::new("Restore Defaults"))
+            .on_hover_text(format!("Reset the {heading} settings to their defaults"))
+            .clicked()
+        {
+            commands.push(UiCommand::ApplyPreferences(restored));
+        } else if changed && draft != saved {
+            commands.push(UiCommand::ApplyPreferences(draft));
+        }
     } else if changed && draft != saved {
         commands.push(UiCommand::ApplyPreferences(draft));
     }
     ui.add_space(6.0);
 }
 
+fn reset_camera_defaults(draft: &mut PreferencesDraft) {
+    let defaults = PreferencesDraft::default();
+    draft.plan_orbit_sensitivity = defaults.plan_orbit_sensitivity;
+    draft.plan_zoom_sensitivity = defaults.plan_zoom_sensitivity;
+    draft.plan_invert_vertical_look = defaults.plan_invert_vertical_look;
+    draft.plan_invert_horizontal_look = defaults.plan_invert_horizontal_look;
+    draft.plan_zoom_towards_cursor = defaults.plan_zoom_towards_cursor;
+    draft.fly_field_of_view_degrees = defaults.fly_field_of_view_degrees;
+    draft.fly_mouse_look_sensitivity = defaults.fly_mouse_look_sensitivity;
+    draft.fly_invert_vertical_look = defaults.fly_invert_vertical_look;
+    draft.fly_invert_horizontal_look = defaults.fly_invert_horizontal_look;
+    draft.fly_near_clip_limit = defaults.fly_near_clip_limit;
+    draft.fly_max_clip_span = defaults.fly_max_clip_span;
+}
+
+fn reset_performance_defaults(draft: &mut PreferencesDraft) {
+    let defaults = PreferencesDraft::default();
+    draft.snap_poll_rate = defaults.snap_poll_rate;
+    draft.frame_rate_cap = defaults.frame_rate_cap;
+    draft.resize_frame_rate_cap = defaults.resize_frame_rate_cap;
+    draft.block_model_interaction_resolution_divisor = defaults.block_model_interaction_resolution_divisor;
+    draft.show_block_model_boundary_highlights = defaults.show_block_model_boundary_highlights;
+    draft.downscale_raster_previews = defaults.downscale_raster_previews;
+}
+
 fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    settings_section(ui, editor, commands, "Interface", |ui, draft| {
-        let [r, g, b, _] = draft.renderer_background_color;
-        let mut background = egui::Color32::from_rgb(linear_to_srgb_byte(r), linear_to_srgb_byte(g), linear_to_srgb_byte(b));
-        let mut changed = false;
-        let response = MenuFieldColor32::new("Background", &mut background).show(ui);
-        if response.changed() {
-            draft.renderer_background_color = [
-                byte_to_linear_rgba(background.r()),
-                byte_to_linear_rgba(background.g()),
-                byte_to_linear_rgba(background.b()),
-                1.0,
-            ];
-        }
-        changed |= committed(&response);
-        changed |= committed(&MenuFieldBool::new("Dark mode", &mut draft.dark_mode).show(ui));
-        changed |= committed(&MenuFieldBool::new("Show console", &mut draft.show_console).show(ui));
-        changed |= committed(&MenuFieldBool::new("Panel chrome", &mut draft.panel_chrome).show(ui));
-        changed |= committed(&MenuFieldBool::new("World axis gizmo", &mut draft.show_world_axis_gizmo).show(ui));
-        changed |= committed(&MenuFieldBool::new("XY grid", &mut draft.show_xy_grid).show(ui));
-        changed
-    });
+    settings_section(
+        ui,
+        editor,
+        commands,
+        "Interface",
+        |ui, draft| {
+            let [r, g, b, _] = draft.renderer_background_color;
+            let mut background = egui::Color32::from_rgb(linear_to_srgb_byte(r), linear_to_srgb_byte(g), linear_to_srgb_byte(b));
+            let mut changed = false;
+            let response = MenuFieldColor32::new("Background", &mut background).show(ui);
+            if response.changed() {
+                draft.renderer_background_color = [
+                    byte_to_linear_rgba(background.r()),
+                    byte_to_linear_rgba(background.g()),
+                    byte_to_linear_rgba(background.b()),
+                    1.0,
+                ];
+            }
+            changed |= committed(&response);
+            changed |= committed(&MenuFieldBool::new("Dark mode", &mut draft.dark_mode).show(ui));
+            changed |= committed(&MenuFieldBool::new("Show console", &mut draft.show_console).show(ui));
+            changed |= committed(&MenuFieldBool::new("Panel chrome", &mut draft.panel_chrome).show(ui));
+            changed |= committed(&MenuFieldBool::new("World axis gizmo", &mut draft.show_world_axis_gizmo).show(ui));
+            changed |= committed(&MenuFieldBool::new("XY grid", &mut draft.show_xy_grid).show(ui));
+            changed |= committed(&MenuFieldBool::new("Scale bar", &mut draft.show_scale_bar).show(ui));
+            changed
+        },
+        None,
+    );
 }
 
 fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    settings_section(ui, editor, commands, "Camera", |ui, draft| {
-        let mut changed = false;
-        ui.strong("Plan Mode");
-        ui.add_space(4.0);
-        changed |= committed(
-            &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
-                .speed(0.0001)
-                .max_decimals(4)
-                .show(ui),
-        );
-        changed |= committed(
-            &MenuFieldF64::new("Zoom sensitivity", &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
-                .speed(0.0001)
-                .max_decimals(4)
-                .show(ui),
-        );
-        changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.plan_invert_vertical_look).show(ui));
-        changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.plan_invert_horizontal_look).show(ui));
-        changed |= committed(&MenuFieldBool::new("Zoom to cursor", &mut draft.plan_zoom_towards_cursor).show(ui));
+    settings_section(
+        ui,
+        editor,
+        commands,
+        "Camera",
+        |ui, draft| {
+            let mut changed = false;
+            ui.strong("Plan Mode");
+            ui.add_space(4.0);
+            changed |= committed(
+                &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
+                    .speed(0.0001)
+                    .max_decimals(4)
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldF64::new("Zoom sensitivity", &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
+                    .speed(0.0001)
+                    .max_decimals(4)
+                    .show(ui),
+            );
+            changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.plan_invert_vertical_look).show(ui));
+            changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.plan_invert_horizontal_look).show(ui));
+            changed |= committed(&MenuFieldBool::new("Zoom to cursor", &mut draft.plan_zoom_towards_cursor).show(ui));
 
-        ui.add_space(12.0);
-        ui.strong("Fly Mode");
-        ui.add_space(4.0);
-        changed |= committed(&MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0).suffix("°").show(ui));
-        changed |= committed(
-            &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
-                .speed(0.0001)
-                .max_decimals(4)
-                .show(ui),
-        );
-        changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.fly_invert_vertical_look).show(ui));
-        changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.fly_invert_horizontal_look).show(ui));
-        changed |= committed(
-            &MenuFieldF64::new("Near clip limit", &mut draft.fly_near_clip_limit, 0.01..=100.0)
-                .speed(0.01)
-                .suffix("m")
-                .show(ui),
-        );
-        changed |= committed(
-            &MenuFieldF64::new("Max clip span", &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
-                .speed(100.0)
-                .suffix("m")
-                .show(ui),
-        );
-        changed
-    });
+            ui.add_space(12.0);
+            ui.strong("Fly Mode");
+            ui.add_space(4.0);
+            changed |= committed(&MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0).suffix("°").show(ui));
+            changed |= committed(
+                &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
+                    .speed(0.0001)
+                    .max_decimals(4)
+                    .show(ui),
+            );
+            changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.fly_invert_vertical_look).show(ui));
+            changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.fly_invert_horizontal_look).show(ui));
+            changed |= committed(
+                &MenuFieldF64::new("Near clip limit", &mut draft.fly_near_clip_limit, 0.01..=100.0)
+                    .speed(0.01)
+                    .suffix("m")
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldF64::new("Max clip span", &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
+                    .speed(100.0)
+                    .suffix("m")
+                    .show(ui),
+            );
+            changed
+        },
+        Some(reset_camera_defaults),
+    );
 }
 
 fn draw_performance_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    settings_section(ui, editor, commands, "Performance", |ui, draft| {
-        let mut changed = false;
-        changed |= committed(&MenuFieldU32::new("Snap polling", &mut draft.snap_poll_rate, 5..=1000).suffix(" Hz").show(ui));
-        changed |= committed(&MenuFieldU32::new("Frame rate cap", &mut draft.frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
-        changed |= committed(&MenuFieldU32::new("Cap while resizing", &mut draft.resize_frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
-        changed |= committed(
-            &MenuFieldU32::new("Block model downscale", &mut draft.block_model_interaction_resolution_divisor, 1..=64)
-                .suffix("x")
-                .show(ui),
-        );
-        changed |= committed(
-            &MenuFieldBool::new("Reflective block edges", &mut draft.show_block_model_boundary_highlights)
-                .help_text("Adds a view-dependent rim highlight at block and material boundaries. Leaving this off slightly reduces volume-rendering work.")
-                .show(ui),
-        );
-        changed |= committed(
+    settings_section(
+        ui,
+        editor,
+        commands,
+        "Performance",
+        |ui, draft| {
+            let mut changed = false;
+            changed |= committed(&MenuFieldU32::new("Snap polling", &mut draft.snap_poll_rate, 5..=1000).suffix(" Hz").show(ui));
+            changed |= committed(&MenuFieldU32::new("Frame rate cap", &mut draft.frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
+            changed |= committed(&MenuFieldU32::new("Cap while resizing", &mut draft.resize_frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
+            changed |= committed(
+                &MenuFieldU32::new("Block model downscale", &mut draft.block_model_interaction_resolution_divisor, 1..=64)
+                    .suffix("x")
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldBool::new("Reflective block edges", &mut draft.show_block_model_boundary_highlights)
+                    .help_text("Adds a view-dependent rim highlight at block and material boundaries. Leaving this off slightly reduces volume-rendering work.")
+                    .show(ui),
+            );
+            changed |= committed(
             &MenuFieldBool::new("Downscale rasters", &mut draft.downscale_raster_previews)
                 .help_text(
                     "Limits newly loaded GeoTIFF previews to 4096 pixels on their longest side. Disable to use full resolution up to the GPU's texture limit, which uses more memory.",
                 )
                 .show(ui),
         );
-        changed
-    });
+            changed
+        },
+        Some(reset_performance_defaults),
+    );
 }
 
 fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    settings_section(ui, editor, commands, "Developer", |ui, draft| {
-        let mut changed = false;
-        changed |= committed(&MenuFieldBool::new("Frame counter", &mut draft.frame_counter_enabled).show(ui));
-        changed |= committed(
-            &MenuFieldBool::new("Colour GPU chunks", &mut draft.debug_chunk_coloring)
-                .help_text("Visualises the Morton spatial chunking used for frustum culling.")
-                .show(ui),
-        );
-        changed |= committed(
-            &MenuFieldBool::new("Camera clip planes", &mut draft.debug_clip_planes)
-                .help_text("Shows the live near and far projection distances in the status bar.")
-                .show(ui),
-        );
-        changed
-    });
+    settings_section(
+        ui,
+        editor,
+        commands,
+        "Developer",
+        |ui, draft| {
+            let mut changed = false;
+            changed |= committed(&MenuFieldBool::new("Frame counter", &mut draft.frame_counter_enabled).show(ui));
+            changed |= committed(
+                &MenuFieldBool::new("Colour GPU chunks", &mut draft.debug_chunk_coloring)
+                    .help_text("Visualises the Morton spatial chunking used for frustum culling.")
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldBool::new("Camera clip planes", &mut draft.debug_clip_planes)
+                    .help_text("Shows the live near and far projection distances in the status bar.")
+                    .show(ui),
+            );
+            changed
+        },
+        None,
+    );
 }
 
 fn draw_block_model_tab(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], context: &PropertyContext, commands: &mut Vec<UiCommand>) {

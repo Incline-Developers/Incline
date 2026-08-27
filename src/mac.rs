@@ -9,10 +9,10 @@ use std::sync::Mutex;
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, ProtocolObject, Sel},
+    runtime::{AnyObject, Sel},
     sel,
 };
-use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuDelegate, NSMenuItem};
+use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 
 use crate::{
@@ -25,10 +25,6 @@ static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MenuState {
-    show_xy_grid: bool,
-    show_scale_bar: bool,
-    dark_mode: bool,
-    show_console: bool,
     can_save: bool,
     has_project: bool,
     can_create_terrain_tin: bool,
@@ -52,10 +48,6 @@ pub(crate) enum MacMenuAction {
     ExportViewportImage,
     OpenPlotDialog,
     RequestExit,
-    ToggleXyGrid,
-    ToggleScaleBar,
-    ToggleDarkMode,
-    ToggleConsole,
     InsertPointsAtIntersections,
     OpenInsertPointAtElevation,
     OpenMoveToX,
@@ -87,10 +79,6 @@ impl MacMenuAction {
             value if value == Self::ExportViewportImage as isize => Self::ExportViewportImage,
             value if value == Self::OpenPlotDialog as isize => Self::OpenPlotDialog,
             value if value == Self::RequestExit as isize => Self::RequestExit,
-            value if value == Self::ToggleXyGrid as isize => Self::ToggleXyGrid,
-            value if value == Self::ToggleScaleBar as isize => Self::ToggleScaleBar,
-            value if value == Self::ToggleDarkMode as isize => Self::ToggleDarkMode,
-            value if value == Self::ToggleConsole as isize => Self::ToggleConsole,
             value if value == Self::InsertPointsAtIntersections as isize => Self::InsertPointsAtIntersections,
             value if value == Self::OpenInsertPointAtElevation as isize => Self::OpenInsertPointAtElevation,
             value if value == Self::OpenMoveToX as isize => Self::OpenMoveToX,
@@ -109,17 +97,6 @@ impl MacMenuAction {
             value if value == Self::OpenAbout as isize => Self::OpenAbout,
             _ => return None,
         })
-    }
-}
-
-fn prune_view_menu(menu: &NSMenu) {
-    for item in menu.itemArray().iter() {
-        if !matches!(
-            MacMenuAction::from_tag(item.tag()),
-            Some(MacMenuAction::ToggleXyGrid | MacMenuAction::ToggleScaleBar | MacMenuAction::ToggleDarkMode | MacMenuAction::ToggleConsole)
-        ) {
-            menu.removeItem(&item);
-        }
     }
 }
 
@@ -144,20 +121,6 @@ define_class!(
 
     // SAFETY: NSObjectProtocol has no additional safety requirements.
     unsafe impl NSObjectProtocol for MenuTarget {}
-
-    // SAFETY: The implemented callbacks have the signatures declared by
-    // NSMenuDelegate and only operate on the supplied main-thread menu.
-    unsafe impl NSMenuDelegate for MenuTarget {
-        #[unsafe(method(menuNeedsUpdate:))]
-        fn menu_needs_update(&self, menu: &NSMenu) {
-            prune_view_menu(menu);
-        }
-
-        #[unsafe(method(menuWillOpen:))]
-        fn menu_will_open(&self, menu: &NSMenu) {
-            prune_view_menu(menu);
-        }
-    }
 );
 
 impl MenuTarget {
@@ -195,10 +158,18 @@ fn add_separator(menu: &NSMenu, mtm: MainThreadMarker) {
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 }
 
-fn add_submenu(root: &NSMenu, title: &str, submenu: &NSMenu, mtm: MainThreadMarker) {
+fn add_submenu(root: &NSMenu, title: &str, submenu: &NSMenu, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     let item = menu_item(title, None, "", mtm);
     item.setSubmenu(Some(submenu));
     root.addItem(&item);
+    item
+}
+
+/// Add a placeholder top-level menu with no actions wired up yet.
+fn add_disabled_submenu(root: &NSMenu, title: &str, mtm: MainThreadMarker) {
+    let empty_menu = menu(title, mtm);
+    let item = add_submenu(root, title, &empty_menu, mtm);
+    item.setEnabled(false);
 }
 
 fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, target: &MenuTarget, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
@@ -248,16 +219,7 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, "Export Engineering Drawing…", "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_submenu(&root, "File", &file_menu, mtm);
 
-    let view_menu = menu("View", mtm);
-    view_menu.setAutoenablesItems(false);
-    view_menu.setAllowsContextMenuPlugIns(false);
-    view_menu.setAutomaticallyInsertsWritingToolsItems(false);
-    view_menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
-    add_action(&view_menu, "Show XY Grid", "", MacMenuAction::ToggleXyGrid, &target, mtm);
-    add_action(&view_menu, "Show Scale Bar", "", MacMenuAction::ToggleScaleBar, &target, mtm);
-    add_action(&view_menu, "Dark Mode", "", MacMenuAction::ToggleDarkMode, &target, mtm);
-    add_action(&view_menu, "Show Console", "", MacMenuAction::ToggleConsole, &target, mtm);
-    add_submenu(&root, "View", &view_menu, mtm);
+    add_disabled_submenu(&root, "Project", mtm);
 
     let design_menu = menu("Design", mtm);
     design_menu.setAutoenablesItems(false);
@@ -317,19 +279,22 @@ pub(crate) fn install_menu_bar() {
     add_action(&triangulation_menu, "Generate Contour Lines…", "", MacMenuAction::OpenContourTriangulation, &target, mtm);
     add_submenu(&root, "Triangulation", &triangulation_menu, mtm);
 
-    let survey_menu = menu("Survey", mtm);
-    survey_menu.setAutoenablesItems(false);
-    add_action(&survey_menu, "Generate Terrain TIN…", "", MacMenuAction::OpenPointCloudTin, &target, mtm);
-    add_submenu(&root, "Survey", &survey_menu, mtm);
+    add_disabled_submenu(&root, "Raster", mtm);
 
-    let geology_menu = menu("Geology", mtm);
-    geology_menu.setAutoenablesItems(false);
-    add_action(&geology_menu, "Create Block Model…", "", MacMenuAction::OpenCreateBlockModel, &target, mtm);
-    add_action(&geology_menu, "Create Ore Triangulation…", "", MacMenuAction::OpenCreateOreTriangulation, &target, mtm);
-    add_submenu(&root, "Geology", &geology_menu, mtm);
+    let point_cloud_menu = menu("Point Cloud", mtm);
+    point_cloud_menu.setAutoenablesItems(false);
+    add_action(&point_cloud_menu, "Generate Terrain TIN…", "", MacMenuAction::OpenPointCloudTin, &target, mtm);
+    add_submenu(&root, "Point Cloud", &point_cloud_menu, mtm);
+
+    let block_model_menu = menu("Block Model", mtm);
+    block_model_menu.setAutoenablesItems(false);
+    add_action(&block_model_menu, "Create Block Model…", "", MacMenuAction::OpenCreateBlockModel, &target, mtm);
+    add_action(&block_model_menu, "Create Ore Triangulation…", "", MacMenuAction::OpenCreateOreTriangulation, &target, mtm);
+    add_submenu(&root, "Block Model", &block_model_menu, mtm);
+
+    add_disabled_submenu(&root, "Drill Holes", mtm);
 
     app.setMainMenu(Some(&root));
-    prune_view_menu(&view_menu);
     NSMenu::setMenuBarVisible(true, mtm);
 }
 
@@ -347,12 +312,6 @@ fn find_item(menu: &NSMenu, tag: isize) -> Option<Retained<NSMenuItem>> {
     None
 }
 
-fn set_checked(root: &NSMenu, action: MacMenuAction, checked: bool) {
-    if let Some(item) = find_item(root, action as isize) {
-        item.setState(if checked { NSControlStateValueOn } else { NSControlStateValueOff });
-    }
-}
-
 fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
     if let Some(item) = find_item(root, action as isize) {
         item.setEnabled(enabled);
@@ -362,10 +321,6 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 /// Keep native checkmarks and availability aligned with the current editor.
 pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     let state = MenuState {
-        show_xy_grid: editor.show_xy_grid,
-        show_scale_bar: editor.show_scale_bar,
-        dark_mode: editor.dark_mode,
-        show_console: editor.show_console,
         can_save: project.projects.iter().any(|entry| entry.dirty),
         has_project: project.projects.iter().any(|entry| entry.is_active),
         can_create_terrain_tin: project.point_clouds.iter().any(|cloud| cloud.is_loaded),
@@ -387,10 +342,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     *previous = Some(state);
     drop(previous);
 
-    set_checked(&root, MacMenuAction::ToggleXyGrid, state.show_xy_grid);
-    set_checked(&root, MacMenuAction::ToggleScaleBar, state.show_scale_bar);
-    set_checked(&root, MacMenuAction::ToggleDarkMode, state.dark_mode);
-    set_checked(&root, MacMenuAction::ToggleConsole, state.show_console);
     set_enabled(&root, MacMenuAction::SaveProject, state.can_save);
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
     set_enabled(&root, MacMenuAction::CloseProject, state.has_project);

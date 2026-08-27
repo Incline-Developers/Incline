@@ -1,39 +1,6 @@
 use crate::{app::App, userspace_log};
 
 impl<'a> App<'a> {
-    pub(crate) fn save_preferences(&self) -> anyhow::Result<()> {
-        crate::app::io::save_config(&crate::app::io::Config {
-            dark_mode: self.editor.dark_mode,
-            show_console: self.editor.show_console,
-            panel_chrome: self.editor.panel_chrome,
-            show_world_axis_gizmo: self.editor.show_world_axis_gizmo,
-            show_xy_grid: self.editor.show_xy_grid,
-            show_scale_bar: self.editor.show_scale_bar,
-            renderer_background_color: self.editor.renderer_background_color,
-            snap_poll_rate: self.editor.snap_poll_rate,
-            frame_rate_cap: self.editor.frame_rate_cap,
-            resize_frame_rate_cap: self.editor.resize_frame_rate_cap,
-            block_model_interaction_resolution_divisor: self.editor.block_model_interaction_resolution_divisor,
-            show_block_model_boundary_highlights: self.editor.show_block_model_boundary_highlights,
-            downscale_raster_previews: self.editor.downscale_raster_previews,
-            frame_counter_enabled: self.editor.frame_counter_enabled,
-            debug_chunk_coloring: self.editor.debug_chunk_coloring,
-            debug_clip_planes: self.editor.debug_clip_planes,
-            plan_orbit_sensitivity: self.editor.plan_orbit_sensitivity,
-            plan_zoom_sensitivity: self.editor.plan_zoom_sensitivity,
-            plan_invert_vertical_look: self.editor.plan_invert_vertical_look,
-            plan_invert_horizontal_look: self.editor.plan_invert_horizontal_look,
-            plan_zoom_towards_cursor: self.editor.plan_zoom_towards_cursor,
-            fly_field_of_view_degrees: self.editor.fly_field_of_view_degrees,
-            fly_mouse_look_sensitivity: self.editor.fly_mouse_look_sensitivity,
-            fly_invert_vertical_look: self.editor.fly_invert_vertical_look,
-            fly_invert_horizontal_look: self.editor.fly_invert_horizontal_look,
-            fly_near_clip_limit: self.editor.fly_near_clip_limit,
-            fly_max_clip_span: self.editor.fly_max_clip_span,
-        })?;
-        Ok(())
-    }
-
     pub(crate) fn set_topology_wireframes(&mut self, enabled: bool) -> anyhow::Result<()> {
         self.editor.topology_wireframes_enabled = enabled;
         // Deliberately not persisted: this is a per-session view toggle.
@@ -49,47 +16,6 @@ impl<'a> App<'a> {
         // Deliberately not persisted: this is a per-session view toggle.
         self.redraw_requested = true;
         userspace_log!("Set view points = {}", enabled);
-        Ok(())
-    }
-
-    pub(crate) fn set_dark_mode(&mut self, enabled: bool) -> anyhow::Result<()> {
-        self.editor.dark_mode = enabled;
-        if let Some(draft) = self.editor.preferences_draft.as_mut() {
-            draft.dark_mode = enabled;
-        }
-        self.save_preferences()?;
-        self.redraw_requested = true;
-        userspace_log!("Set dark mode = {}", enabled);
-        Ok(())
-    }
-
-    pub(crate) fn set_show_console(&mut self, enabled: bool) -> anyhow::Result<()> {
-        self.editor.show_console = enabled;
-        if let Some(draft) = self.editor.preferences_draft.as_mut() {
-            draft.show_console = enabled;
-        }
-        self.save_preferences()?;
-        self.redraw_requested = true;
-        userspace_log!("Set show console = {}", enabled);
-        Ok(())
-    }
-
-    pub(crate) fn set_show_xy_grid(&mut self, enabled: bool) -> anyhow::Result<()> {
-        self.editor.show_xy_grid = enabled;
-        if let Some(draft) = self.editor.preferences_draft.as_mut() {
-            draft.show_xy_grid = enabled;
-        }
-        self.save_preferences()?;
-        self.redraw_requested = true;
-        userspace_log!("Set show XY grid = {}", enabled);
-        Ok(())
-    }
-
-    pub(crate) fn set_show_scale_bar(&mut self, enabled: bool) -> anyhow::Result<()> {
-        self.editor.show_scale_bar = enabled;
-        self.save_preferences()?;
-        self.redraw_requested = true;
-        userspace_log!("Set show scale bar = {}", enabled);
         Ok(())
     }
 
@@ -115,7 +41,7 @@ impl<'a> App<'a> {
             panel_chrome: preferences.panel_chrome,
             show_world_axis_gizmo: preferences.show_world_axis_gizmo,
             show_xy_grid: preferences.show_xy_grid,
-            show_scale_bar: self.editor.show_scale_bar,
+            show_scale_bar: preferences.show_scale_bar,
             renderer_background_color: preferences.renderer_background_color,
             snap_poll_rate: preferences.snap_poll_rate,
             frame_rate_cap: preferences.frame_rate_cap,
@@ -144,6 +70,7 @@ impl<'a> App<'a> {
         self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
         self.editor.show_xy_grid = preferences.show_xy_grid;
+        self.editor.show_scale_bar = preferences.show_scale_bar;
         self.editor.renderer_background_color = preferences.renderer_background_color;
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
         self.editor.frame_rate_cap = preferences.frame_rate_cap;

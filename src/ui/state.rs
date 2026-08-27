@@ -43,6 +43,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) panel_chrome: bool,
     pub(crate) show_world_axis_gizmo: bool,
     pub(crate) show_xy_grid: bool,
+    pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
     pub(crate) frame_rate_cap: u32,
     pub(crate) resize_frame_rate_cap: u32,
@@ -81,6 +82,7 @@ impl Default for PreferencesDraft {
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: crate::app::io::default_show_xy_grid(),
+            show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
             resize_frame_rate_cap: crate::app::io::default_resize_frame_rate_cap(),
@@ -1565,6 +1567,7 @@ impl EditorState {
             panel_chrome: self.panel_chrome,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
             show_xy_grid: self.show_xy_grid,
+            show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
             frame_rate_cap: self.frame_rate_cap,
             resize_frame_rate_cap: self.resize_frame_rate_cap,
@@ -2132,10 +2135,6 @@ pub(crate) enum UiCommand {
     ResetView,
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
-    SetDarkMode(bool),
-    SetShowConsole(bool),
-    SetShowXyGrid(bool),
-    SetShowScaleBar(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
     /// Make one block model the selection, so its properties tab is shown.
@@ -2441,7 +2440,6 @@ impl UiCommand {
             | Self::CancelOffset
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
-            | Self::SetShowConsole(_)
             | Self::ApplyPreferences(_)
             | Self::SelectBlockModel(_)
             | Self::BeginRenameItem(_)
@@ -2536,9 +2534,6 @@ impl UiCommand {
             Self::ResetView => report("Reset View", "Fit to extents".to_owned()),
             Self::SetTopologyWireframes(enabled) => report("Set Topology Wireframes", if *enabled { "Shown" } else { "Hidden" }.to_owned()),
             Self::SetShowPoints(enabled) => report("Set Point Visibility", if *enabled { "Shown" } else { "Hidden" }.to_owned()),
-            Self::SetDarkMode(enabled) => report("Set Theme", if *enabled { "Dark" } else { "Light" }.to_owned()),
-            Self::SetShowXyGrid(enabled) => report("Set XY Grid", if *enabled { "Shown" } else { "Hidden" }.to_owned()),
-            Self::SetShowScaleBar(enabled) => report("Set Scale Bar", if *enabled { "Shown" } else { "Hidden" }.to_owned()),
             Self::SetStandardView(view) => report("Set Standard View", format!("{view:?}")),
             Self::SaveProject => report("Save Project", "Current project".to_owned()),
             Self::SaveAndReplaceProject => report("Save and Replace Project", "Current project".to_owned()),

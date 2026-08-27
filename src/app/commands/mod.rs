@@ -598,10 +598,6 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
-            UiCommand::SetDarkMode(enabled) => self.set_dark_mode(enabled),
-            UiCommand::SetShowConsole(enabled) => self.set_show_console(enabled),
-            UiCommand::SetShowXyGrid(enabled) => self.set_show_xy_grid(enabled),
-            UiCommand::SetShowScaleBar(enabled) => self.set_show_scale_bar(enabled),
             UiCommand::SetStandardView(view) => {
                 // The slice camera is derived from the slice state each frame;
                 // a standard-view transition would silently queue and fire on
