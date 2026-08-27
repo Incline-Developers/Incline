@@ -75,9 +75,18 @@ impl ViewportDockPanel {
     }
 }
 
-/// Minimum gap (in normalized `t`) enforced between adjacent colour-transfer
-const RESET_COLORS_WIDTH: f32 = 44.0;
-const RESET_COLORS_HEIGHT: f32 = 16.0;
+/// The small "Reset" button in the Slice and Colour-mapping section headers.
+///
+/// Sized to its own label with tight padding and `Extend` wrap - the properties
+/// panel sets a global `Truncate` that would otherwise clip it to "Re…".
+fn reset_section_button(ui: &mut egui::Ui, tooltip: &str) -> bool {
+    ui.scope(|ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
+        ui.add(egui::Button::new(egui::RichText::new("Reset").small())).on_hover_text(tooltip.to_owned()).clicked()
+    })
+    .inner
+}
 
 /// A colormap as the ramp widget manipulates it.
 ///
@@ -236,6 +245,7 @@ impl UiStop {
     }
 }
 
+/// Minimum gap (in normalized `t`) enforced between adjacent colour-transfer
 /// stops when dragging, so segments never collapse to zero width.
 const STOP_EPSILON: f32 = 0.01;
 /// Side of a boundary handle's square hit target.
@@ -246,10 +256,16 @@ const COLOR_PICKER_BUTTON_HEIGHT: f32 = 18.0;
 /// the colour picker to its right.
 const LEGEND_BAR_HEIGHT: f32 = 400.0;
 const LEGEND_BAR_THICKNESS: f32 = 16.0;
-/// Wide enough for a handle plus the `≤` marker drawn beside it.
-const LEGEND_HANDLE_COLUMN_WIDTH: f32 = COLOR_STOP_HANDLE_SIZE + 8.0;
+/// Column drawn left of each boundary handle: the boundary's value in the
+/// variable's own units (an editable number box once clicked), then the `≤`
+/// marker when the boundary is inclusive.
+const LEGEND_STOP_VALUE_WIDTH: f32 = 46.0;
+/// Wide enough for a handle, the `≤` marker beside it, and the value column.
+const LEGEND_HANDLE_COLUMN_WIDTH: f32 = COLOR_STOP_HANDLE_SIZE + 8.0 + LEGEND_STOP_VALUE_WIDTH;
 const LEGEND_COLUMN_GAP: f32 = 6.0;
 const LEGEND_LABEL_FRACTIONS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+/// Width of the per-category share column drawn left of each legend swatch.
+const LEGEND_CATEGORY_PERCENT_WIDTH: f32 = 34.0;
 /// Floor on the width the block-model properties lay themselves out in, so a
 /// very narrow explorer panel scrolls horizontally rather than collapsing the
 /// legend's columns into each other.
@@ -483,11 +499,7 @@ impl<'a> BlockModelProperties<'a> {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Colour mapping").strong().color(ui.visuals().weak_text_color()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_sized(egui::vec2(RESET_COLORS_WIDTH, RESET_COLORS_HEIGHT), egui::Button::new(egui::RichText::new("Reset").small()))
-                    .on_hover_text("Rebuild this variable's colours from its data")
-                    .clicked()
-                {
+                if reset_section_button(ui, "Rebuild this variable's colours from its data") {
                     commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
                 }
             });
@@ -514,11 +526,7 @@ impl<'a> BlockModelProperties<'a> {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Slice").strong().color(ui.visuals().weak_text_color()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_sized(egui::vec2(RESET_COLORS_WIDTH, RESET_COLORS_HEIGHT), egui::Button::new(egui::RichText::new("Reset").small()))
-                    .on_hover_text("Restore the full model range")
-                    .clicked()
-                {
+                if reset_section_button(ui, "Restore the full model range") {
                     commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: None });
                 }
             });
@@ -653,8 +661,18 @@ impl<'a> BlockModelProperties<'a> {
                     continue;
                 }
                 let color = gradient.get(&code).copied().unwrap_or([0.72, 0.72, 0.75, 1.0]);
+                let percent_text = model.active_category_code_fraction(code).map(format_category_percent).unwrap_or_default();
                 ui.push_id(("category_color", code), |ui| {
                     ui.horizontal(|ui| {
+                        // Share of the renderable blocks in this category, in a
+                        // fixed column so the names still line up beneath it.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(LEGEND_CATEGORY_PERCENT_WIDTH, ui.spacing().interact_size.y),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(egui::RichText::new(&percent_text).color(ui.visuals().weak_text_color()));
+                            },
+                        );
                         if !is_default || !model.hide_empty_color_values {
                             let mut srgba = straight_to_unmultiplied_srgba(color);
                             if color_edit_button_srgba_unmultiplied(ui, &mut srgba)
@@ -851,10 +869,68 @@ impl<'a> BlockModelProperties<'a> {
                     }
                 }
             }
+            // The value label sits in its own column left of the handle. It
+            // reads as plain text until clicked, then becomes an in-place number
+            // field clamped between the neighbouring boundaries' values - no
+            // detached popup.
+            let value_rect = egui::Rect::from_center_size(
+                egui::pos2(handle_column_rect.left() + LEGEND_STOP_VALUE_WIDTH * 0.5, y),
+                egui::vec2(LEGEND_STOP_VALUE_WIDTH, ui.spacing().interact_size.y.min(18.0)),
+            );
+            let editing_value = value_popup_stop == Some(i);
+            let value_field_hovered;
+            if editing_value {
+                let gap_t = 1.0e-4_f32;
+                let lower_t = if i == 0 { 0.0 } else { ramp.stops[i - 1].t + gap_t };
+                let upper_t = if i + 1 == ramp.stops.len() { 1.0 } else { ramp.stops[i + 1].t - gap_t };
+                let (lo_t, hi_t) = (lower_t.min(upper_t), lower_t.max(upper_t));
+                let (lo_v, hi_v) = (normalized_to_value(lo_t, min, max), normalized_to_value(hi_t, min, max));
+                let mut value = ramp.stops[i].value;
+                let field = ui
+                    .scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(value_rect)
+                            .layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)),
+                        |ui| {
+                            // The column is narrow; trim the number box's padding so
+                            // a few significant digits fit without clipping.
+                            ui.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
+                            ui.add(
+                                egui::DragValue::new(&mut value)
+                                    .range(lo_v.min(hi_v)..=lo_v.max(hi_v))
+                                    .speed(((max - min).abs() / 250.0).max(0.0001))
+                                    .max_decimals(6),
+                            )
+                        },
+                    )
+                    .inner;
+                if field.changed() {
+                    ramp.stops[i].set_t(value_to_normalized(value, min, max).clamp(lo_t, hi_t), min, max);
+                    changed = true;
+                }
+                value_field_hovered = field.hovered();
+                if !popup_kept_open && (field.lost_focus() || field.clicked_elsewhere()) {
+                    value_popup_stop = None;
+                } else {
+                    selected = i;
+                }
+            } else {
+                let label = ui
+                    .interact(value_rect, self.id.with(("color_stop_value_label", ramp.stops[i].id)), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::Text)
+                    .on_hover_text("Click to type this boundary's value");
+                value_field_hovered = label.hovered();
+                if label.clicked() {
+                    selected = i;
+                    value_popup_stop = Some(i);
+                    popup_kept_open = true;
+                }
+            }
+
             let painter = ui.painter();
             let marker_color = color32_from_straight(ramp.stops[i].color);
             let center = egui::pos2(handle_center_x, y);
-            let active = selected == i || response.dragged() || response.hovered();
+            let active = selected == i || response.dragged() || response.hovered() || value_field_hovered;
             let radius = if active { 5.5 } else { 4.5 };
             painter.line_segment(
                 [egui::pos2(center.x + radius, y), egui::pos2(bar_rect.left(), y)],
@@ -866,12 +942,24 @@ impl<'a> BlockModelProperties<'a> {
                 radius,
                 egui::Stroke::new(if active { 1.5 } else { 1.0 }, if active { egui::Color32::BLACK } else { egui::Color32::from_gray(40) }),
             );
+            // Each boundary's value in the variable's own units, so every stop
+            // shows what it is without having to be clicked open. Skipped while
+            // the in-place field for this stop is showing.
+            if !editing_value {
+                painter.text(
+                    egui::pos2(handle_column_rect.left(), y),
+                    egui::Align2::LEFT_CENTER,
+                    format_grade(ramp.stops[i].value),
+                    egui::FontId::proportional(10.0),
+                    if active { text_color } else { ui.visuals().weak_text_color() },
+                );
+            }
             // An inclusive boundary owns its own value, which changes which
             // band a block exactly on it lands in - worth showing.
             if ramp.stops[i].inclusive {
                 painter.text(
-                    egui::pos2(handle_column_rect.left(), y),
-                    egui::Align2::LEFT_CENTER,
+                    egui::pos2(handle_rect.left() - 3.0, y),
+                    egui::Align2::RIGHT_CENTER,
                     "≤",
                     egui::FontId::proportional(9.0),
                     text_color,
@@ -885,7 +973,6 @@ impl<'a> BlockModelProperties<'a> {
             let new_index = insert_stop_sorted(&mut ramp, editor.allocate_color_stop_id(), t, min, max);
             selected = new_index;
             value_popup_stop = Some(new_index);
-            popup_kept_open = true;
             changed = true;
         }
 
@@ -898,17 +985,6 @@ impl<'a> BlockModelProperties<'a> {
             };
             selected = selected.min(ramp.stops.len().saturating_sub(1));
             changed = true;
-        }
-
-        if value_popup_stop == Some(selected) {
-            let popup_response = self.draw_stop_value_popup(ui, &mut ramp, selected, bar_rect, handle_column_rect, min, max, &mut changed);
-            // Close the value input when the user clicks anywhere outside
-            // it - unless this frame's click was on a stop handle, which
-            // (re)opens it for that stop. Clicking inside the popup to edit
-            // the value is not "elsewhere", so it stays open.
-            if !popup_kept_open && popup_response.is_some_and(|response| response.clicked_elsewhere()) {
-                value_popup_stop = None;
-            }
         }
 
         if let Some(color) = ramp.stops.get(selected).map(|stop| stop.color) {
@@ -981,66 +1057,6 @@ impl<'a> BlockModelProperties<'a> {
                 text_color,
             );
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_stop_value_popup(
-        &self,
-        ui: &mut egui::Ui,
-        ramp: &mut UiRamp,
-        selected_stop: usize,
-        bar_rect: egui::Rect,
-        handle_column_rect: egui::Rect,
-        min: f64,
-        max: f64,
-        changed: &mut bool,
-    ) -> Option<egui::Response> {
-        let stops = ramp.stops.as_mut_slice();
-        let stop = stops.get(selected_stop).copied()?;
-        let selected_y = bar_rect.bottom() - bar_rect.height() * stop.t;
-        let popup_pos = egui::pos2(handle_column_rect.left() - 4.0, selected_y);
-        // The ramp is drawn wherever its host puts it - today the properties
-        // panel, whose layer is `Order::Background`. `set_sublayer` below
-        // requires parent and child to share an order, so take the parent's
-        // rather than assuming one.
-        let parent_layer = ui.layer_id();
-        let area_response = egui::Area::new(self.id.with("stop_value_popup"))
-            .order(parent_layer.order)
-            // The popup is fixed to its stop. Its container must not retain a
-            // drag response after the stop slider has been adjusted.
-            .movable(false)
-            .sense(egui::Sense::hover())
-            .pivot(egui::Align2::RIGHT_CENTER)
-            .fixed_pos(popup_pos)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    let lower_t = if selected_stop == 0 { 0.0 } else { stops[selected_stop - 1].t + STOP_EPSILON };
-                    let upper_t = if selected_stop + 1 == stops.len() {
-                        1.0
-                    } else {
-                        stops[selected_stop + 1].t - STOP_EPSILON
-                    };
-                    let mut value = normalized_to_value(stop.t, min, max);
-                    let min_value = normalized_to_value(lower_t.min(upper_t), min, max);
-                    let max_value = normalized_to_value(lower_t.max(upper_t), min, max);
-                    // No forced width: the popup frame hugs the drag value
-                    // instead of leaving empty space the number sat
-                    // left-aligned against.
-                    let response = ui.add(
-                        egui::DragValue::new(&mut value)
-                            .range(min_value..=max_value)
-                            .speed(((max - min).abs() / 250.0).max(0.0001))
-                            .max_decimals(6),
-                    );
-                    if response.changed() {
-                        stops[selected_stop].set_t(value_to_normalized(value, min, max).clamp(lower_t.min(upper_t), lower_t.max(upper_t)), min, max);
-                        *changed = true;
-                    }
-                });
-            });
-        // Keep the value editor above its parent layer.
-        ui.ctx().set_sublayer(parent_layer, area_response.response.layer_id);
-        Some(area_response.response)
     }
 }
 
@@ -1223,6 +1239,18 @@ fn category_count(variable: &crate::model::formats::block_model_data::BlockVaria
 fn format_category_count(variable: &crate::model::formats::block_model_data::BlockVariable) -> String {
     let count = category_count(variable);
     format!("{count} categor{}", if count == 1 { "y" } else { "ies" })
+}
+
+/// Compact share label for a legend category: `0%`, `<1%`, or a whole percent.
+fn format_category_percent(fraction: f32) -> String {
+    let percent = fraction * 100.0;
+    if fraction <= 0.0 {
+        "0%".to_owned()
+    } else if percent < 1.0 {
+        "<1%".to_owned()
+    } else {
+        format!("{percent:.0}%")
+    }
 }
 
 fn normalized_to_value(t: f32, min: f64, max: f64) -> f64 {

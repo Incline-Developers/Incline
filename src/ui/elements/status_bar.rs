@@ -57,8 +57,8 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState) -> egui::
                 }
                 if editor.debug_clip_planes {
                     match editor.debug_clip_plane_distances {
-                        Some((near, far)) => ui.label(format!("Clip near/far: {near:.3} / {far:.3} m")),
-                        None => ui.label("Clip near/far: -- / --"),
+                        Some((near, far)) => ui.label(format!("Clip near/far/Δ: {near:.3} / {far:.3} / {:.3} m", far - near)),
+                        None => ui.label("Clip near/far/Δ: -- / -- / --"),
                     };
                     ui.separator();
                 }

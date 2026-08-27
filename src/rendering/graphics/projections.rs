@@ -174,7 +174,11 @@ impl<'a> Graphics<'a> {
             self.camera.forward(),
             self.camera.up(),
             (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
-            |world| self.world_to_window_px(&view_proj, world),
+            // The gizmo is a foreground overlay sized to constant screen space,
+            // so its arms reach furthest in world units exactly when the camera
+            // is zoomed in and the scene-fitted depth slab is thinnest - project
+            // without that slab's rejection or the arms vanish.
+            |world| self.world_to_window_px_unclipped_depth(&view_proj, world),
         )
     }
 
@@ -197,8 +201,8 @@ impl<'a> Graphics<'a> {
             let vp = self.view_proj();
             // One entry per source vertex: a clipped vertex must keep its
             // slot so guide pairing and preview ranges stay index-aligned.
-            editor.offset_source_screen_px = editor.offset_source_world.iter().map(|&p| self.world_to_window_px(&vp, p)).collect();
-            editor.offset_preview_screen_px = editor.offset_preview_world.iter().map(|&p| self.world_to_window_px(&vp, p)).collect();
+            editor.offset_source_screen_px = editor.offset_source_world.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect();
+            editor.offset_preview_screen_px = editor.offset_preview_world.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect();
         } else {
             editor.offset_source_screen_px.clear();
             editor.offset_preview_screen_px.clear();
@@ -207,11 +211,11 @@ impl<'a> Graphics<'a> {
 
         if editor.batter_berm_dialog_open && !editor.batter_berm_rings_world.is_empty() {
             let vp = self.view_proj();
-            editor.batter_berm_source_screen_px = editor.batter_berm_source_world.iter().map(|&p| self.world_to_window_px(&vp, p)).collect();
+            editor.batter_berm_source_screen_px = editor.batter_berm_source_world.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect();
             editor.batter_berm_rings_screen_px = editor
                 .batter_berm_rings_world
                 .iter()
-                .map(|ring| ring.iter().map(|&p| self.world_to_window_px(&vp, p)).collect())
+                .map(|ring| ring.iter().map(|&p| self.world_to_window_px_unclipped_depth(&vp, p)).collect())
                 .collect();
         } else {
             editor.batter_berm_source_screen_px.clear();
@@ -276,7 +280,10 @@ impl<'a> Graphics<'a> {
         if editor.active_tool == ActiveTool::Chamfer {
             use crate::app::commands::drawing::chamfer::chamfer_corner;
             let vp = self.view_proj();
-            let project = |w: DVec3| -> Option<(f32, f32)> { self.world_to_window_px(&vp, w) };
+            // Preview + gizmo geometry is a foreground overlay offset from the
+            // source corner, so keep it drawable even when a tightly-fitted
+            // depth slab would reject the displaced point.
+            let project = |w: DVec3| -> Option<(f32, f32)> { self.world_to_window_px_unclipped_depth(&vp, w) };
 
             let corner_data = editor.chamfer_poly_id.and_then(|oid| {
                 let ci = editor.chamfer_corner_index?;
@@ -353,7 +360,10 @@ impl<'a> Graphics<'a> {
         if editor.active_tool == ActiveTool::Bezier {
             use crate::app::commands::drawing::bezier::{bezier_eval, directed_span_points};
             let vp = self.view_proj();
-            let project = |w: DVec3| -> Option<(f32, f32)> { self.world_to_window_px(&vp, w) };
+            // Control points and the curve they bow toward are a foreground
+            // overlay that can sit well off the source line's depth, so project
+            // without the scene-fitted depth slab's rejection.
+            let project = |w: DVec3| -> Option<(f32, f32)> { self.world_to_window_px_unclipped_depth(&vp, w) };
 
             if let Some(oid) = editor.bezier_poly_id {
                 if let Some(Object::Polyline { verts, closed, .. }) = document.get_object(oid) {

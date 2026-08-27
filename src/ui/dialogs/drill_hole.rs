@@ -41,9 +41,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                 ui.label(egui::RichText::new("All rendered intervals are opaque white.").weak());
                 return;
             };
-            ui.add_space(4.0);
-            ui.separator();
-            ui.add_space(2.0);
+            menu::menu_section(ui, "Colour scale");
             match &field.kind {
                 DrillFieldKind::Numeric { min, max } => {
                     let mut preset = dataset.color.preset;

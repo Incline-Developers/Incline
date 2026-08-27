@@ -895,6 +895,10 @@ pub(crate) struct EditorState {
     // Dialog state (position snapshots)
     /// When true, show the polyline finish dialog near the cursor.
     pub(crate) poly_finish_dialog: bool,
+    /// The polyline finish dialog only accepts its Enter shortcut once the
+    /// Enter press that opened it has been released - otherwise a held key
+    /// confirms "Open" the same instant the dialog appears.
+    pub(crate) poly_finish_dialog_confirm_armed: bool,
     /// Screen position (physical px) where the polyline finish dialog was opened.
     /// Snapshotted once so the dialog doesn't follow the cursor.
     pub(crate) poly_finish_dialog_px: Option<(f32, f32)>,
@@ -1184,6 +1188,8 @@ pub(crate) struct EditorState {
     pub(crate) tri_include_solid_name_input: String,
     pub(crate) tri_include_solid_name_auto: bool,
     pub(crate) tri_include_solid_save_as_two: bool,
+    /// Hide and unload the source topology and solid once the merge completes.
+    pub(crate) tri_include_solid_hide_old: bool,
 
     // Contour Generation
     pub(crate) tri_contour_open: bool,
@@ -1414,8 +1420,8 @@ impl EditorState {
             .file_stem()
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or("surface");
-        self.tri_contour_layer_name_input = format!("{stem}_contour");
+            .unwrap_or("Surface");
+        self.tri_contour_layer_name_input = format!("{} Contours", stem.trim());
     }
 
     /// Clear every project/object-owned interaction session in one lifecycle
@@ -1448,6 +1454,7 @@ impl EditorState {
         self.pending_stroke.clear();
         self.circle_draft = None;
         self.poly_finish_dialog = false;
+        self.poly_finish_dialog_confirm_armed = false;
         self.poly_finish_dialog_px = None;
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
@@ -1655,7 +1662,7 @@ impl EditorState {
             #[cfg(target_arch = "wasm32")]
             new_project_name: String::new(),
             new_layer_dialog_open: false,
-            new_layer_name: "design".to_owned(),
+            new_layer_name: "Design".to_owned(),
             renaming_item: None,
             pending_delete_layer: None,
             pending_delete_item: None,
@@ -1678,6 +1685,7 @@ impl EditorState {
             z_input: 0.0,
             cursor_screen_px: None,
             poly_finish_dialog: false,
+            poly_finish_dialog_confirm_armed: false,
             poly_finish_dialog_px: None,
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
@@ -1830,6 +1838,7 @@ impl EditorState {
             tri_include_solid_name_input: String::new(),
             tri_include_solid_name_auto: true,
             tri_include_solid_save_as_two: false,
+            tri_include_solid_hide_old: true,
             tri_contour_open: false,
             tri_contour_tri_id: None,
             tri_contour_major_interval_input: 10.0,
@@ -1840,7 +1849,7 @@ impl EditorState {
             tri_contour_z_min_input: 0.0,
             tri_contour_z_max_input: 100.0,
             tri_contour_target_layer: None,
-            tri_contour_layer_name_input: "surface_contour".to_owned(),
+            tri_contour_layer_name_input: "Surface Contours".to_owned(),
             tri_contour_layer_name_auto: true,
             point_cloud_tin_open: false,
             point_cloud_tin_cloud_id: None,
@@ -2395,6 +2404,7 @@ pub(crate) enum UiCommand {
         shape_id: TriangulationId,
         name: String,
         save_as_two: bool,
+        hide_old: bool,
     },
     /// Open the "Generate Contour Lines" dialog.
     OpenContourTriangulation,
@@ -2610,7 +2620,7 @@ impl UiCommand {
             Self::ExecuteCutTriangulationByZ { name, z_min, z_max, .. } => report("Cut Triangulation by Z", format!("{name} · {z_min} to {z_max}")),
             Self::ExecuteCutTriangulationBySurface { name, .. } => report("Trim Triangulation to Surface", name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report("Cut Topology to Pit Shell", name.clone()),
-            Self::ExecuteIncludeSolidInTopology { name, .. } => report("Include Solid in Topology", name.clone()),
+            Self::ExecuteIncludeSolidInTopology { name, .. } => report("Merge Shell into Topology", name.clone()),
             Self::Undo => report("Undo", "Previous edit".to_owned()),
             Self::Redo => report("Redo", "Next edit".to_owned()),
             Self::ExecuteContourTriangulation {

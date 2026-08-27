@@ -294,6 +294,9 @@ impl<'a> App<'a> {
             }
             ActiveTool::MakePoly if self.editor.pending_stroke.len() >= 2 => {
                 self.editor.poly_finish_dialog = true;
+                // The Enter that opened this dialog must be released before its
+                // own Enter shortcut can fire, or a held key skips it entirely.
+                self.editor.poly_finish_dialog_confirm_armed = false;
                 self.editor.poly_finish_dialog_px = self.editor.cursor_screen_px;
                 self.redraw_requested = true;
             }

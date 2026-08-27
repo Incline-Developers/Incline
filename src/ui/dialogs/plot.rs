@@ -371,7 +371,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         .max_height(PLOT_SETTINGS_MAX_HEIGHT)
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            // ── Paper ──
+                            menu::menu_section(ui, "Paper");
                             let paper_label = dialog.paper.to_string();
                             MenuFieldCombo::new(
                                 "plot_paper",
@@ -415,11 +415,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                                 .width(PLOT_FIELD_WIDTH)
                                 .show(ui);
 
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(2.0);
-
-                            // ── Scale and framing ──
+                            menu::menu_section(ui, "Scale and framing");
                             MenuFieldF64::new("Scale  1:", &mut dialog.scale, 1.0..=1.0e7)
                                 .help_text("At 1:1000, one millimetre on the sheet is one metre on the ground.")
                                 .speed(10.0)
@@ -458,11 +454,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                                 commands.push(UiCommand::FitPlotScaleToData);
                             }
 
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(2.0);
-
-                            // ── Sheet furniture ──
+                            menu::menu_section(ui, "Sheet furniture");
                             MenuFieldBool::new("Border", &mut dialog.show_frame).show(ui);
                             MenuFieldBool::new("Coordinate grid", &mut dialog.show_grid).show(ui);
                             if dialog.show_grid {
@@ -484,11 +476,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
                                 .help_text("Lists the visible surfaces and design layers with their colours.")
                                 .show(ui);
 
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(2.0);
-
-                            // ── Title block ──
+                            menu::menu_section(ui, "Title block");
                             MenuFieldBool::new("Title block", &mut dialog.show_title_block).show(ui);
                             if dialog.show_title_block {
                                 MenuFieldText::new("Title", &mut dialog.title).width(PLOT_FIELD_WIDTH).show(ui);

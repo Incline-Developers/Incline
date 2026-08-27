@@ -285,8 +285,7 @@ fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, comm
         return;
     };
 
-    ui.separator();
-    ui.label("Column mapping");
+    menu::menu_section(ui, "Column mapping");
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(ui.available_height()).show(ui, |ui| {
         egui::Grid::new("csv_block_model_preview").striped(true).min_col_width(110.0).show(ui, |ui| {
             for (column, header) in preview.headers.iter().enumerate() {

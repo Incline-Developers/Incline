@@ -540,7 +540,7 @@ impl<'a> App<'a> {
                         .or_else(|| model.model.numeric_variables().into_iter().find(|var| !var.special).map(|var| var.name.clone()))
                         .unwrap_or_default();
                     let stem = std::path::Path::new(&model.name).file_stem().and_then(|value| value.to_str()).unwrap_or(&model.name);
-                    self.editor.ore_name_input = format!("{stem}_ore");
+                    self.editor.ore_name_input = format!("{stem} Ore");
                 }
                 Ok(())
             }
@@ -762,7 +762,7 @@ impl<'a> App<'a> {
                 self.editor.selected_handles.clear();
                 self.editor.tri_selected_object_ids.clear();
                 self.editor.tri_selected_layer_ids.clear();
-                self.editor.tri_name_input = "surface".to_owned();
+                self.editor.tri_name_input = "Surface".to_owned();
                 self.editor.tri_hover_handles.clear();
                 Ok(())
             }
@@ -802,10 +802,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_poly_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| {
-                        let stem = std::path::Path::new(&t.name).file_stem().and_then(|s| s.to_str()).unwrap_or(&t.name);
-                        format!("{stem}_cut")
-                    })
+                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, "Clipped"))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -841,10 +838,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_z_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| {
-                        let stem = std::path::Path::new(&t.name).file_stem().and_then(|s| s.to_str()).unwrap_or(&t.name);
-                        format!("{stem}_slice")
-                    })
+                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, "Sliced"))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -887,10 +881,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_pitshell_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| {
-                        let stem = std::path::Path::new(&t.name).file_stem().and_then(|s| s.to_str()).unwrap_or(&t.name);
-                        format!("{stem}_cut")
-                    })
+                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, "Cut"))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -907,16 +898,11 @@ impl<'a> App<'a> {
                 self.editor.tri_include_solid_topology_id = self.active_triangulation;
                 self.editor.tri_include_solid_shape_id = None;
                 self.editor.tri_include_solid_save_as_two = false;
+                self.editor.tri_include_solid_hide_old = true;
                 self.editor.tri_include_solid_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|triangulation| triangulation.id == id))
-                    .map(|triangulation| {
-                        let stem = std::path::Path::new(&triangulation.name)
-                            .file_stem()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(&triangulation.name);
-                        format!("{stem}_with_shape")
-                    })
+                    .map(|triangulation| crate::app::canvas::derived_triangulation_name(&triangulation.name, "With Shell"))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -925,8 +911,9 @@ impl<'a> App<'a> {
                 shape_id,
                 name,
                 save_as_two,
+                hide_old,
             } => {
-                let result = self.include_solid_in_topology(topology_id, shape_id, name, save_as_two);
+                let result = self.include_solid_in_topology(topology_id, shape_id, name, save_as_two, hide_old);
                 if result.is_ok() {
                     self.editor.tri_include_solid_open = false;
                 }
@@ -946,7 +933,7 @@ impl<'a> App<'a> {
                 if let Some(surface_name) = surface_name {
                     self.editor.update_contour_layer_name_from_surface(&surface_name);
                 } else {
-                    self.editor.tri_contour_layer_name_input = "surface_contour".to_owned();
+                    self.editor.tri_contour_layer_name_input = "Surface Contours".to_owned();
                 }
                 Ok(())
             }

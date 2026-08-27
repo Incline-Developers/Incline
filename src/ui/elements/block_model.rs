@@ -116,8 +116,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
         }
         MenuFieldText::new("Output name", &mut editor.kriging_name_input).show(ui);
 
-        ui.separator();
-        ui.strong("Block grid");
+        menu::menu_section(ui, "Block grid");
         vector_fields(
             ui,
             "Minimum",
@@ -156,8 +155,7 @@ pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut Edi
             }
         }
 
-        ui.separator();
-        ui.strong("Spherical variogram and search");
+        menu::menu_section(ui, "Spherical variogram and search");
         MenuFieldF64::new("Range / search radius", &mut editor.kriging_range, 0.001..=f64::MAX)
             .help_text("Samples farther than this distance are excluded; covariance reaches zero at this range.")
             .show(ui);

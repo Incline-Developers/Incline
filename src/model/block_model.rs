@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
 };
@@ -936,10 +936,33 @@ pub(crate) struct ActiveValuesCacheEntry {
     variable: String,
     values: Option<Arc<Vec<f64>>>,
     range: Option<(f64, f64)>,
-    /// Integer category codes that actually occur anywhere in the decoded
-    /// column. Kept beside the values so the legend never rescans a large
-    /// model on every UI frame.
-    present_category_codes: Option<Arc<HashSet<u32>>>,
+    /// Per-code occurrence counts across the renderable blocks of the decoded
+    /// column, plus the renderable total. Kept beside the values so the legend
+    /// never rescans a large model on every UI frame.
+    category_code_counts: Option<Arc<CategoryCounts>>,
+}
+
+/// Occurrence counts for a categorical colour variable, over the renderable
+/// blocks only.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CategoryCounts {
+    per_code: HashMap<u32, usize>,
+    total: usize,
+}
+
+impl CategoryCounts {
+    /// Whether any renderable block carries this category code.
+    pub(crate) fn contains(&self, code: u32) -> bool {
+        self.per_code.get(&code).is_some_and(|count| *count > 0)
+    }
+
+    /// Share of renderable blocks carrying this category code, `0.0..=1.0`.
+    pub(crate) fn fraction(&self, code: u32) -> f32 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        *self.per_code.get(&code).unwrap_or(&0) as f32 / self.total as f32
+    }
 }
 
 pub(crate) fn active_values_cache_has_range(cache: &ActiveValuesCache) -> bool {
@@ -962,15 +985,15 @@ impl OpenBlockModel {
                     .and_then(|values| render_value_range(values, renderable_block_indices, numeric_variable_default(variable)))
             })
         });
-        let present_category_codes = model
+        let category_code_counts = model
             .variable(name)
             .filter(|variable| categorical_variable(variable))
-            .and_then(|_| values.as_deref().map(|values| collect_present_category_codes(values.as_slice(), renderable_block_indices)));
+            .and_then(|_| values.as_deref().map(|values| collect_category_counts(values.as_slice(), renderable_block_indices)));
         RefCell::new(Some(ActiveValuesCacheEntry {
             variable: name.to_owned(),
             values,
             range,
-            present_category_codes,
+            category_code_counts,
         }))
     }
 
@@ -979,7 +1002,7 @@ impl OpenBlockModel {
             variable: variable.to_owned(),
             values: None,
             range: None,
-            present_category_codes: None,
+            category_code_counts: None,
         });
     }
 
@@ -1018,16 +1041,16 @@ impl OpenBlockModel {
                     .and_then(|values| render_value_range(values, &self.renderable_block_indices, numeric_variable_default(variable)))
             })
         });
-        let present_category_codes = self.model.variable(name).filter(|variable| categorical_variable(variable)).and_then(|_| {
-            values
-                .as_deref()
-                .map(|values| collect_present_category_codes(values.as_slice(), &self.renderable_block_indices))
-        });
+        let category_code_counts = self
+            .model
+            .variable(name)
+            .filter(|variable| categorical_variable(variable))
+            .and_then(|_| values.as_deref().map(|values| collect_category_counts(values.as_slice(), &self.renderable_block_indices)));
         *cache = Some(ActiveValuesCacheEntry {
             variable: name.to_owned(),
             values,
             range,
-            present_category_codes,
+            category_code_counts,
         });
     }
 
@@ -1066,9 +1089,23 @@ impl OpenBlockModel {
         self.active_values_cache
             .borrow()
             .as_ref()?
-            .present_category_codes
+            .category_code_counts
             .as_ref()
-            .map(|codes| codes.contains(&code))
+            .map(|counts| counts.contains(code))
+    }
+
+    /// Share of the renderable blocks whose active categorical value is `code`,
+    /// `0.0..=1.0`. `None` while the column is still decoding or the active
+    /// variable is numeric.
+    pub(crate) fn active_category_code_fraction(&self, code: u32) -> Option<f32> {
+        let name = self.active_color_variable.as_deref()?;
+        self.ensure_active_values_cached(name);
+        self.active_values_cache
+            .borrow()
+            .as_ref()?
+            .category_code_counts
+            .as_ref()
+            .map(|counts| counts.fraction(code))
     }
 
     /// The ramp for the active colour variable, or a neutral one when no
@@ -1259,15 +1296,16 @@ fn categorical_variable(variable: &crate::model::formats::block_model_data::Bloc
     matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort")
 }
 
-fn collect_present_category_codes(values: &[f64], renderable: &RenderableBlockIndices) -> Arc<HashSet<u32>> {
-    Arc::new(
-        renderable
-            .iter()
-            .filter_map(|index| values.get(index).copied())
-            .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(value))
-            .map(|value| value as u32)
-            .collect(),
-    )
+fn collect_category_counts(values: &[f64], renderable: &RenderableBlockIndices) -> Arc<CategoryCounts> {
+    let mut per_code: HashMap<u32, usize> = HashMap::new();
+    let mut total = 0usize;
+    for value in renderable.iter().filter_map(|index| values.get(index).copied()) {
+        if value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&value) {
+            *per_code.entry(value as u32).or_insert(0) += 1;
+            total += 1;
+        }
+    }
+    Arc::new(CategoryCounts { per_code, total })
 }
 
 /// The colour list a categorical variable starts with: whatever palette the

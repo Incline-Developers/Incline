@@ -13,7 +13,7 @@ impl<'a> App<'a> {
     ///
     /// The heavy include (clip + BVH build) runs on a background thread so the
     /// UI stays interactive; the result is applied on the next frame.
-    pub(crate) fn include_solid_in_topology(&mut self, topology_id: TriangulationId, shape_id: TriangulationId, name: String, save_as_two: bool) -> Result<()> {
+    pub(crate) fn include_solid_in_topology(&mut self, topology_id: TriangulationId, shape_id: TriangulationId, name: String, save_as_two: bool, hide_old: bool) -> Result<()> {
         if topology_id == shape_id {
             anyhow::bail!("Topology and pit/stockpile solid must be different triangulations");
         }
@@ -69,9 +69,9 @@ impl<'a> App<'a> {
                 }
 
                 let topology_edges = triangle_edge_list(&faces);
-                let topology = session::build_generated_triangulation(component_name(&name, "topology"), vertices, faces, TriSurfaceType::Surface, |_| topology_edges)?;
+                let topology = session::build_generated_triangulation(component_name(&name, "Topology"), vertices, faces, TriSurfaceType::Surface, |_| topology_edges)?;
                 let shape_edges = triangle_edge_list(&shape_faces);
-                let shape = session::build_generated_triangulation(component_name(&name, "solid"), shape_vertices, shape_faces, TriSurfaceType::Surface, |_| shape_edges)?;
+                let shape = session::build_generated_triangulation(component_name(&name, "Shell"), shape_vertices, shape_faces, TriSurfaceType::Surface, |_| shape_edges)?;
                 vec![topology, shape]
             } else {
                 let edges = triangle_edge_list(&faces);
@@ -97,6 +97,12 @@ impl<'a> App<'a> {
                 );
                 for generated in output.generated {
                     app.insert_generated_triangulation(generated);
+                }
+                // The job has finished, so unloading its source dependencies no
+                // longer risks cancelling it.
+                if hide_old {
+                    app.close_triangulation(topology_id);
+                    app.close_triangulation(shape_id);
                 }
             }
             Err(err) => {
@@ -153,12 +159,8 @@ fn sorted_u32_edge(a: u32, b: u32) -> [u32; 2] {
 }
 
 fn component_name(name: &str, component: &str) -> String {
-    let path = std::path::Path::new(name);
-    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or(name);
-    match path.extension().and_then(|value| value.to_str()) {
-        Some(extension) => format!("{stem}_{component}.{extension}"),
-        None => format!("{stem}_{component}"),
-    }
+    let stem = std::path::Path::new(name).file_stem().and_then(|value| value.to_str()).unwrap_or(name).trim();
+    format!("{stem} ({component})")
 }
 
 pub(super) fn include_shape_mesh_in_topology_with_spatial(

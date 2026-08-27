@@ -1033,16 +1033,28 @@ impl<'a> App<'a> {
     }
 
     fn handle_key_action(&mut self, event: &WindowEvent) {
-        if let WindowEvent::KeyboardInput {
+        let WindowEvent::KeyboardInput {
             event: KeyEvent {
-                state: ElementState::Pressed,
+                state,
                 physical_key: PhysicalKey::Code(key),
                 ..
             },
             ..
         } = event
-        {
-            self.handle_key_code(*key);
+        else {
+            return;
+        };
+        match state {
+            ElementState::Pressed => self.handle_key_code(*key),
+            ElementState::Released => {
+                // Once the Enter that opened the polyline finish dialog is
+                // released, let its Enter shortcut work. Until then a held key
+                // must not skip straight past the Open/Closed choice.
+                if matches!(key, KeyCode::Enter | KeyCode::NumpadEnter) && self.editor.poly_finish_dialog && !self.editor.poly_finish_dialog_confirm_armed {
+                    self.editor.poly_finish_dialog_confirm_armed = true;
+                    self.redraw_requested = true;
+                }
+            }
         }
     }
 

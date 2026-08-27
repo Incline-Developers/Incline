@@ -1042,6 +1042,9 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                  of combining them into one entity.",
                 )
                 .show(ui);
+            MenuFieldBool::new("Hide and unload sources", &mut editor.tri_include_solid_hide_old)
+                .help_text("Once the merge succeeds, unload the source topology and solid so only the merged result stays in the scene.")
+                .show(ui);
 
             ui.add_space(6.0);
             ui.separator();
@@ -1060,6 +1063,7 @@ pub(crate) fn draw_include_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
                         shape_id,
                         name: editor.tri_include_solid_name_input.trim().to_owned(),
                         save_as_two: editor.tri_include_solid_save_as_two,
+                        hide_old: editor.tri_include_solid_hide_old,
                     });
                 }
                 if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {

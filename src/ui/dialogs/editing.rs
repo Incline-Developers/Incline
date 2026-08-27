@@ -616,7 +616,12 @@ pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<
     ViewportDockPanel::new("finish_poly_dialog", "Finish Polyline", viewport_rect).show(ui, |ui| {
         MenuField::new("Shape").show(ui, |ui, _, _| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(MenuButton::new("Open").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                // Drain the key from egui's queue every frame so it never leaks
+                // elsewhere, but honour it only once the Enter that opened this
+                // dialog has been released - a key held down to finish the line
+                // would otherwise confirm "Open" the instant the dialog appears.
+                let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
+                if ui.add(MenuButton::new("Open").primary()).clicked() || (confirm_key && editor.poly_finish_dialog_confirm_armed) {
                     commands.push(UiCommand::CommitStrokeOpen);
                     editor.poly_finish_dialog = false;
                 }

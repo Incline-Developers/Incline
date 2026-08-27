@@ -48,7 +48,7 @@ pub(crate) fn draw_replace_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<
             if ui.add(MenuButton::new("Save").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(UiCommand::SaveAndReplaceProject);
             }
-            if ui.add(MenuButton::new("Discard")).clicked() {
+            if ui.add(MenuButton::new("Discard").danger()).clicked() {
                 commands.push(UiCommand::DiscardAndReplaceProject);
             }
             if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -199,7 +199,10 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
                 if ui.add(MenuButton::new(if removing { "Save and Remove" } else { "Save and Close" }).primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                     commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                 }
-                if ui.add(MenuButton::new(if removing { "Remove Without Saving" } else { "Close Without Saving" })).clicked() {
+                if ui
+                    .add(MenuButton::new(if removing { "Remove Without Saving" } else { "Close Without Saving" }).danger())
+                    .clicked()
+                {
                     commands.push(UiCommand::CloseProjectForce(runtime_id));
                 }
                 if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
@@ -224,7 +227,7 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
                     if ui.add(MenuButton::new("Save and Close").primary()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                         commands.push(UiCommand::SaveAndCloseProject(runtime_id));
                     }
-                    if ui.add(MenuButton::new("Close Without Saving")).clicked() {
+                    if ui.add(MenuButton::new("Close Without Saving").danger()).clicked() {
                         commands.push(UiCommand::CloseProjectForce(runtime_id));
                     }
                 }

@@ -19,7 +19,7 @@ use crate::{
         state::{EditorState, PreferencesDraft, PropertyTab},
         themed_icon, unthemed_icon,
         widgets::{
-            menu::{MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
+            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
             viewport::BlockModelProperties,
         },
     },
@@ -141,10 +141,14 @@ pub(crate) fn draw_properties(
                 });
 
             egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
-                egui::ScrollArea::vertical().id_salt("explorer_properties_scroll").auto_shrink([false; 2]).show(ui, |ui| {
-                    // Leave room for the scrollbar so the right-aligned controls
-                    // are never tucked underneath it.
-                    ui.set_max_width((ui.available_width() - 4.0).max(1.0));
+                // `both`, not `vertical`: a panel dragged narrower than the
+                // widest control scrolls sideways to reach it. With vertical-only
+                // scrolling egui clips horizontal overflow to the *panel* edge,
+                // not the content area, so overwide rows paint over the tab column.
+                egui::ScrollArea::both().id_salt("explorer_properties_scroll").auto_shrink([false; 2]).show(ui, |ui| {
+                    // Leave room for the floating scrollbar so the right-aligned
+                    // controls are never tucked underneath it.
+                    ui.set_max_width((ui.available_width() - 10.0).max(1.0));
                     // Headings and field labels get whatever their row's control
                     // leaves them, which in a panel this narrow is regularly less
                     // than the text: end it in an ellipsis rather than wrapping
@@ -305,9 +309,7 @@ fn settings_section(
 ) {
     let saved = editor.current_preferences();
     let draft = editor.preferences_draft.get_or_insert(saved);
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(heading).strong().color(ui.visuals().weak_text_color()));
-    ui.add_space(4.0);
+    menu::menu_section(ui, heading);
     let changed = add_fields(ui, draft);
     let draft = *draft;
 
@@ -315,11 +317,18 @@ fn settings_section(
         ui.add_space(10.0);
         let mut restored = draft;
         reset_tab(&mut restored);
-        if ui
-            .add_enabled(draft != restored, egui::Button::new("Restore Defaults"))
-            .on_hover_text(format!("Reset the {heading} settings to their defaults"))
-            .clicked()
-        {
+        // Extend, not the panel's global Truncate: a full-width button on a
+        // narrow panel should keep its label and be reachable by scrolling
+        // rather than read "Restore Def…".
+        let restore_clicked = ui
+            .scope(|ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                ui.add_enabled(draft != restored, egui::Button::new("Restore Defaults"))
+                    .on_hover_text(format!("Reset the {heading} settings to their defaults"))
+                    .clicked()
+            })
+            .inner;
+        if restore_clicked {
             commands.push(UiCommand::ApplyPreferences(restored));
         } else if changed && draft != saved {
             commands.push(UiCommand::ApplyPreferences(draft));
@@ -395,8 +404,7 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
         "Camera",
         |ui, draft| {
             let mut changed = false;
-            ui.strong("Plan Mode");
-            ui.add_space(4.0);
+            menu::menu_section(ui, "Plan Mode");
             changed |= committed(
                 &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
                     .speed(0.0001)
@@ -413,9 +421,8 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
             changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.plan_invert_horizontal_look).show(ui));
             changed |= committed(&MenuFieldBool::new("Zoom to cursor", &mut draft.plan_zoom_towards_cursor).show(ui));
 
-            ui.add_space(12.0);
-            ui.strong("Fly Mode");
-            ui.add_space(4.0);
+            ui.add_space(8.0);
+            menu::menu_section(ui, "Fly Mode");
             changed |= committed(&MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0).suffix("°").show(ui));
             changed |= committed(
                 &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
@@ -530,9 +537,8 @@ fn draw_triangulation_tab(ui: &mut egui::Ui, project: &UiProjectView, context: &
         *geometry_dirty = true;
     }
 
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new("Mesh").strong().color(ui.visuals().weak_text_color()));
-    ui.add_space(4.0);
+    ui.add_space(6.0);
+    menu::menu_section(ui, "Mesh");
     read_only_row(ui, "Vertices", &triangulation.vertex_count.separate_with_commas());
     read_only_row(ui, "Triangles", &triangulation.triangle_count.separate_with_commas());
     ui.add_space(6.0);

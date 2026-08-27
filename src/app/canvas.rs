@@ -226,11 +226,11 @@ impl<'a> App<'a> {
         match target {
             TriangulationPickTarget::ClipSurface => {
                 self.editor.tri_cut_poly_tri_id = Some(id);
-                update_auto_derived_name(&mut self.editor.tri_cut_poly_name_input, self.editor.tri_cut_poly_name_auto, name, "cut");
+                update_auto_derived_name(&mut self.editor.tri_cut_poly_name_input, self.editor.tri_cut_poly_name_auto, name, "Clipped");
             }
             TriangulationPickTarget::SliceSurface => {
                 self.editor.tri_cut_z_tri_id = Some(id);
-                update_auto_derived_name(&mut self.editor.tri_cut_z_name_input, self.editor.tri_cut_z_name_auto, name, "slice");
+                update_auto_derived_name(&mut self.editor.tri_cut_z_name_input, self.editor.tri_cut_z_name_auto, name, "Sliced");
             }
             TriangulationPickTarget::TrimTopology => {
                 self.editor.tri_cut_surface_reference_id = Some(id);
@@ -243,14 +243,14 @@ impl<'a> App<'a> {
                 if self.editor.tri_cut_surface_reference_id == Some(id) {
                     self.editor.tri_cut_surface_reference_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_cut_surface_name_input, self.editor.tri_cut_surface_name_auto, name, "trimmed");
+                update_auto_derived_name(&mut self.editor.tri_cut_surface_name_input, self.editor.tri_cut_surface_name_auto, name, "Trimmed");
             }
             TriangulationPickTarget::CutPitTopology => {
                 self.editor.tri_cut_pitshell_topology_id = Some(id);
                 if self.editor.tri_cut_pitshell_pitshell_id == Some(id) {
                     self.editor.tri_cut_pitshell_pitshell_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_cut_pitshell_name_input, self.editor.tri_cut_pitshell_name_auto, name, "cut");
+                update_auto_derived_name(&mut self.editor.tri_cut_pitshell_name_input, self.editor.tri_cut_pitshell_name_auto, name, "Cut");
             }
             TriangulationPickTarget::CutPitShell => {
                 self.editor.tri_cut_pitshell_pitshell_id = Some(id);
@@ -263,7 +263,7 @@ impl<'a> App<'a> {
                 if self.editor.tri_include_solid_shape_id == Some(id) {
                     self.editor.tri_include_solid_shape_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_include_solid_name_input, self.editor.tri_include_solid_name_auto, name, "with_shape");
+                update_auto_derived_name(&mut self.editor.tri_include_solid_name_input, self.editor.tri_include_solid_name_auto, name, "With Shell");
             }
             TriangulationPickTarget::IncludeShape => {
                 self.editor.tri_include_solid_shape_id = Some(id);
@@ -568,13 +568,12 @@ impl<'a> App<'a> {
     }
 }
 
-fn derived_triangulation_name(name: &str, suffix: &str) -> String {
-    let path = std::path::Path::new(name);
-    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or(name);
-    match path.extension().and_then(|value| value.to_str()) {
-        Some(extension) => format!("{stem}_{suffix}.{extension}"),
-        None => format!("{stem}_{suffix}"),
-    }
+/// Standardised name for a triangulation derived from another: the source's
+/// stem verbatim (its own casing is left alone), then a Title-Case operation
+/// word - e.g. `"minedesign.dxf"` with `"Clipped"` becomes `"minedesign Clipped"`.
+pub(crate) fn derived_triangulation_name(name: &str, suffix: &str) -> String {
+    let stem = std::path::Path::new(name).file_stem().and_then(|value| value.to_str()).unwrap_or(name).trim();
+    if stem.is_empty() { name.to_owned() } else { format!("{stem} {suffix}") }
 }
 
 fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, suffix: &str) {

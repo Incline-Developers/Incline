@@ -200,6 +200,16 @@ impl<'a> Graphics<'a> {
         Some(self.viewport_to_window_px((px.x as f32, px.y as f32)))
     }
 
+    /// Like [`world_to_window_px`] but keeps points whose depth falls outside
+    /// the scene-fitted near/far slab. Tool previews (offset, batter/berm) are
+    /// foreground overlays, not scene geometry: their screen position stays
+    /// meaningful even when a tightly-fitted depth range - now fitted to the
+    /// panel-cropped viewport frustum - would reject the world point itself.
+    pub(crate) fn world_to_window_px_unclipped_depth(&self, view_proj: &DMat4, world: DVec3) -> Option<(f32, f32)> {
+        let px = crate::rendering::pick::world_to_screen_unclipped_depth(view_proj, world, self.screen_size())?;
+        Some(self.viewport_to_window_px((px.x as f32, px.y as f32)))
+    }
+
     pub(super) fn screen_size(&self) -> Size {
         (self.viewport_rect.width as f32, self.viewport_rect.height as f32)
     }
@@ -622,10 +632,25 @@ impl<'a> Graphics<'a> {
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
             let drill_hole_hit = SceneQuery::nearest_drill_hole_entity(drill_holes, hidden, frozen, ray_origin, direction, &view_proj, screen, 0.0).map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
+            // A point cloud has no ray-castable surface, so pivot on the nearest
+            // splat under the cursor instead - otherwise orbiting over a selected
+            // cloud spins about a stale camera-target depth.
+            let point_cloud_hit = self
+                .point_cloud_gpu
+                .nearest_visible_entity_at_screen(
+                    &view_proj,
+                    screen,
+                    DVec2::new(f64::from(self.camera_controller.mouse_loc.0), f64::from(self.camera_controller.mouse_loc.1)),
+                    SNAP_THRESHOLD_PX,
+                    hidden,
+                    frozen,
+                )
+                .map(|(_, world)| world);
             triangulation_hit
                 .into_iter()
                 .chain(drill_hole_hit)
                 .chain(block_model_hit)
+                .chain(point_cloud_hit)
                 .min_by(|a, b| (*a - ray_origin).dot(direction).total_cmp(&(*b - ray_origin).dot(direction)))
                 .unwrap_or_else(|| {
                     // No asset surface hit - try picking any document object
