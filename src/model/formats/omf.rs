@@ -600,8 +600,11 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         .iter()
         .map(|&index| {
             let block = open.blocks.get(index).with_context(|| format!("Block model '{}' is missing block {index}", open.name))?;
-            let min = (block.lower - lower) / extent;
-            let max = (block.upper - lower) / extent;
+            // Normalizing by `extent` should land boundary blocks exactly on
+            // 0.0/1.0, but float rounding can push a corner a hair outside
+            // that range, which OMF's strict validation rejects.
+            let min = ((block.lower - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
+            let max = ((block.upper - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
             Ok(([0, 0, 0], [min.x, min.y, min.z, max.x, max.y, max.z]))
         })
         .collect::<Result<Vec<_>>>()?;
