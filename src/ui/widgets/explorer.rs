@@ -136,6 +136,7 @@ pub(crate) struct ExplorerEntry {
     selected: bool,
     reserve_toggle_gutter: bool,
     toggles: Option<EntryToggles>,
+    leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
 }
 
 impl ExplorerEntry {
@@ -146,6 +147,7 @@ impl ExplorerEntry {
             selected: false,
             reserve_toggle_gutter: false,
             toggles: None,
+            leading_icon: None,
         }
     }
 
@@ -160,6 +162,16 @@ impl ExplorerEntry {
         self
     }
 
+    /// Show `icon`, tinted to `color`, in the gutter ahead of the label.
+    ///
+    /// This is not a "kind" icon like a section heading's - entries don't
+    /// carry those - but a status distinct from the other rows around it
+    /// (the one active project among the tracked list).
+    pub(crate) fn leading_icon(mut self, icon: egui::ImageSource<'static>, color: egui::Color32) -> Self {
+        self.leading_icon = Some((icon, color));
+        self
+    }
+
     /// Lay the row out, returning its label response alongside the toggles.
     ///
     /// [`egui::Widget`] can only hand back the label response, so rows that
@@ -171,6 +183,7 @@ impl ExplorerEntry {
             selected,
             reserve_toggle_gutter,
             toggles,
+            leading_icon,
         } = self;
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
@@ -182,7 +195,17 @@ impl ExplorerEntry {
                     // Match its gutter so this leaf starts at the same x.
                     ui.add_space(ui.spacing().indent);
                 }
-                ui.add_space(ENTRY_LABEL_GUTTER);
+                match leading_icon {
+                    Some((icon, color)) => {
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(ENTRY_LABEL_GUTTER, height), egui::Sense::hover());
+                        if ui.is_rect_visible(rect) {
+                            egui::Image::new(icon)
+                                .tint(color)
+                                .paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(TOGGLE_ICON)));
+                        }
+                    }
+                    None => ui.add_space(ENTRY_LABEL_GUTTER),
+                }
                 // The label claims everything the toggles do not, so a long
                 // name truncates against them rather than pushing them off.
                 //

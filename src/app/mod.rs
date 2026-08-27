@@ -1343,7 +1343,10 @@ impl<'a> App<'a> {
             project.layers.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         }
         projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name).then_with(|| a.path.cmp(&b.path)));
-        tracked_projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
+        // The active project always sits last, so it reads as the "current"
+        // row at the bottom of the list rather than wherever its name falls
+        // alphabetically among the others.
+        tracked_projects.sort_by(|a, b| a.is_active.cmp(&b.is_active).then_with(|| crate::natural_sort::natural_cmp(&a.name, &b.name)));
         triangulations.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         block_models.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         drill_holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
