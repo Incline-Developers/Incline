@@ -2105,6 +2105,8 @@ pub(crate) enum UiCommand {
     RemoveRaster(RasterTextureId),
     DrapeRaster(RasterTextureId),
     UndrapeRaster(RasterTextureId),
+    /// Undrape every raster from every triangulation it covers.
+    UndrapeAllRasters,
     ClearActiveTriangulationRaster,
     LoadPointCloud(PointCloudId),
     ClosePointCloud(PointCloudId),
@@ -2522,6 +2524,7 @@ impl UiCommand {
             Self::RemoveRaster(id) => report("Remove Raster", format!("{id:?}")),
             Self::DrapeRaster(id) => report("Drape Raster", format!("{id:?}")),
             Self::UndrapeRaster(id) => report("Undrape Raster", format!("{id:?}")),
+            Self::UndrapeAllRasters => report("Undrape Rasters", "Removed from every triangulation".to_owned()),
             Self::ClearActiveTriangulationRaster => report("Clear Raster", "Removed from active triangulation".to_owned()),
             Self::LoadPointCloud(id) => report("Load Point Cloud", format!("{id:?}")),
             Self::ClosePointCloud(id) => report("Close Point Cloud", format!("{id:?}")),

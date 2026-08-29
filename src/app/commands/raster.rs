@@ -239,6 +239,23 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Undrape every raster at once, returning all of them to the flat
+    /// plan-view image. Menu-bar counterpart to per-raster [`Self::undrape_raster`].
+    pub(crate) fn undrape_all_rasters(&mut self) {
+        let mut count = 0usize;
+        for triangulation in &mut self.triangulations {
+            if triangulation.raster_texture.take().is_some() {
+                triangulation.state.touch();
+                count += 1;
+            }
+        }
+        if count > 0 {
+            userspace_log!("Undraped rasters from {count} triangulation(s)");
+            self.touch_active_project_content();
+            self.redraw_requested = true;
+        }
+    }
+
     /// Remove the raster from every triangulation it is draped
     /// over, returning it to the flat plan-view image.
     pub(crate) fn undrape_raster(&mut self, id: RasterTextureId) {

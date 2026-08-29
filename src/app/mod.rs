@@ -438,7 +438,7 @@ impl<'a> App<'a> {
         let command = match action {
             MacMenuAction::SaveProject => Some(UiCommand::SaveProject),
             MacMenuAction::SaveProjectAs => active_project_id.map(UiCommand::SaveProjectAs),
-            MacMenuAction::CloseProject => active_project_id.map(UiCommand::CloseProject),
+            MacMenuAction::CloseProject | MacMenuAction::DeactivateProject => active_project_id.map(UiCommand::CloseProject),
             MacMenuAction::NewProject => Some(UiCommand::NewProject),
             MacMenuAction::OpenProject => Some(UiCommand::OpenProject),
             MacMenuAction::OpenImport => {
@@ -473,6 +473,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
+            MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
         };
 
         if let Some(command) = command {

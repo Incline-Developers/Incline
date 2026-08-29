@@ -4,10 +4,11 @@
 //! [`super::menu`]. Context menus have denser rows, flat actions, a subdued
 //! header, and remain anchored to the click position.
 //!
-//! Every right-click menu in the app is built from these: the viewport's own
-//! menu drives [`ContextMenu`] from editor state, while widget menus - the
-//! explorer tree, the console - go through [`context_menu_popup`], which is
-//! egui's context-menu popup wearing the same frame, header and rows.
+//! Every menu in the app is built from these: the viewport's own right-click
+//! menu drives [`ContextMenu`] from editor state, widget menus - the explorer
+//! tree, the console - go through [`context_menu_popup`], and the menu bar goes
+//! through [`MenuBarMenu`]. The latter two are egui's own popups wearing this
+//! module's frame, header and rows instead of the default menu style.
 
 use std::{fmt::Debug, hash::Hash};
 
@@ -61,16 +62,7 @@ impl ContextMenu {
             .fade_in(false)
             .pivot(egui::Align2::LEFT_TOP)
             .current_pos(position)
-            .show(ctx, |ui| {
-                let visuals = ui.visuals().clone();
-                egui::Frame::new()
-                    .fill(visuals.window_fill())
-                    .stroke(visuals.window_stroke())
-                    .corner_radius(egui::CornerRadius::same(CORNER_RADIUS))
-                    .shadow(visuals.popup_shadow)
-                    .show(ui, |ui| draw_body(ui, &title, width, add_contents))
-                    .inner
-            })
+            .show(ctx, |ui| menu_frame(ui.style()).show(ui, |ui| draw_body(ui, &title, width, add_contents)).inner)
     }
 }
 
@@ -85,14 +77,8 @@ pub(crate) fn context_menu_popup<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<egui::InnerResponse<R>> {
     let title = title.into();
-    let visuals = response.ctx.style_of(response.ctx.theme()).visuals.clone();
-    let frame = egui::Frame::new()
-        .fill(visuals.window_fill())
-        .stroke(visuals.window_stroke())
-        .corner_radius(egui::CornerRadius::same(CORNER_RADIUS))
-        .shadow(visuals.popup_shadow);
     egui::Popup::context_menu(response)
-        .frame(frame)
+        .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
         .width(MENU_WIDTH)
         .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
 }
@@ -137,8 +123,12 @@ fn paint_header(ui: &mut egui::Ui, title: &str, width: f32) {
     );
 }
 
+/// Dense rows, small text, and the frame metrics egui builds nested submenu
+/// frames from (they are read from the style, not passed in like [`menu_frame`]).
 fn apply_compact_style(ui: &mut egui::Ui) {
     let style = ui.style_mut();
+    style.spacing.menu_margin = egui::Margin::ZERO;
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(CORNER_RADIUS);
     style.spacing.item_spacing = egui::vec2(4.0, 1.0);
     style.spacing.button_padding = egui::vec2(4.0, 1.0);
     style.spacing.interact_size.y = ROW_HEIGHT;
@@ -177,7 +167,6 @@ impl ContextMenuAction {
         self
     }
 
-    #[allow(dead_code)]
     pub(crate) fn submenu(mut self, submenu: bool) -> Self {
         self.submenu = submenu;
         self
@@ -240,4 +229,74 @@ pub(crate) fn context_menu_separator(ui: &mut egui::Ui) {
         egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
     );
     ui.add_space(2.0);
+}
+
+/// A menu-bar dropdown wearing the context-menu frame, header and rows.
+///
+/// The bar button itself stays an ordinary egui button so the menu bar keeps
+/// its own layout and hover behaviour; only the popup below it is ours.
+pub(crate) struct MenuBarMenu<'a> {
+    label: &'a str,
+    enabled: bool,
+}
+
+impl<'a> MenuBarMenu<'a> {
+    pub(crate) fn new(label: &'a str) -> Self {
+        Self { label, enabled: true }
+    }
+
+    /// A disabled menu shows its bar button greyed out and never opens.
+    ///
+    /// Unused while every menu in the bar has content.
+    #[allow(dead_code)]
+    pub(crate) fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
+        use egui::containers::menu::MenuConfig;
+
+        let Self { label, enabled } = self;
+        // Mirrors `menu::MenuButton::ui` with a default (non-bar) menu config,
+        // so rows and nested submenus behave as they do in egui's own menus -
+        // only the frame, width and row metrics are this module's.
+        let config = MenuConfig::new();
+        let response = ui.add_enabled(enabled, egui::Button::new(label));
+        if !enabled {
+            return None;
+        }
+        let title: egui::WidgetText = label.into();
+        egui::Popup::menu(&response)
+            .close_behavior(config.close_behavior)
+            .style(config.style.clone())
+            .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
+            .width(MENU_WIDTH)
+            .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+            .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+    }
+}
+
+/// A submenu row inside a [`MenuBarMenu`] or [`context_menu_popup`], opening a
+/// nested menu that wears the same frame, header and rows.
+///
+/// The nested popup is egui's own [`egui::containers::menu::SubMenu`], so hover
+/// timing and keyboard navigation behave exactly as elsewhere.
+pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
+    let response = ContextMenuAction::new(label).enabled(enabled).submenu(true).show(ui);
+    if !enabled {
+        return None;
+    }
+    let title: egui::WidgetText = label.into();
+    egui::containers::menu::SubMenu::new().show(ui, &response, |ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+}
+
+/// The shared popup frame: flat fill, hairline border, no inner margin so the
+/// header underline reaches both edges.
+fn menu_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::new()
+        .fill(style.visuals.window_fill())
+        .stroke(style.visuals.window_stroke())
+        .corner_radius(egui::CornerRadius::same(CORNER_RADIUS))
+        .shadow(style.visuals.popup_shadow)
 }

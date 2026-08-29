@@ -582,7 +582,7 @@ fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, su
     }
 }
 
-fn is_triangulation_polyline(obj: &Object) -> bool {
+pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
     matches!(
         obj,
         Object::Polyline {

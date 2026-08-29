@@ -11,6 +11,15 @@ use crate::{
 
 /// Reset the Create Triangulation workflow state.
 fn tri_reset_state(editor: &mut EditorState) {
+    tri_close_dialog(editor);
+    editor.selected_handles.clear();
+}
+
+/// Close the dialog but leave the viewport selection alone.
+///
+/// Used when the dialog is dismissed rather than run: the selection was made
+/// before it opened, so cancelling should not cost the user that work.
+fn tri_close_dialog(editor: &mut EditorState) {
     editor.tri_create_open = false;
     editor.tri_create_phase = TriCreatePhase::MainDialog;
     editor.tri_create_picker_px = None;
@@ -19,7 +28,6 @@ fn tri_reset_state(editor: &mut EditorState) {
     editor.tri_selected_layer_ids.clear();
     editor.tri_name_input.clear();
     editor.tri_surface_type = TriSurfaceType::Surface;
-    editor.selected_handles.clear();
 }
 
 /// Compact summary of a viewport selection, grouped by object kind
@@ -292,13 +300,13 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 commands.push(command);
             }
             if ui.add(MenuButton::new("Cancel")).clicked() || cancel {
-                tri_reset_state(editor);
+                tri_close_dialog(editor);
             }
         });
     });
 
     if !open {
-        tri_reset_state(editor);
+        tri_close_dialog(editor);
     }
 }
 
@@ -1327,7 +1335,7 @@ pub(crate) fn draw_point_cloud_tin_dialog(ui: &mut egui::Ui, editor: &mut Editor
     use crate::app::commands::triangulation::{TerrainBudget, TerrainSampler, TerrainTinParams, terrain_budget_target};
 
     let mut open = true;
-    DragableMenu::new("Generate Terrain TIN").open(&mut open).min_width(400.0).show(ui.ctx(), |ui| {
+    DragableMenu::new("Create Triangulation").open(&mut open).min_width(400.0).show(ui.ctx(), |ui| {
         tool_help_panel(
             ui,
             "Reconstruct a triangulated terrain surface from a point cloud. The adaptive \

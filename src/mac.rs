@@ -30,6 +30,7 @@ struct MenuState {
     can_create_terrain_tin: bool,
     can_create_block_model: bool,
     can_create_ore_triangulation: bool,
+    can_undrape_rasters: bool,
     has_design_selection: bool,
     has_selection_intersections: bool,
 }
@@ -64,6 +65,8 @@ pub(crate) enum MacMenuAction {
     OpenCreateBlockModel,
     OpenCreateOreTriangulation,
     OpenAbout,
+    DeactivateProject,
+    UndrapeAllRasters,
 }
 
 impl MacMenuAction {
@@ -95,6 +98,8 @@ impl MacMenuAction {
             value if value == Self::OpenCreateBlockModel as isize => Self::OpenCreateBlockModel,
             value if value == Self::OpenCreateOreTriangulation as isize => Self::OpenCreateOreTriangulation,
             value if value == Self::OpenAbout as isize => Self::OpenAbout,
+            value if value == Self::DeactivateProject as isize => Self::DeactivateProject,
+            value if value == Self::UndrapeAllRasters as isize => Self::UndrapeAllRasters,
             _ => return None,
         })
     }
@@ -166,6 +171,10 @@ fn add_submenu(root: &NSMenu, title: &str, submenu: &NSMenu, mtm: MainThreadMark
 }
 
 /// Add a placeholder top-level menu with no actions wired up yet.
+///
+/// Unused while every menu has content - kept as the counterpart to
+/// `MenuBarMenu::enabled` on the egui side.
+#[allow(dead_code)]
 fn add_disabled_submenu(root: &NSMenu, title: &str, mtm: MainThreadMarker) {
     let empty_menu = menu(title, mtm);
     let item = add_submenu(root, title, &empty_menu, mtm);
@@ -219,7 +228,10 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, "Export Engineering Drawing…", "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_submenu(&root, "File", &file_menu, mtm);
 
-    add_disabled_submenu(&root, "Project", mtm);
+    let project_menu = menu("Project", mtm);
+    project_menu.setAutoenablesItems(false);
+    add_action(&project_menu, "Deactivate Current Project", "", MacMenuAction::DeactivateProject, &target, mtm);
+    add_submenu(&root, "Project", &project_menu, mtm);
 
     let design_menu = menu("Design", mtm);
     design_menu.setAutoenablesItems(false);
@@ -235,12 +247,12 @@ pub(crate) fn install_menu_bar() {
     add_action(&move_to_menu, "Set Y…", "", MacMenuAction::OpenMoveToY, &target, mtm);
     add_action(&move_to_menu, "Set Z…", "", MacMenuAction::OpenMoveToZ, &target, mtm);
     add_submenu(&design_menu, "Move to", &move_to_menu, mtm);
+    add_separator(&design_menu, mtm);
+    add_action(&design_menu, "Create Triangulation…", "", MacMenuAction::OpenCreateTriangulation, &target, mtm);
     add_submenu(&root, "Design", &design_menu, mtm);
 
     let triangulation_menu = menu("Triangulation", mtm);
     triangulation_menu.setAutoenablesItems(false);
-    add_action(&triangulation_menu, "Create Triangulation…", "", MacMenuAction::OpenCreateTriangulation, &target, mtm);
-    add_separator(&triangulation_menu, mtm);
     add_action(
         &triangulation_menu,
         "Clip Surface by Polyline…",
@@ -279,20 +291,25 @@ pub(crate) fn install_menu_bar() {
     add_action(&triangulation_menu, "Generate Contour Lines…", "", MacMenuAction::OpenContourTriangulation, &target, mtm);
     add_submenu(&root, "Triangulation", &triangulation_menu, mtm);
 
-    add_disabled_submenu(&root, "Raster", mtm);
+    let raster_menu = menu("Raster", mtm);
+    raster_menu.setAutoenablesItems(false);
+    add_action(&raster_menu, "Undrape All", "", MacMenuAction::UndrapeAllRasters, &target, mtm);
+    add_submenu(&root, "Raster", &raster_menu, mtm);
 
     let point_cloud_menu = menu("Point Cloud", mtm);
     point_cloud_menu.setAutoenablesItems(false);
-    add_action(&point_cloud_menu, "Generate Terrain TIN…", "", MacMenuAction::OpenPointCloudTin, &target, mtm);
+    add_action(&point_cloud_menu, "Create Triangulation…", "", MacMenuAction::OpenPointCloudTin, &target, mtm);
     add_submenu(&root, "Point Cloud", &point_cloud_menu, mtm);
 
     let block_model_menu = menu("Block Model", mtm);
     block_model_menu.setAutoenablesItems(false);
-    add_action(&block_model_menu, "Create Block Model…", "", MacMenuAction::OpenCreateBlockModel, &target, mtm);
     add_action(&block_model_menu, "Create Ore Triangulation…", "", MacMenuAction::OpenCreateOreTriangulation, &target, mtm);
     add_submenu(&root, "Block Model", &block_model_menu, mtm);
 
-    add_disabled_submenu(&root, "Drill Holes", mtm);
+    let drill_hole_menu = menu("Drill Holes", mtm);
+    drill_hole_menu.setAutoenablesItems(false);
+    add_action(&drill_hole_menu, "Create Block Model…", "", MacMenuAction::OpenCreateBlockModel, &target, mtm);
+    add_submenu(&root, "Drill Holes", &drill_hole_menu, mtm);
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -326,6 +343,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_create_terrain_tin: project.point_clouds.iter().any(|cloud| cloud.is_loaded),
         can_create_block_model: project.drill_holes.iter().any(|dataset| dataset.is_loaded),
         can_create_ore_triangulation: !project.block_models.is_empty(),
+        can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_selection_intersections: editor.selection_has_intersections,
     };
@@ -345,6 +363,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::SaveProject, state.can_save);
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
     set_enabled(&root, MacMenuAction::CloseProject, state.has_project);
+    set_enabled(&root, MacMenuAction::DeactivateProject, state.has_project);
+    set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);
     set_enabled(&root, MacMenuAction::OpenCreateOreTriangulation, state.can_create_ore_triangulation);

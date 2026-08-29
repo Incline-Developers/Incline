@@ -18,7 +18,8 @@ pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
 use anyhow::Result;
 
 use crate::{
-    app::App,
+    app::{App, canvas::is_triangulation_polyline},
+    model::{Object, ObjectId, SceneEntityId},
     ui::state::{TriCreatePhase, UiCommand},
     userspace_error, userspace_warn,
 };
@@ -202,6 +203,10 @@ impl<'a> App<'a> {
             UiCommand::DrapeRaster(id) => self.drape_raster_over_surfaces(id),
             UiCommand::UndrapeRaster(id) => {
                 self.undrape_raster(id);
+                Ok(())
+            }
+            UiCommand::UndrapeAllRasters => {
+                self.undrape_all_rasters();
                 Ok(())
             }
             UiCommand::ClearActiveTriangulationRaster => self.clear_active_triangulation_raster(),
@@ -759,8 +764,29 @@ impl<'a> App<'a> {
             UiCommand::OpenCreateTriangulation => {
                 self.editor.tri_create_open = true;
                 self.editor.tri_create_phase = TriCreatePhase::MainDialog;
-                self.editor.selected_handles.clear();
-                self.editor.tri_selected_object_ids.clear();
+                // Seed the pick list from what is already selected, so this
+                // behaves like the rest of the Design menu: select first, then
+                // run the action. Objects that cannot contribute an edge are
+                // dropped from both lists, keeping the viewport highlight and
+                // the dialog's count in agreement; document order keeps the
+                // result independent of the selection set's iteration order.
+                let selected: std::collections::HashSet<ObjectId> = self
+                    .editor
+                    .selected_handles
+                    .iter()
+                    .filter_map(|handle| match handle {
+                        SceneEntityId::Object(object_id) => Some(*object_id),
+                        _ => None,
+                    })
+                    .collect();
+                self.editor.tri_selected_object_ids = self
+                    .scene_document
+                    .objects()
+                    .iter()
+                    .filter(|object| selected.contains(&object.id()) && is_triangulation_polyline(object))
+                    .map(Object::id)
+                    .collect();
+                self.editor.selected_handles = self.editor.tri_selected_object_ids.iter().map(|&object_id| SceneEntityId::Object(object_id)).collect();
                 self.editor.tri_selected_layer_ids.clear();
                 self.editor.tri_name_input = "Surface".to_owned();
                 self.editor.tri_hover_handles.clear();
