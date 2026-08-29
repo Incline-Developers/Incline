@@ -29,8 +29,8 @@ egui-wgpu = "0.35.0"
 egui_extras = { version = "0.35.0", default-features = false, features = ["svg"] }
 foldhash = "0.2.0"
 fontmesh = "0.6.0"
-glam = { version = "0.33.5", features = ["serde"] }
-laz = { version = "0.12.2", features = ["parallel"] }
+glam = { version = "0.33.6", features = ["serde"] }
+laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.33"
 lyon = "1.0.19"
 omf = { git = "https://github.com/gmggroup/omf-rust.git", rev = "64d305790b3415618a01f00a94cd914acd0b80ba", default-features = false, features = ["image", "parquet"] }
@@ -45,8 +45,8 @@ strum = { version = "0.28.0", features = ["derive"] }
 thousands = "0.2.0"
 tiff = { version = "0.11.3", features = ["deflate", "fax", "jpeg", "lzw"], default-features = false }
 toml = "1.1.4"
-twox-hash = "2.1.3"
-uuid = { version = "1.24.1", features = ["js", "serde", "v4"] }
+twox-hash = "2.1.4"
+uuid = { version = "1.26.0", features = ["js", "serde", "v4"] }
 web-time = "1.1.0"
 wgpu = "29.0.4"
 winit = "0.30.13"
