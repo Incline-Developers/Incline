@@ -935,10 +935,16 @@ impl<'a> Graphics<'a> {
         // in lockstep: the raycast shader derives the same sub-rect from
         // `camera.viewport.xy * render_scale` - that uniform tracks the visible
         // scene viewport (see `apply_canvas_rect`), not the swapchain, so this
-        // must too.
+        // must too. Take it from this pass's own `viewport` rather than
+        // `self.viewport_rect`: secondary cameras (slice previews, plot
+        // exports) render a full-surface viewport into their own swapped-in
+        // targets, sized to the swapped-in `config`, while `viewport_rect`
+        // still describes the main window's canvas. The clamp is what keeps
+        // every scissor below inside the target.
         let render_scale = self.camera_uniform.render_scale();
-        let scaled_width = (self.viewport_rect.width as f32 * render_scale).max(1.0);
-        let scaled_height = (self.viewport_rect.height as f32 * render_scale).max(1.0);
+        let (_, _, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
+        let scaled_width = (vp_width as f32 * render_scale).max(1.0);
+        let scaled_height = (vp_height as f32 * render_scale).max(1.0);
         self.queue
             .write_buffer(&volume_target.params_buffer, 0, bytemuck::cast_slice(&[scaled_width, scaled_height, 0.0f32, 0.0f32]));
 
