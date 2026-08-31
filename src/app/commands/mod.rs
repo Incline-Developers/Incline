@@ -130,6 +130,12 @@ impl<'a> App<'a> {
             UiCommand::RemoveTrackedProject(project) => self.remove_tracked_project(project),
             UiCommand::CloseStartupDialog => {
                 self.startup_dialog_dismissed = true;
+                // Dismissing the splash leaves the application on a project,
+                // never on nothing: closing a project puts the splash back, so
+                // this is the path that has to restore one.
+                if !self.workspace.has_active_project() {
+                    self.start_untitled_project()?;
+                }
                 Ok(())
             }
             UiCommand::ImportOmfPaths(paths) => {
@@ -380,11 +386,6 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SaveProjectAs(runtime_id) => {
                 self.spawn_save_project_as_dialog(runtime_id);
-                Ok(())
-            }
-            UiCommand::CloseProject(runtime_id) => {
-                self.editor.remove_project_after_close = false;
-                self.request_close_project(runtime_id);
                 Ok(())
             }
             UiCommand::SaveAndCloseProject(runtime_id) => self.save_and_close_project(runtime_id),

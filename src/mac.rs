@@ -41,7 +41,6 @@ struct MenuState {
 pub(crate) enum MacMenuAction {
     SaveProject = 1,
     SaveProjectAs,
-    CloseProject,
     NewProject,
     OpenProject,
     OpenImport,
@@ -65,7 +64,6 @@ pub(crate) enum MacMenuAction {
     OpenCreateBlockModel,
     OpenCreateOreTriangulation,
     OpenAbout,
-    DeactivateProject,
     UndrapeAllRasters,
 }
 
@@ -74,7 +72,6 @@ impl MacMenuAction {
         Some(match tag {
             value if value == Self::SaveProject as isize => Self::SaveProject,
             value if value == Self::SaveProjectAs as isize => Self::SaveProjectAs,
-            value if value == Self::CloseProject as isize => Self::CloseProject,
             value if value == Self::NewProject as isize => Self::NewProject,
             value if value == Self::OpenProject as isize => Self::OpenProject,
             value if value == Self::OpenImport as isize => Self::OpenImport,
@@ -98,7 +95,6 @@ impl MacMenuAction {
             value if value == Self::OpenCreateBlockModel as isize => Self::OpenCreateBlockModel,
             value if value == Self::OpenCreateOreTriangulation as isize => Self::OpenCreateOreTriangulation,
             value if value == Self::OpenAbout as isize => Self::OpenAbout,
-            value if value == Self::DeactivateProject as isize => Self::DeactivateProject,
             value if value == Self::UndrapeAllRasters as isize => Self::UndrapeAllRasters,
             _ => return None,
         })
@@ -220,18 +216,12 @@ pub(crate) fn install_menu_bar() {
     add_separator(&file_menu, mtm);
     add_action(&file_menu, "Save Project", "s", MacMenuAction::SaveProject, &target, mtm);
     add_action(&file_menu, "Save Project As…", "S", MacMenuAction::SaveProjectAs, &target, mtm);
-    add_action(&file_menu, "Close Project", "w", MacMenuAction::CloseProject, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, "Import…", "", MacMenuAction::OpenImport, &target, mtm);
     add_action(&file_menu, "Export…", "", MacMenuAction::OpenExport, &target, mtm);
     add_action(&file_menu, "Export Viewport Image…", "", MacMenuAction::ExportViewportImage, &target, mtm);
     add_action(&file_menu, "Export Engineering Drawing…", "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_submenu(&root, "File", &file_menu, mtm);
-
-    let project_menu = menu("Project", mtm);
-    project_menu.setAutoenablesItems(false);
-    add_action(&project_menu, "Deactivate Current Project", "", MacMenuAction::DeactivateProject, &target, mtm);
-    add_submenu(&root, "Project", &project_menu, mtm);
 
     let design_menu = menu("Design", mtm);
     design_menu.setAutoenablesItems(false);
@@ -338,7 +328,7 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 /// Keep native checkmarks and availability aligned with the current editor.
 pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     let state = MenuState {
-        can_save: project.projects.iter().any(|entry| entry.dirty),
+        can_save: project.projects.iter().any(crate::ui::state::UiProjectEntry::needs_save),
         has_project: project.projects.iter().any(|entry| entry.is_active),
         can_create_terrain_tin: project.point_clouds.iter().any(|cloud| cloud.is_loaded),
         can_create_block_model: project.drill_holes.iter().any(|dataset| dataset.is_loaded),
@@ -362,8 +352,6 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
 
     set_enabled(&root, MacMenuAction::SaveProject, state.can_save);
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
-    set_enabled(&root, MacMenuAction::CloseProject, state.has_project);
-    set_enabled(&root, MacMenuAction::DeactivateProject, state.has_project);
     set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);

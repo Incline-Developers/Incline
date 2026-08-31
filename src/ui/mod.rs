@@ -814,7 +814,7 @@ fn draw_ui(
     #[cfg(not(target_arch = "wasm32"))]
     let naming_browser_project = false;
     if project.needs_startup_dialog && !naming_browser_project {
-        dialogs::editing::draw_select_project_dialog(root_ui, editor, commands);
+        dialogs::editing::draw_select_project_dialog(root_ui, editor, project, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);

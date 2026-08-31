@@ -2158,7 +2158,6 @@ pub(crate) enum UiCommand {
     DownloadProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
-    CloseProject(u32),
     SaveAndCloseProject(u32),
     CloseProjectForce(u32),
     CancelCloseProject,
@@ -2503,7 +2502,7 @@ impl UiCommand {
             Self::SetSliceModeEnabled(enabled) => report("Slice Mode", if *enabled { "Enabled" } else { "Disabled" }.to_owned()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SetSlicePreviewDetached(detached) => report("Slice Preview", if *detached { "Detached" } else { "Docked" }.to_owned()),
-            Self::NewProject => report("Create Project", "Choose a destination".to_owned()),
+            Self::NewProject => report("Create Project", "Untitled project".to_owned()),
             #[cfg(target_arch = "wasm32")]
             Self::CreateBrowserProject { name } => report("Create Project", name.clone()),
             Self::OpenProject => report("Open Project", "Choose one or more files".to_owned()),
@@ -2559,7 +2558,7 @@ impl UiCommand {
             Self::DownloadProject => report("Download OMF", "Current project".to_owned()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SaveProjectAs(id) => report("Save Project As", format!("Project {id}")),
-            Self::CloseProject(id) | Self::CloseProjectForce(id) => report("Close Project", format!("Project {id}")),
+            Self::CloseProjectForce(id) => report("Close Project", format!("Project {id}")),
             Self::SaveAndCloseProject(id) => report("Save and Close Project", format!("Project {id}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::DiscardProjectChanges(id) => report("Discard Project Changes", format!("Project {id}")),
@@ -2701,8 +2700,8 @@ pub(crate) struct UiProjectEntry {
     pub(crate) path: Option<PathBuf>,
 }
 
-/// A project remembered by Incline and shown in the explorer's Projects
-/// section. Only the active entry has a decoded [`UiProjectEntry`].
+/// A project Incline remembers, listed under Recent on the welcome splash.
+/// Only the active entry has a decoded [`UiProjectEntry`].
 #[derive(Clone, Debug)]
 pub(crate) struct UiTrackedProjectEntry {
     pub(crate) name: String,
@@ -2719,10 +2718,11 @@ pub(crate) struct UiTrackedProjectEntry {
 impl UiProjectEntry {
     /// Whether Save would write anything for this project.
     ///
-    /// On desktop that is exactly "has unsaved edits" - the file it was opened
-    /// from is still on disk either way. In the browser an unedited project is
-    /// still unsaved work until browser storage holds a copy, so Save has to
-    /// stay available for one that has never been stored.
+    /// Unsaved edits, or nowhere to have written them yet: a project opened
+    /// from a file is backed by one that stays put either way, but the project
+    /// the application starts on has no path, and in the browser an unedited
+    /// project is still unsaved work until storage holds a copy. Save stays
+    /// available in both of those so the first one can ask where to go.
     pub(crate) fn needs_save(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         {
@@ -2730,16 +2730,14 @@ impl UiProjectEntry {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.dirty
+            self.dirty || self.path.is_none()
         }
     }
 }
 
 /// One collapsible group of the explorer tree, as targeted by the bulk
-/// show/hide/lock actions on its heading's right-click menu.
-///
-/// Projects are deliberately absent: neither visibility nor locking means
-/// anything for a project file.
+/// show/hide/lock actions on its heading's right-click menu, and by
+/// [`Workspace::opens_section`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExplorerSection {
     Designs,
@@ -2849,10 +2847,6 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds_membership_dirty: bool,
     pub(crate) rasters_membership_dirty: bool,
     pub(crate) has_active_project: bool,
-    /// Runtime id of the active project, or 0 when none is open. Changes on
-    /// every project switch, creation, close, and revert, which is what tells
-    /// the explorer's sections to re-sync their collapsed state.
-    pub(crate) active_project_epoch: u64,
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,
@@ -2893,6 +2887,22 @@ impl Workspace {
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
         matches!(self, Self::Production)
+    }
+
+    /// Whether the explorer opens `section` when this workspace is selected.
+    ///
+    /// The tab decides the arrangement of the tree, the way it decides what
+    /// the viewport bar carries: switching to a workspace opens the sections
+    /// that discipline works on and collapses the rest, rather than following
+    /// whatever the project happens to hold. Between switches the headers are
+    /// left exactly as the user set them. The unimplemented workspaces open
+    /// nothing until they have editors of their own.
+    pub(crate) fn opens_section(self, section: ExplorerSection) -> bool {
+        match self {
+            Self::Production => true,
+            Self::DrillAndBlast => section == ExplorerSection::DrillHoles,
+            Self::Geology | Self::Schedule | Self::Simulate => false,
+        }
     }
 }
 

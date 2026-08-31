@@ -48,15 +48,19 @@ use crate::{
 /// those bytes are a file that stays put, and in the browser they are nowhere
 /// at all until a record exists. Without this, saving an opened project writes
 /// nothing and the project is gone on the next reload.
-fn project_needs_first_browser_save(project: &OpenProject) -> bool {
+///
+/// The project the application starts on is the same case on desktop: it is
+/// clean, because nothing has been drawn in it yet, and it is also nowhere,
+/// because it has no path. Save has to reach it so the destination chooser can
+/// appear.
+fn project_needs_first_save(project: &OpenProject) -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         !matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = project;
-        false
+        project.path.is_none()
     }
 }
 
@@ -111,8 +115,10 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 // On wasm the native variants are compiled out, leaving only the `Web`-prefixed ones.
 #[cfg_attr(target_arch = "wasm32", allow(clippy::enum_variant_names))]
 pub(crate) enum FileDialogAction {
+    /// Start a new, never-saved project. It carries no path until the first
+    /// Save asks for one.
     #[cfg(not(target_arch = "wasm32"))]
-    NewProject(PathBuf),
+    NewProject,
     #[cfg(not(target_arch = "wasm32"))]
     OpenProject(Vec<PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
@@ -339,7 +345,7 @@ impl<'a> App<'a> {
         #[cfg(not(target_arch = "wasm32"))]
         let replaces_project = matches!(
             &action,
-            FileDialogAction::NewProject(_) | FileDialogAction::OpenProject(_) | FileDialogAction::SwitchProject(_)
+            FileDialogAction::NewProject | FileDialogAction::OpenProject(_) | FileDialogAction::SwitchProject(_)
         );
         #[cfg(target_arch = "wasm32")]
         let replaces_project = matches!(
@@ -372,20 +378,9 @@ impl<'a> App<'a> {
         self.project_replacement_bypass = false;
         match action {
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::NewProject(path) => {
-                self.ensure_save_path_not_pending(&path)?;
-                let design = project::new_empty(Some(path.clone()));
-                let snapshot = formats::omf::ProjectSnapshot {
-                    name: path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned(),
-                    designs: Some(design.clone()),
-                    ..Default::default()
-                };
-                let progress = crate::model::progress::Progress::new();
-                formats::omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))?;
-                let project = project::open_project(Some(path.clone()), design)?;
-                self.set_active_project(project);
-                userspace_log!("Created new project: {}", path.display());
-                self.persist_session();
+            FileDialogAction::NewProject => {
+                self.start_untitled_project()?;
+                userspace_log!("Created new project");
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1031,6 +1026,12 @@ impl<'a> App<'a> {
 
     // ── Dialog spawners (non-blocking) ──────────────────────────────────────
 
+    /// Start a new project.
+    ///
+    /// Nothing is written and nothing is asked: the project lives in memory
+    /// until the first Save, which is where the destination chooser appears.
+    /// A dirty project still routes through the save/discard/cancel prompt
+    /// before it is replaced.
     pub(crate) fn choose_new_project(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
@@ -1038,15 +1039,25 @@ impl<'a> App<'a> {
             self.editor.new_project_dialog_open = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.spawn_file_dialog(async {
-            let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("Project", &["omf"])
-                .set_file_name("new_project.omf")
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::NewProject(path))
-        });
+        if let Err(error) = self.execute_file_dialog_action(FileDialogAction::NewProject) {
+            userspace_warn!("Could not create a new project: {error:#}");
+        }
+    }
+
+    /// Replace whatever is open with an empty, never-saved project.
+    ///
+    /// This is what the application starts on and what the welcome splash
+    /// leaves behind when it is dismissed, so there is always somewhere to
+    /// draw. It deliberately skips the replacement prompt: the callers either
+    /// have no project to lose or have already been through it.
+    pub(crate) fn start_untitled_project(&mut self) -> Result<()> {
+        let mut project = project::open_project(None, project::new_empty(None))?;
+        // Nothing has been drawn in it, so it is not unsaved work: quitting or
+        // starting another one straight away must not raise the save/discard
+        // prompt. Save still reaches it through `project_needs_first_save`.
+        project.mark_saved();
+        self.set_active_project(project);
+        Ok(())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1653,7 +1664,7 @@ impl<'a> App<'a> {
         let dirty_ids: Vec<u32> = self
             .workspace
             .active_project()
-            .filter(|project| self.project_content_is_dirty(project.runtime_id) || project_needs_first_browser_save(project))
+            .filter(|project| self.project_content_is_dirty(project.runtime_id) || project_needs_first_save(project))
             .map(|project| project.runtime_id)
             .into_iter()
             .collect();
@@ -2084,7 +2095,7 @@ impl<'a> App<'a> {
         };
         #[cfg(target_arch = "wasm32")]
         {
-            if self.project_content_is_dirty(runtime_id) || project_needs_first_browser_save(&self.workspace.projects[index]) || self.editor.text_editing_enabled {
+            if self.project_content_is_dirty(runtime_id) || project_needs_first_save(&self.workspace.projects[index]) || self.editor.text_editing_enabled {
                 self.editor.pending_close_project = Some(runtime_id);
             } else {
                 self.close_project(runtime_id);

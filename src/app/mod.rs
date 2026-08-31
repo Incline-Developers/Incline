@@ -438,7 +438,6 @@ impl<'a> App<'a> {
         let command = match action {
             MacMenuAction::SaveProject => Some(UiCommand::SaveProject),
             MacMenuAction::SaveProjectAs => active_project_id.map(UiCommand::SaveProjectAs),
-            MacMenuAction::CloseProject | MacMenuAction::DeactivateProject => active_project_id.map(UiCommand::CloseProject),
             MacMenuAction::NewProject => Some(UiCommand::NewProject),
             MacMenuAction::OpenProject => Some(UiCommand::OpenProject),
             MacMenuAction::OpenImport => {
@@ -506,6 +505,11 @@ impl<'a> App<'a> {
 
         app.load_session_projects(&session);
         app.apply_config(config);
+        // Blender-style: there is always a project to draw into. The welcome
+        // splash sits over this one until it is dismissed, and `New Project`
+        // from it lands on another just like it.
+        app.start_untitled_project()?;
+        app.startup_dialog_dismissed = false;
 
         Ok(app)
     }
@@ -634,15 +638,20 @@ impl<'a> App<'a> {
         }
         self.clear_editor_transient_state();
         self.history.activate(self.workspace.projects[index].runtime_id);
+        self.startup_dialog_dismissed = true;
         self.invalidate_geometry();
         self.persist_session();
     }
 
+    /// Remember `path` as the most recently opened project.
+    ///
+    /// The list is kept in opening order, newest last, which is the order the
+    /// splash's Recent block reverses to read top-down. A path that is already
+    /// tracked moves to the end rather than staying where it first landed.
     #[cfg(not(target_arch = "wasm32"))]
     fn track_project_path(&mut self, path: PathBuf) {
-        if !self.tracked_project_paths.iter().any(|tracked| tracked == &path) {
-            self.tracked_project_paths.push(path);
-        }
+        self.tracked_project_paths.retain(|tracked| tracked != &path);
+        self.tracked_project_paths.push(path);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1344,10 +1353,13 @@ impl<'a> App<'a> {
             project.layers.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         }
         projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name).then_with(|| a.path.cmp(&b.path)));
-        // The active project always sits last, so it reads as the "current"
-        // row at the bottom of the list rather than wherever its name falls
-        // alphabetically among the others.
-        tracked_projects.sort_by(|a, b| a.is_active.cmp(&b.is_active).then_with(|| crate::natural_sort::natural_cmp(&a.name, &b.name)));
+        // Most recently opened first, so the splash's Recent block reads the
+        // way such a list is expected to. Browser storage records no such
+        // order, so there the list stays alphabetical.
+        #[cfg(not(target_arch = "wasm32"))]
+        tracked_projects.reverse();
+        #[cfg(target_arch = "wasm32")]
+        tracked_projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         triangulations.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         block_models.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         drill_holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
@@ -1387,8 +1399,7 @@ impl<'a> App<'a> {
             point_clouds_membership_dirty,
             rasters_membership_dirty,
             has_active_project: self.workspace.has_active_project(),
-            active_project_epoch: self.workspace.active_project().map_or(0, |project| u64::from(project.runtime_id)),
-            needs_startup_dialog: !self.workspace.has_active_project() && !self.startup_dialog_dismissed,
+            needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
             active_triangulation_for_menu,
         });
@@ -1396,9 +1407,9 @@ impl<'a> App<'a> {
         view
     }
 
-    /// Restore the tracked native project catalog for the startup dialog's
-    /// recent list. The previously active project is deliberately *not*
-    /// reopened: startup always begins with no active project.
+    /// Restore the tracked native project catalog. The previously active
+    /// project is deliberately *not* reopened: startup always begins on a
+    /// fresh, never-saved project.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn load_session_projects(&mut self, session: &io::Session) {
         self.tracked_project_paths.clear();

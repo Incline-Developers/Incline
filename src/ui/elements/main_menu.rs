@@ -74,7 +74,6 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                         #[cfg(not(target_os = "macos"))]
                         {
                             draw_file_menu(ui, editor, project, commands);
-                            draw_project_menu(ui, project, commands);
                         }
                         // The parameters are only read by the menus above.
                         #[cfg(target_os = "macos")]
@@ -220,12 +219,6 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             commands.push(UiCommand::OpenProject);
             ui.close();
         }
-        if ContextMenuAction::new("Close Project").enabled(active_project.is_some()).show(ui).clicked() {
-            if let Some(project) = active_project {
-                commands.push(UiCommand::CloseProject(project.runtime_id));
-            }
-            ui.close();
-        }
         context_menu_separator(ui);
         if ContextMenuAction::new("Import...").enabled(active_project.is_some()).show(ui).clicked() {
             editor.show_import = true;
@@ -252,21 +245,6 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
         }
         if ContextMenuAction::new(format!("Exit {}", crate::APP_NAME)).show(ui).clicked() {
             commands.push(UiCommand::RequestExit);
-            ui.close();
-        }
-    });
-}
-
-/// The Project menu: what the workspace does with the project that is open.
-#[cfg(not(target_os = "macos"))]
-fn draw_project_menu(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    MenuBarMenu::new("Project").show(ui, |ui| {
-        // Deactivating a dirty project routes through the save/discard/cancel dialog.
-        let active_project = project.projects.iter().find(|entry| entry.is_active);
-        if ContextMenuAction::new("Deactivate Current Project").enabled(active_project.is_some()).show(ui).clicked() {
-            if let Some(project) = active_project {
-                commands.push(UiCommand::CloseProject(project.runtime_id));
-            }
             ui.close();
         }
     });
