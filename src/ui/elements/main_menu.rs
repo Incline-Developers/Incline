@@ -37,8 +37,12 @@ const TAB_HEIGHT: f32 = 20.0;
 /// menu bar where the labels are the whole row. In the viewport bar they share
 /// the row with three clusters of icons, and at that padding the six of them
 /// ran together into one band of text.
+///
+/// Unused on macOS, where the production menus live in the system menu bar.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const MENU_LABEL_PADDING: f32 = 7.0;
 /// Gap between two dropdowns in that run, on top of their padding.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 const MENU_LABEL_GAP: f32 = 2.0;
 /// What the platform calls showing a file in its file manager. macOS says
 /// "Reveal in Finder" and has the row in the system menu instead - see
