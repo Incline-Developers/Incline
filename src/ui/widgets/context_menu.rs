@@ -167,6 +167,7 @@ impl ContextMenuAction {
         self
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn submenu(mut self, submenu: bool) -> Self {
         self.submenu = submenu;
         self
@@ -235,11 +236,15 @@ pub(crate) fn context_menu_separator(ui: &mut egui::Ui) {
 ///
 /// The bar button itself stays an ordinary egui button so the menu bar keeps
 /// its own layout and hover behaviour; only the popup below it is ours.
+///
+/// Unused on macOS, where these menus live in the system menu bar.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) struct MenuBarMenu<'a> {
     label: &'a str,
     enabled: bool,
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 impl<'a> MenuBarMenu<'a> {
     pub(crate) fn new(label: &'a str) -> Self {
         Self { label, enabled: true }
@@ -282,6 +287,7 @@ impl<'a> MenuBarMenu<'a> {
 ///
 /// The nested popup is egui's own [`egui::containers::menu::SubMenu`], so hover
 /// timing and keyboard navigation behave exactly as elsewhere.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
     let response = ContextMenuAction::new(label).enabled(enabled).submenu(true).show(ui);
     if !enabled {
