@@ -32,6 +32,17 @@ impl ToolbarButton {
         }
     }
 
+    /// Square the button off at `side`, with its icon inset by [`ICON_INSET`].
+    ///
+    /// The viewport bar sizes its buttons from the height it was given rather
+    /// than the other way round, so that it comes out exactly as tall as the
+    /// menu bar above it.
+    pub(crate) fn side(mut self, side: f32) -> Self {
+        self.button_size = Vec2::splat(side);
+        self.icon_size = Vec2::splat((side - ICON_INSET).max(1.0));
+        self
+    }
+
     pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
@@ -65,29 +76,30 @@ impl egui::Widget for ToolbarButton {
     }
 }
 
-/// Corner rounding on a toolbar group's tile. Shared with the window chrome
+/// How much smaller than its button a [`ToolbarButton`]'s icon is drawn: the
+/// ring of fill that shows around it when the button is selected or hovered.
+const ICON_INSET: f32 = 4.0;
+
+/// Corner rounding on a run of tool cells. Shared with the window chrome
 /// (`ui::chrome`), so every rounded surface in the window reads as one family.
 pub(crate) const GROUP_CORNER_RADIUS: u8 = 3;
-/// Gap between the buttons stacked inside a tile. None: the cells butt up
-/// against each other so a run of them reads as one block.
-const GROUP_BUTTON_GAP: f32 = 0.0;
-/// Side of a tool cell, which is also the tile's width: the buttons run edge
-/// to edge, so a selected tool's fill has no strip of tile left beside it.
+/// Side of a tool cell, which is also its run's width: the buttons run edge to
+/// edge, so a selected tool's fill has no strip of surface left beside it.
 pub(crate) const TOOL_CELL_SIZE: f32 = 30.0;
 /// Side of the icon drawn inside a tool cell.
 const TOOL_ICON_SIZE: f32 = 19.0;
-/// Corner rounding on a tool cell's fill outside a tile, where it has no
-/// neighbours to sit flush against.
+/// Corner rounding on a tool cell's fill where it has no neighbours to sit
+/// flush against.
 const TOOL_CELL_CORNER_RADIUS: f32 = GROUP_CORNER_RADIUS as f32;
 
-/// Where a [`ToolbarGroup`]'s cells park their fills until the group knows
-/// which of them are its end caps.
+/// Where a run's cells park their fills until it knows which of them are its
+/// end caps.
 ///
-/// A cell's fill is painted before its icon, but only the group knows whether
-/// a cell is the run's first, last, or neither - which is what decides the
-/// corners it rounds. So each cell reserves its slot in the paint list and
-/// registers here, and the group fills the slots in once the run is complete.
-/// Groups never nest, so one key serves them all.
+/// A cell's fill is painted before its icon, but only the run knows whether a
+/// cell is its first, last, or neither - which is what decides the corners it
+/// rounds. So each cell reserves its slot in the paint list and registers
+/// here, and the run fills the slots in once it is complete. Runs never nest,
+/// so one key serves them all.
 #[derive(Clone, Default)]
 struct GroupCellFills(Vec<(egui::layers::ShapeIdx, egui::Rect, Color32)>);
 
@@ -95,12 +107,12 @@ fn group_cell_fills_id() -> egui::Id {
     egui::Id::new("toolbar_group_cell_fills")
 }
 
-/// A tool button that fills its cell, sized to a [`ToolbarGroup`] tile's width.
+/// A tool button that fills its cell, sized to [`TOOL_CELL_SIZE`].
 ///
 /// Unlike [`ToolbarButton`], whose fill is a small square inside whatever space
 /// it is given, this fills its whole cell - so a selected tool reads as a solid
-/// block the width of the tile rather than a chip floating inside it. That only
-/// works in a tile: elsewhere, use [`ToolbarButton`].
+/// block the width of the run rather than a chip floating inside it. That only
+/// works inside [`tool_cell_run`]; elsewhere, use [`ToolbarButton`].
 pub(crate) struct ToolCellButton {
     icon: egui::Image<'static>,
     tooltip: egui::WidgetText,
@@ -163,59 +175,8 @@ impl egui::Widget for ToolCellButton {
     }
 }
 
-/// A vertical run of tool buttons drawn on one rounded tile.
-///
-/// A toolbar reads as clusters of related tools rather than a column of
-/// separate buttons: the tile is the cluster, and its buttons sit inside it
-/// with a little air around and between them.
-pub(crate) struct ToolbarGroup {
-    width: f32,
-}
-
-impl ToolbarGroup {
-    pub(crate) fn new() -> Self {
-        Self { width: TOOL_CELL_SIZE }
-    }
-
-    pub(crate) fn show<R>(self, ui: &mut Ui, add_buttons: impl FnOnce(&mut Ui) -> R) -> R {
-        // The tile has to be painted under the buttons, and its height is only
-        // known once they have been laid out, so its slot is reserved first.
-        let tile = ui.painter().add(egui::Shape::Noop);
-        let inner = tool_cell_run(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.set_max_width(self.width);
-                ui.spacing_mut().item_spacing.y = GROUP_BUTTON_GAP;
-                add_buttons(ui)
-            })
-        });
-        let rows = inner.response.rect;
-        if rows.height() > 0.0 {
-            // The tile is exactly the run of cells: no padding, so a selected
-            // cell's fill reaches the tile's edges instead of floating inside
-            // a border of it.
-            let tile_rect = egui::Rect::from_center_size(egui::pos2(ui.max_rect().center().x, rows.center().y), egui::vec2(self.width, rows.height()));
-            // The tile carries the panel colour, because it *is* the panel now:
-            // the toolbar's own background is transparent, so the tiles are all
-            // that separates the tools from the scene behind them.
-            let fill = ui.visuals().panel_fill;
-            // A disabled group fades everything painted through `ui.painter()`,
-            // the tile included - but the tile is the toolbar's backdrop, not a
-            // tool, so it should stay fully opaque even while its tools can't
-            // be used.
-            let mut painter = ui.painter().clone();
-            painter.set_opacity(1.0);
-            painter.set(tile, egui::Shape::rect_filled(tile_rect, egui::CornerRadius::same(GROUP_CORNER_RADIUS), fill));
-        }
-        inner.inner
-    }
-}
-
 /// Draw a run of [`ToolCellButton`]s as one block: the cells butt up against
 /// each other and only the run's outer corners are rounded.
-///
-/// A [`ToolbarGroup`] is this plus a tile of its own. A toolbar that already
-/// has a surface under its buttons - the docked drawing tools, whose region is
-/// their backdrop - wants the run without the tile.
 pub(crate) fn tool_cell_run<R>(ui: &mut Ui, add_buttons: impl FnOnce(&mut Ui) -> R) -> R {
     ui.data_mut(|data| data.insert_temp(group_cell_fills_id(), Some(GroupCellFills::default())));
     let inner = add_buttons(ui);
@@ -226,7 +187,7 @@ pub(crate) fn tool_cell_run<R>(ui: &mut Ui, add_buttons: impl FnOnce(&mut Ui) ->
     inner
 }
 
-/// Paint a group's cell fills, rounding only the run's outer corners so the
+/// Paint a run's cell fills, rounding only its outer corners so the
 /// cells sit flush against each other.
 fn paint_cell_fills(ui: &Ui, cells: &[(egui::layers::ShapeIdx, egui::Rect, Color32)]) {
     let last = cells.len().saturating_sub(1);

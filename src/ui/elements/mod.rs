@@ -8,8 +8,8 @@ pub(crate) mod block_model;
 pub(crate) mod console;
 pub(crate) mod cursors;
 pub(crate) mod explorer;
-#[cfg(not(target_os = "macos"))]
 pub(crate) mod main_menu;
 pub(crate) mod properties;
 pub(crate) mod status_bar;
 pub(crate) mod toolbars;
+pub(crate) mod viewport_bar;

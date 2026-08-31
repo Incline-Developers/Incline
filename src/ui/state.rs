@@ -1319,6 +1319,8 @@ pub(crate) struct EditorState {
     pub(crate) bezier_dialog_open: bool,
     /// Which section the explorer's properties panel is showing.
     pub(crate) active_property_tab: PropertyTab,
+    /// The workspace tab selected in the menu bar.
+    pub(crate) active_workspace: Workspace,
     pub(crate) show_import: bool,
     pub(crate) show_export: bool,
     /// Whether the About dialog is open.
@@ -1918,6 +1920,7 @@ impl EditorState {
             bezier_hover_cp: None,
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Interface,
+            active_workspace: Workspace::Production,
             show_import: false,
             show_export: false,
             show_about: false,
@@ -2855,6 +2858,42 @@ pub(crate) struct UiProjectView {
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
+}
+
+/// A workspace: one of the discipline-shaped arrangements of the window the
+/// menu bar's tabs switch between.
+///
+/// The tab decides what the viewport bar carries, the way Blender's workspace
+/// tabs decide what its editors show. Only [`Workspace::Production`] is built
+/// out; the rest name where the remaining disciplines will land and stay
+/// disabled in the bar until they have something behind them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Workspace {
+    Production,
+    DrillAndBlast,
+    Geology,
+    Schedule,
+    Simulate,
+}
+
+impl Workspace {
+    /// Every workspace, in the order the tabs are drawn.
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Schedule, Self::Simulate];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Production => "Production",
+            Self::DrillAndBlast => "Drill & Blast",
+            Self::Geology => "Geology",
+            Self::Schedule => "Schedule",
+            Self::Simulate => "Simulate",
+        }
+    }
+
+    /// Whether the tab can be selected at all yet.
+    pub(crate) fn implemented(self) -> bool {
+        matches!(self, Self::Production)
+    }
 }
 
 /// A section of the explorer's properties panel.

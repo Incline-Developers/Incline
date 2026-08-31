@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- The application mark for the menu bar.
+
+     Drawn for this size rather than reduced from res/logo.svg: at 18px the
+     full mark's three facets close up into a blob, so this is one filled
+     silhouette - a single peak right of centre with a shoulder falling away
+     to the left, which is what the mark reads as once its colour is gone.
+
+     One flat fill, on the 24x24 grid the rest of res/ui/ uses. -->
+
+<svg
+   viewBox="0 0 24 24"
+   version="1.1"
+   id="svg1"
+   sodipodi:docname="logo.svg"
+   xml:space="preserve"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"><defs
+     id="defs1" /><sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="17.04422"
+     inkscape:cx="-2.3175012"
+     inkscape:cy="13.347634"
+     inkscape:window-width="2560"
+     inkscape:window-height="1366"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg1" /><g
+     id="g1"
+     transform="matrix(0.19638022,0,0,0.19638022,0.41562815,0.63000986)"
+     style="fill:#ffffff;fill-opacity:1"><g
+       transform="translate(0,-1.2374)"
+       id="g4"
+       style="fill:#ffffff;fill-opacity:1"><path
+         d="m 83.492,111.18 c 0,0 24.944,0.20743 33.915,-4.5635 l -15.661,-38.012 c 0,0 -6.1626,-22.027 -6.5961,-22.269 -1.8348,-1.0209 -0.99624,-0.93981 -0.82981,0.28253 0.66028,4.8493 -14.408,12.047 -31.866,15.245 -17.839,3.2671 -44.033,6.6438 -28.045,13.741 21.473,9.5317 22.804,5.1959 52.09,15.559 0,0 6.3786,3.1634 7.3639,5.9637 0,0 2.2818,4.3042 -2.8522,8.9196 z"
+         style="fill:#ffffff;fill-opacity:1"
+         id="path2" /><path
+         d="m 1.7785,102.49 c 0,0 71.178,0.90246 71.134,-7.5902 -0.03176,-6.1642 -55.325,-12.044 -57.037,-26.577 -0.71495,-6.0693 42.117,-5.2127 42.868,-12.953 0.19999,-2.0607 -25.302,-11.194 -29.444,-16.581 -1.1692,-1.5202 -3.6574,16.468 -7.6263,24.319 -1.1594,2.2937 -5.2086,0.5469 -6.4273,4.6696 z"
+         style="fill:#ffffff;fill-opacity:1"
+         id="path3" /><path
+         d="m 73.172,55.073 c 0,0 16.357,-4.4583 17.089,-8.0988 0,0 -3.197,-10.306 -6.6138,-13.59 -1.0316,-0.99127 -5.586,-2.0798 -6.3267,-3.7222 -6.4114,-14.215 0.55307,-10.505 -15.091,-22.869 -1.4246,-1.1259 -15.527,9.5964 -16.396,10.597 -0.90259,1.0394 -2.7329,11.355 -6.4215,18.754 -0.43689,0.87641 -2.2299,1.1279 -2.3596,1.7502 -0.12965,0.6223 12.558,8.6302 36.119,17.178 z"
+         style="fill:#ffffff;fill-opacity:1"
+         id="path4" /></g></g></svg>

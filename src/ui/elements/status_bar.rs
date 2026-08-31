@@ -34,7 +34,11 @@ fn coord_field(ui: &mut egui::Ui, width: f32, text: String) {
 
 /// Draw the bottom status bar panel.
 pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState) -> egui::Rect {
+    // The other bar that spans the window rather than sitting in a region, and
+    // dressed the same way: the gap's colour, and no separator line.
     egui::Panel::bottom("status_bar")
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .frame(crate::ui::chrome::window_bar_frame(ui))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE));

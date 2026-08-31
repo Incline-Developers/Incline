@@ -11,7 +11,7 @@ use crate::ui::{
 };
 
 /// Copyright line, kept in step with the one on the startup splash.
-const COPYRIGHT: &str = "© 2026 Leo Timmins and Lucas Timmins";
+const COPYRIGHT: &str = "Licensed under the GNU General Public License v3.0";
 
 const LICENSE_NOTICE: &str = "Incline is free software: you can redistribute it and/or modify it under the terms of \
     the GNU General Public License version 3 as published by the Free Software Foundation.\n\n\

@@ -1,13 +1,45 @@
-//! Top application menu bar (File, Project, Design, Triangulation, Raster, Point Cloud, Block Model, Drill Holes).
+//! Top application menu bar: the mark, the application-wide menus (File,
+//! Project) and the workspace tabs.
+//!
+//! Everything that acts on the scene rather than on the application has moved
+//! down to the viewport bar - see [`crate::ui::elements::viewport_bar`] - so
+//! this bar carries only what is true whichever workspace is open, the way
+//! Blender's topbar does.
 
+use crate::ui::{EditorState, UiCommand, UiProjectView, state::Workspace, themed_icon, widgets::toolbar::GROUP_CORNER_RADIUS};
+// The dropdowns below are all in the system menu bar on macOS (`mac.rs`), and
+// nothing this module still draws there needs any of this.
+#[cfg(not(target_os = "macos"))]
 use crate::{
     model::{Axis, SceneEntityId},
     ui::{
-        EditorState, UiCommand, UiProjectView,
         state::UiProjectEntry,
         widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
     },
 };
+
+/// Side of the application mark at the left of the bar.
+const LOGO_SIZE: f32 = 18.0;
+/// Space either side of the mark, so it reads as a mark rather than as the
+/// first menu.
+const LOGO_MARGIN: f32 = 6.0;
+/// Height of the rule parting the menus from the workspace tabs.
+const SEPARATOR_HEIGHT: f32 = 16.0;
+/// Space either side of that rule.
+const SEPARATOR_MARGIN: f32 = 8.0;
+/// Space either side of a workspace tab's label.
+const TAB_PADDING: f32 = 10.0;
+/// Height of a workspace tab's fill.
+const TAB_HEIGHT: f32 = 20.0;
+/// Space either side of a dropdown's label in the viewport bar.
+///
+/// `egui`'s `menu_style` packs bar labels to 2 points, which is right for a
+/// menu bar where the labels are the whole row. In the viewport bar they share
+/// the row with three clusters of icons, and at that padding the six of them
+/// ran together into one band of text.
+const MENU_LABEL_PADDING: f32 = 7.0;
+/// Gap between two dropdowns in that run, on top of their padding.
+const MENU_LABEL_GAP: f32 = 2.0;
 
 /// Draw the top menu bar panel.
 ///
@@ -15,184 +47,341 @@ use crate::{
 /// [`crate::ui::widgets::context_menu`] - so rows, submenus and separators all
 /// come from there rather than from egui's default menu style.
 ///
+/// On macOS the File and Project menus live in the system menu bar (`mac.rs`)
+/// instead, but the bar itself stays: the mark and the workspace tabs are not
+/// things an `NSMenu` can carry.
+///
 /// Returns the panel's bounding rect.
 pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
+    // Not a region: the bar spans the window and carries the gap's own colour,
+    // so it reads as the backdrop the workspace is laid on rather than as a
+    // panel of its own. See `chrome::window_bar_frame`.
+    let bar_fill = crate::ui::chrome::window_bar_fill(ui);
     egui::Panel::top("main_menu")
+        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+        .frame(crate::ui::chrome::window_bar_frame(ui))
         .show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                MenuBarMenu::new("File").show(ui, |ui| {
-                    let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
-                    let active_project = project.projects.iter().find(|entry| entry.is_active);
-                    if ContextMenuAction::new("Save Project").enabled(has_unsaved).show(ui).clicked() {
-                        commands.push(UiCommand::SaveProject);
-                        ui.close();
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if ContextMenuAction::new("Save Project As...").enabled(active_project.is_some()).show(ui).clicked() {
-                        if let Some(project) = active_project {
-                            commands.push(UiCommand::SaveProjectAs(project.runtime_id));
-                        }
-                        ui.close();
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    if ContextMenuAction::new("Download OMF").enabled(!project.projects.is_empty()).show(ui).clicked() {
-                        commands.push(UiCommand::DownloadProject);
-                        ui.close();
-                    }
-                    context_menu_separator(ui);
-                    if ContextMenuAction::new("New project...").show(ui).clicked() {
-                        commands.push(UiCommand::NewProject);
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Open project...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenProject);
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Close Project").enabled(active_project.is_some()).show(ui).clicked() {
-                        if let Some(project) = active_project {
-                            commands.push(UiCommand::CloseProject(project.runtime_id));
-                        }
-                        ui.close();
-                    }
-                    context_menu_separator(ui);
-                    if ContextMenuAction::new("Import...").enabled(active_project.is_some()).show(ui).clicked() {
-                        editor.show_import = true;
-                        editor.show_export = false;
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Export...").enabled(active_project.is_some()).show(ui).clicked() {
-                        editor.show_import = false;
-                        editor.show_export = true;
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Export Viewport Image...").show(ui).clicked() {
-                        commands.push(UiCommand::ExportViewportImage);
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Export Engineering Drawing...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenPlotDialog);
-                        ui.close();
-                    }
-                    context_menu_separator(ui);
-                    if ContextMenuAction::new(format!("About {}...", crate::APP_NAME)).show(ui).clicked() {
-                        editor.show_about = true;
-                        ui.close();
-                    }
-                    if ContextMenuAction::new(format!("Exit {}", crate::APP_NAME)).show(ui).clicked() {
-                        commands.push(UiCommand::RequestExit);
-                        ui.close();
-                    }
-                });
+                draw_logo(ui);
 
-                MenuBarMenu::new("Project").show(ui, |ui| {
-                    // Deactivating a dirty project routes through the save/discard/cancel dialog.
-                    let active_project = project.projects.iter().find(|entry| entry.is_active);
-                    if ContextMenuAction::new("Deactivate Current Project").enabled(active_project.is_some()).show(ui).clicked() {
-                        if let Some(project) = active_project {
-                            commands.push(UiCommand::CloseProject(project.runtime_id));
-                        }
-                        ui.close();
-                    }
-                });
+                #[cfg(not(target_os = "macos"))]
+                {
+                    draw_file_menu(ui, editor, project, commands);
+                    draw_project_menu(ui, project, commands);
+                }
+                // The parameters are only read by the menus above.
+                #[cfg(target_os = "macos")]
+                let _ = (project, commands);
 
-                MenuBarMenu::new("Design").show(ui, |ui| {
-                    // Every entry here acts on the current design selection.
-                    let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
-                    context_submenu(ui, "Insert Point", has_selection, |ui| {
-                        // Needs two or more crossing polylines to insert anything.
-                        if ContextMenuAction::new("At intersection").enabled(editor.selection_has_intersections).show(ui).clicked() {
-                            commands.push(UiCommand::InsertPointsAtIntersections);
-                            ui.close();
-                        }
-                        if ContextMenuAction::new("At elevation...").show(ui).clicked() {
-                            commands.push(UiCommand::OpenInsertPointAtElevationDialog);
-                            ui.close();
-                        }
-                    });
-                    context_menu_separator(ui);
-                    context_submenu(ui, "Move to", has_selection, |ui| {
-                        for axis in [Axis::X, Axis::Y, Axis::Z] {
-                            if ContextMenuAction::new(format!("Set {}...", axis.label())).show(ui).clicked() {
-                                commands.push(UiCommand::OpenMoveToAxisDialog(axis));
-                                ui.close();
-                            }
-                        }
-                    });
-                    context_menu_separator(ui);
-                    // Unlike the entries above this one runs with nothing
-                    // selected: the dialog seeds from the selection when there
-                    // is one, and otherwise you pick in the viewport with it open.
-                    if ContextMenuAction::new("Create Triangulation...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenCreateTriangulation);
-                        ui.close();
-                    }
-                });
-
-                MenuBarMenu::new("Triangulation").show(ui, |ui| {
-                    if ContextMenuAction::new("Clip Surface by Polyline...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenCutTriangulationByPolyline);
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Slice Triangulation by Z Range...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenCutTriangulationByZ);
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Trim to Topology...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenCutTriangulationBySurface);
-                        ui.close();
-                    }
-                    context_menu_separator(ui);
-                    if ContextMenuAction::new("Cut Topology with Pit Shell...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenCutTopologyByPitShell);
-                        ui.close();
-                    }
-                    if ContextMenuAction::new("Merge Shell into Topology...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenIncludeSolidInTopology);
-                        ui.close();
-                    }
-                    context_menu_separator(ui);
-                    if ContextMenuAction::new("Generate Contour Lines...").show(ui).clicked() {
-                        commands.push(UiCommand::OpenContourTriangulation);
-                        ui.close();
-                    }
-                });
-
-                MenuBarMenu::new("Raster").show(ui, |ui| {
-                    let any_draped = project.raster_textures.iter().any(|raster| raster.is_draped);
-                    if ContextMenuAction::new("Undrape All").enabled(any_draped).show(ui).clicked() {
-                        commands.push(UiCommand::UndrapeAllRasters);
-                        ui.close();
-                    }
-                });
-
-                MenuBarMenu::new("Point Cloud").show(ui, |ui| {
-                    let has_loaded_cloud = project.point_clouds.iter().any(|cloud| cloud.is_loaded);
-                    if ContextMenuAction::new("Create Triangulation...").enabled(has_loaded_cloud).show(ui).clicked() {
-                        commands.push(UiCommand::OpenPointCloudTin);
-                        ui.close();
-                    }
-                });
-
-                MenuBarMenu::new("Block Model").show(ui, |ui| {
-                    if ContextMenuAction::new("Create Ore Triangulation...")
-                        .enabled(!project.block_models.is_empty())
-                        .show(ui)
-                        .clicked()
-                    {
-                        commands.push(UiCommand::OpenCreateOreTriangulation);
-                        ui.close();
-                    }
-                });
-
-                MenuBarMenu::new("Drill Holes").show(ui, |ui| {
-                    let has_loaded_holes = project.drill_holes.iter().any(|dataset| dataset.is_loaded);
-                    if ContextMenuAction::new("Create Block Model...").enabled(has_loaded_holes).show(ui).clicked() {
-                        commands.push(UiCommand::OpenCreateBlockModel(None));
-                        ui.close();
-                    }
-                });
+                draw_separator(ui);
+                draw_workspace_tabs(ui, editor, bar_fill);
             });
         })
         .response
         .rect
+}
+
+/// Paint the application mark at the head of the bar.
+///
+/// Flat and one-coloured: beside the menu labels it is a glyph, not artwork.
+fn draw_logo(ui: &mut egui::Ui) {
+    ui.add_space(LOGO_MARGIN);
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(LOGO_SIZE), egui::Sense::hover());
+    egui::Image::new(themed_icon!(ui, "logo.svg")).fit_to_exact_size(rect.size()).paint_at(ui, rect);
+    ui.add_space(LOGO_MARGIN);
+}
+
+/// Part the menus from the workspace tabs with a short vertical rule.
+fn draw_separator(ui: &mut egui::Ui) {
+    ui.add_space(SEPARATOR_MARGIN);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, SEPARATOR_HEIGHT), egui::Sense::hover());
+    let color = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    ui.painter().line_segment([rect.center_top(), rect.center_bottom()], egui::Stroke::new(1.0, color));
+    ui.add_space(SEPARATOR_MARGIN);
+}
+
+/// Draw the run of workspace tabs.
+fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, bar_fill: egui::Color32) {
+    for workspace in Workspace::ALL {
+        draw_workspace_tab(ui, editor, workspace, bar_fill);
+    }
+}
+
+/// One workspace tab: a text cell filled from [`tab_fill`].
+///
+/// A tab for a workspace that has nothing behind it yet is drawn recessed and
+/// unclickable rather than left off the bar, so the shape of the application
+/// is visible before all of it is built.
+fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, workspace: Workspace, bar_fill: egui::Color32) {
+    let enabled = workspace.implemented();
+    let selected = editor.active_workspace == workspace;
+    let state = if !enabled {
+        TabState::Disabled
+    } else if selected {
+        TabState::Active
+    } else {
+        TabState::Inactive
+    };
+
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(workspace.label().to_owned(), font, egui::Color32::PLACEHOLDER);
+    // Not `add_enabled_ui`, which fades everything painted inside it toward the
+    // background: a disabled tab is meant to read as *recessed below* the bar,
+    // and a fade would wash the step out to nothing. The colours below say what
+    // state a tab is in; the sense is what stops it being clicked.
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(galley.size().x + TAB_PADDING * 2.0, TAB_HEIGHT), sense);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, workspace.label()));
+
+    let visuals = ui.visuals();
+    ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, tab_fill(visuals, bar_fill, state, response.hovered()));
+    let text = match state {
+        TabState::Active => visuals.strong_text_color(),
+        TabState::Inactive => visuals.text_color(),
+        TabState::Disabled => visuals.weak_text_color(),
+    };
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, text);
+
+    if response.clicked() {
+        editor.active_workspace = workspace;
+    }
+}
+
+/// What a workspace tab is showing about itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabState {
+    Active,
+    Inactive,
+    Disabled,
+}
+
+/// Fill for a workspace tab, stepped off `bar_fill` the way Blender steps its
+/// workspace tabs.
+///
+/// The open workspace's tab takes the panel surface itself - it reads as the
+/// workspace below coming up through the bar, which is exactly what Blender's
+/// active tab does. An available one sits a step off the bar, and one with
+/// nothing behind it yet is recessed below it. Those two steps are signed by
+/// theme so "lighter" means away from the background in both: the ordering is
+/// what carries the meaning, not the direction.
+fn tab_fill(visuals: &egui::Visuals, bar_fill: egui::Color32, state: TabState, hovered: bool) -> egui::Color32 {
+    let away = if visuals.dark_mode { 1 } else { -1 };
+    let hover = i16::from(hovered && state != TabState::Disabled) * 6;
+    match state {
+        TabState::Active => crate::ui::widgets::shifted(visuals.panel_fill, away * hover),
+        TabState::Inactive => crate::ui::widgets::shifted(bar_fill, away * (8 + hover)),
+        TabState::Disabled => crate::ui::widgets::shifted(bar_fill, away * -6),
+    }
+}
+
+/// The File menu: everything about the project as a file on disk.
+#[cfg(not(target_os = "macos"))]
+fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    MenuBarMenu::new("File").show(ui, |ui| {
+        let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
+        let active_project = project.projects.iter().find(|entry| entry.is_active);
+        if ContextMenuAction::new("Save Project").enabled(has_unsaved).show(ui).clicked() {
+            commands.push(UiCommand::SaveProject);
+            ui.close();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if ContextMenuAction::new("Save Project As...").enabled(active_project.is_some()).show(ui).clicked() {
+            if let Some(project) = active_project {
+                commands.push(UiCommand::SaveProjectAs(project.runtime_id));
+            }
+            ui.close();
+        }
+        #[cfg(target_arch = "wasm32")]
+        if ContextMenuAction::new("Download OMF").enabled(!project.projects.is_empty()).show(ui).clicked() {
+            commands.push(UiCommand::DownloadProject);
+            ui.close();
+        }
+        context_menu_separator(ui);
+        if ContextMenuAction::new("New project...").show(ui).clicked() {
+            commands.push(UiCommand::NewProject);
+            ui.close();
+        }
+        if ContextMenuAction::new("Open project...").show(ui).clicked() {
+            commands.push(UiCommand::OpenProject);
+            ui.close();
+        }
+        if ContextMenuAction::new("Close Project").enabled(active_project.is_some()).show(ui).clicked() {
+            if let Some(project) = active_project {
+                commands.push(UiCommand::CloseProject(project.runtime_id));
+            }
+            ui.close();
+        }
+        context_menu_separator(ui);
+        if ContextMenuAction::new("Import...").enabled(active_project.is_some()).show(ui).clicked() {
+            editor.show_import = true;
+            editor.show_export = false;
+            ui.close();
+        }
+        if ContextMenuAction::new("Export...").enabled(active_project.is_some()).show(ui).clicked() {
+            editor.show_import = false;
+            editor.show_export = true;
+            ui.close();
+        }
+        if ContextMenuAction::new("Export Viewport Image...").show(ui).clicked() {
+            commands.push(UiCommand::ExportViewportImage);
+            ui.close();
+        }
+        if ContextMenuAction::new("Export Engineering Drawing...").show(ui).clicked() {
+            commands.push(UiCommand::OpenPlotDialog);
+            ui.close();
+        }
+        context_menu_separator(ui);
+        if ContextMenuAction::new(format!("About {}...", crate::APP_NAME)).show(ui).clicked() {
+            editor.show_about = true;
+            ui.close();
+        }
+        if ContextMenuAction::new(format!("Exit {}", crate::APP_NAME)).show(ui).clicked() {
+            commands.push(UiCommand::RequestExit);
+            ui.close();
+        }
+    });
+}
+
+/// The Project menu: what the workspace does with the project that is open.
+#[cfg(not(target_os = "macos"))]
+fn draw_project_menu(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    MenuBarMenu::new("Project").show(ui, |ui| {
+        // Deactivating a dirty project routes through the save/discard/cancel dialog.
+        let active_project = project.projects.iter().find(|entry| entry.is_active);
+        if ContextMenuAction::new("Deactivate Current Project").enabled(active_project.is_some()).show(ui).clicked() {
+            if let Some(project) = active_project {
+                commands.push(UiCommand::CloseProject(project.runtime_id));
+            }
+            ui.close();
+        }
+    });
+}
+
+/// Draw the menus belonging to the Production workspace, for the viewport bar
+/// to place at the head of its own row.
+///
+/// These act on what is in the scene rather than on the application, so they
+/// follow the workspace rather than sitting in the menu bar above it. On macOS
+/// they are in the system menu bar instead and this draws nothing.
+///
+/// `row_height` is how tall a label's hover fill is drawn: the bar is taller
+/// than the labels need, so that fill sits inside it rather than reaching its
+/// edges.
+///
+/// Deliberately not wrapped in an `egui::MenuBar`, which claims the whole
+/// width it is given: these menus are one cluster in a row with two more, so
+/// they take only what they use. Every dropdown here is a `MenuBarMenu`, which
+/// carries its own menu config rather than reading the bar's, so the only
+/// thing the wrapper would have added is the flat button style below.
+pub(crate) fn draw_production_menus(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, row_height: f32) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (ui, editor, project, commands, row_height);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    ui.scope(|ui| {
+        egui::containers::menu::menu_style(ui.style_mut());
+        // After `menu_style`, which sets the padding this overrides.
+        let spacing = &mut ui.style_mut().spacing;
+        spacing.interact_size.y = row_height;
+        spacing.button_padding = egui::vec2(MENU_LABEL_PADDING, 0.0);
+        spacing.item_spacing.x = MENU_LABEL_GAP;
+        MenuBarMenu::new("Design").show(ui, |ui| {
+            // Every entry here acts on the current design selection.
+            let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
+            context_submenu(ui, "Insert Point", has_selection, |ui| {
+                // Needs two or more crossing polylines to insert anything.
+                if ContextMenuAction::new("At intersection").enabled(editor.selection_has_intersections).show(ui).clicked() {
+                    commands.push(UiCommand::InsertPointsAtIntersections);
+                    ui.close();
+                }
+                if ContextMenuAction::new("At elevation...").show(ui).clicked() {
+                    commands.push(UiCommand::OpenInsertPointAtElevationDialog);
+                    ui.close();
+                }
+            });
+            context_menu_separator(ui);
+            context_submenu(ui, "Move to", has_selection, |ui| {
+                for axis in [Axis::X, Axis::Y, Axis::Z] {
+                    if ContextMenuAction::new(format!("Set {}...", axis.label())).show(ui).clicked() {
+                        commands.push(UiCommand::OpenMoveToAxisDialog(axis));
+                        ui.close();
+                    }
+                }
+            });
+            context_menu_separator(ui);
+            // Unlike the entries above this one runs with nothing
+            // selected: the dialog seeds from the selection when there
+            // is one, and otherwise you pick in the viewport with it open.
+            if ContextMenuAction::new("Create Triangulation...").show(ui).clicked() {
+                commands.push(UiCommand::OpenCreateTriangulation);
+                ui.close();
+            }
+        });
+
+        MenuBarMenu::new("Triangulation").show(ui, |ui| {
+            if ContextMenuAction::new("Clip Surface by Polyline...").show(ui).clicked() {
+                commands.push(UiCommand::OpenCutTriangulationByPolyline);
+                ui.close();
+            }
+            if ContextMenuAction::new("Slice Triangulation by Z Range...").show(ui).clicked() {
+                commands.push(UiCommand::OpenCutTriangulationByZ);
+                ui.close();
+            }
+            if ContextMenuAction::new("Trim to Topology...").show(ui).clicked() {
+                commands.push(UiCommand::OpenCutTriangulationBySurface);
+                ui.close();
+            }
+            context_menu_separator(ui);
+            if ContextMenuAction::new("Cut Topology with Pit Shell...").show(ui).clicked() {
+                commands.push(UiCommand::OpenCutTopologyByPitShell);
+                ui.close();
+            }
+            if ContextMenuAction::new("Merge Shell into Topology...").show(ui).clicked() {
+                commands.push(UiCommand::OpenIncludeSolidInTopology);
+                ui.close();
+            }
+            context_menu_separator(ui);
+            if ContextMenuAction::new("Generate Contour Lines...").show(ui).clicked() {
+                commands.push(UiCommand::OpenContourTriangulation);
+                ui.close();
+            }
+        });
+
+        MenuBarMenu::new("Raster").show(ui, |ui| {
+            let any_draped = project.raster_textures.iter().any(|raster| raster.is_draped);
+            if ContextMenuAction::new("Undrape All").enabled(any_draped).show(ui).clicked() {
+                commands.push(UiCommand::UndrapeAllRasters);
+                ui.close();
+            }
+        });
+
+        MenuBarMenu::new("Point Cloud").show(ui, |ui| {
+            let has_loaded_cloud = project.point_clouds.iter().any(|cloud| cloud.is_loaded);
+            if ContextMenuAction::new("Create Triangulation...").enabled(has_loaded_cloud).show(ui).clicked() {
+                commands.push(UiCommand::OpenPointCloudTin);
+                ui.close();
+            }
+        });
+
+        MenuBarMenu::new("Block Model").show(ui, |ui| {
+            if ContextMenuAction::new("Create Ore Triangulation...")
+                .enabled(!project.block_models.is_empty())
+                .show(ui)
+                .clicked()
+            {
+                commands.push(UiCommand::OpenCreateOreTriangulation);
+                ui.close();
+            }
+        });
+
+        MenuBarMenu::new("Drill Holes").show(ui, |ui| {
+            let has_loaded_holes = project.drill_holes.iter().any(|dataset| dataset.is_loaded);
+            if ContextMenuAction::new("Create Block Model...").enabled(has_loaded_holes).show(ui).clicked() {
+                commands.push(UiCommand::OpenCreateBlockModel(None));
+                ui.close();
+            }
+        });
+    });
 }
