@@ -123,9 +123,9 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, bar_fill: eg
 
 /// One workspace tab: a text cell filled from [`tab_fill`].
 ///
-/// A tab for a workspace that has nothing behind it yet is drawn recessed and
-/// unclickable rather than left off the bar, so the shape of the application
-/// is visible before all of it is built.
+/// A tab for a workspace that has nothing behind it yet is drawn as bare text
+/// on the bar rather than left off it, so the shape of the application is
+/// visible before all of it is built.
 fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, workspace: Workspace, bar_fill: egui::Color32) {
     let enabled = workspace.implemented();
     let selected = editor.active_workspace == workspace;
@@ -140,9 +140,9 @@ fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, workspace: Wo
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(workspace.label().to_owned(), font, egui::Color32::PLACEHOLDER);
     // Not `add_enabled_ui`, which fades everything painted inside it toward the
-    // background: a disabled tab is meant to read as *recessed below* the bar,
-    // and a fade would wash the step out to nothing. The colours below say what
-    // state a tab is in; the sense is what stops it being clicked.
+    // background: the weak text colour below is the whole of what a disabled tab
+    // says about itself, and a fade would wash it out further. The colours below
+    // say what state a tab is in; the sense is what stops it being clicked.
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(galley.size().x + TAB_PADDING * 2.0, TAB_HEIGHT), sense);
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, workspace.label()));
@@ -174,17 +174,19 @@ enum TabState {
 ///
 /// The open workspace's tab takes the panel surface itself - it reads as the
 /// workspace below coming up through the bar, which is exactly what Blender's
-/// active tab does. An available one sits a step off the bar, and one with
-/// nothing behind it yet is recessed below it. Those two steps are signed by
-/// theme so "lighter" means away from the background in both: the ordering is
-/// what carries the meaning, not the direction.
+/// active tab does. Every other tab takes the bar's own colour, so no cell
+/// outline shows around it and only its label is left on the backdrop; what
+/// separates an available workspace from one with nothing behind it yet is the
+/// text colour alone. An available tab still lights up under the pointer, and
+/// that step is signed by theme so "lighter" means away from the background in
+/// both.
 fn tab_fill(visuals: &egui::Visuals, bar_fill: egui::Color32, state: TabState, hovered: bool) -> egui::Color32 {
     let away = if visuals.dark_mode { 1 } else { -1 };
     let hover = i16::from(hovered && state != TabState::Disabled) * 6;
     match state {
         TabState::Active => crate::ui::widgets::shifted(visuals.panel_fill, away * hover),
-        TabState::Inactive => crate::ui::widgets::shifted(bar_fill, away * (8 + hover)),
-        TabState::Disabled => crate::ui::widgets::shifted(bar_fill, away * -6),
+        TabState::Inactive => crate::ui::widgets::shifted(bar_fill, away * hover),
+        TabState::Disabled => bar_fill,
     }
 }
 
