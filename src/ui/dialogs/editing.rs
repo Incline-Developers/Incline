@@ -331,10 +331,12 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
     /// How many remembered projects the Recent list offers before the file
-    /// chooser is the better tool for finding one. Laid out as a grid of
-    /// `RECENT_COLUMNS`, so the two have to divide.
-    const RECENT_LIMIT: usize = 4;
-    const RECENT_COLUMNS: usize = 2;
+    /// chooser is the better tool for finding one.
+    const RECENT_LIMIT: usize = 10;
+    const RECENT_HEIGHT: f32 = 100.0;
+    /// Grow the splash by exactly as much as the Recent box has grown from the
+    /// original two-row grid, keeping the footer and surrounding spacing put.
+    const PANEL_HEIGHT: f32 = PANEL_SIZE * 0.7 + (RECENT_HEIGHT - 48.0);
 
     // The splash is the only place a remembered project can be picked up now
     // that the explorer shows the open one alone. The active project is never
@@ -370,7 +372,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
                     ui.set_width(PANEL_SIZE);
-                    ui.set_height(PANEL_SIZE * 0.7);
+                    ui.set_height(PANEL_HEIGHT);
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 16.0);
 
                     // Claimed before the content above it, so that content -
@@ -416,58 +418,15 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
 
                     // The splash is a fixed shape, so the Recent list takes
                     // the room left below the two columns rather than making
-                    // the frame taller: it offers as many grid rows as fit and
-                    // no more. 16pt of that is the gap above its heading.
-                    // Recent cells take the action columns' width and pitch rather than
-                    // dividing the list evenly, so the second column starts under
-                    // `Application` instead of at its own offset.
+                    // the frame taller. 16pt of that is the gap above its
+                    // heading. The box presents its entries as one full-width
+                    // scrolling list and keeps two rows visible at once.
                     let list_width = PANEL_SIZE - 60.0;
-                    let cell_width = COLUMN_WIDTH;
-                    let column_gap = (list_width - COLUMN_WIDTH * RECENT_COLUMNS as f32) / (RECENT_COLUMNS - 1) as f32;
-                    let grid_rows = (((ui.available_height() - 16.0 - ROW_HEIGHT) / (ROW_HEIGHT + 4.0)).floor().max(0.0) as usize).min(RECENT_LIMIT / RECENT_COLUMNS);
-                    let recent = &recent[..(grid_rows * RECENT_COLUMNS).min(recent.len())];
                     if !recent.is_empty() {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                             ui.add_space(30.0);
                             select_project_action_column(ui, "Recent", list_width, |ui| {
-                                for grid_row in recent.chunks(RECENT_COLUMNS) {
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = column_gap;
-                                        for entry in grid_row {
-                                            let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                                            let row = select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "recent_project.svg")), &label, cell_width, ROW_HEIGHT);
-                                            // The cells are too narrow to promise the whole
-                                            // name, so the hover text carries it.
-                                            #[cfg(not(target_arch = "wasm32"))]
-                                            let row = row.on_hover_text(format!("{}\n{}", entry.name, entry.path.display()));
-                                            #[cfg(target_arch = "wasm32")]
-                                            let row = row.on_hover_text(format!(
-                                                "{}\n{}",
-                                                entry.name,
-                                                if entry.stored_in_browser {
-                                                    "Saved in browser storage"
-                                                } else {
-                                                    "Not saved in browser storage"
-                                                }
-                                            ));
-                                            if row.clicked() {
-                                                #[cfg(not(target_arch = "wasm32"))]
-                                                commands.push(UiCommand::ActivateTrackedProject(entry.path.clone()));
-                                                #[cfg(target_arch = "wasm32")]
-                                                commands.push(UiCommand::ActivateTrackedProject(entry.id));
-                                            }
-                                            context_menu_popup(&row, entry.name.as_str(), |ui| {
-                                                if ContextMenuAction::new("Remove from List").show(ui).clicked() {
-                                                    #[cfg(not(target_arch = "wasm32"))]
-                                                    commands.push(UiCommand::RemoveTrackedProject(entry.path.clone()));
-                                                    #[cfg(target_arch = "wasm32")]
-                                                    commands.push(UiCommand::RemoveTrackedProject(entry.id));
-                                                    ui.close();
-                                                }
-                                            });
-                                        }
-                                    });
-                                }
+                                draw_recent_projects(ui, &recent, list_width, RECENT_HEIGHT, ROW_HEIGHT, commands);
                             });
                         });
                     }
@@ -532,6 +491,62 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         });
 }
 
+fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTrackedProjectEntry], width: f32, height: f32, row_height: f32, commands: &mut Vec<UiCommand>) {
+    const INSET: i8 = 3;
+
+    let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
+    let frame = egui::Frame::new()
+        .fill(surface)
+        .stroke(ui.visuals().window_stroke())
+        .corner_radius(egui::CornerRadius::same(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
+        .inner_margin(egui::Margin::same(INSET));
+
+    frame.show(ui, |ui| {
+        let inset = f32::from(INSET);
+        ui.set_width(width - inset * 2.0);
+        egui::ScrollArea::vertical()
+            .id_salt("recent_projects_scroll")
+            .max_height(height - inset * 2.0)
+            .min_scrolled_height(0.0)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (index, entry) in recent.iter().enumerate() {
+                    let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
+                    let fill = if index % 2 == 1 { stripe } else { surface };
+                    let row = select_project_action_row_with_fill(ui, egui::Image::new(themed_icon!(ui, "recent_project.svg")), &label, ui.available_width(), row_height, fill);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let row = row.on_hover_text(format!("{}\n{}", entry.name, entry.path.display()));
+                    #[cfg(target_arch = "wasm32")]
+                    let row = row.on_hover_text(format!(
+                        "{}\n{}",
+                        entry.name,
+                        if entry.stored_in_browser {
+                            "Saved in browser storage"
+                        } else {
+                            "Not saved in browser storage"
+                        }
+                    ));
+                    if row.clicked() {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        commands.push(UiCommand::ActivateTrackedProject(entry.path.clone()));
+                        #[cfg(target_arch = "wasm32")]
+                        commands.push(UiCommand::ActivateTrackedProject(entry.id));
+                    }
+                    context_menu_popup(&row, entry.name.as_str(), |ui| {
+                        if ContextMenuAction::new("Remove from List").show(ui).clicked() {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            commands.push(UiCommand::RemoveTrackedProject(entry.path.clone()));
+                            #[cfg(target_arch = "wasm32")]
+                            commands.push(UiCommand::RemoveTrackedProject(entry.id));
+                            ui.close();
+                        }
+                    });
+                }
+            });
+    });
+}
+
 fn select_project_action_column(ui: &mut egui::Ui, heading: &str, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.vertical(|ui| {
         ui.set_width(width);
@@ -542,19 +557,26 @@ fn select_project_action_column(ui: &mut egui::Ui, heading: &str, width: f32, ad
 }
 
 fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, height: f32) -> egui::Response {
+    select_project_action_row_with_fill(ui, icon, label, width, height, egui::Color32::TRANSPARENT)
+}
+
+fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, height: f32, fill: egui::Color32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    if response.hovered() {
-        ui.painter().rect_filled(rect, egui::CornerRadius::same(2), ui.visuals().widgets.hovered.bg_fill);
+    let hovered = response.hovered();
+    if fill != egui::Color32::TRANSPARENT || hovered {
+        ui.painter().rect_filled(
+            rect,
+            if hovered { egui::CornerRadius::same(2) } else { egui::CornerRadius::ZERO },
+            if hovered { ui.visuals().widgets.hovered.bg_fill } else { fill },
+        );
     }
 
     let icon_size = egui::vec2(22.0, 22.0);
     let icon_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + 2.0, rect.center().y - icon_size.y / 2.0), icon_size);
     icon.fit_to_exact_size(icon_size).paint_at(ui, icon_rect);
 
-    // Rows are laid out to a fixed cell width - the Recent grid's cells are
-    // narrow - so the label is truncated to an ellipsis rather than allowed to
-    // run past the row and into its neighbour. The full name stays on the
-    // hover text.
+    // Rows are laid out to a fixed width, so long labels truncate rather than
+    // running beyond their action area. The full name stays on the hover text.
     let text_left = rect.left() + 30.0;
     let text_color = ui.visuals().text_color();
     let mut job = egui::text::LayoutJob::single_section(label.to_owned(), egui::TextFormat::simple(egui::FontId::proportional(13.0), text_color));
