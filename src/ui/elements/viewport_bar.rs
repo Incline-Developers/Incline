@@ -14,7 +14,9 @@
 //! The centre is centred on the *window*, not on the space the other two
 //! clusters leave, so it stays put as they change width - but it is clamped to
 //! that space, so a narrow window slides it across rather than letting the
-//! three overlap.
+//! three overlap. Narrower still and the bar stops narrowing altogether and
+//! scrolls under the wheel, the way a Blender header does - see
+//! [`crate::ui::elements::bar_strip`].
 
 use crate::ui::{
     EditorState, UiProjectView, color32_to_rgba,
@@ -92,34 +94,40 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
         // gap around the region is its spacing.
         .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::symmetric(BAR_MARGIN, 0)))
         .show(ui, |ui| {
-            // Keep the automatic ids below this point independent of the
-            // parent panel's layout pass. egui may rerun a frame for sizing;
-            // an explicit scope prevents an earlier conditional panel from
-            // shifting the ids of these persistent controls on that rerun.
-            let contents_id = ui.make_persistent_id("viewport_bar_contents");
-            ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
-                let strip = ui.max_rect();
-                let side = (strip.height() - 2.0 * BUTTON_INSET).clamp(*BUTTON_SIDE_RANGE.start(), *BUTTON_SIDE_RANGE.end());
-                // Deliberately *not* raising `interact_size.y` to match: the
-                // combo box and the number field in the centre take their
-                // height from it, and a taller bar is not a reason to grow
-                // them. The layout centres everything on the row, so the three
-                // clusters can be three different heights and still line up.
+            // Once the window is too narrow to hold all three clusters the bar
+            // stops narrowing and scrolls instead, rather than letting them
+            // run into each other. See `elements::bar_strip`.
+            crate::ui::elements::bar_strip(ui, "viewport_bar_strip", ui.available_height(), |ui, strip| {
+                // Keep the automatic ids below this point independent of the
+                // parent panel's layout pass. egui may rerun a frame for sizing;
+                // an explicit scope prevents an earlier conditional panel from
+                // shifting the ids of these persistent controls on that rerun.
+                let contents_id = ui.make_persistent_id("viewport_bar_contents");
+                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                    let side = (strip.height() - 2.0 * BUTTON_INSET).clamp(*BUTTON_SIDE_RANGE.start(), *BUTTON_SIDE_RANGE.end());
+                    // Deliberately *not* raising `interact_size.y` to match: the
+                    // combo box and the number field in the centre take their
+                    // height from it, and a taller bar is not a reason to grow
+                    // them. The layout centres everything on the row, so the three
+                    // clusters can be three different heights and still line up.
 
-                let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    draw_project_actions(ui, editor, project, commands, side);
-                    if editor.active_workspace == Workspace::Production {
-                        ui.add_space(CLUSTER_GAP - BUTTON_GAP);
-                        main_menu::draw_production_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                    let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        draw_project_actions(ui, editor, project, commands, side);
+                        if editor.active_workspace == Workspace::Production {
+                            ui.add_space(CLUSTER_GAP - BUTTON_GAP);
+                            main_menu::draw_production_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                        }
+                    });
+                    let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        draw_view_tools(ui, editor, commands, side);
+                    });
+
+                    if editor.active_workspace != Workspace::Production {
+                        // Nothing between the two clusters but the parting they
+                        // would take if they met.
+                        return left.width() + CLUSTER_GAP + right.width();
                     }
-                });
-                let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    draw_view_tools(ui, editor, commands, side);
-                });
 
-                if editor.active_workspace == Workspace::Production
-                    && let Some(band) = centre_band(strip, left, right)
-                {
                     // egui centres a block it is told the size of, and the run
                     // below is only measured once it has been laid out - so it
                     // is placed from the width it came out at last frame and
@@ -128,16 +136,23 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // stays there.
                     let width_id = ui.make_persistent_id("viewport_bar_centre_width");
                     let width: f32 = ui.data(|data| data.get_temp(width_id)).unwrap_or(CENTRE_WIDTH_GUESS);
-                    let left_edge = (strip.center().x - width / 2.0).clamp(band.left(), (band.right() - width).max(band.left()));
-                    // Open to the right of where the run starts rather than
-                    // sized to it, so a stale width slides the run along
-                    // instead of squeezing what is in it.
-                    let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
-                    let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        draw_drawing_settings(ui, editor, project);
-                    });
-                    ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
-                }
+                    if let Some(band) = centre_band(strip, left, right) {
+                        let left_edge = (strip.center().x - width / 2.0).clamp(band.left(), (band.right() - width).max(band.left()));
+                        // Open to the right of where the run starts rather than
+                        // sized to it, so a stale width slides the run along
+                        // instead of squeezing what is in it.
+                        let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
+                        let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            draw_drawing_settings(ui, editor, project);
+                        });
+                        ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
+                    }
+                    // The width the strip has to keep, worked out from the same
+                    // centre width the run was just placed from: the three
+                    // clusters, each with its clearance.
+                    left.width() + CENTRE_CLEARANCE + width + CENTRE_CLEARANCE + right.width()
+                })
+                .inner
             });
         })
         .response

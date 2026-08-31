@@ -61,20 +61,35 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .frame(crate::ui::chrome::window_bar_frame(ui))
         .show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                draw_logo(ui);
+            // Too narrow a window scrolls the row rather than clipping the
+            // workspace tabs off the end of it. See `elements::bar_strip`.
+            // The row is as tall as `MenuBar` makes it, which is this unless
+            // something on it is taller; the strip grows with the contents.
+            crate::ui::elements::bar_strip(ui, "main_menu_strip", ui.spacing().interact_size.y, |ui, strip| {
+                let mut used = 0.0;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(strip), |ui| {
+                    egui::MenuBar::new().ui(ui, |ui| {
+                        draw_logo(ui);
 
-                #[cfg(not(target_os = "macos"))]
-                {
-                    draw_file_menu(ui, editor, project, commands);
-                    draw_project_menu(ui, project, commands);
-                }
-                // The parameters are only read by the menus above.
-                #[cfg(target_os = "macos")]
-                let _ = (project, commands);
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            draw_file_menu(ui, editor, project, commands);
+                            draw_project_menu(ui, project, commands);
+                        }
+                        // The parameters are only read by the menus above.
+                        #[cfg(target_os = "macos")]
+                        let _ = (project, commands);
 
-                draw_separator(ui);
-                draw_workspace_tabs(ui, editor, bar_fill);
+                        draw_separator(ui);
+                        draw_workspace_tabs(ui, editor, bar_fill);
+
+                        // `MenuBar` sizes itself to the whole width it is given,
+                        // so its rect says nothing about how much of the row was
+                        // used; where the next item would go does.
+                        used = ui.cursor().left() - strip.left();
+                    });
+                });
+                used
             });
         })
         .response
