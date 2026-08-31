@@ -4,7 +4,7 @@
 //! AppKit owns the equivalent commands so they appear in the global menu bar
 //! and participate in standard Command-key handling.
 
-use std::sync::Mutex;
+use std::{path::PathBuf, sync::Mutex};
 
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
@@ -23,7 +23,9 @@ use crate::{
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
 static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Not `Copy`: the Open Recent rows are part of what the menu is showing, so
+/// they belong in the state the sync pass compares against.
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct MenuState {
     can_save: bool,
     has_project: bool,
@@ -33,13 +35,20 @@ struct MenuState {
     can_undrape_rasters: bool,
     has_design_selection: bool,
     has_selection_intersections: bool,
+    /// Whether the active project is a file that can be shown in Finder.
+    has_project_file: bool,
+    /// The File > Open Recent rows, as name and the project each opens.
+    recent: Vec<(String, PathBuf)>,
 }
 
 /// Actions emitted by AppKit and consumed by the winit application loop.
+///
+/// Every variant but [`MacMenuAction::OpenRecent`] is one fixed menu item;
+/// that one names a row of the File > Open Recent submenu, which is rebuilt
+/// from the recent-project list rather than written out here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(isize)]
 pub(crate) enum MacMenuAction {
-    SaveProject = 1,
+    SaveProject,
     SaveProjectAs,
     NewProject,
     OpenProject,
@@ -65,39 +74,69 @@ pub(crate) enum MacMenuAction {
     OpenCreateOreTriangulation,
     OpenAbout,
     UndrapeAllRasters,
+    ShowProjectInFileManager,
+    /// One row of File > Open Recent, by its index in the recent list the menu
+    /// was last built from.
+    OpenRecent(usize),
 }
 
+/// Tags at or above this carry a recent-project index rather than naming a
+/// fixed action, leaving room for the fixed list to grow.
+const RECENT_TAG_BASE: isize = 1000;
+/// Tag of the Open Recent item itself. It opens a submenu rather than
+/// performing anything, so [`MacMenuAction::from_tag`] rejects it: no fixed
+/// action sits this far up the range.
+const RECENT_SUBMENU_TAG: isize = RECENT_TAG_BASE - 1;
+
 impl MacMenuAction {
+    /// Every action that is one fixed menu item, in tag order.
+    ///
+    /// A variant's position here is its `NSMenuItem` tag, offset by one so
+    /// that 0 - the tag an item that was never given one carries - names
+    /// nothing.
+    const FIXED: &'static [Self] = &[
+        Self::SaveProject,
+        Self::SaveProjectAs,
+        Self::NewProject,
+        Self::OpenProject,
+        Self::OpenImport,
+        Self::OpenExport,
+        Self::ExportViewportImage,
+        Self::OpenPlotDialog,
+        Self::RequestExit,
+        Self::InsertPointsAtIntersections,
+        Self::OpenInsertPointAtElevation,
+        Self::OpenMoveToX,
+        Self::OpenMoveToY,
+        Self::OpenMoveToZ,
+        Self::OpenCreateTriangulation,
+        Self::OpenCutTriangulationByPolyline,
+        Self::OpenCutTriangulationByZ,
+        Self::OpenCutTriangulationBySurface,
+        Self::OpenCutTopologyByPitShell,
+        Self::OpenIncludeSolidInTopology,
+        Self::OpenContourTriangulation,
+        Self::OpenPointCloudTin,
+        Self::OpenCreateBlockModel,
+        Self::OpenCreateOreTriangulation,
+        Self::OpenAbout,
+        Self::UndrapeAllRasters,
+        Self::ShowProjectInFileManager,
+    ];
+
+    /// The `NSMenuItem` tag this action is carried by.
+    fn tag(self) -> isize {
+        match self {
+            Self::OpenRecent(index) => RECENT_TAG_BASE + index as isize,
+            action => Self::FIXED.iter().position(|fixed| *fixed == action).map_or(0, |index| index as isize + 1),
+        }
+    }
+
     fn from_tag(tag: isize) -> Option<Self> {
-        Some(match tag {
-            value if value == Self::SaveProject as isize => Self::SaveProject,
-            value if value == Self::SaveProjectAs as isize => Self::SaveProjectAs,
-            value if value == Self::NewProject as isize => Self::NewProject,
-            value if value == Self::OpenProject as isize => Self::OpenProject,
-            value if value == Self::OpenImport as isize => Self::OpenImport,
-            value if value == Self::OpenExport as isize => Self::OpenExport,
-            value if value == Self::ExportViewportImage as isize => Self::ExportViewportImage,
-            value if value == Self::OpenPlotDialog as isize => Self::OpenPlotDialog,
-            value if value == Self::RequestExit as isize => Self::RequestExit,
-            value if value == Self::InsertPointsAtIntersections as isize => Self::InsertPointsAtIntersections,
-            value if value == Self::OpenInsertPointAtElevation as isize => Self::OpenInsertPointAtElevation,
-            value if value == Self::OpenMoveToX as isize => Self::OpenMoveToX,
-            value if value == Self::OpenMoveToY as isize => Self::OpenMoveToY,
-            value if value == Self::OpenMoveToZ as isize => Self::OpenMoveToZ,
-            value if value == Self::OpenCreateTriangulation as isize => Self::OpenCreateTriangulation,
-            value if value == Self::OpenCutTriangulationByPolyline as isize => Self::OpenCutTriangulationByPolyline,
-            value if value == Self::OpenCutTriangulationByZ as isize => Self::OpenCutTriangulationByZ,
-            value if value == Self::OpenCutTriangulationBySurface as isize => Self::OpenCutTriangulationBySurface,
-            value if value == Self::OpenCutTopologyByPitShell as isize => Self::OpenCutTopologyByPitShell,
-            value if value == Self::OpenIncludeSolidInTopology as isize => Self::OpenIncludeSolidInTopology,
-            value if value == Self::OpenContourTriangulation as isize => Self::OpenContourTriangulation,
-            value if value == Self::OpenPointCloudTin as isize => Self::OpenPointCloudTin,
-            value if value == Self::OpenCreateBlockModel as isize => Self::OpenCreateBlockModel,
-            value if value == Self::OpenCreateOreTriangulation as isize => Self::OpenCreateOreTriangulation,
-            value if value == Self::OpenAbout as isize => Self::OpenAbout,
-            value if value == Self::UndrapeAllRasters as isize => Self::UndrapeAllRasters,
-            _ => return None,
-        })
+        if tag >= RECENT_TAG_BASE {
+            return Some(Self::OpenRecent(usize::try_from(tag - RECENT_TAG_BASE).ok()?));
+        }
+        Self::FIXED.get(usize::try_from(tag - 1).ok()?).copied()
     }
 }
 
@@ -179,7 +218,7 @@ fn add_disabled_submenu(root: &NSMenu, title: &str, mtm: MainThreadMarker) {
 
 fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, target: &MenuTarget, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     let item = menu_item(title, Some(sel!(performInclineMenuAction:)), key, mtm);
-    item.setTag(action as isize);
+    item.setTag(action.tag());
     // NSMenuItem's target is weak. representedObject retains the target for
     // exactly as long as the item remains installed in the application menu.
     unsafe {
@@ -213,6 +252,13 @@ pub(crate) fn install_menu_bar() {
     file_menu.setAutoenablesItems(false);
     add_action(&file_menu, "New project…", "n", MacMenuAction::NewProject, &target, mtm);
     add_action(&file_menu, "Open project…", "o", MacMenuAction::OpenProject, &target, mtm);
+    // Empty until the first sync pass fills it - see `rebuild_recent_menu`.
+    let recent_menu = menu("Open Recent", mtm);
+    recent_menu.setAutoenablesItems(false);
+    let recent_item = add_submenu(&file_menu, "Open Recent", &recent_menu, mtm);
+    recent_item.setTag(RECENT_SUBMENU_TAG);
+    recent_item.setEnabled(false);
+    add_action(&file_menu, "Reveal in Finder", "", MacMenuAction::ShowProjectInFileManager, &target, mtm);
     add_separator(&file_menu, mtm);
     add_action(&file_menu, "Save Project", "s", MacMenuAction::SaveProject, &target, mtm);
     add_action(&file_menu, "Save Project As…", "S", MacMenuAction::SaveProjectAs, &target, mtm);
@@ -320,9 +366,41 @@ fn find_item(menu: &NSMenu, tag: isize) -> Option<Retained<NSMenuItem>> {
 }
 
 fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
-    if let Some(item) = find_item(root, action as isize) {
+    if let Some(item) = find_item(root, action.tag()) {
         item.setEnabled(enabled);
     }
+}
+
+/// Refill File > Open Recent from the recent-project list.
+///
+/// The rows are rebuilt rather than enabled and disabled in place: what the
+/// list holds changes with every project opened, and a row's tag is its index
+/// in it. Each new item retains its own target, exactly as the fixed ones
+/// installed at startup do.
+fn rebuild_recent_menu(root: &NSMenu, recent: &[(String, PathBuf)], mtm: MainThreadMarker) {
+    let Some(item) = find_item(root, RECENT_SUBMENU_TAG) else {
+        return;
+    };
+    let Some(submenu) = item.submenu() else {
+        return;
+    };
+    submenu.removeAllItems();
+    let target = MenuTarget::new(mtm);
+    for (index, (name, _)) in recent.iter().enumerate() {
+        add_action(&submenu, name, "", MacMenuAction::OpenRecent(index), &target, mtm);
+    }
+    // Greyed out with nothing to offer rather than hidden, so the File menu
+    // keeps its shape.
+    item.setEnabled(!recent.is_empty());
+}
+
+/// The project behind one File > Open Recent row, as the menu last showed it.
+///
+/// The click carries the row's index alone, so it is resolved against the
+/// same list the row was built from rather than against the current one.
+pub(crate) fn recent_project_path(index: usize) -> Option<PathBuf> {
+    let state = last_menu_state();
+    state.as_ref()?.recent.get(index).map(|(_, path)| path.clone())
 }
 
 /// Keep native checkmarks and availability aligned with the current editor.
@@ -336,6 +414,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         can_undrape_rasters: project.raster_textures.iter().any(|raster| raster.is_draped),
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_selection_intersections: editor.selection_has_intersections,
+        has_project_file: project.active_path.is_some(),
+        recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -347,11 +427,15 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     if previous.as_ref() == Some(&state) {
         return;
     }
-    *previous = Some(state);
+    *previous = Some(state.clone());
     drop(previous);
+
+    rebuild_recent_menu(&root, &state.recent, mtm);
 
     set_enabled(&root, MacMenuAction::SaveProject, state.can_save);
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
+    // A never-saved project is nowhere to be shown.
+    set_enabled(&root, MacMenuAction::ShowProjectInFileManager, state.has_project_file);
     set_enabled(&root, MacMenuAction::UndrapeAllRasters, state.can_undrape_rasters);
     set_enabled(&root, MacMenuAction::OpenPointCloudTin, state.can_create_terrain_tin);
     set_enabled(&root, MacMenuAction::OpenCreateBlockModel, state.can_create_block_model);

@@ -128,6 +128,8 @@ impl<'a> App<'a> {
             }
             UiCommand::ActivateTrackedProject(project) => self.activate_tracked_project(project),
             UiCommand::RemoveTrackedProject(project) => self.remove_tracked_project(project),
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::ShowProjectInFileManager => self.show_active_project_in_file_manager(),
             UiCommand::CloseStartupDialog => {
                 self.startup_dialog_dismissed = true;
                 // Dismissing the splash leaves the application on a project,

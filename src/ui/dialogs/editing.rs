@@ -330,9 +330,6 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
-    /// How many remembered projects the Recent list offers before the file
-    /// chooser is the better tool for finding one.
-    const RECENT_LIMIT: usize = 10;
     const RECENT_HEIGHT: f32 = 100.0;
     /// Grow the splash by exactly as much as the Recent box has grown from the
     /// original two-row grid, keeping the footer and surrounding spacing put.
@@ -342,7 +339,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
     // that the explorer shows the open one alone. The active project is never
     // among these: the splash is only up when nothing but the startup project
     // is open.
-    let recent: Vec<&crate::ui::state::UiTrackedProjectEntry> = project.tracked_projects.iter().filter(|entry| !entry.is_active).take(RECENT_LIMIT).collect();
+    let recent: Vec<&crate::ui::state::UiTrackedProjectEntry> = project.recent_projects().collect();
 
     // Only the update notice below reads the editor, and that is native-only.
     #[cfg(target_arch = "wasm32")]

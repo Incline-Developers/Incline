@@ -40,6 +40,13 @@ const TAB_HEIGHT: f32 = 20.0;
 const MENU_LABEL_PADDING: f32 = 7.0;
 /// Gap between two dropdowns in that run, on top of their padding.
 const MENU_LABEL_GAP: f32 = 2.0;
+/// What the platform calls showing a file in its file manager. macOS says
+/// "Reveal in Finder" and has the row in the system menu instead - see
+/// `mac.rs`.
+#[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
+const SHOW_PROJECT_LABEL: &str = "Show in Explorer";
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows"), not(target_os = "macos")))]
+const SHOW_PROJECT_LABEL: &str = "Open Containing Folder";
 
 /// Draw the top menu bar panel.
 ///
@@ -216,6 +223,14 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             commands.push(UiCommand::OpenProject);
             ui.close();
         }
+        draw_open_recent(ui, project, commands);
+        // Disabled until the project is a file: a never-saved one is nowhere
+        // to be shown.
+        #[cfg(not(target_arch = "wasm32"))]
+        if ContextMenuAction::new(SHOW_PROJECT_LABEL).enabled(project.active_path.is_some()).show(ui).clicked() {
+            commands.push(UiCommand::ShowProjectInFileManager);
+            ui.close();
+        }
         context_menu_separator(ui);
         if ContextMenuAction::new("Import...").enabled(active_project.is_some()).show(ui).clicked() {
             editor.show_import = true;
@@ -243,6 +258,35 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
         if ContextMenuAction::new(format!("Exit {}", crate::APP_NAME)).show(ui).clicked() {
             commands.push(UiCommand::RequestExit);
             ui.close();
+        }
+    });
+}
+
+/// The File menu's Open Recent submenu: the same remembered projects the
+/// welcome splash lists, so a project can be reopened without the splash or
+/// the file chooser.
+///
+/// Greyed out with nothing to offer rather than hidden, so the menu keeps its
+/// shape. The open project is not among the rows - see
+/// [`UiProjectView::recent_projects`] - so none of them is ever the dirty one
+/// and no `*` marker is needed.
+#[cfg(not(target_os = "macos"))]
+fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let recent: Vec<_> = project.recent_projects().collect();
+    context_submenu(ui, "Open Recent", !recent.is_empty(), |ui| {
+        for entry in recent {
+            let row = ContextMenuAction::new(entry.name.as_str()).show(ui);
+            // A row is a file stem, so two remembered projects can read alike;
+            // the full path tells them apart.
+            #[cfg(not(target_arch = "wasm32"))]
+            let row = row.on_hover_text(entry.path.display().to_string());
+            if row.clicked() {
+                #[cfg(not(target_arch = "wasm32"))]
+                commands.push(UiCommand::ActivateTrackedProject(entry.path.clone()));
+                #[cfg(target_arch = "wasm32")]
+                commands.push(UiCommand::ActivateTrackedProject(entry.id));
+                ui.close();
+            }
         }
     });
 }

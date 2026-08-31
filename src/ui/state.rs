@@ -2100,6 +2100,10 @@ pub(crate) enum UiCommand {
     RemoveTrackedProject(PathBuf),
     #[cfg(target_arch = "wasm32")]
     RemoveTrackedProject(crate::model::project::ProjectId),
+    /// Open the file manager on the active project's own file. Nothing the
+    /// browser can do, so it is not offered there.
+    #[cfg(not(target_arch = "wasm32"))]
+    ShowProjectInFileManager,
     CloseStartupDialog,
     ImportOmfPaths(Vec<PathBuf>),
     ImportDxfPathsInto(Vec<PathBuf>),
@@ -2518,6 +2522,8 @@ impl UiCommand {
             Self::RemoveTrackedProject(path) => report("Remove Project", path.display().to_string()),
             #[cfg(target_arch = "wasm32")]
             Self::RemoveTrackedProject(id) => report("Remove Project", id.to_string()),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::ShowProjectInFileManager => report("Show Project", "Open the containing folder".to_owned()),
             Self::ImportOmfPaths(paths) => report("Import OMF", format!("{} file(s)", paths.len())),
             Self::ImportDxfPathsInto(paths) => report("Import DXF", format!("{} file(s)", paths.len())),
             Self::ImportTriangulationPaths(paths) => report("Import Triangulation", format!("{} file(s)", paths.len())),
@@ -2858,6 +2864,22 @@ pub(crate) struct UiProjectView {
     pub(crate) active_path: Option<PathBuf>,
     /// Active triangulation id and face colour, used by the context menu.
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
+}
+
+/// How many remembered projects a Recent list offers before the file chooser
+/// is the better tool for finding one.
+pub(crate) const RECENT_PROJECT_LIMIT: usize = 10;
+
+impl UiProjectView {
+    /// The remembered projects a Recent list offers, most recently opened
+    /// first.
+    ///
+    /// The open project is left out: it is not somewhere to go back to, and
+    /// both lists that read this - the welcome splash and File > Open Recent -
+    /// are ways of leaving it.
+    pub(crate) fn recent_projects(&self) -> impl Iterator<Item = &UiTrackedProjectEntry> {
+        self.tracked_projects.iter().filter(|entry| !entry.is_active).take(RECENT_PROJECT_LIMIT)
+    }
 }
 
 /// A workspace: one of the discipline-shaped arrangements of the window the

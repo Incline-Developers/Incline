@@ -1140,6 +1140,20 @@ impl<'a> App<'a> {
         self.execute_file_dialog_action(FileDialogAction::SwitchProject(path))
     }
 
+    /// Show the active project's file in the platform's file manager.
+    ///
+    /// Only ever reached with a saved project - the menu row is disabled until
+    /// there is a file to show - but a project can be closed between the click
+    /// and the command arriving, so the absence is an error rather than a
+    /// panic.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn show_active_project_in_file_manager(&mut self) -> Result<()> {
+        let Some(path) = self.workspace.active_project().and_then(|project| project.path.clone()) else {
+            anyhow::bail!("Save the project before showing where it is");
+        };
+        show_in_file_manager(&path)
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn activate_tracked_project(&mut self, project_id: crate::model::project::ProjectId) -> Result<()> {
         if self.workspace.active_project().is_some_and(|project| project.id == project_id) {
@@ -2541,4 +2555,45 @@ fn sanitize_file_stem(name: &str) -> String {
     let cleaned: String = name.trim().chars().map(|c| if INVALID.contains(&c) { '_' } else { c }).collect();
     let trimmed = cleaned.trim();
     if trimmed.is_empty() { "layer".to_string() } else { trimmed.to_string() }
+}
+
+/// Show `path` in the platform's file manager.
+///
+/// Windows and macOS both have a way of opening the containing folder with the
+/// file itself picked out, which is what makes this more useful than reading
+/// the path off the title bar. Elsewhere there is no portable way to ask for
+/// that - the freedesktop `ShowItems` interface needs a session bus and a file
+/// manager that implements it - so the folder is opened and the file is left
+/// for the user to spot.
+///
+/// The launcher is spawned rather than waited on: it hands the request to an
+/// already-running file manager and its exit says nothing useful. Windows
+/// `explorer.exe` in particular exits non-zero on success.
+#[cfg(not(target_arch = "wasm32"))]
+fn show_in_file_manager(path: &Path) -> Result<()> {
+    use std::process::Command;
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        // No space after the comma: `explorer` reads one as part of the path.
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(path);
+        command
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut command = {
+        let folder = path.parent().unwrap_or(Path::new("."));
+        let mut command = Command::new("xdg-open");
+        command.arg(folder);
+        command
+    };
+
+    command.spawn().with_context(|| format!("show {} in the file manager", path.display()))?;
+    Ok(())
 }

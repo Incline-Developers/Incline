@@ -440,6 +440,10 @@ impl<'a> App<'a> {
             MacMenuAction::SaveProjectAs => active_project_id.map(UiCommand::SaveProjectAs),
             MacMenuAction::NewProject => Some(UiCommand::NewProject),
             MacMenuAction::OpenProject => Some(UiCommand::OpenProject),
+            // The row carries its index alone; `mac.rs` holds the list it was
+            // built from.
+            MacMenuAction::OpenRecent(index) => crate::mac::recent_project_path(index).map(UiCommand::ActivateTrackedProject),
+            MacMenuAction::ShowProjectInFileManager => Some(UiCommand::ShowProjectInFileManager),
             MacMenuAction::OpenImport => {
                 self.editor.show_import = true;
                 self.editor.show_export = false;
