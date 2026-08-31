@@ -435,7 +435,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                                         ui.spacing_mut().item_spacing.x = column_gap;
                                         for entry in grid_row {
                                             let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                                            let row = select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_project.svg")), &label, cell_width, ROW_HEIGHT);
+                                            let row = select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "recent_project.svg")), &label, cell_width, ROW_HEIGHT);
                                             // The cells are too narrow to promise the whole
                                             // name, so the hover text carries it.
                                             #[cfg(not(target_arch = "wasm32"))]
