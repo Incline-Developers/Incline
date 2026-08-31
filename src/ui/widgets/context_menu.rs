@@ -164,6 +164,7 @@ impl ContextMenuAction {
     /// Mark this row as a switch rather than a command, drawing a tick at its
     /// head while the setting is on. Rows in the same menu that are not
     /// switches keep their own left edge; only checkable ones are indented.
+    #[cfg(not(target_os = "macos"))]
     pub(crate) fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self

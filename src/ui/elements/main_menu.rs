@@ -29,8 +29,10 @@ const LOGO_SIZE: f32 = 18.0;
 /// first menu.
 const LOGO_MARGIN: f32 = 6.0;
 /// Height of the rule parting the menus from the workspace tabs.
+#[cfg(not(target_os = "macos"))]
 const SEPARATOR_HEIGHT: f32 = 16.0;
 /// Space either side of that rule.
+#[cfg(not(target_os = "macos"))]
 const SEPARATOR_MARGIN: f32 = 8.0;
 /// Space either side of a workspace tab's label.
 const TAB_PADDING: f32 = 10.0;
@@ -96,7 +98,9 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                         #[cfg(target_os = "macos")]
                         let _ = project;
 
+                        #[cfg(not(target_os = "macos"))]
                         draw_separator(ui);
+
                         draw_workspace_tabs(ui, editor, commands, bar_fill);
 
                         // `MenuBar` sizes itself to the whole width it is given,
@@ -123,6 +127,7 @@ fn draw_logo(ui: &mut egui::Ui) {
 }
 
 /// Part the menus from the workspace tabs with a short vertical rule.
+#[cfg(not(target_os = "macos"))]
 fn draw_separator(ui: &mut egui::Ui) {
     ui.add_space(SEPARATOR_MARGIN);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, SEPARATOR_HEIGHT), egui::Sense::hover());
