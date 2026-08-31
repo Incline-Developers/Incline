@@ -6,7 +6,12 @@
 //! this bar carries only what is true whichever workspace is open, the way
 //! Blender's topbar does.
 
-use crate::ui::{EditorState, UiCommand, UiProjectView, state::Workspace, themed_icon, widgets::toolbar::GROUP_CORNER_RADIUS};
+use crate::ui::{
+    EditorState, UiCommand, UiProjectView,
+    state::{ActiveTool, Workspace},
+    themed_icon,
+    widgets::toolbar::GROUP_CORNER_RADIUS,
+};
 // The dropdowns below are all in the system menu bar on macOS (`mac.rs`), and
 // nothing this module still draws there needs any of this.
 #[cfg(not(target_os = "macos"))]
@@ -87,12 +92,12 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                             draw_file_menu(ui, editor, project, commands);
                             draw_view_menu(ui, editor, commands);
                         }
-                        // The parameters are only read by the menus above.
+                        // The parameter is only read by the menus above.
                         #[cfg(target_os = "macos")]
-                        let _ = (project, commands);
+                        let _ = project;
 
                         draw_separator(ui);
-                        draw_workspace_tabs(ui, editor, bar_fill);
+                        draw_workspace_tabs(ui, editor, commands, bar_fill);
 
                         // `MenuBar` sizes itself to the whole width it is given,
                         // so its rect says nothing about how much of the row was
@@ -127,9 +132,34 @@ fn draw_separator(ui: &mut egui::Ui) {
 }
 
 /// Draw the run of workspace tabs.
-fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, bar_fill: egui::Color32) {
+fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, bar_fill: egui::Color32) {
     for workspace in Workspace::ALL {
-        draw_workspace_tab(ui, editor, workspace, bar_fill);
+        draw_workspace_tab(ui, editor, commands, workspace, bar_fill);
+    }
+}
+
+/// Open `workspace`, putting down anything the tools it does not carry had
+/// picked up.
+///
+/// The drawing tools, the slice view and flying mode leave the window with
+/// production - see [`Workspace::has_production_tools`] - so a mode still
+/// running after the switch would have nothing left to turn it off. Entering a
+/// workspace without them hands the scene back to plain orbiting first. The
+/// cursor mode is left as the user set it: it does nothing without a drawing
+/// tool to use it, and it is theirs again the moment production is back.
+fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace) {
+    editor.active_workspace = workspace;
+    if workspace.has_production_tools() {
+        return;
+    }
+    if editor.fly_mode_enabled {
+        commands.push(UiCommand::SetFlyModeEnabled(false));
+    }
+    if editor.slice_mode_enabled {
+        commands.push(UiCommand::SetSliceModeEnabled(false));
+    }
+    if editor.active_tool != ActiveTool::None {
+        commands.push(UiCommand::SetActiveTool(ActiveTool::None));
     }
 }
 
@@ -138,7 +168,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, bar_fill: eg
 /// A tab for a workspace that has nothing behind it yet is drawn as bare text
 /// on the bar rather than left off it, so the shape of the application is
 /// visible before all of it is built.
-fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, workspace: Workspace, bar_fill: egui::Color32) {
+fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace, bar_fill: egui::Color32) {
     let enabled = workspace.implemented();
     let selected = editor.active_workspace == workspace;
     let state = if !enabled {
@@ -169,7 +199,7 @@ fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, workspace: Wo
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, text);
 
     if response.clicked() {
-        editor.active_workspace = workspace;
+        select_workspace(editor, commands, workspace);
     }
 }
 

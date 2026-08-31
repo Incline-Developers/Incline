@@ -298,7 +298,11 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
         if let Some(measurement) = state::batter_angle_measurement(editor.batter_angle_points.as_slice()) {
-            return Some(format!("{:.2}° batter angle", measurement.angle_degrees));
+            let dip = format!("{:.2}° dip", measurement.dip_degrees);
+            return Some(match measurement.strike_degrees {
+                Some(strike) => format!("{strike:06.2}° strike · {dip}"),
+                None => format!("{dip} (horizontal, no strike)"),
+            });
         }
         return Some(
             match editor.batter_angle_points.len() {

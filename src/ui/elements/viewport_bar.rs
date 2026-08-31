@@ -22,7 +22,7 @@ use crate::ui::{
     EditorState, UiProjectView, color32_to_rgba,
     elements::main_menu,
     rgba_to_color32,
-    state::{ActiveTool, UiCommand, UiProjectEntry, Workspace},
+    state::{ActiveTool, UiCommand, UiProjectEntry},
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
@@ -93,7 +93,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
                     let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
-                        if editor.active_workspace == Workspace::Production {
+                        if editor.active_workspace.has_production_tools() {
                             main_menu::draw_production_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                         }
                     });
@@ -101,7 +101,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         draw_view_tools(ui, editor, commands, side);
                     });
 
-                    if editor.active_workspace != Workspace::Production {
+                    if !editor.active_workspace.has_production_tools() {
                         // Nothing between the two clusters but the parting they
                         // would take if they met.
                         return left.width() + CLUSTER_GAP + right.width();
@@ -282,7 +282,55 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 ///
 /// Drawn into a right-to-left layout, so the run is written here in the order
 /// it reads on screen and placed from the strip's right edge inward.
+///
+/// What is here is what any workspace asks of the camera; the switches over
+/// how the scene itself is drawn belong to production and are added ahead of
+/// it only there - see [`draw_production_view_tools`].
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    if editor.active_workspace.has_production_tools() {
+        draw_production_view_tools(ui, editor, commands, side);
+    }
+
+    let exaggeration = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
+            format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
+        )
+        .id_salt("vertical_exaggeration")
+        .button_side(side)
+        .selected(editor.vertical_exaggeration != 1.0),
+    );
+    if exaggeration.clicked() {
+        editor.vertical_exaggeration_input = editor.vertical_exaggeration;
+        editor.vertical_exaggeration_dialog_open = true;
+    }
+
+    let zoom = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents")
+            .id_salt("zoom_to_extents")
+            .button_side(side),
+    );
+    if zoom.clicked() {
+        commands.push(UiCommand::ZoomToExtents);
+    }
+
+    let reset = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view")
+            .id_salt("reset_view")
+            .button_side(side),
+    );
+    if reset.clicked() {
+        commands.push(UiCommand::ResetView);
+    }
+}
+
+/// The head of that run: the switches over how the scene is drawn, which the
+/// production workspace carries and the others do not.
+///
+/// Flying and the slice view are modes the scene is put into rather than
+/// settings, so a workspace that does not offer them cannot be left holding
+/// one - see `main_menu::select_workspace`.
+fn draw_production_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     // A right-to-left layout adds each button to the left of the last, so the
     // run is added in reverse to read left to right on screen.
     let fly = ui.add(
@@ -355,37 +403,5 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
     );
     if xray.clicked() {
         editor.xray_enabled = !editor.xray_enabled;
-    }
-
-    let exaggeration = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
-            format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
-        )
-        .id_salt("vertical_exaggeration")
-        .button_side(side)
-        .selected(editor.vertical_exaggeration != 1.0),
-    );
-    if exaggeration.clicked() {
-        editor.vertical_exaggeration_input = editor.vertical_exaggeration;
-        editor.vertical_exaggeration_dialog_open = true;
-    }
-
-    let zoom = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents")
-            .id_salt("zoom_to_extents")
-            .button_side(side),
-    );
-    if zoom.clicked() {
-        commands.push(UiCommand::ZoomToExtents);
-    }
-
-    let reset = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view")
-            .id_salt("reset_view")
-            .button_side(side),
-    );
-    if reset.clicked() {
-        commands.push(UiCommand::ResetView);
     }
 }

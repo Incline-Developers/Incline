@@ -536,9 +536,24 @@ pub(crate) struct FinishedTask {
     pub(crate) total_units: Option<u64>,
 }
 
+/// The plane through the three picked points, as the Strike and Dip tool
+/// reports it.
+///
+/// Dip and strike are read off the plane itself rather than off the section
+/// the picks happen to cut, so the pair is the plane's own attitude however
+/// the three points were placed. Picking a level crest line and a toe point -
+/// the way a bench face is measured - gives the batter angle as the dip, which
+/// is what this measured before it was named for the plane.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BatterAngleMeasurement {
-    pub(crate) angle_degrees: f64,
+    /// Dip: the plane's steepest slope, in degrees below horizontal.
+    pub(crate) dip_degrees: f64,
+    /// Strike: the bearing of the plane's horizontal line, in degrees
+    /// clockwise from grid north, by the right-hand rule - the dip falls 90°
+    /// clockwise of it. `None` for a horizontal plane, which has no strike.
+    pub(crate) strike_degrees: Option<f64>,
+    /// Where the third point sits against the line through the first two, in
+    /// plan. The overlay draws the measurement out to here.
     pub(crate) projection: DVec3,
 }
 
@@ -563,8 +578,26 @@ pub(crate) fn batter_angle_measurement(points: &[DVec3]) -> Option<BatterAngleMe
         return None;
     }
 
+    // Turned upward, so its horizontal part points down the dip: the plane is
+    // z = z0 - (n.x·dx + n.y·dy) / n.z, whose steepest descent runs along
+    // (n.x, n.y) once n.z is positive.
+    let mut normal = (*b - *a).cross(*c - *a);
+    if normal.z < 0.0 {
+        normal = -normal;
+    }
+    let down_dip = normal.truncate();
+    let dip_degrees = down_dip.length().atan2(normal.z.abs()).to_degrees();
+    // A horizontal plane dips nowhere, so it has no line of strike to name.
+    let strike_degrees = (down_dip.length() > 1.0e-12).then(|| {
+        // Bearings run clockwise from grid north, which is +Y: east over
+        // north, rather than the north-over-east of a mathematical angle.
+        let dip_direction = down_dip.x.atan2(down_dip.y).to_degrees();
+        (dip_direction - 90.0).rem_euclid(360.0)
+    });
+
     Some(BatterAngleMeasurement {
-        angle_degrees: vertical.atan2(horizontal).to_degrees(),
+        dip_degrees,
+        strike_degrees,
         projection,
     })
 }
@@ -2929,7 +2962,7 @@ impl UiProjectView {
 /// menu bar's tabs switch between.
 ///
 /// The tab decides what the viewport bar carries, the way Blender's workspace
-/// tabs decide what its editors show. Only [`Workspace::Production`] is built
+/// tabs decide what its editors show. Production and Drill & Blast are built
 /// out; the rest name where the remaining disciplines will land and stay
 /// disabled in the bar until they have something behind them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2957,6 +2990,17 @@ impl Workspace {
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
+        matches!(self, Self::Production | Self::DrillAndBlast)
+    }
+
+    /// Whether this workspace carries the mine production tools.
+    ///
+    /// The drawing toolbar, the cursor modes, the design menus, the layer / Z
+    /// / colour / fill settings those tools draw with and the scene switches
+    /// that go with them all belong to production alone. A workspace without
+    /// them keeps what is true everywhere: the project actions, the camera
+    /// controls, and the editors of its own discipline.
+    pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
 

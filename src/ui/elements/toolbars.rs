@@ -110,17 +110,30 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
 /// flush against the scene's edge and carry the same chrome as every other
 /// panel: the column is one region, running the full height the panels around
 /// it leave, with its run of cells at the top.
+///
+/// The tools in it are the production workspace's - see
+/// [`crate::ui::state::Workspace::has_production_tools`] - so another
+/// workspace leaves the column standing and empty, one cell wide, rather than
+/// taking it off the window: it is where that discipline's own tools will go,
+/// and the workspace tabs are not a reason for the window to change shape
+/// under the pointer.
 pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, editing_enabled: bool, project_active: bool, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    let tools = left_tools(ui, editing_enabled, project_active);
+    let tools = if editor.active_workspace.has_production_tools() {
+        left_tools(ui, editing_enabled, project_active)
+    } else {
+        Vec::new()
+    };
     // The run wraps into further columns rather than off the bottom of a short
     // window, and a panel claims its width before anything is drawn in it - so
     // the packing is arithmetic, every cell being one square.
     let margins = 2.0 * crate::ui::chrome::margin(ui.ctx());
     // A column is filled before the next is started - ten tools in room for
     // six wrap 6-4, not 5-5 - so the toolbar only reaches as far across the
-    // window as it has to.
-    let rows = (((ui.available_height() - margins) / TOOL_CELL_SIZE) as usize).clamp(1, tools.len());
-    let columns = tools.len().div_ceil(rows);
+    // window as it has to. An empty run still claims the one column it would
+    // have started, so the column has a width to be a column at.
+    let cells = tools.len().max(1);
+    let rows = (((ui.available_height() - margins) / TOOL_CELL_SIZE) as usize).clamp(1, cells);
+    let columns = cells.div_ceil(rows);
     let width = columns as f32 * TOOL_CELL_SIZE + margins;
 
     egui::Panel::left(LEFT_TOOLBAR_PANEL_ID)
@@ -154,6 +167,12 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
 /// Visibility and locking are per-item concerns now, so they live on the
 /// explorer's rows rather than as whole-scene toolbar actions: see
 /// `ExplorerEntry::toggles`.
+///
+/// The cursor modes go with the drawing tools they snap for, and the two
+/// measurements are of a pit being designed, so the whole run belongs to the
+/// production workspace - see
+/// [`crate::ui::state::Workspace::has_production_tools`]. Another workspace is
+/// left with the strip and what is running on it.
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     let claimed = bottom_toolbar_height(ui.ctx());
     egui::Panel::bottom("bottom_tools_strip")
@@ -169,58 +188,32 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    cursor_mode_button(ui, egui::Image::new(themed_icon!(ui, "cursor_select.svg")), "Cursor: Regular", editor, CursorMode::Select, side);
+                    if editor.active_workspace.has_production_tools() {
+                        draw_cursor_modes(ui, editor, side);
+                        ui.add_space(12.);
 
-                    cursor_mode_button(
-                        ui,
-                        egui::Image::new(themed_icon!(ui, "snap_to_surface.svg")),
-                        "Cursor: Snap to surface",
-                        editor,
-                        CursorMode::SnapToSurface,
-                        side,
-                    );
+                        ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
+                            tool_button(
+                                ui,
+                                egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
+                                "Measure distance",
+                                editor,
+                                commands,
+                                ActiveTool::MeasureDistance,
+                                side,
+                            );
 
-                    cursor_mode_button(
-                        ui,
-                        egui::Image::new(themed_icon!(ui, "snap_to_line.svg")),
-                        "Cursor: Snap to line",
-                        editor,
-                        CursorMode::SnapToLine,
-                        side,
-                    );
-
-                    cursor_mode_button(
-                        ui,
-                        egui::Image::new(themed_icon!(ui, "snap_to_point.svg")),
-                        "Cursor: Snap to point",
-                        editor,
-                        CursorMode::SnapToPoint,
-                        side,
-                    );
-
-                    ui.add_space(12.);
-
-                    ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
-                        tool_button(
-                            ui,
-                            egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
-                            "Measure distance",
-                            editor,
-                            commands,
-                            ActiveTool::MeasureDistance,
-                            side,
-                        );
-
-                        tool_button(
-                            ui,
-                            egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
-                            "Measure batter angle",
-                            editor,
-                            commands,
-                            ActiveTool::MeasureBatterAngle,
-                            side,
-                        );
-                    });
+                            tool_button(
+                                ui,
+                                egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
+                                "Strike and Dip",
+                                editor,
+                                commands,
+                                ActiveTool::MeasureBatterAngle,
+                                side,
+                            );
+                        });
+                    }
 
                     // Task progress hugs the right end of the strip, out of the
                     // way of the tools and with room to say what is running -
@@ -233,6 +226,46 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
         })
         .response
         .rect
+}
+
+/// The run of cursor modes at the head of the bottom toolbar: what a click in
+/// the scene snaps to.
+fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
+    cursor_mode_button(
+        ui,
+        egui::Image::new(themed_icon!(ui, "cursor_select.svg")),
+        "Cursor: Regular",
+        editor,
+        CursorMode::Select,
+        side,
+    );
+
+    cursor_mode_button(
+        ui,
+        egui::Image::new(themed_icon!(ui, "snap_to_surface.svg")),
+        "Cursor: Snap to surface",
+        editor,
+        CursorMode::SnapToSurface,
+        side,
+    );
+
+    cursor_mode_button(
+        ui,
+        egui::Image::new(themed_icon!(ui, "snap_to_line.svg")),
+        "Cursor: Snap to line",
+        editor,
+        CursorMode::SnapToLine,
+        side,
+    );
+
+    cursor_mode_button(
+        ui,
+        egui::Image::new(themed_icon!(ui, "snap_to_point.svg")),
+        "Cursor: Snap to point",
+        editor,
+        CursorMode::SnapToPoint,
+        side,
+    );
 }
 
 /// Draw a tool button in a horizontal toolbar; sets `editor.active_tool` on click.

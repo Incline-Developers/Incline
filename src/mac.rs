@@ -37,6 +37,8 @@ struct MenuState {
     has_selection_intersections: bool,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
+    /// Whether the open workspace carries the production menus.
+    has_production_menus: bool,
     /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
     view_toggles: [bool; VIEW_TOGGLES.len()],
     /// The File > Open Recent rows, as name and the project each opens.
@@ -87,6 +89,15 @@ pub(crate) enum MacMenuAction {
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
 /// the same three - see [`crate::ui::elements::main_menu`].
 pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid];
+
+/// The root menus that belong to the production workspace, by title.
+///
+/// They are hidden with it, which is what the other targets get by leaving the
+/// viewport bar's dropdowns undrawn - see
+/// [`crate::ui::elements::main_menu::draw_production_menus`]. Hidden rather
+/// than disabled: a workspace not carrying a menu is not the same as its
+/// actions having nothing to act on, which is what greying one out says.
+const PRODUCTION_MENUS: [&str; 6] = ["Design", "Triangulation", "Raster", "Point Cloud", "Block Model", "Drill Holes"];
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -396,6 +407,15 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
     }
 }
 
+/// Show or hide the production workspace's root menus.
+fn set_production_menus_visible(root: &NSMenu, visible: bool) {
+    for title in PRODUCTION_MENUS {
+        if let Some(item) = root.itemWithTitle(&NSString::from_str(title)) {
+            item.setHidden(!visible);
+        }
+    }
+}
+
 fn set_checked(root: &NSMenu, action: MacMenuAction, checked: bool) {
     if let Some(item) = find_item(root, action.tag()) {
         item.setState(if checked { NSControlStateValueOn } else { NSControlStateValueOff });
@@ -446,6 +466,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_selection_intersections: editor.selection_has_intersections,
         has_project_file: project.active_path.is_some(),
+        has_production_menus: editor.active_workspace.has_production_tools(),
         view_toggles: {
             let preferences = editor.current_preferences();
             VIEW_TOGGLES.map(|toggle| toggle.get(&preferences))
@@ -466,6 +487,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     drop(previous);
 
     rebuild_recent_menu(&root, &state.recent, mtm);
+    set_production_menus_visible(&root, state.has_production_menus);
 
     set_enabled(&root, MacMenuAction::SaveProject, state.can_save);
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
