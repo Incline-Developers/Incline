@@ -67,8 +67,12 @@ impl Gui {
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
         ctx.global_style_mut(|style| {
+            // Tooltips wait out a deliberate hover rather than firing the moment the pointer
+            // crosses a widget, but the grace time keeps them instant while sweeping along a
+            // row of toolbar buttons that are already showing one.
             style.interaction.show_tooltips_only_when_still = false;
-            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_delay = 0.5;
+            style.interaction.tooltip_grace_time = 0.2;
         });
         ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
 
