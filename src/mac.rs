@@ -12,12 +12,12 @@ use objc2::{
     runtime::{AnyObject, Sel},
     sel,
 };
-use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
+use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem};
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 
 use crate::{
     model::SceneEntityId,
-    ui::state::{EditorState, UiProjectView},
+    ui::state::{EditorState, UiProjectView, ViewToggle},
 };
 
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
@@ -37,6 +37,8 @@ struct MenuState {
     has_selection_intersections: bool,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
+    /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
+    view_toggles: [bool; VIEW_TOGGLES.len()],
     /// The File > Open Recent rows, as name and the project each opens.
     recent: Vec<(String, PathBuf)>,
 }
@@ -78,11 +80,20 @@ pub(crate) enum MacMenuAction {
     /// One row of File > Open Recent, by its index in the recent list the menu
     /// was last built from.
     OpenRecent(usize),
+    /// One View menu switch, by its position in [`VIEW_TOGGLES`].
+    ToggleView(usize),
 }
+
+/// The View menu's rows, in the order they are drawn. The egui menu bar draws
+/// the same three - see [`crate::ui::elements::main_menu`].
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid];
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
 const RECENT_TAG_BASE: isize = 1000;
+/// Tags at or above this, and below [`RECENT_SUBMENU_TAG`], carry a View menu
+/// switch by its index in [`VIEW_TOGGLES`].
+const VIEW_TAG_BASE: isize = 500;
 /// Tag of the Open Recent item itself. It opens a submenu rather than
 /// performing anything, so [`MacMenuAction::from_tag`] rejects it: no fixed
 /// action sits this far up the range.
@@ -128,6 +139,7 @@ impl MacMenuAction {
     fn tag(self) -> isize {
         match self {
             Self::OpenRecent(index) => RECENT_TAG_BASE + index as isize,
+            Self::ToggleView(index) => VIEW_TAG_BASE + index as isize,
             action => Self::FIXED.iter().position(|fixed| *fixed == action).map_or(0, |index| index as isize + 1),
         }
     }
@@ -135,6 +147,10 @@ impl MacMenuAction {
     fn from_tag(tag: isize) -> Option<Self> {
         if tag >= RECENT_TAG_BASE {
             return Some(Self::OpenRecent(usize::try_from(tag - RECENT_TAG_BASE).ok()?));
+        }
+        if tag >= VIEW_TAG_BASE && tag < RECENT_SUBMENU_TAG {
+            let index = usize::try_from(tag - VIEW_TAG_BASE).ok()?;
+            return (index < VIEW_TOGGLES.len()).then_some(Self::ToggleView(index));
         }
         Self::FIXED.get(usize::try_from(tag - 1).ok()?).copied()
     }
@@ -269,6 +285,15 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, "Export Engineering Drawing…", "", MacMenuAction::OpenPlotDialog, &target, mtm);
     add_submenu(&root, "File", &file_menu, mtm);
 
+    // Switches onto the same settings the Interface preferences tab holds;
+    // their checkmarks are kept current by `sync_menu_state`.
+    let view_menu = menu("View", mtm);
+    view_menu.setAutoenablesItems(false);
+    for (index, toggle) in VIEW_TOGGLES.iter().enumerate() {
+        add_action(&view_menu, toggle.label(), "", MacMenuAction::ToggleView(index), &target, mtm);
+    }
+    add_submenu(&root, "View", &view_menu, mtm);
+
     let design_menu = menu("Design", mtm);
     design_menu.setAutoenablesItems(false);
     let insert_point_menu = menu("Insert Point", mtm);
@@ -371,6 +396,12 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
     }
 }
 
+fn set_checked(root: &NSMenu, action: MacMenuAction, checked: bool) {
+    if let Some(item) = find_item(root, action.tag()) {
+        item.setState(if checked { NSControlStateValueOn } else { NSControlStateValueOff });
+    }
+}
+
 /// Refill File > Open Recent from the recent-project list.
 ///
 /// The rows are rebuilt rather than enabled and disabled in place: what the
@@ -415,6 +446,10 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_selection_intersections: editor.selection_has_intersections,
         has_project_file: project.active_path.is_some(),
+        view_toggles: {
+            let preferences = editor.current_preferences();
+            VIEW_TOGGLES.map(|toggle| toggle.get(&preferences))
+        },
         recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {
@@ -451,4 +486,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     }
     // Inserting at intersections additionally needs two polylines that cross.
     set_enabled(&root, MacMenuAction::InsertPointsAtIntersections, state.has_selection_intersections);
+    for (index, checked) in state.view_toggles.iter().enumerate() {
+        set_checked(&root, MacMenuAction::ToggleView(index), *checked);
+    }
 }

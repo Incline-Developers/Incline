@@ -2074,6 +2074,44 @@ impl ToolHatch {
     }
 }
 
+/// One of the view preferences the View menu switches on and off.
+///
+/// The menu carries the few that are reached often enough to want a row of
+/// their own; the whole set stays in the Interface preferences tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewToggle {
+    Console,
+    DarkMode,
+    XyGrid,
+}
+
+impl ViewToggle {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Console => "Show Console",
+            Self::DarkMode => "Dark Mode",
+            Self::XyGrid => "XY Grid",
+        }
+    }
+
+    /// Read this toggle out of a preferences snapshot.
+    pub(crate) fn get(self, preferences: &PreferencesDraft) -> bool {
+        match self {
+            Self::Console => preferences.show_console,
+            Self::DarkMode => preferences.dark_mode,
+            Self::XyGrid => preferences.show_xy_grid,
+        }
+    }
+
+    pub(crate) fn set(self, preferences: &mut PreferencesDraft, value: bool) {
+        match self {
+            Self::Console => preferences.show_console = value,
+            Self::DarkMode => preferences.dark_mode = value,
+            Self::XyGrid => preferences.show_xy_grid = value,
+        }
+    }
+}
+
 /// Commands sent from the UI back to the application core.
 ///
 /// Each variant represents an action the user triggered through the UI
@@ -2161,6 +2199,10 @@ pub(crate) enum UiCommand {
     SetShowPoints(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
+    /// Flip one view preference from the View menu. The application reads the
+    /// current value rather than the UI sending one, so the row and the
+    /// Interface tab cannot disagree about what is being toggled.
+    ToggleViewOption(ViewToggle),
     /// Make one block model the selection, so its properties tab is shown.
     SelectBlockModel(BlockModelId),
     SaveProject,
@@ -2463,6 +2505,7 @@ impl UiCommand {
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
             | Self::ApplyPreferences(_)
+            | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)

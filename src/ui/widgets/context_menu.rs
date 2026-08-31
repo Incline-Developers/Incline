@@ -15,6 +15,9 @@ use std::{fmt::Debug, hash::Hash};
 const MENU_WIDTH: f32 = 220.0;
 const HEADER_HEIGHT: f32 = 20.0;
 const ROW_HEIGHT: f32 = 20.0;
+/// Width of the tick column at the head of a checkable row, which its label is
+/// indented past.
+const CHECK_COLUMN: f32 = 16.0;
 const CONTENT_HORIZONTAL_MARGIN: i8 = 6;
 const CONTENT_VERTICAL_MARGIN: i8 = 4;
 const CORNER_RADIUS: u8 = 3;
@@ -144,6 +147,7 @@ pub(crate) struct ContextMenuAction {
     shortcut: Option<egui::WidgetText>,
     enabled: bool,
     submenu: bool,
+    checked: Option<bool>,
 }
 
 impl ContextMenuAction {
@@ -153,7 +157,16 @@ impl ContextMenuAction {
             shortcut: None,
             enabled: true,
             submenu: false,
+            checked: None,
         }
+    }
+
+    /// Mark this row as a switch rather than a command, drawing a tick at its
+    /// head while the setting is on. Rows in the same menu that are not
+    /// switches keep their own left edge; only checkable ones are indented.
+    pub(crate) fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
     }
 
     #[allow(dead_code)]
@@ -178,6 +191,7 @@ impl ContextMenuAction {
             shortcut,
             enabled,
             submenu,
+            checked,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
@@ -188,8 +202,19 @@ impl ContextMenuAction {
                     ui.painter().rect_filled(rect, 1.0, visuals.bg_fill);
                 }
                 let text_color = visuals.fg_stroke.color;
+                let text_left = if checked.is_some() { CHECK_COLUMN } else { 4.0 };
+                if checked == Some(true) {
+                    // A tick drawn rather than set as text: the row's glyphs
+                    // come from the button style, and a checkmark character is
+                    // not in every font that style can resolve to.
+                    let center = rect.left_center() + egui::vec2(CHECK_COLUMN / 2.0, 0.0);
+                    ui.painter().add(egui::Shape::line(
+                        vec![center + egui::vec2(-3.0, 0.0), center + egui::vec2(-1.0, 2.5), center + egui::vec2(3.0, -3.0)],
+                        egui::Stroke::new(1.4, text_color),
+                    ));
+                }
                 ui.painter().text(
-                    rect.left_center() + egui::vec2(4.0, 0.0),
+                    rect.left_center() + egui::vec2(text_left, 0.0),
                     egui::Align2::LEFT_CENTER,
                     label.text(),
                     egui::TextStyle::Button.resolve(ui.style()),

@@ -363,6 +363,24 @@ fn settings_section(
     ui.add_space(6.0);
 }
 
+fn reset_interface_defaults(draft: &mut PreferencesDraft) {
+    let defaults = PreferencesDraft::default();
+    draft.renderer_background_color = defaults.renderer_background_color;
+    draft.dark_mode = defaults.dark_mode;
+    draft.show_console = defaults.show_console;
+    draft.panel_chrome = defaults.panel_chrome;
+    draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
+    draft.show_xy_grid = defaults.show_xy_grid;
+    draft.show_scale_bar = defaults.show_scale_bar;
+}
+
+fn reset_developer_defaults(draft: &mut PreferencesDraft) {
+    let defaults = PreferencesDraft::default();
+    draft.frame_counter_enabled = defaults.frame_counter_enabled;
+    draft.debug_chunk_coloring = defaults.debug_chunk_coloring;
+    draft.debug_clip_planes = defaults.debug_clip_planes;
+}
+
 fn reset_camera_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
     draft.plan_orbit_sensitivity = defaults.plan_orbit_sensitivity;
@@ -416,7 +434,7 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new("Scale bar", &mut draft.show_scale_bar).show(ui));
             changed
         },
-        None,
+        Some(reset_interface_defaults),
     );
 }
 
@@ -531,7 +549,7 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             );
             changed
         },
-        None,
+        Some(reset_developer_defaults),
     );
 }
 

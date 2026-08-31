@@ -13,7 +13,7 @@ use crate::ui::{EditorState, UiCommand, UiProjectView, state::Workspace, themed_
 use crate::{
     model::{Axis, SceneEntityId},
     ui::{
-        state::UiProjectEntry,
+        state::{UiProjectEntry, ViewToggle},
         widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
     },
 };
@@ -81,6 +81,7 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
                         #[cfg(not(target_os = "macos"))]
                         {
                             draw_file_menu(ui, editor, project, commands);
+                            draw_view_menu(ui, editor, commands);
                         }
                         // The parameters are only read by the menus above.
                         #[cfg(target_os = "macos")]
@@ -258,6 +259,25 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
         if ContextMenuAction::new(format!("Exit {}", crate::APP_NAME)).show(ui).clicked() {
             commands.push(UiCommand::RequestExit);
             ui.close();
+        }
+    });
+}
+
+/// The View menu, beside File: the view preferences reached often enough to
+/// want a row of their own.
+///
+/// Each row is a switch onto the same setting the Interface preferences tab
+/// holds - see [`crate::ui::elements::properties`] - rather than a second
+/// piece of state, so a change here shows in that tab and is saved with it.
+#[cfg(not(target_os = "macos"))]
+fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    let preferences = editor.current_preferences();
+    MenuBarMenu::new("View").show(ui, |ui| {
+        for toggle in [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid] {
+            if ContextMenuAction::new(toggle.label()).checked(toggle.get(&preferences)).show(ui).clicked() {
+                commands.push(UiCommand::ToggleViewOption(toggle));
+                ui.close();
+            }
         }
     });
 }
