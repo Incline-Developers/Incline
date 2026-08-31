@@ -329,7 +329,7 @@ pub(crate) struct App<'a> {
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
     /// One-shot website release check. Failures are logged and otherwise
-    /// ignored so starting Incline never depends on network availability.
+    /// ignored so starting Incline Design never depends on network availability.
     #[cfg(not(target_arch = "wasm32"))]
     pending_release_check: Option<mpsc::Receiver<Result<Option<String>>>>,
     #[cfg(target_arch = "wasm32")]
@@ -438,9 +438,12 @@ impl<'a> App<'a> {
         let command = match action {
             MacMenuAction::SaveProject => Some(UiCommand::SaveProject),
             MacMenuAction::SaveProjectAs => active_project_id.map(UiCommand::SaveProjectAs),
-            MacMenuAction::CloseProject | MacMenuAction::DeactivateProject => active_project_id.map(UiCommand::CloseProject),
             MacMenuAction::NewProject => Some(UiCommand::NewProject),
             MacMenuAction::OpenProject => Some(UiCommand::OpenProject),
+            // The row carries its index alone; `mac.rs` holds the list it was
+            // built from.
+            MacMenuAction::OpenRecent(index) => crate::mac::recent_project_path(index).map(UiCommand::ActivateTrackedProject),
+            MacMenuAction::ShowProjectInFileManager => Some(UiCommand::ShowProjectInFileManager),
             MacMenuAction::OpenImport => {
                 self.editor.show_import = true;
                 self.editor.show_export = false;
@@ -474,6 +477,7 @@ impl<'a> App<'a> {
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
             MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
+            MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
         };
 
         if let Some(command) = command {
@@ -506,6 +510,11 @@ impl<'a> App<'a> {
 
         app.load_session_projects(&session);
         app.apply_config(config);
+        // Blender-style: there is always a project to draw into. The welcome
+        // splash sits over this one until it is dismissed, and `New Project`
+        // from it lands on another just like it.
+        app.start_untitled_project()?;
+        app.startup_dialog_dismissed = false;
 
         Ok(app)
     }
@@ -634,15 +643,20 @@ impl<'a> App<'a> {
         }
         self.clear_editor_transient_state();
         self.history.activate(self.workspace.projects[index].runtime_id);
+        self.startup_dialog_dismissed = true;
         self.invalidate_geometry();
         self.persist_session();
     }
 
+    /// Remember `path` as the most recently opened project.
+    ///
+    /// The list is kept in opening order, newest last, which is the order the
+    /// splash's Recent block reverses to read top-down. A path that is already
+    /// tracked moves to the end rather than staying where it first landed.
     #[cfg(not(target_arch = "wasm32"))]
     fn track_project_path(&mut self, path: PathBuf) {
-        if !self.tracked_project_paths.iter().any(|tracked| tracked == &path) {
-            self.tracked_project_paths.push(path);
-        }
+        self.tracked_project_paths.retain(|tracked| tracked != &path);
+        self.tracked_project_paths.push(path);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1265,17 +1279,24 @@ impl<'a> App<'a> {
         let mut triangulations = self
             .triangulations
             .iter()
-            .map(|tri| UiTriangulationEntry {
-                id: tri.id,
-                name: tri.name.clone(),
-                source_name: tri.state.source_name.clone(),
-                visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
-                is_active: self.active_triangulation == Some(tri.id),
-                is_loaded: tri.state.loaded,
-                dirty: tri.state.is_dirty(),
-                color: tri.color,
-                vertex_count: tri.mesh.vertex_count(),
-                triangle_count: tri.mesh.face_count(),
+            .map(|tri| {
+                let bounds = tri.mesh.bounds();
+                UiTriangulationEntry {
+                    id: tri.id,
+                    name: tri.name.clone(),
+                    source_name: tri.state.source_name.clone(),
+                    visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
+                    is_active: self.active_triangulation == Some(tri.id),
+                    is_loaded: tri.state.loaded,
+                    dirty: tri.state.is_dirty(),
+                    color: tri.color,
+                    vertex_count: tri.mesh.vertex_count(),
+                    triangle_count: tri.mesh.face_count(),
+                    bounds: Some((
+                        glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z),
+                        glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z),
+                    )),
+                }
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -1290,6 +1311,7 @@ impl<'a> App<'a> {
                 dirty: model.state.is_dirty(),
                 _block_count: model.renderable_block_indices.len(),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
+                bounds: model.world_bounds(),
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self
@@ -1304,6 +1326,7 @@ impl<'a> App<'a> {
                 dirty: dataset.state.is_dirty(),
                 hole_count: dataset.dataset.holes.len(),
                 field_count: dataset.dataset.fields.len(),
+                bounds: dataset.dataset.bounds,
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -1317,6 +1340,7 @@ impl<'a> App<'a> {
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.points.len(),
+                bounds: Some(cloud.bounds),
             })
             .collect::<Vec<_>>();
         let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
@@ -1344,10 +1368,13 @@ impl<'a> App<'a> {
             project.layers.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         }
         projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name).then_with(|| a.path.cmp(&b.path)));
-        // The active project always sits last, so it reads as the "current"
-        // row at the bottom of the list rather than wherever its name falls
-        // alphabetically among the others.
-        tracked_projects.sort_by(|a, b| a.is_active.cmp(&b.is_active).then_with(|| crate::natural_sort::natural_cmp(&a.name, &b.name)));
+        // Most recently opened first, so the splash's Recent block reads the
+        // way such a list is expected to. Browser storage records no such
+        // order, so there the list stays alphabetical.
+        #[cfg(not(target_arch = "wasm32"))]
+        tracked_projects.reverse();
+        #[cfg(target_arch = "wasm32")]
+        tracked_projects.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         triangulations.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         block_models.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
         drill_holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.name, &b.name));
@@ -1387,8 +1414,7 @@ impl<'a> App<'a> {
             point_clouds_membership_dirty,
             rasters_membership_dirty,
             has_active_project: self.workspace.has_active_project(),
-            active_project_epoch: self.workspace.active_project().map_or(0, |project| u64::from(project.runtime_id)),
-            needs_startup_dialog: !self.workspace.has_active_project() && !self.startup_dialog_dismissed,
+            needs_startup_dialog: !self.startup_dialog_dismissed,
             active_path,
             active_triangulation_for_menu,
         });
@@ -1396,9 +1422,9 @@ impl<'a> App<'a> {
         view
     }
 
-    /// Restore the tracked native project catalog for the startup dialog's
-    /// recent list. The previously active project is deliberately *not*
-    /// reopened: startup always begins with no active project.
+    /// Restore the tracked native project catalog. The previously active
+    /// project is deliberately *not* reopened: startup always begins on a
+    /// fresh, never-saved project.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn load_session_projects(&mut self, session: &io::Session) {
         self.tracked_project_paths.clear();

@@ -1,13 +1,13 @@
 //! The explorer's properties panel: application settings plus the properties
 //! of whatever is selected, switched between by the icon strip at its top.
 //!
-//! Sections are [`PropertyTab`]s. The four settings tabs are always present and
-//! apply live - every committed edit becomes an [`UiCommand::ApplyPreferences`],
-//! which saves the config file - so there is no draft to confirm or discard.
-//! The Block Model, Triangulation and Design tabs describe the last non-empty
-//! selection and only appear while there is something for them to describe;
-//! clearing the selection leaves them in place, as Blender's properties editor
-//! does with its active object.
+//! Sections are [`PropertyTab`]s. The four settings tabs and generic Object tab
+//! are always present. Settings apply live - every committed edit becomes an
+//! [`UiCommand::ApplyPreferences`], which saves the config file - so there is
+//! no draft to confirm or discard. The Block Model, Triangulation and Design
+//! tabs describe the last non-empty selection and only appear while there is
+//! something for them to describe; clearing the selection leaves them in
+//! place, as Blender's properties editor does with its active object.
 
 use thousands::Separable;
 
@@ -19,6 +19,7 @@ use crate::{
         state::{EditorState, PreferencesDraft, PropertyTab},
         themed_icon, unthemed_icon,
         widgets::{
+            collapsible_section::CollapsibleSection,
             menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
             viewport::BlockModelProperties,
         },
@@ -40,8 +41,19 @@ const MIN_HEIGHT: f32 = 120.0;
 /// the sections stay reachable however short the window gets.
 const MIN_TREE_HEIGHT: f32 = 72.0;
 
+/// Effective outer-height limits for the properties panel in the available
+/// workspace. Kept public within the UI so the console and bottom-toolbar
+/// stack can stop at the same two horizontal lines.
+pub(crate) fn height_limits(available_height: f32) -> (f32, f32) {
+    let min = MIN_HEIGHT.min(available_height);
+    let max = (available_height - MIN_TREE_HEIGHT).max(min).min(available_height);
+    (min, max)
+}
+
 /// What the panel can show this frame, given the current selection.
 struct PropertyContext {
+    /// Scene entities described by the generic Object tab.
+    entities: Vec<SceneEntityId>,
     /// Selected block model to describe, if any.
     block_model: Option<crate::model::block_model::BlockModelId>,
     /// Selected triangulation to describe, if any.
@@ -60,12 +72,6 @@ impl PropertyContext {
             PropertyTab::Design => !self.objects.is_empty(),
             _ => true,
         }
-    }
-
-    /// Whether any tab describing a selection is showing, and so whether the
-    /// tab strip needs the gap that separates them from the settings tabs.
-    fn has_selection_tabs(&self) -> bool {
-        self.block_model.is_some() || self.triangulation.is_some() || !self.objects.is_empty()
     }
 }
 
@@ -95,7 +101,7 @@ pub(crate) fn draw_properties(
     let shown_tab = if context.tab_available(editor.active_property_tab) {
         editor.active_property_tab
     } else {
-        PropertyTab::Interface
+        PropertyTab::Object
     };
 
     // The tab column sits on the tree's darker list surface; the properties
@@ -109,14 +115,14 @@ pub(crate) fn draw_properties(
     // Only the first frame uses this; after that the panel remembers its
     // dragged size.
     let available_height = ui.available_height();
-    let default_height = (available_height / 3.0).clamp(180.0, 640.0);
+    let (min_height, max_height) = height_limits(available_height);
+    let default_height = (available_height / 3.0).clamp(180.0, 640.0).clamp(min_height, max_height);
     // Never take the last of the tree's height: a short window would otherwise
     // leave it with a sliver the section headers spill straight out of.
-    let max_height = (available_height - MIN_TREE_HEIGHT).max(MIN_HEIGHT);
     egui::Panel::bottom(PANEL_ID)
         .resizable(true)
         .default_size(default_height)
-        .min_size(MIN_HEIGHT)
+        .min_size(min_height)
         .max_size(max_height)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .frame(crate::ui::chrome::region_frame(ui).fill(content_fill).inner_margin(egui::Margin::ZERO))
@@ -163,6 +169,7 @@ pub(crate) fn draw_properties(
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
+                        PropertyTab::Object => draw_object_tab(ui, editor, project, block_models, document, &context),
                         PropertyTab::BlockModel => draw_block_model_tab(ui, editor, block_models, &context, commands),
                         PropertyTab::Triangulation => draw_triangulation_tab(ui, project, &context, commands, geometry_dirty),
                         PropertyTab::Design => draw_design_tab(ui, editor, document, &context, commands, geometry_dirty),
@@ -181,6 +188,14 @@ fn collect_context(editor: &mut EditorState, project: &UiProjectView, block_mode
     // the same way Blender's properties editor keeps describing the active
     // object after everything is deselected.
     if !editor.selected_handles.is_empty() {
+        editor.property_entities = editor.selected_handles.iter().copied().collect();
+        editor.property_entities.sort_by_key(|entity| match entity {
+            SceneEntityId::Object(id) => (0, id.0),
+            SceneEntityId::Triangulation(id) => (1, id.0),
+            SceneEntityId::BlockModel(id) => (2, id.0),
+            SceneEntityId::PointCloud(id) => (3, id.0),
+            SceneEntityId::DrillHole(id) => (4, id.0),
+        });
         // Remember which model the tab describes, so a multi-model selection
         // does not switch between them as the set is re-walked.
         editor.viewport_block_model_id = block_models
@@ -218,6 +233,13 @@ fn collect_context(editor: &mut EditorState, project: &UiProjectView, block_mode
         .viewport_triangulation_id
         .filter(|id| project.triangulations.iter().any(|tri| tri.id == *id && tri.is_loaded));
     editor.property_objects.retain(|&id| document.get_object(id).is_some());
+    editor.property_entities.retain(|entity| match entity {
+        SceneEntityId::Object(id) => document.get_object(*id).is_some(),
+        SceneEntityId::Triangulation(id) => project.triangulations.iter().any(|item| item.id == *id && item.is_loaded),
+        SceneEntityId::BlockModel(id) => block_models.iter().any(|item| item.id == *id && item.state.loaded),
+        SceneEntityId::PointCloud(id) => project.point_clouds.iter().any(|item| item.id == *id && item.is_loaded),
+        SceneEntityId::DrillHole(id) => project.drill_holes.iter().any(|item| item.id == *id && item.is_loaded),
+    });
 
     let objects = editor.property_objects.clone();
     let polylines = objects
@@ -227,6 +249,7 @@ fn collect_context(editor: &mut EditorState, project: &UiProjectView, block_mode
         .collect();
 
     PropertyContext {
+        entities: editor.property_entities.clone(),
         block_model: editor.viewport_block_model_id,
         triangulation: editor.viewport_triangulation_id,
         objects,
@@ -249,9 +272,10 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, shown_tab: Proper
         content_fill,
     );
     tab_button(ui, editor, shown_tab, PropertyTab::Developer, themed_icon!(ui, "properties_developer.svg"), content_fill);
-    if context.has_selection_tabs() {
-        ui.add_space(TAB_GROUP_GAP);
-    }
+    // Object starts the data/object group and stays available even before a
+    // selection exists, so it can be the stable startup tab.
+    ui.add_space(TAB_GROUP_GAP);
+    tab_button(ui, editor, shown_tab, PropertyTab::Object, unthemed_icon!("properties_object.svg"), content_fill);
     if context.block_model.is_some() {
         tab_button(ui, editor, shown_tab, PropertyTab::BlockModel, unthemed_icon!("section_block_models.svg"), content_fill);
     }
@@ -339,6 +363,24 @@ fn settings_section(
     ui.add_space(6.0);
 }
 
+fn reset_interface_defaults(draft: &mut PreferencesDraft) {
+    let defaults = PreferencesDraft::default();
+    draft.renderer_background_color = defaults.renderer_background_color;
+    draft.dark_mode = defaults.dark_mode;
+    draft.show_console = defaults.show_console;
+    draft.panel_chrome = defaults.panel_chrome;
+    draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
+    draft.show_xy_grid = defaults.show_xy_grid;
+    draft.show_scale_bar = defaults.show_scale_bar;
+}
+
+fn reset_developer_defaults(draft: &mut PreferencesDraft) {
+    let defaults = PreferencesDraft::default();
+    draft.frame_counter_enabled = defaults.frame_counter_enabled;
+    draft.debug_chunk_coloring = defaults.debug_chunk_coloring;
+    draft.debug_clip_planes = defaults.debug_clip_planes;
+}
+
 fn reset_camera_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
     draft.plan_orbit_sensitivity = defaults.plan_orbit_sensitivity;
@@ -392,7 +434,7 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new("Scale bar", &mut draft.show_scale_bar).show(ui));
             changed
         },
-        None,
+        Some(reset_interface_defaults),
     );
 }
 
@@ -404,46 +446,48 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
         "Camera",
         |ui, draft| {
             let mut changed = false;
-            menu::menu_section(ui, "Plan Mode");
-            changed |= committed(
-                &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
-                    .speed(0.0001)
-                    .max_decimals(4)
-                    .show(ui),
-            );
-            changed |= committed(
-                &MenuFieldF64::new("Zoom sensitivity", &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
-                    .speed(0.0001)
-                    .max_decimals(4)
-                    .show(ui),
-            );
-            changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.plan_invert_vertical_look).show(ui));
-            changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.plan_invert_horizontal_look).show(ui));
-            changed |= committed(&MenuFieldBool::new("Zoom to cursor", &mut draft.plan_zoom_towards_cursor).show(ui));
+            CollapsibleSection::new("camera_plan_mode", "Plan Mode").default_open(true).show(ui, |ui| {
+                changed |= committed(
+                    &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
+                        .speed(0.0001)
+                        .max_decimals(4)
+                        .show(ui),
+                );
+                changed |= committed(
+                    &MenuFieldF64::new("Zoom sensitivity", &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
+                        .speed(0.0001)
+                        .max_decimals(4)
+                        .show(ui),
+                );
+                changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.plan_invert_vertical_look).show(ui));
+                changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.plan_invert_horizontal_look).show(ui));
+                changed |= committed(&MenuFieldBool::new("Zoom to cursor", &mut draft.plan_zoom_towards_cursor).show(ui));
+            });
 
-            ui.add_space(8.0);
-            menu::menu_section(ui, "Fly Mode");
-            changed |= committed(&MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0).suffix("°").show(ui));
-            changed |= committed(
-                &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
-                    .speed(0.0001)
-                    .max_decimals(4)
-                    .show(ui),
-            );
-            changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.fly_invert_vertical_look).show(ui));
-            changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.fly_invert_horizontal_look).show(ui));
-            changed |= committed(
-                &MenuFieldF64::new("Near clip limit", &mut draft.fly_near_clip_limit, 0.01..=100.0)
-                    .speed(0.01)
-                    .suffix("m")
-                    .show(ui),
-            );
-            changed |= committed(
-                &MenuFieldF64::new("Max clip span", &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
-                    .speed(100.0)
-                    .suffix("m")
-                    .show(ui),
-            );
+            ui.add_space(4.0);
+            CollapsibleSection::new("camera_fly_mode", "Fly Mode").show(ui, |ui| {
+                changed |= committed(&MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0).suffix("°").show(ui));
+                changed |= committed(
+                    &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
+                        .speed(0.0001)
+                        .max_decimals(4)
+                        .show(ui),
+                );
+                changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.fly_invert_vertical_look).show(ui));
+                changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.fly_invert_horizontal_look).show(ui));
+                changed |= committed(
+                    &MenuFieldF64::new("Near clip limit", &mut draft.fly_near_clip_limit, 0.01..=100.0)
+                        .speed(0.01)
+                        .suffix("m")
+                        .show(ui),
+                );
+                changed |= committed(
+                    &MenuFieldF64::new("Max clip span", &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
+                        .speed(100.0)
+                        .suffix("m")
+                        .show(ui),
+                );
+            });
             changed
         },
         Some(reset_camera_defaults),
@@ -505,8 +549,196 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             );
             changed
         },
-        None,
+        Some(reset_developer_defaults),
     );
+}
+
+struct EntityDetails {
+    name: String,
+    kind: &'static str,
+    id: String,
+    layer: Option<String>,
+    source: Option<String>,
+    visible: bool,
+    locked: bool,
+    bounds: Option<(glam::DVec3, glam::DVec3)>,
+}
+
+fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProjectView, block_models: &[OpenBlockModel], document: &Document) -> Option<EntityDetails> {
+    let locked = editor.frozen_handles.contains(&entity);
+    match entity {
+        SceneEntityId::Object(id) => {
+            let object = document.get_object(id)?;
+            let layer = document.layer(object.layer());
+            Some(EntityDetails {
+                name: object.kind_name().to_owned(),
+                kind: "Design Object",
+                id: format!("object:{}", id.0),
+                layer: layer.map(|layer| layer.name.clone()),
+                source: None,
+                visible: layer.is_some_and(|layer| layer.visible) && !document.is_object_hidden(id) && !editor.hidden_handles.contains(&entity),
+                locked,
+                bounds: object.world_bounds(),
+            })
+        }
+        SceneEntityId::Triangulation(id) => {
+            let item = project.triangulations.iter().find(|item| item.id == id && item.is_loaded)?;
+            Some(EntityDetails {
+                name: item.name.clone(),
+                kind: "Triangulation",
+                id: format!("triangulation:{}", id.0),
+                layer: None,
+                source: item.source_name.clone(),
+                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                locked,
+                bounds: item.bounds,
+            })
+        }
+        SceneEntityId::BlockModel(id) => {
+            let model = block_models.iter().find(|item| item.id == id && item.state.loaded)?;
+            let item = project.block_models.iter().find(|item| item.id == id);
+            let source = item.and_then(|item| item.source_name.clone());
+            Some(EntityDetails {
+                name: model.name.clone(),
+                kind: "Block Model",
+                id: format!("block-model:{}", id.0),
+                layer: None,
+                source,
+                visible: model.visible && !editor.hidden_handles.contains(&entity),
+                locked,
+                bounds: item.and_then(|item| item.bounds).or_else(|| model.world_bounds()),
+            })
+        }
+        SceneEntityId::PointCloud(id) => {
+            let item = project.point_clouds.iter().find(|item| item.id == id && item.is_loaded)?;
+            Some(EntityDetails {
+                name: item.name.clone(),
+                kind: "Point Cloud",
+                id: format!("point-cloud:{}", id.0),
+                layer: None,
+                source: item.source_name.clone(),
+                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                locked,
+                bounds: item.bounds,
+            })
+        }
+        SceneEntityId::DrillHole(id) => {
+            let item = project.drill_holes.iter().find(|item| item.id == id && item.is_loaded)?;
+            Some(EntityDetails {
+                name: item.name.clone(),
+                kind: "Drill Holes",
+                id: format!("drill-hole:{}", id.0),
+                layer: None,
+                source: item.source_name.clone(),
+                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                locked,
+                bounds: item.bounds,
+            })
+        }
+    }
+}
+
+fn common_text<'a>(mut values: impl Iterator<Item = &'a str>) -> &'a str {
+    let Some(first) = values.next() else {
+        return "";
+    };
+    if values.all(|value| value == first) { first } else { "Mixed" }
+}
+
+fn common_state(details: &[EntityDetails], value: impl Fn(&EntityDetails) -> bool, on: &'static str, off: &'static str) -> &'static str {
+    let Some(first) = details.first().map(&value) else {
+        return off;
+    };
+    if details.iter().skip(1).all(|detail| value(detail) == first) {
+        if first { on } else { off }
+    } else {
+        "Mixed"
+    }
+}
+
+fn selection_bounds(details: &[EntityDetails]) -> Option<(glam::DVec3, glam::DVec3)> {
+    let mut bounds = details.iter().map(|detail| detail.bounds);
+    let (mut min, mut max) = bounds.next()??;
+    for next in bounds {
+        let (next_min, next_max) = next?;
+        min = min.min(next_min);
+        max = max.max(next_max);
+    }
+    Some((min, max))
+}
+
+fn spatial_value(value: f64) -> String {
+    format!("{} m", crate::model::plot::format_quantity(value, 3))
+}
+
+fn spatial_vector_rows(ui: &mut egui::Ui, label: &str, value: glam::DVec3) {
+    read_only_row(ui, &format!("{label} X"), &spatial_value(value.x));
+    read_only_row(ui, &format!("{label} Y"), &spatial_value(value.y));
+    read_only_row(ui, &format!("{label} Z"), &spatial_value(value.z));
+}
+
+/// Generic information shared by every selectable scene entity. Type-specific
+/// appearance and geometry controls remain in the neighbouring tabs.
+fn draw_object_tab(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, block_models: &[OpenBlockModel], document: &Document, context: &PropertyContext) {
+    menu::menu_section(ui, "Object");
+    let details = context
+        .entities
+        .iter()
+        .filter_map(|&entity| entity_details(entity, editor, project, block_models, document))
+        .collect::<Vec<_>>();
+    if details.is_empty() {
+        ui.label(egui::RichText::new("No object selected").color(ui.visuals().weak_text_color()));
+        ui.add_space(6.0);
+        return;
+    }
+
+    let heading = if details.len() == 1 {
+        details[0].name.clone()
+    } else {
+        format!("{} objects", details.len())
+    };
+    ui.label(egui::RichText::new(heading).strong());
+    ui.add_space(4.0);
+
+    CollapsibleSection::new("object_general", "General").default_open(true).show(ui, |ui| {
+        if let [detail] = details.as_slice() {
+            read_only_row(ui, "Name", &detail.name);
+            read_only_row(ui, "Type", detail.kind);
+            read_only_row(ui, "ID", &detail.id);
+            if let Some(layer) = &detail.layer {
+                read_only_row(ui, "Layer", layer);
+            }
+            if let Some(source) = &detail.source {
+                read_only_row(ui, "Source", source);
+            }
+        } else {
+            read_only_row(ui, "Selected", &details.len().separate_with_commas());
+            read_only_row(ui, "Type", common_text(details.iter().map(|detail| detail.kind)));
+            if let Some(layer) = details.first().and_then(|detail| detail.layer.as_deref())
+                && details.iter().all(|detail| detail.layer.as_deref() == Some(layer))
+            {
+                read_only_row(ui, "Layer", layer);
+            }
+            if let Some(source) = details.first().and_then(|detail| detail.source.as_deref())
+                && details.iter().all(|detail| detail.source.as_deref() == Some(source))
+            {
+                read_only_row(ui, "Source", source);
+            }
+        }
+        read_only_row(ui, "Visibility", common_state(&details, |detail| detail.visible, "Visible", "Hidden"));
+        read_only_row(ui, "Editing", common_state(&details, |detail| detail.locked, "Locked", "Unlocked"));
+    });
+
+    ui.add_space(4.0);
+    CollapsibleSection::new("object_transform", "Transform").default_open(true).show(ui, |ui| {
+        if let Some((min, max)) = selection_bounds(&details) {
+            spatial_vector_rows(ui, "Centre", (min + max) * 0.5);
+            spatial_vector_rows(ui, "Size", (max - min).max(glam::DVec3::ZERO));
+        } else {
+            ui.label(egui::RichText::new("No spatial extent available").color(ui.visuals().weak_text_color()));
+        }
+    });
+    ui.add_space(6.0);
 }
 
 fn draw_block_model_tab(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], context: &PropertyContext, commands: &mut Vec<UiCommand>) {
@@ -538,9 +770,10 @@ fn draw_triangulation_tab(ui: &mut egui::Ui, project: &UiProjectView, context: &
     }
 
     ui.add_space(6.0);
-    menu::menu_section(ui, "Mesh");
-    read_only_row(ui, "Vertices", &triangulation.vertex_count.separate_with_commas());
-    read_only_row(ui, "Triangles", &triangulation.triangle_count.separate_with_commas());
+    CollapsibleSection::new("triangulation_geometry", "Geometry").default_open(true).show(ui, |ui| {
+        read_only_row(ui, "Vertices", &triangulation.vertex_count.separate_with_commas());
+        read_only_row(ui, "Triangles", &triangulation.triangle_count.separate_with_commas());
+    });
     ui.add_space(6.0);
 }
 

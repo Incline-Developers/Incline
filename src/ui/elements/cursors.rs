@@ -12,11 +12,6 @@ const GIZMO_MARGIN: f32 = 16.0;
 
 /// Where the world-axis gizmo lands in `canvas_rect`, without drawing it, or
 /// [`egui::Rect::NOTHING`] when the viewport is too small to carry it.
-///
-/// The view tools hang off the bottom of this, and the overlays that have to
-/// keep clear of *them* need it before anything is drawn - so the position is
-/// arithmetic the caller can ask for early rather than something only the
-/// drawing pass knows.
 pub(crate) fn orientation_gizmo_rect(canvas_rect: egui::Rect) -> egui::Rect {
     if canvas_rect.width() < 88.0 || canvas_rect.height() < 88.0 {
         return egui::Rect::NOTHING;
@@ -29,8 +24,8 @@ pub(crate) fn orientation_gizmo_rect(canvas_rect: egui::Rect) -> egui::Rect {
 
 /// Draw the world-axis gizmo in the viewport's top-right corner.
 ///
-/// Returns the rect it occupies, which is what the view tools below it anchor
-/// to; [`egui::Rect::NOTHING`] when the viewport is too small to draw it.
+/// Returns the rect it occupies, or [`egui::Rect::NOTHING`] when the viewport
+/// is too small to draw it.
 pub(crate) fn draw_orientation_gizmo(
     ui: &mut egui::Ui,
     canvas_rect: egui::Rect,

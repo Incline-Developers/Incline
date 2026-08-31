@@ -43,7 +43,7 @@ pub(crate) const fn default_show_xy_grid() -> bool {
 }
 
 pub(crate) const fn default_show_scale_bar() -> bool {
-    false
+    true
 }
 
 pub(crate) const fn default_panel_chrome() -> bool {
@@ -51,7 +51,7 @@ pub(crate) const fn default_panel_chrome() -> bool {
 }
 
 pub(crate) const fn default_dark_mode() -> bool {
-    false
+    true
 }
 
 pub(crate) const fn default_show_console() -> bool {

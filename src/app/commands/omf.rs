@@ -41,7 +41,7 @@ impl<'a> App<'a> {
             .active_project()
             .map(|project| project.project.metadata.name.trim_end_matches(".omf").to_owned())
             .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| "Incline project".to_owned());
+            .unwrap_or_else(|| "Incline Design project".to_owned());
         let snapshot = ProjectSnapshot {
             name,
             designs: self.workspace.active_project().map(|project| project.project.clone()),
@@ -52,7 +52,7 @@ impl<'a> App<'a> {
             rasters: self.raster_textures.clone(),
         };
         if snapshot.is_empty() {
-            anyhow::bail!("There is no open Incline data to export");
+            anyhow::bail!("There is no open Incline Design data to export");
         }
         Ok(snapshot)
     }
@@ -514,5 +514,5 @@ fn safe_stem(name: &str) -> String {
         })
         .collect::<String>();
     let value = value.trim_matches('_');
-    if value.is_empty() { "incline_project".to_owned() } else { value.to_owned() }
+    if value.is_empty() { "incline_design_project".to_owned() } else { value.to_owned() }
 }

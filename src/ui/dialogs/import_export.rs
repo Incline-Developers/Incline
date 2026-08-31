@@ -244,7 +244,7 @@ fn draw_export_omf(ui: &mut egui::Ui, project: &UiProjectView) {
     ui.label(format!(
         "Exports all open data in one project: {designs} design document, {triangulations} triangulation(s), {block_models} block model(s), {drill_holes} drillhole dataset(s), {point_clouds} point cloud(s), and {rasters} raster(s)."
     ));
-    ui.small("Incline styling and exact design/drillhole semantics are retained as OMF metadata alongside native OMF geometry and attributes.");
+    ui.small("Incline Design styling and exact design/drillhole semantics are retained as OMF metadata alongside native OMF geometry and attributes.");
 }
 
 fn draw_import_dxf(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {

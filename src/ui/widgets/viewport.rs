@@ -276,12 +276,11 @@ const SCALE_BAR_LABEL_OVERHANG: f32 = 18.0;
 const SCALE_BAR_SEGMENT_FRACTIONS: [f64; 6] = [0.0, 0.05, 0.10, 0.25, 0.50, 1.0];
 /// Height of the scale bar's block: the bar itself and the labels under it.
 const SCALE_BAR_HEIGHT: f32 = 21.0;
-/// Gap between the embedded slice preview and whatever it sits beside: the
-/// viewport's right edge, or the view tools' block.
+/// Gap between the embedded slice preview and the viewport's edges.
 const SLICE_PREVIEW_MARGIN: f32 = 10.0;
-/// Drop from the top of the viewport to the embedded slice preview when there
-/// is no view tools block to line its top edge up with.
-const SLICE_PREVIEW_TOP: f32 = 104.0;
+/// Drop from the top of the viewport to the embedded slice preview when the
+/// orientation gizmo it normally hangs below is switched off.
+const SLICE_PREVIEW_TOP: f32 = 10.0;
 /// Bounds on the embedded slice preview's side. It tracks the viewport's
 /// shorter side between them, so a small viewport still gets a usable preview
 /// and a large one is not handed most of the scene as a minimap.
@@ -1068,7 +1067,6 @@ impl<'a> BlockModelProperties<'a> {
 pub(crate) struct ViewportScaleBar {
     id: egui::Id,
     viewport_rect: egui::Rect,
-    clear_of: egui::Rect,
 }
 
 impl ViewportScaleBar {
@@ -1076,20 +1074,7 @@ impl ViewportScaleBar {
         Self {
             id: egui::Id::new(id_source),
             viewport_rect,
-            clear_of: egui::Rect::NOTHING,
         }
-    }
-
-    /// Keep the bar out from under a block of floating tools.
-    ///
-    /// The bar is painted in the background order, so anything floating over
-    /// the viewport covers it rather than the other way around. It normally
-    /// sits well below the view tools, but a window short enough to wrap them
-    /// into a second column brings that column down the right-hand edge to
-    /// meet it - so the bar steps aside instead.
-    pub(crate) fn clear_of(mut self, block: egui::Rect) -> Self {
-        self.clear_of = block;
-        self
     }
 
     pub(crate) fn show(self, ctx: &egui::Context, world_per_point: Option<f64>, viewport_background: [f32; 4]) {
@@ -1099,16 +1084,12 @@ impl ViewportScaleBar {
         let distance = nice_scale_distance(world_per_point * SCALE_BAR_TARGET_WIDTH);
         let bar_width = (distance / world_per_point) as f32;
         let bar_size = egui::vec2(bar_width + SCALE_BAR_LABEL_OVERHANG * 2.0, SCALE_BAR_HEIGHT);
-        let mut anchor = egui::pos2(
+        // Nothing floats over the viewport's right edge any more, so the bar
+        // hangs off its bottom-right corner with nothing to dodge.
+        let anchor = egui::pos2(
             self.viewport_rect.right() - SCALE_BAR_VIEWPORT_MARGIN,
             self.viewport_rect.bottom() - SCALE_BAR_VIEWPORT_MARGIN,
         );
-        // The bar hangs off its bottom-right corner, so clearing the tools is
-        // a matter of moving that corner to their left - as far as the left of
-        // the viewport, past which there is nowhere better to be.
-        if egui::Rect::from_min_max(anchor - bar_size, anchor).intersects(self.clear_of) {
-            anchor.x = (self.clear_of.left() - SCALE_BAR_VIEWPORT_MARGIN).max(self.viewport_rect.left() + bar_size.x);
-        }
         let luminance = 0.2126 * viewport_background[0] + 0.7152 * viewport_background[1] + 0.0722 * viewport_background[2];
         let (ink, outline) = if luminance > 0.45 {
             (egui::Color32::BLACK, egui::Color32::WHITE)
@@ -1308,7 +1289,7 @@ impl ViewportLabel {
 pub(crate) struct ViewportMiniMap {
     id: egui::Id,
     viewport_rect: egui::Rect,
-    tools_block: egui::Rect,
+    gizmo_block: egui::Rect,
 }
 
 impl ViewportMiniMap {
@@ -1316,20 +1297,19 @@ impl ViewportMiniMap {
         Self {
             id: egui::Id::new(id_source),
             viewport_rect,
-            tools_block: egui::Rect::NOTHING,
+            gizmo_block: egui::Rect::NOTHING,
         }
     }
 
-    /// Line the preview up with the view tools' block and keep it out from
-    /// under them.
+    /// Hang the preview below the orientation gizmo, which shares the
+    /// viewport's top-right corner with it.
     ///
-    /// The tools' own top moves with the orientation gizmo, so taking the top
-    /// edge from the block is what keeps the two lined up in both states. And
-    /// because the preview is painted in the foreground order, above the view
-    /// tools, it has to step aside from their tile itself rather than let
-    /// paint order hide them behind it.
-    pub(crate) fn beside_tools(mut self, block: egui::Rect) -> Self {
-        self.tools_block = block;
+    /// The preview is painted in the foreground order, above the gizmo, so it
+    /// has to keep clear of it itself rather than let paint order hide it.
+    /// Pass [`egui::Rect::NOTHING`] while the gizmo is switched off, and the
+    /// preview takes the corner.
+    pub(crate) fn below_gizmo(mut self, block: egui::Rect) -> Self {
+        self.gizmo_block = block;
         self
     }
 
@@ -1347,8 +1327,8 @@ impl ViewportMiniMap {
         // user-resizable: resizing an egui window captures pointer interaction
         // and makes the following middle-drag feel as if the 3D canvas needs
         // to be focused again.
-        let top = if self.tools_block.is_positive() {
-            self.tools_block.top()
+        let top = if self.gizmo_block.is_positive() {
+            self.gizmo_block.bottom() + SLICE_PREVIEW_MARGIN
         } else {
             self.viewport_rect.top() + SLICE_PREVIEW_TOP
         };
@@ -1358,10 +1338,7 @@ impl ViewportMiniMap {
             .min(self.viewport_rect.bottom() - SLICE_PREVIEW_MARGIN - top)
             .max(1.0);
         let preview_size = egui::vec2(side, side);
-        let mut preview_pos = egui::pos2(self.viewport_rect.right() - preview_size.x - SLICE_PREVIEW_MARGIN, top);
-        if egui::Rect::from_min_size(preview_pos, preview_size).intersects(self.tools_block) {
-            preview_pos.x = (self.tools_block.left() - SLICE_PREVIEW_MARGIN - preview_size.x).max(self.viewport_rect.left());
-        }
+        let preview_pos = egui::pos2(self.viewport_rect.right() - preview_size.x - SLICE_PREVIEW_MARGIN, top);
         let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::ZERO);
         egui::Window::new("")
             .id(self.id)

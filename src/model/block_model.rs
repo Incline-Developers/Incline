@@ -482,7 +482,7 @@ pub(crate) fn detect_uniform_grid(blocks: &[BlockBounds]) -> Option<UniformBlock
 ///
 /// Mirrors OMF2 `Boundary::{Less, LessEqual}`. Values are `f64` because that is
 /// what [`BlockModelData`] decodes every numeric column to, so a boundary
-/// written by Incline always matches the type of the numbers it is written
+/// written by Incline Design always matches the type of the numbers it is written
 /// alongside - which the standard requires.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) struct Boundary {
@@ -524,7 +524,7 @@ pub(crate) enum ColorTransferFunction {
     ///
     /// A transparent `gradient[0]` is how a grade cutoff is expressed - it is an
     /// ordinary editable colour, not a marker, so it means the same thing to
-    /// Incline and to any other reader that honours alpha.
+    /// Incline Design and to any other reader that honours alpha.
     Discrete { boundaries: Vec<Boundary>, gradient: Vec<[f32; 4]> },
 }
 

@@ -6,7 +6,7 @@ use crate::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
         themed_icon, unthemed_icon,
         widgets::{
-            context_menu::{ContextMenu, ContextMenuAction, context_menu_separator},
+            context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator},
             menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldRgba, MenuFieldText, MenuFieldU32},
             viewport::ViewportDockPanel,
         },
@@ -321,11 +321,42 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
     }
 }
 
-/// Draw the startup dialog prompting the user to open or create a .omf file.
-pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+/// Draw the welcome splash the application starts on.
+///
+/// A project is already open behind it - startup lands on an empty, never-saved
+/// one - so the splash is an offer, not a gate: Escape, a click on the backdrop,
+/// or `New project` all simply dismiss it and leave that project in place.
+pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
+    const RECENT_HEIGHT: f32 = 100.0;
+    /// Grow the splash by exactly as much as the Recent box has grown from the
+    /// original two-row grid, keeping the footer and surrounding spacing put.
+    const PANEL_HEIGHT: f32 = PANEL_SIZE * 0.7 + (RECENT_HEIGHT - 48.0);
+
+    // The splash is the only place a remembered project can be picked up now
+    // that the explorer shows the open one alone. The active project is never
+    // among these: the splash is only up when nothing but the startup project
+    // is open.
+    let recent: Vec<&crate::ui::state::UiTrackedProjectEntry> = project.recent_projects().collect();
+
+    // Only the update notice below reads the editor, and that is native-only.
+    #[cfg(target_arch = "wasm32")]
+    let _ = editor;
+
+    // The splash floats over a live window, so something has to catch the
+    // clicks that dismiss it, or they would fall through to the viewport and
+    // orbit the camera instead. It paints nothing: the window behind the
+    // splash reads as it always does.
+    let screen = ui.ctx().viewport_rect();
+    let backdrop = egui::Area::new(egui::Id::new("select_project_backdrop"))
+        .fixed_pos(screen.min)
+        .order(egui::Order::Middle)
+        .show(ui.ctx(), |ui| ui.allocate_exact_size(screen.size(), egui::Sense::click()).1);
+    if backdrop.inner.clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+        commands.push(UiCommand::CloseStartupDialog);
+    }
 
     egui::Area::new(egui::Id::new("select_project_dialog"))
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -338,18 +369,31 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
                     ui.set_width(PANEL_SIZE);
-                    ui.set_height(PANEL_SIZE * 0.7);
+                    ui.set_height(PANEL_HEIGHT);
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 16.0);
+
+                    // Claimed before the content above it, so that content -
+                    // and the Recent list in particular - lays out against
+                    // what is genuinely left rather than pushing this out of
+                    // the frame. It still draws along the bottom edge.
+                    egui::Panel::bottom("meta_splash").show_separator_line(false).show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.label(format!("{}: {}", crate::APP_NAME, crate::APP_RELEASE));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label("GNU General Public License v3.0"));
+                        });
+                    });
 
                     ui.add(egui::Image::new(unthemed_icon!("splash.svg")).shrink_to_fit());
 
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                         ui.add_space(30.0);
                         select_project_action_column(ui, "Project", COLUMN_WIDTH, |ui| {
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "create_project.svg")), "New project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
-                                commands.push(UiCommand::NewProject);
+                            // Startup is already sitting on an empty project,
+                            // so this only has to get the splash out of the way.
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "create_project.svg")), "New Project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                                commands.push(UiCommand::CloseStartupDialog);
                             }
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_project.svg")), "Load project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_project.svg")), "Load Project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 commands.push(UiCommand::OpenProject);
                             }
                         });
@@ -360,23 +404,28 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                             if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_website.svg")), "Website", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
                             }
-                            // Enter has no sensible default among New / Load / Website,
-                            // so only Escape is bound here, matching Close.
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Close", COLUMN_WIDTH, ROW_HEIGHT).clicked()
-                                || menu::dialog_cancel_pressed(ui.ctx())
-                            {
-                                commands.push(UiCommand::CloseStartupDialog);
+                            // Escape dismisses the splash rather than firing
+                            // this row: leaving is a deliberate click only.
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Exit Application", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                                commands.push(UiCommand::RequestExit);
                             }
                         });
                     });
-                    egui::Panel::bottom("meta_splash").show_separator_line(false).show(ui, |ui| {
-                        ui.horizontal_centered(|ui| {
-                            ui.label("© 2026 Leo Timmins and Lucas Timmins");
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(format!("{}: {}", crate::APP_NAME, crate::APP_RELEASE))
+
+                    // The splash is a fixed shape, so the Recent list takes
+                    // the room left below the two columns rather than making
+                    // the frame taller. 16pt of that is the gap above its
+                    // heading. The box presents its entries as one full-width
+                    // scrolling list and keeps two rows visible at once.
+                    let list_width = PANEL_SIZE - 60.0;
+                    if !recent.is_empty() {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                            ui.add_space(30.0);
+                            select_project_action_column(ui, "Recent", list_width, |ui| {
+                                draw_recent_projects(ui, &recent, list_width, RECENT_HEIGHT, ROW_HEIGHT, commands);
                             });
                         });
-                    });
+                    }
                 });
 
             #[cfg(target_arch = "wasm32")]
@@ -397,7 +446,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                         ui.set_width(PANEL_SIZE - 24.0);
                         ui.horizontal_wrapped(|ui| {
                             ui.label(egui::RichText::new(
-                                "Incline Web is not recommended for production use. Only use \
+                                "Incline Design Web is not recommended for production use. Only use \
                                      it as a demo.",
                             ));
                             ui.hyperlink_to("Download the free native version at our website ↗", "https://inclinedesign.net");
@@ -424,7 +473,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(egui::RichText::new(format!("Incline {newest_release} is available")).strong());
+                                ui.label(egui::RichText::new(format!("Incline Design {newest_release} is available")).strong());
                                 ui.label(egui::RichText::new(format!("Currently installed: {}", crate::APP_RELEASE)).color(ui.visuals().weak_text_color()));
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -438,7 +487,78 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
         });
 }
 
-fn select_project_action_column(ui: &mut egui::Ui, heading: &'static str, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
+fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTrackedProjectEntry], width: f32, height: f32, row_height: f32, commands: &mut Vec<UiCommand>) {
+    const INSET: i8 = 3;
+
+    let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
+    let frame = egui::Frame::new()
+        .fill(surface)
+        .stroke(ui.visuals().window_stroke())
+        .corner_radius(egui::CornerRadius::same(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
+        .inner_margin(egui::Margin::same(INSET));
+
+    frame.show(ui, |ui| {
+        let inset = f32::from(INSET);
+        ui.set_width(width - inset * 2.0);
+        // The banding belongs to the box, not to the entries: it tiles the
+        // whole list the way the explorer's does, so a couple of entries read
+        // as a striped list rather than as one stray dark bar. Reserved here,
+        // outside the scroll area, so the bands sit behind the rows and can be
+        // measured against the box itself once its rect and scroll offset are
+        // known - inside, the only rect wide enough to band is the dialog's
+        // clip rect, which is the whole window.
+        let stripes_slot = ui.painter().add(egui::Shape::Noop);
+        let scroll = egui::ScrollArea::vertical()
+            .id_salt("recent_projects_scroll")
+            .max_height(height - inset * 2.0)
+            .min_scrolled_height(0.0)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for entry in recent.iter() {
+                    let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
+                    let row = select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "recent_project.svg")), &label, ui.available_width(), row_height);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let row = row.on_hover_text(format!("{}\n{}", entry.name, entry.path.display()));
+                    #[cfg(target_arch = "wasm32")]
+                    let row = row.on_hover_text(format!(
+                        "{}\n{}",
+                        entry.name,
+                        if entry.stored_in_browser {
+                            "Saved in browser storage"
+                        } else {
+                            "Not saved in browser storage"
+                        }
+                    ));
+                    if row.clicked() {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        commands.push(UiCommand::ActivateTrackedProject(entry.path.clone()));
+                        #[cfg(target_arch = "wasm32")]
+                        commands.push(UiCommand::ActivateTrackedProject(entry.id));
+                    }
+                    context_menu_popup(&row, entry.name.as_str(), |ui| {
+                        if ContextMenuAction::new("Remove from List").show(ui).clicked() {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            commands.push(UiCommand::RemoveTrackedProject(entry.path.clone()));
+                            #[cfg(target_arch = "wasm32")]
+                            commands.push(UiCommand::RemoveTrackedProject(entry.id));
+                            ui.close();
+                        }
+                    });
+                }
+            });
+        // Anchored to the content's top edge - the box top less however far the
+        // list is scrolled - so the bands travel with the rows rather than
+        // staying put under them.
+        let box_rect = scroll.inner_rect;
+        let bands = crate::ui::widgets::explorer::stripe_bands(box_rect.x_range(), box_rect.top() - scroll.state.offset.y, box_rect.bottom(), row_height, stripe);
+        // Clipped to the box: when the list is scrolled the first band starts
+        // above the box's top edge.
+        ui.painter().with_clip_rect(box_rect).set(stripes_slot, bands);
+    });
+}
+
+fn select_project_action_column(ui: &mut egui::Ui, heading: &str, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.vertical(|ui| {
         ui.set_width(width);
         ui.label(egui::RichText::new(heading).size(12.0).color(ui.visuals().weak_text_color()));
@@ -447,23 +567,33 @@ fn select_project_action_column(ui: &mut egui::Ui, heading: &'static str, width:
     });
 }
 
-fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &'static str, width: f32, height: f32) -> egui::Response {
+fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, height: f32) -> egui::Response {
+    select_project_action_row_with_fill(ui, icon, label, width, height, egui::Color32::TRANSPARENT)
+}
+
+fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, height: f32, fill: egui::Color32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    if response.hovered() {
-        ui.painter().rect_filled(rect, egui::CornerRadius::same(2), ui.visuals().widgets.hovered.bg_fill);
+    let hovered = response.hovered();
+    if fill != egui::Color32::TRANSPARENT || hovered {
+        ui.painter().rect_filled(
+            rect,
+            if hovered { egui::CornerRadius::same(2) } else { egui::CornerRadius::ZERO },
+            if hovered { ui.visuals().widgets.hovered.bg_fill } else { fill },
+        );
     }
 
     let icon_size = egui::vec2(22.0, 22.0);
     let icon_rect = egui::Rect::from_min_size(egui::pos2(rect.left() + 2.0, rect.center().y - icon_size.y / 2.0), icon_size);
     icon.fit_to_exact_size(icon_size).paint_at(ui, icon_rect);
 
-    ui.painter().text(
-        egui::pos2(rect.left() + 30.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(13.0),
-        ui.visuals().text_color(),
-    );
+    // Rows are laid out to a fixed width, so long labels truncate rather than
+    // running beyond their action area. The full name stays on the hover text.
+    let text_left = rect.left() + 30.0;
+    let text_color = ui.visuals().text_color();
+    let mut job = egui::text::LayoutJob::single_section(label.to_owned(), egui::TextFormat::simple(egui::FontId::proportional(13.0), text_color));
+    job.wrap = egui::text::TextWrapping::truncate_at_width((rect.right() - 4.0 - text_left).max(0.0));
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(egui::pos2(text_left, rect.center().y - galley.size().y / 2.0), galley, text_color);
 
     response
 }

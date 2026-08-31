@@ -67,8 +67,12 @@ impl Gui {
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
         ctx.global_style_mut(|style| {
+            // Tooltips wait out a deliberate hover rather than firing the moment the pointer
+            // crosses a widget, but the grace time keeps them instant while sweeping along a
+            // row of toolbar buttons that are already showing one.
             style.interaction.show_tooltips_only_when_still = false;
-            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_delay = 0.5;
+            style.interaction.tooltip_grace_time = 0.2;
         });
         ctx.set_visuals(theme_visuals(false, SELECTION_COLOR));
 
@@ -294,7 +298,11 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
         if let Some(measurement) = state::batter_angle_measurement(editor.batter_angle_points.as_slice()) {
-            return Some(format!("{:.2}° batter angle", measurement.angle_degrees));
+            let dip = format!("{:.2}° dip", measurement.dip_degrees);
+            return Some(match measurement.strike_degrees {
+                Some(strike) => format!("{strike:06.2}° strike · {dip}"),
+                None => format!("{dip} (horizontal, no strike)"),
+            });
         }
         return Some(
             match editor.batter_angle_points.len() {
@@ -475,34 +483,41 @@ fn draw_ui(
     let project_active = project.has_active_project;
     let editing_enabled = project.has_active_project && editor.active_layer.is_some() && !editor.fly_mode_enabled && !editor.slice_mode_enabled;
 
-    #[cfg(not(target_os = "macos"))]
+    // On macOS the File and Project dropdowns are in the system menu bar
+    // (`mac.rs`) instead, but the bar itself is still drawn: the mark and the
+    // workspace tabs have nowhere else to go.
     let main_menu_rect = crate::ui::elements::main_menu::draw_main_menu(root_ui, editor, project, commands);
-    // macOS exposes these actions through the system menu bar in `mac.rs`.
-    // An empty rect keeps the rest of the shared panel layout unchanged.
-    #[cfg(target_os = "macos")]
-    let main_menu_rect = egui::Rect::NOTHING;
 
     // --- Draw all toolbar panels ---
-    // The status bar spans the window, so it is claimed first. The explorer
-    // comes next, which is what lets it run the full height between the menu
-    // and the status bar: every panel after it - the top toolbar included -
-    // starts at its right edge rather than passing over it.
+    // The status bar spans the window, so it is claimed first.
     let status_bar_rect = elements::status_bar::draw_status_bar(root_ui, editor);
 
     // Everything between those two bars is a rounded region with a gap of
-    // window background around it. The bars themselves span the window and
-    // stay square, so the regions start half a gap inside what is left of it.
-    chrome::claim_gap(root_ui, "chrome_window_edge");
+    // window background around it. The left and right window edges get half a
+    // gap so they read like the seam between two regions; the top and bottom
+    // do not, because what is there is the two bars, which are that same
+    // background already - see `chrome::Gap`.
+    chrome::claim_gap(root_ui, "chrome_window_edge", chrome::Gap::Sides);
+
+    // The bar spans the window, so it is claimed before the explorer: the
+    // column, the tools and the scene all start below it.
+    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
     let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
-    let top_toolbar_rect = elements::toolbars::draw_top_toolbar(root_ui, editor, project);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
     // toolbar (or the side panels drawn afterward) of layout space.
     let console_rect = editor.show_console.then(|| {
-        let max_height = (root_ui.available_height() - elements::toolbars::BOTTOM_TOOLBAR_HEIGHT).max(0.0);
-        elements::console::draw_console(root_ui, max_height, frame_context.console_snapshot)
+        let available_height = root_ui.available_height();
+        let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
+        let (properties_min, properties_max) = elements::properties::height_limits(available_height);
+        // The properties panel and this two-region stack share a bottom edge.
+        // Offset both properties limits by the toolbar so the top of the
+        // toolbar lands on the properties panel's top at either drag limit.
+        let console_min = (properties_min - toolbar_height).max(0.0);
+        let console_max = (properties_max - toolbar_height).max(console_min);
+        elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
@@ -529,25 +544,18 @@ fn draw_ui(
     // What is left of the root ui is the canvas, so its edges are already
     // inside the window-edge gap the chrome claimed.
     let scene_claimed = egui::Rect::from_min_max(
-        egui::pos2(root_ui.available_rect_before_wrap().left(), main_menu_rect.bottom().max(top_toolbar_rect.bottom())),
+        egui::pos2(root_ui.available_rect_before_wrap().left(), main_menu_rect.bottom().max(viewport_bar_rect.bottom())),
         egui::pos2(root_ui.available_rect_before_wrap().right(), canvas_bottom),
     );
     let scene_rect = chrome::region_rect(root_ui.ctx(), scene_claimed);
     // The scene's own margin, claimed like the window's so a scroll over the
     // gap around the viewport reaches the interface rather than the camera.
-    chrome::claim_gap(root_ui, "chrome_scene_edge");
-    // The view tools still float over the scene rather than claiming a panel,
-    // so the scene is drawn out to its own edges. The canvas is what
-    // everything that floats - the dialogs, the gizmo, the labels - lays
-    // itself out in; the view tools are at the far end of it, so the canvas
-    // keeps its right edge and the two overlays that reach it dodge the tile
-    // themselves.
+    chrome::claim_gap(root_ui, "chrome_scene_edge", chrome::Gap::All);
+    // Nothing is docked inside the scene any more, so the canvas is the whole
+    // of it: what everything that floats - the dialogs, the gizmo, the labels
+    // - lays itself out in.
     let canvas_rect = scene_rect;
     *canvas_rect_out = canvas_rect;
-    // Where the view tools will land, before either they or the overlays that
-    // have to dodge them are drawn. They are the last thing drawn over the
-    // canvas, so an overlay that asked afterwards would be a frame behind.
-    let view_tools_rect = elements::toolbars::view_tools_bounds(canvas_rect, editor.show_world_axis_gizmo);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
@@ -821,7 +829,7 @@ fn draw_ui(
     #[cfg(not(target_arch = "wasm32"))]
     let naming_browser_project = false;
     if project.needs_startup_dialog && !naming_browser_project {
-        dialogs::editing::draw_select_project_dialog(root_ui, editor, commands);
+        dialogs::editing::draw_select_project_dialog(root_ui, editor, project, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
@@ -916,7 +924,11 @@ fn draw_ui(
     if editor.slice_mode_enabled {
         dialogs::editing::draw_slice_panel(root_ui, editor, commands, canvas_rect);
         widgets::viewport::ViewportMiniMap::new("slice_minimap", canvas_rect)
-            .beside_tools(view_tools_rect)
+            .below_gizmo(if editor.show_world_axis_gizmo {
+                elements::cursors::orientation_gizmo_rect(canvas_rect)
+            } else {
+                egui::Rect::NOTHING
+            })
             .show(root_ui.ctx(), editor, commands);
     }
     // Batter Berm
@@ -976,20 +988,13 @@ fn draw_ui(
         elements::cursors::draw_orbit_marker(root_ui, ox, oy, canvas_rect);
     }
 
-    // The view tools hang below the gizmo, or take its place at the top of the
-    // viewport when it is switched off.
     if editor.show_world_axis_gizmo {
         elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands);
     }
-    elements::toolbars::draw_view_tools(root_ui, editor, commands, canvas_rect, editor.show_world_axis_gizmo);
 
     let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
     if editor.show_scale_bar {
-        widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).clear_of(view_tools_rect).show(
-            root_ui.ctx(),
-            world_per_point,
-            editor.renderer_background_color,
-        );
+        widgets::viewport::ViewportScaleBar::new("viewport_scale_bar", canvas_rect).show(root_ui.ctx(), world_per_point, editor.renderer_background_color);
     }
 
     geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
@@ -1004,10 +1009,9 @@ fn draw_ui(
     chrome::paint_regions(
         &ctx,
         [
-            explorer.toolbar,
+            viewport_bar_rect,
             explorer.tree,
             explorer.properties,
-            top_toolbar_rect,
             left_toolbar_rect,
             bottom_toolbar_rect,
             console_claimed,
@@ -1288,7 +1292,7 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
     let mut visuals = if dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
     visuals.selection.bg_fill = selection_color.gamma_multiply(0.35);
     visuals.selection.stroke.color = selection_color;
-    // Incline's UI is flat: no drop shadows on windows, popups, or menus.
+    // Incline Design's UI is flat: no drop shadows on windows, popups, or menus.
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals

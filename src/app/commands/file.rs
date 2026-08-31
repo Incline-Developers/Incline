@@ -48,15 +48,19 @@ use crate::{
 /// those bytes are a file that stays put, and in the browser they are nowhere
 /// at all until a record exists. Without this, saving an opened project writes
 /// nothing and the project is gone on the next reload.
-fn project_needs_first_browser_save(project: &OpenProject) -> bool {
+///
+/// The project the application starts on is the same case on desktop: it is
+/// clean, because nothing has been drawn in it yet, and it is also nowhere,
+/// because it has no path. Save has to reach it so the destination chooser can
+/// appear.
+fn project_needs_first_save(project: &OpenProject) -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         !matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = project;
-        false
+        project.path.is_none()
     }
 }
 
@@ -111,8 +115,10 @@ fn mesh_format_mime_type(format: MeshFormat) -> &'static str {
 // On wasm the native variants are compiled out, leaving only the `Web`-prefixed ones.
 #[cfg_attr(target_arch = "wasm32", allow(clippy::enum_variant_names))]
 pub(crate) enum FileDialogAction {
+    /// Start a new, never-saved project. It carries no path until the first
+    /// Save asks for one.
     #[cfg(not(target_arch = "wasm32"))]
-    NewProject(PathBuf),
+    NewProject,
     #[cfg(not(target_arch = "wasm32"))]
     OpenProject(Vec<PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
@@ -339,7 +345,7 @@ impl<'a> App<'a> {
         #[cfg(not(target_arch = "wasm32"))]
         let replaces_project = matches!(
             &action,
-            FileDialogAction::NewProject(_) | FileDialogAction::OpenProject(_) | FileDialogAction::SwitchProject(_)
+            FileDialogAction::NewProject | FileDialogAction::OpenProject(_) | FileDialogAction::SwitchProject(_)
         );
         #[cfg(target_arch = "wasm32")]
         let replaces_project = matches!(
@@ -372,20 +378,9 @@ impl<'a> App<'a> {
         self.project_replacement_bypass = false;
         match action {
             #[cfg(not(target_arch = "wasm32"))]
-            FileDialogAction::NewProject(path) => {
-                self.ensure_save_path_not_pending(&path)?;
-                let design = project::new_empty(Some(path.clone()));
-                let snapshot = formats::omf::ProjectSnapshot {
-                    name: path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned(),
-                    designs: Some(design.clone()),
-                    ..Default::default()
-                };
-                let progress = crate::model::progress::Progress::new();
-                formats::omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))?;
-                let project = project::open_project(Some(path.clone()), design)?;
-                self.set_active_project(project);
-                userspace_log!("Created new project: {}", path.display());
-                self.persist_session();
+            FileDialogAction::NewProject => {
+                self.start_untitled_project()?;
+                userspace_log!("Created new project");
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -677,7 +672,7 @@ impl<'a> App<'a> {
                 }
                 self.ensure_project_has_no_pending_text_edit(project_index)?;
                 self.ensure_project_save_path_available(project_index, &path)?;
-                let new_name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned();
+                let new_name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline Design project").to_owned();
                 let (previous_name, snapshot_hash, snapshot_layer_hashes) = {
                     let project = &mut self.workspace.projects[project_index];
                     let previous_name = std::mem::replace(&mut project.project.metadata.name, new_name.clone());
@@ -921,7 +916,7 @@ impl<'a> App<'a> {
                                     if save_as_previous_name.is_some() {
                                         self.workspace.projects[index].path = Some(save.path.clone());
                                         self.workspace.projects[index].project.metadata.name =
-                                            save.path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned();
+                                            save.path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline Design project").to_owned();
                                         userspace_log!("Saved project as: {}", save.path.display());
                                     } else {
                                         userspace_log!("Saved project: {}", save.path.display());
@@ -1031,6 +1026,12 @@ impl<'a> App<'a> {
 
     // ── Dialog spawners (non-blocking) ──────────────────────────────────────
 
+    /// Start a new project.
+    ///
+    /// Nothing is written and nothing is asked: the project lives in memory
+    /// until the first Save, which is where the destination chooser appears.
+    /// A dirty project still routes through the save/discard/cancel prompt
+    /// before it is replaced.
     pub(crate) fn choose_new_project(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
@@ -1038,15 +1039,25 @@ impl<'a> App<'a> {
             self.editor.new_project_dialog_open = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.spawn_file_dialog(async {
-            let path: PathBuf = AsyncFileDialog::new()
-                .add_filter("Project", &["omf"])
-                .set_file_name("new_project.omf")
-                .save_file()
-                .await?
-                .into_path();
-            Some(FileDialogAction::NewProject(path))
-        });
+        if let Err(error) = self.execute_file_dialog_action(FileDialogAction::NewProject) {
+            userspace_warn!("Could not create a new project: {error:#}");
+        }
+    }
+
+    /// Replace whatever is open with an empty, never-saved project.
+    ///
+    /// This is what the application starts on and what the welcome splash
+    /// leaves behind when it is dismissed, so there is always somewhere to
+    /// draw. It deliberately skips the replacement prompt: the callers either
+    /// have no project to lose or have already been through it.
+    pub(crate) fn start_untitled_project(&mut self) -> Result<()> {
+        let mut project = project::open_project(None, project::new_empty(None))?;
+        // Nothing has been drawn in it, so it is not unsaved work: quitting or
+        // starting another one straight away must not raise the save/discard
+        // prompt. Save still reaches it through `project_needs_first_save`.
+        project.mark_saved();
+        self.set_active_project(project);
+        Ok(())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1127,6 +1138,20 @@ impl<'a> App<'a> {
             anyhow::bail!("Wait for the project to finish opening");
         }
         self.execute_file_dialog_action(FileDialogAction::SwitchProject(path))
+    }
+
+    /// Show the active project's file in the platform's file manager.
+    ///
+    /// Only ever reached with a saved project - the menu row is disabled until
+    /// there is a file to show - but a project can be closed between the click
+    /// and the command arriving, so the absence is an error rather than a
+    /// panic.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn show_active_project_in_file_manager(&mut self) -> Result<()> {
+        let Some(path) = self.workspace.active_project().and_then(|project| project.path.clone()) else {
+            anyhow::bail!("Save the project before showing where it is");
+        };
+        show_in_file_manager(&path)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1489,41 +1514,6 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Download a portable `.omf` copy of the current browser project. This is
-    /// an export and deliberately does not update the save baseline.
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn download_project(&mut self) -> Result<()> {
-        if self.workspace.active_project().is_none() {
-            return Ok(());
-        }
-        if self.has_pending_move_delta() {
-            self.commit_pending_move();
-        }
-        if let Some(active_index) = self.workspace.active_index {
-            self.ensure_project_has_no_pending_text_edit(active_index)?;
-        }
-
-        let snapshot = self.omf_export_snapshot()?;
-        let file_name = format!("{}.omf", snapshot.name.trim_end_matches(".omf"));
-
-        self.spawn_job(
-            "Encoding project download…",
-            vec![crate::app::jobs::JobKey::Anonymous],
-            move |cancel| {
-                if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
-                }
-                let progress = crate::model::progress::Progress::new();
-                Ok((file_name, formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0))?))
-            },
-            move |_app, result| match result {
-                Ok((file_name, bytes)) => Self::trigger_browser_download(file_name, bytes, "application/octet-stream", "project"),
-                Err(error) => userspace_warn!("Project download encoding failed: {error:#}"),
-            },
-        );
-        Ok(())
-    }
-
     pub(crate) fn choose_export_layer_dxf(&mut self, layer: LayerId) {
         if self.has_pending_move_delta() {
             self.commit_pending_move();
@@ -1653,7 +1643,7 @@ impl<'a> App<'a> {
         let dirty_ids: Vec<u32> = self
             .workspace
             .active_project()
-            .filter(|project| self.project_content_is_dirty(project.runtime_id) || project_needs_first_browser_save(project))
+            .filter(|project| self.project_content_is_dirty(project.runtime_id) || project_needs_first_save(project))
             .map(|project| project.runtime_id)
             .into_iter()
             .collect();
@@ -1756,7 +1746,7 @@ impl<'a> App<'a> {
         self.editor.exit_confirm_open = false;
         // `save_dirty_project` reporting true only means no Save As dialog is
         // outstanding. The write itself may still be running in the background,
-        // and an OMF Incline cannot round-trip replaces the save with a
+        // and an OMF Incline Design cannot round-trip replaces the save with a
         // confirmation prompt - exiting on that alone quits without writing.
         if started && !self.project_save_is_in_flight() && self.pending_file_dialogs.is_empty() && !self.has_unsaved_changes_for_exit() {
             self.finish_deferred_exit();
@@ -2084,7 +2074,7 @@ impl<'a> App<'a> {
         };
         #[cfg(target_arch = "wasm32")]
         {
-            if self.project_content_is_dirty(runtime_id) || project_needs_first_browser_save(&self.workspace.projects[index]) || self.editor.text_editing_enabled {
+            if self.project_content_is_dirty(runtime_id) || project_needs_first_save(&self.workspace.projects[index]) || self.editor.text_editing_enabled {
                 self.editor.pending_close_project = Some(runtime_id);
             } else {
                 self.close_project(runtime_id);
@@ -2565,4 +2555,45 @@ fn sanitize_file_stem(name: &str) -> String {
     let cleaned: String = name.trim().chars().map(|c| if INVALID.contains(&c) { '_' } else { c }).collect();
     let trimmed = cleaned.trim();
     if trimmed.is_empty() { "layer".to_string() } else { trimmed.to_string() }
+}
+
+/// Show `path` in the platform's file manager.
+///
+/// Windows and macOS both have a way of opening the containing folder with the
+/// file itself picked out, which is what makes this more useful than reading
+/// the path off the title bar. Elsewhere there is no portable way to ask for
+/// that - the freedesktop `ShowItems` interface needs a session bus and a file
+/// manager that implements it - so the folder is opened and the file is left
+/// for the user to spot.
+///
+/// The launcher is spawned rather than waited on: it hands the request to an
+/// already-running file manager and its exit says nothing useful. Windows
+/// `explorer.exe` in particular exits non-zero on success.
+#[cfg(not(target_arch = "wasm32"))]
+fn show_in_file_manager(path: &Path) -> Result<()> {
+    use std::process::Command;
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        // No space after the comma: `explorer` reads one as part of the path.
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(path);
+        command
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut command = {
+        let folder = path.parent().unwrap_or(Path::new("."));
+        let mut command = Command::new("xdg-open");
+        command.arg(folder);
+        command
+    };
+
+    command.spawn().with_context(|| format!("show {} in the file manager", path.display()))?;
+    Ok(())
 }

@@ -536,9 +536,24 @@ pub(crate) struct FinishedTask {
     pub(crate) total_units: Option<u64>,
 }
 
+/// The plane through the three picked points, as the Strike and Dip tool
+/// reports it.
+///
+/// Dip and strike are read off the plane itself rather than off the section
+/// the picks happen to cut, so the pair is the plane's own attitude however
+/// the three points were placed. Picking a level crest line and a toe point -
+/// the way a bench face is measured - gives the batter angle as the dip, which
+/// is what this measured before it was named for the plane.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BatterAngleMeasurement {
-    pub(crate) angle_degrees: f64,
+    /// Dip: the plane's steepest slope, in degrees below horizontal.
+    pub(crate) dip_degrees: f64,
+    /// Strike: the bearing of the plane's horizontal line, in degrees
+    /// clockwise from grid north, by the right-hand rule - the dip falls 90°
+    /// clockwise of it. `None` for a horizontal plane, which has no strike.
+    pub(crate) strike_degrees: Option<f64>,
+    /// Where the third point sits against the line through the first two, in
+    /// plan. The overlay draws the measurement out to here.
     pub(crate) projection: DVec3,
 }
 
@@ -563,8 +578,26 @@ pub(crate) fn batter_angle_measurement(points: &[DVec3]) -> Option<BatterAngleMe
         return None;
     }
 
+    // Turned upward, so its horizontal part points down the dip: the plane is
+    // z = z0 - (n.x·dx + n.y·dy) / n.z, whose steepest descent runs along
+    // (n.x, n.y) once n.z is positive.
+    let mut normal = (*b - *a).cross(*c - *a);
+    if normal.z < 0.0 {
+        normal = -normal;
+    }
+    let down_dip = normal.truncate();
+    let dip_degrees = down_dip.length().atan2(normal.z.abs()).to_degrees();
+    // A horizontal plane dips nowhere, so it has no line of strike to name.
+    let strike_degrees = (down_dip.length() > 1.0e-12).then(|| {
+        // Bearings run clockwise from grid north, which is +Y: east over
+        // north, rather than the north-over-east of a mathematical angle.
+        let dip_direction = down_dip.x.atan2(down_dip.y).to_degrees();
+        (dip_direction - 90.0).rem_euclid(360.0)
+    });
+
     Some(BatterAngleMeasurement {
-        angle_degrees: vertical.atan2(horizontal).to_degrees(),
+        dip_degrees,
+        strike_degrees,
         projection,
     })
 }
@@ -914,6 +947,10 @@ pub(crate) struct EditorState {
     /// last non-empty selection held, kept after that selection is cleared so
     /// the tab stays put. Entries are dropped once the object is gone.
     pub(crate) property_objects: Vec<ObjectId>,
+    /// Scene entities described by the generic Object properties tab. Like
+    /// the type-specific memories, this keeps the last non-empty selection so
+    /// the panel does not go blank merely because the canvas was deselected.
+    pub(crate) property_entities: Vec<SceneEntityId>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
     /// Whether the selected polylines cross anywhere, refreshed by
@@ -1319,6 +1356,8 @@ pub(crate) struct EditorState {
     pub(crate) bezier_dialog_open: bool,
     /// Which section the explorer's properties panel is showing.
     pub(crate) active_property_tab: PropertyTab,
+    /// The workspace tab selected in the menu bar.
+    pub(crate) active_workspace: Workspace,
     pub(crate) show_import: bool,
     pub(crate) show_export: bool,
     /// Whether the About dialog is open.
@@ -1460,6 +1499,7 @@ impl EditorState {
         self.canvas_context_menu_px = None;
         self.design_line_weight_input = None;
         self.property_objects.clear();
+        self.property_entities.clear();
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
@@ -1691,6 +1731,7 @@ impl EditorState {
             canvas_context_menu_px: None,
             design_line_weight_input: None,
             property_objects: Vec::new(),
+            property_entities: Vec::new(),
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,
@@ -1917,7 +1958,8 @@ impl EditorState {
             bezier_dragging_cp: None,
             bezier_hover_cp: None,
             bezier_dialog_open: false,
-            active_property_tab: PropertyTab::Interface,
+            active_property_tab: PropertyTab::Object,
+            active_workspace: Workspace::Production,
             show_import: false,
             show_export: false,
             show_about: false,
@@ -2065,6 +2107,44 @@ impl ToolHatch {
     }
 }
 
+/// One of the view preferences the View menu switches on and off.
+///
+/// The menu carries the few that are reached often enough to want a row of
+/// their own; the whole set stays in the Interface preferences tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewToggle {
+    Console,
+    DarkMode,
+    XyGrid,
+}
+
+impl ViewToggle {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Console => "Show Console",
+            Self::DarkMode => "Dark Mode",
+            Self::XyGrid => "XY Grid",
+        }
+    }
+
+    /// Read this toggle out of a preferences snapshot.
+    pub(crate) fn get(self, preferences: &PreferencesDraft) -> bool {
+        match self {
+            Self::Console => preferences.show_console,
+            Self::DarkMode => preferences.dark_mode,
+            Self::XyGrid => preferences.show_xy_grid,
+        }
+    }
+
+    pub(crate) fn set(self, preferences: &mut PreferencesDraft, value: bool) {
+        match self {
+            Self::Console => preferences.show_console = value,
+            Self::DarkMode => preferences.dark_mode = value,
+            Self::XyGrid => preferences.show_xy_grid = value,
+        }
+    }
+}
+
 /// Commands sent from the UI back to the application core.
 ///
 /// Each variant represents an action the user triggered through the UI
@@ -2091,6 +2171,10 @@ pub(crate) enum UiCommand {
     RemoveTrackedProject(PathBuf),
     #[cfg(target_arch = "wasm32")]
     RemoveTrackedProject(crate::model::project::ProjectId),
+    /// Open the file manager on the active project's own file. Nothing the
+    /// browser can do, so it is not offered there.
+    #[cfg(not(target_arch = "wasm32"))]
+    ShowProjectInFileManager,
     CloseStartupDialog,
     ImportOmfPaths(Vec<PathBuf>),
     ImportDxfPathsInto(Vec<PathBuf>),
@@ -2148,14 +2232,15 @@ pub(crate) enum UiCommand {
     SetShowPoints(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
+    /// Flip one view preference from the View menu. The application reads the
+    /// current value rather than the UI sending one, so the row and the
+    /// Interface tab cannot disagree about what is being toggled.
+    ToggleViewOption(ViewToggle),
     /// Make one block model the selection, so its properties tab is shown.
     SelectBlockModel(BlockModelId),
     SaveProject,
-    #[cfg(target_arch = "wasm32")]
-    DownloadProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
-    CloseProject(u32),
     SaveAndCloseProject(u32),
     CloseProjectForce(u32),
     CancelCloseProject,
@@ -2453,6 +2538,7 @@ impl UiCommand {
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
             | Self::ApplyPreferences(_)
+            | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
@@ -2500,7 +2586,7 @@ impl UiCommand {
             Self::SetSliceModeEnabled(enabled) => report("Slice Mode", if *enabled { "Enabled" } else { "Disabled" }.to_owned()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SetSlicePreviewDetached(detached) => report("Slice Preview", if *detached { "Detached" } else { "Docked" }.to_owned()),
-            Self::NewProject => report("Create Project", "Choose a destination".to_owned()),
+            Self::NewProject => report("Create Project", "Untitled project".to_owned()),
             #[cfg(target_arch = "wasm32")]
             Self::CreateBrowserProject { name } => report("Create Project", name.clone()),
             Self::OpenProject => report("Open Project", "Choose one or more files".to_owned()),
@@ -2512,6 +2598,8 @@ impl UiCommand {
             Self::RemoveTrackedProject(path) => report("Remove Project", path.display().to_string()),
             #[cfg(target_arch = "wasm32")]
             Self::RemoveTrackedProject(id) => report("Remove Project", id.to_string()),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::ShowProjectInFileManager => report("Show Project", "Open the containing folder".to_owned()),
             Self::ImportOmfPaths(paths) => report("Import OMF", format!("{} file(s)", paths.len())),
             Self::ImportDxfPathsInto(paths) => report("Import DXF", format!("{} file(s)", paths.len())),
             Self::ImportTriangulationPaths(paths) => report("Import Triangulation", format!("{} file(s)", paths.len())),
@@ -2531,13 +2619,13 @@ impl UiCommand {
             Self::TogglePointCloudVisible(id) => report("Set Point Cloud Visibility", format!("{id:?}")),
             Self::RemovePointCloud(id) => report("Remove Point Cloud", format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report("Import CSV Block Model", path.display().to_string()),
-            Self::ExportOmf => report("Export OMF", "All open Incline data".to_owned()),
+            Self::ExportOmf => report("Export OMF", "All open Incline Design data".to_owned()),
             Self::ExportProjectDxf(id) => report("Export Project to DXF", format!("Project {id}")),
             Self::ExportViewportImage => report("Export Viewport Image", "Choose a destination".to_owned()),
             Self::ExportLayerDxf(id) => report("Export Layer to DXF", format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report("Export Triangulation", format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report("Export Block Model CSV", format!("{id:?}")),
-            Self::RequestExit => report("Exit Incline", "Checking unsaved work".to_owned()),
+            Self::RequestExit => report("Exit Incline Design", "Checking unsaved work".to_owned()),
             Self::SaveAndExit => report("Save and Exit", "Saving the current project".to_owned()),
             Self::ExitWithoutSaving => report("Exit Without Saving", "Discarding unsaved changes".to_owned()),
             Self::CreateLayer { name } => report("Create Layer", name.clone()),
@@ -2552,11 +2640,9 @@ impl UiCommand {
             Self::SaveAndReplaceProject => report("Save and Replace Project", "Current project".to_owned()),
             Self::DiscardAndReplaceProject => report("Discard and Replace Project", "Current project".to_owned()),
             Self::ConfirmLossyProjectSave => report("Confirm OMF Rewrite", "Save despite unsupported content".to_owned()),
-            #[cfg(target_arch = "wasm32")]
-            Self::DownloadProject => report("Download OMF", "Current project".to_owned()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SaveProjectAs(id) => report("Save Project As", format!("Project {id}")),
-            Self::CloseProject(id) | Self::CloseProjectForce(id) => report("Close Project", format!("Project {id}")),
+            Self::CloseProjectForce(id) => report("Close Project", format!("Project {id}")),
             Self::SaveAndCloseProject(id) => report("Save and Close Project", format!("Project {id}")),
             #[cfg(not(target_arch = "wasm32"))]
             Self::DiscardProjectChanges(id) => report("Discard Project Changes", format!("Project {id}")),
@@ -2698,8 +2784,8 @@ pub(crate) struct UiProjectEntry {
     pub(crate) path: Option<PathBuf>,
 }
 
-/// A project remembered by Incline and shown in the explorer's Projects
-/// section. Only the active entry has a decoded [`UiProjectEntry`].
+/// A project Incline Design remembers, listed under Recent on the welcome splash.
+/// Only the active entry has a decoded [`UiProjectEntry`].
 #[derive(Clone, Debug)]
 pub(crate) struct UiTrackedProjectEntry {
     pub(crate) name: String,
@@ -2716,10 +2802,11 @@ pub(crate) struct UiTrackedProjectEntry {
 impl UiProjectEntry {
     /// Whether Save would write anything for this project.
     ///
-    /// On desktop that is exactly "has unsaved edits" - the file it was opened
-    /// from is still on disk either way. In the browser an unedited project is
-    /// still unsaved work until browser storage holds a copy, so Save has to
-    /// stay available for one that has never been stored.
+    /// Unsaved edits, or nowhere to have written them yet: a project opened
+    /// from a file is backed by one that stays put either way, but the project
+    /// the application starts on has no path, and in the browser an unedited
+    /// project is still unsaved work until storage holds a copy. Save stays
+    /// available in both of those so the first one can ask where to go.
     pub(crate) fn needs_save(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         {
@@ -2727,16 +2814,14 @@ impl UiProjectEntry {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.dirty
+            self.dirty || self.path.is_none()
         }
     }
 }
 
 /// One collapsible group of the explorer tree, as targeted by the bulk
-/// show/hide/lock actions on its heading's right-click menu.
-///
-/// Projects are deliberately absent: neither visibility nor locking means
-/// anything for a project file.
+/// show/hide/lock actions on its heading's right-click menu, and by
+/// [`Workspace::opens_section`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExplorerSection {
     Designs,
@@ -2771,6 +2856,7 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -2801,6 +2887,7 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) color: [f32; 4],
     pub(crate) vertex_count: usize,
     pub(crate) triangle_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -2813,6 +2900,7 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
     pub(crate) variable_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -2825,6 +2913,7 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 /// Active triangulation id and face colour, as surfaced to the canvas context menu.
@@ -2846,10 +2935,6 @@ pub(crate) struct UiProjectView {
     pub(crate) point_clouds_membership_dirty: bool,
     pub(crate) rasters_membership_dirty: bool,
     pub(crate) has_active_project: bool,
-    /// Runtime id of the active project, or 0 when none is open. Changes on
-    /// every project switch, creation, close, and revert, which is what tells
-    /// the explorer's sections to re-sync their collapsed state.
-    pub(crate) active_project_epoch: u64,
     pub(crate) needs_startup_dialog: bool,
     /// Full filesystem path of the currently active project, if any.
     pub(crate) active_path: Option<PathBuf>,
@@ -2857,17 +2942,97 @@ pub(crate) struct UiProjectView {
     pub(crate) active_triangulation_for_menu: Option<TriangulationMenuStyle>,
 }
 
+/// How many remembered projects a Recent list offers before the file chooser
+/// is the better tool for finding one.
+pub(crate) const RECENT_PROJECT_LIMIT: usize = 10;
+
+impl UiProjectView {
+    /// The remembered projects a Recent list offers, most recently opened
+    /// first.
+    ///
+    /// The open project is left out: it is not somewhere to go back to, and
+    /// both lists that read this - the welcome splash and File > Open Recent -
+    /// are ways of leaving it.
+    pub(crate) fn recent_projects(&self) -> impl Iterator<Item = &UiTrackedProjectEntry> {
+        self.tracked_projects.iter().filter(|entry| !entry.is_active).take(RECENT_PROJECT_LIMIT)
+    }
+}
+
+/// A workspace: one of the discipline-shaped arrangements of the window the
+/// menu bar's tabs switch between.
+///
+/// The tab decides what the viewport bar carries, the way Blender's workspace
+/// tabs decide what its editors show. Production and Drill & Blast are built
+/// out; the rest name where the remaining disciplines will land and stay
+/// disabled in the bar until they have something behind them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Workspace {
+    Production,
+    DrillAndBlast,
+    Geology,
+    Schedule,
+    Simulate,
+}
+
+impl Workspace {
+    /// Every workspace, in the order the tabs are drawn.
+    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Schedule, Self::Simulate];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Production => "Production",
+            Self::DrillAndBlast => "Drill & Blast",
+            Self::Geology => "Geology",
+            Self::Schedule => "Schedule",
+            Self::Simulate => "Simulate",
+        }
+    }
+
+    /// Whether the tab can be selected at all yet.
+    pub(crate) fn implemented(self) -> bool {
+        matches!(self, Self::Production | Self::DrillAndBlast)
+    }
+
+    /// Whether this workspace carries the mine production tools.
+    ///
+    /// The drawing toolbar, the cursor modes, the design menus, the layer / Z
+    /// / colour / fill settings those tools draw with and the scene switches
+    /// that go with them all belong to production alone. A workspace without
+    /// them keeps what is true everywhere: the project actions, the camera
+    /// controls, and the editors of its own discipline.
+    pub(crate) fn has_production_tools(self) -> bool {
+        matches!(self, Self::Production)
+    }
+
+    /// Whether the explorer opens `section` when this workspace is selected.
+    ///
+    /// The tab decides the arrangement of the tree, the way it decides what
+    /// the viewport bar carries: switching to a workspace opens the sections
+    /// that discipline works on and collapses the rest, rather than following
+    /// whatever the project happens to hold. Between switches the headers are
+    /// left exactly as the user set them. The unimplemented workspaces open
+    /// nothing until they have editors of their own.
+    pub(crate) fn opens_section(self, section: ExplorerSection) -> bool {
+        match self {
+            Self::Production => true,
+            Self::DrillAndBlast => section == ExplorerSection::DrillHoles,
+            Self::Geology | Self::Schedule | Self::Simulate => false,
+        }
+    }
+}
+
 /// A section of the explorer's properties panel.
 ///
-/// The first four are the application settings, always available. The last
-/// three describe the current selection and only appear while there is
-/// something they apply to.
+/// The first four are the application settings. Object is always available
+/// and describes the last selection; the last three add type-specific fields
+/// and only appear while there is something they apply to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
     Developer,
+    Object,
     BlockModel,
     Triangulation,
     Design,

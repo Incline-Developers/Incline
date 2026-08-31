@@ -41,22 +41,16 @@ struct ConsolePresentationCache {
 /// the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "Console";
 
-/// Shortest the console may be dragged. Below this its rows stop fitting and
-/// the panel would be pushed past the window edge by its own contents.
-const MIN_HEIGHT: f32 = 64.0;
-
 /// Draw the console content, filling the remaining UI area.
 ///
 /// Returns the panel's bounding rect.
-pub(crate) fn draw_console(ui: &mut egui::Ui, max_height: f32, snapshot: &crate::logging::ConsoleSnapshot) -> egui::Rect {
+pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, snapshot: &crate::logging::ConsoleSnapshot) -> egui::Rect {
     let (log_revision, entries) = snapshot;
     let surface_fill = ui.visuals().extreme_bg_color;
     egui::Panel::bottom(PANEL_ID)
         .resizable(true)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        // Never a minimum above the maximum: a window short enough to squeeze
-        // the console below its minimum leaves it whatever is going.
-        .min_size(MIN_HEIGHT.min(max_height))
+        .min_size(min_height)
         .max_size(max_height)
         .frame(crate::ui::chrome::region_frame(ui).fill(surface_fill).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {

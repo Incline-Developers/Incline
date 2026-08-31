@@ -1,3 +1,5 @@
+use crate::ui::state::{ExplorerSection, Workspace};
+
 /// Width of the gutter an entry's label is indented by, matching the space the
 /// section heading's icon occupies so labels line up under the heading text.
 const ENTRY_LABEL_GUTTER: f32 = 20.0;
@@ -36,12 +38,21 @@ pub(crate) fn reserve_fixed_stripes(ui: &egui::Ui) -> (egui::layers::ShapeIdx, f
 /// painting one shape for the whole tree makes the pattern indifferent to
 /// which row currently sits where.
 pub(crate) fn paint_fixed_stripes(ui: &egui::Ui, slot: egui::layers::ShapeIdx, top: f32, stripe: egui::Color32) {
-    let height = row_height(ui);
-    let bottom = ui.available_rect_before_wrap().bottom();
-    if bottom <= top {
-        return;
+    let bands = stripe_bands(ui.clip_rect().x_range(), top, ui.available_rect_before_wrap().bottom(), row_height(ui), stripe);
+    ui.painter().set(slot, bands);
+}
+
+/// The alternating bands themselves: one shape tiling `top..bottom` in
+/// `height`-tall rows, every other one filled.
+///
+/// Split out from [`paint_fixed_stripes`] so any list that wants the same
+/// banding - the welcome splash's Recent box, for one - can anchor it to its
+/// own box rather than to the explorer's panel, and can tile the full box
+/// whether or not the entries reach the bottom of it.
+pub(crate) fn stripe_bands(x_range: egui::Rangef, top: f32, bottom: f32, height: f32, stripe: egui::Color32) -> egui::Shape {
+    if bottom <= top || height <= 0.0 {
+        return egui::Shape::Noop;
     }
-    let x_range = ui.clip_rect().x_range();
     let mut shapes = Vec::new();
     let mut band_top = top;
     let mut band_index = 0usize;
@@ -53,7 +64,7 @@ pub(crate) fn paint_fixed_stripes(ui: &egui::Ui, slot: egui::layers::ShapeIdx, t
         band_top += height;
         band_index += 1;
     }
-    ui.painter().set(slot, egui::Shape::Vec(shapes));
+    egui::Shape::Vec(shapes)
 }
 
 /// A section's empty-state line ("No design layers"), as a tree row.
@@ -162,16 +173,6 @@ impl ExplorerEntry {
         self
     }
 
-    /// Show `icon`, tinted to `color`, in the gutter ahead of the label.
-    ///
-    /// This is not a "kind" icon like a section heading's - entries don't
-    /// carry those - but a status distinct from the other rows around it
-    /// (the one active project among the tracked list).
-    pub(crate) fn leading_icon(mut self, icon: egui::ImageSource<'static>, color: egui::Color32) -> Self {
-        self.leading_icon = Some((icon, color));
-        self
-    }
-
     /// Lay the row out, returning its label response alongside the toggles.
     ///
     /// [`egui::Widget`] can only hand back the label response, so rows that
@@ -273,64 +274,20 @@ impl egui::Widget for ExplorerEntry {
     }
 }
 
-/// Opens `id`'s collapsing state the first time `default_open` is true.
+/// Set a section's open state from the workspace tab that is selected.
 ///
-/// `CollapsingState::load_with_default_open` only honours the default while no
-/// state has been stored yet, and the Projects section wants to start open.
-fn apply_default_open_once(ctx: &egui::Context, id: egui::Id, default_open: bool) {
-    if !default_open {
+/// Only the workspace is recorded, so the arrangement is applied on the frame
+/// the tab changes and never afterwards: a header the user collapsed by hand
+/// stays collapsed until the next tab change.
+fn apply_workspace_open(ctx: &egui::Context, id: egui::Id, workspace: Workspace, open: bool) {
+    let state_id = id.with("explorer_header_workspace_open");
+    if ctx.data_mut(|d| d.get_temp::<Workspace>(state_id)) == Some(workspace) {
         return;
     }
-    let applied_id = id.with("explorer_header_default_open_applied");
-    if ctx.data_mut(|d| d.get_temp::<bool>(applied_id).unwrap_or(false)) {
-        return;
-    }
-    ctx.data_mut(|d| d.insert_temp(applied_id, true));
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, true);
-    state.set_open(true);
+    ctx.data_mut(|d| d.insert_temp(state_id, workspace));
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, open);
+    state.set_open(open);
     state.store(ctx);
-}
-
-/// What [`apply_auto_open`] saw for a section on the previous frame.
-#[derive(Clone, Copy)]
-struct AutoOpenState {
-    epoch: u64,
-    entries: usize,
-}
-
-/// Keep a project-scoped section's open state in step with its contents.
-///
-/// A section opens as soon as it gains an entry, and collapses as soon as it
-/// has none, so a newly created layer or imported model is never hidden behind
-/// a collapsed header and an empty header never sits open over a "nothing
-/// here" line. `epoch` identifies the active project: when it changes, the
-/// section mirrors the new project's contents outright, which also reopens a
-/// populated section the user had collapsed under the previous project.
-/// Between those points a populated section is left exactly as the user set
-/// it.
-///
-/// Every rule is a transition rather than a per-frame assertion, because the
-/// two inputs do not always change on the same frame: opening a project can
-/// publish the new active project a frame or more before its items are loaded
-/// or before the outgoing project's are dropped. Watching for the change
-/// rather than the state gets the same result whichever arrives first, and
-/// still lets the user expand an empty section by hand afterwards.
-fn apply_auto_open(ctx: &egui::Context, id: egui::Id, entries: usize, epoch: u64) {
-    let state_id = id.with("explorer_header_auto_open");
-    let previous = ctx.data_mut(|d| d.get_temp::<AutoOpenState>(state_id));
-    ctx.data_mut(|d| d.insert_temp(state_id, AutoOpenState { epoch, entries }));
-    let open = match previous {
-        Some(previous) if entries > previous.entries => Some(true),
-        Some(previous) if entries == 0 && (previous.entries > 0 || previous.epoch != epoch) => Some(false),
-        Some(previous) if previous.epoch != epoch => Some(true),
-        Some(_) => None,
-        None => Some(entries > 0),
-    };
-    if let Some(open) = open {
-        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, open);
-        state.set_open(open);
-        state.store(ctx);
-    }
 }
 
 /// A collapsible explorer section heading.
@@ -340,13 +297,12 @@ pub(crate) struct ExplorerHeader {
     /// Icon naming the kind of entry this section holds.
     icon: Option<egui::ImageSource<'static>>,
     dirty: bool,
-    default_open: bool,
     /// Heading tint, matching the section's entry icons. `None` uses the
     /// theme's normal text colour.
     color: Option<egui::Color32>,
-    /// Entry count and active-project epoch, for sections that follow their
-    /// contents. `None` leaves the section on plain `default_open` behaviour.
-    auto_open: Option<(usize, u64)>,
+    /// The workspace this section belongs to, and whether that workspace
+    /// opens it: see [`apply_workspace_open`].
+    workspace_open: Option<(Workspace, bool)>,
 }
 
 impl ExplorerHeader {
@@ -356,9 +312,8 @@ impl ExplorerHeader {
             title: title.into(),
             icon: None,
             dirty: false,
-            default_open: false,
             color: None,
-            auto_open: None,
+            workspace_open: None,
         }
     }
 
@@ -378,11 +333,6 @@ impl ExplorerHeader {
         self
     }
 
-    pub(crate) fn default_open(mut self, default_open: bool) -> Self {
-        self.default_open = default_open;
-        self
-    }
-
     /// Tint the heading text, keying the section to the colour of the icons
     /// its entries use.
     pub(crate) fn color(mut self, color: egui::Color32) -> Self {
@@ -390,11 +340,11 @@ impl ExplorerHeader {
         self
     }
 
-    /// Follow the section's contents: see [`apply_auto_open`]. `epoch`
-    /// identifies the active project, so switching projects re-syncs the
-    /// section against the new project's entries.
-    pub(crate) fn auto_open(mut self, entries: usize, epoch: u64) -> Self {
-        self.auto_open = Some((entries, epoch));
+    /// Let `workspace` decide whether this section is open: see
+    /// [`apply_workspace_open`]. Switching tabs re-syncs the header against
+    /// the incoming workspace's arrangement.
+    pub(crate) fn workspace_open(mut self, section: ExplorerSection, workspace: Workspace) -> Self {
+        self.workspace_open = Some((workspace, workspace.opens_section(section)));
         self
     }
 
@@ -408,16 +358,16 @@ impl ExplorerHeader {
             mut title,
             icon,
             dirty,
-            mut default_open,
             color,
-            auto_open,
+            workspace_open,
         } = self;
-        if let Some((entries, epoch)) = auto_open {
-            apply_auto_open(ui.ctx(), id, entries, epoch);
-            default_open = entries > 0;
-        } else {
-            apply_default_open_once(ui.ctx(), id, default_open);
-        }
+        let default_open = match workspace_open {
+            Some((workspace, open)) => {
+                apply_workspace_open(ui.ctx(), id, workspace, open);
+                open
+            }
+            None => false,
+        };
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
         if dirty && !state.is_open() {
             title.push_str(" *");

@@ -19,6 +19,16 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Flip one view preference and save it, exactly as the Interface tab
+    /// would: the View menu is a shortcut to those settings, not a second
+    /// place they are stored.
+    pub(crate) fn toggle_view_option(&mut self, option: crate::ui::state::ViewToggle) -> anyhow::Result<()> {
+        let mut preferences = self.editor.current_preferences();
+        let value = !option.get(&preferences);
+        option.set(&mut preferences, value);
+        self.apply_preferences(preferences)
+    }
+
     pub(crate) fn apply_preferences(&mut self, mut preferences: crate::ui::state::PreferencesDraft) -> anyhow::Result<()> {
         // Clamp once, up front, so the saved config, the applied editor state
         // and the retained draft cannot diverge.

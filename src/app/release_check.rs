@@ -1,4 +1,4 @@
-//! One-shot check for a newer published Incline release.
+//! One-shot check for a newer published Incline Design release.
 //!
 //! The release service publishes the latest version separately. This check is
 //! deliberately advisory: network and parsing failures
@@ -18,7 +18,7 @@ fn fetch_newer_release(current: &str) -> Result<Option<String>> {
     let agent: ureq::Agent = config.into();
     let mut response = agent
         .get(LATEST_RELEASE_URL)
-        .header("User-Agent", concat!("Incline/", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", concat!("InclineDesign/", env!("CARGO_PKG_VERSION")))
         .call()
         .context("requesting the latest release")?;
     let body = response
@@ -32,7 +32,7 @@ fn fetch_newer_release(current: &str) -> Result<Option<String>> {
 }
 
 fn newer_release(current: &str, published: &str) -> Result<Option<String>> {
-    let current = Version::parse(current).context("the current Incline version is not valid semantic versioning")?;
+    let current = Version::parse(current).context("the current Incline Design version is not valid semantic versioning")?;
     let published = Version::parse(published.trim()).context("the website returned an invalid release version")?;
     Ok((published > current).then(|| published.to_string()))
 }
@@ -65,11 +65,11 @@ impl<'a> App<'a> {
                 self.pending_release_check = None;
             }
             Ok(Err(error)) => {
-                log::warn!("Could not check for a newer Incline release: {error:#}");
+                log::warn!("Could not check for a newer Incline Design release: {error:#}");
                 self.pending_release_check = None;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                log::warn!("Could not check for a newer Incline release: the background task ended unexpectedly");
+                log::warn!("Could not check for a newer Incline Design release: the background task ended unexpectedly");
                 self.pending_release_check = None;
             }
             Err(mpsc::TryRecvError::Empty) => {}

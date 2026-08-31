@@ -10,7 +10,10 @@
 //! the same radius without any of it having to know the shape.
 //!
 //! The menu bar and the status bar are deliberately not regions: they span the
-//! window and stay square, as Blender's global top bar and status bar do.
+//! window and stay square, as Blender's global top bar and status bar do - and
+//! they are painted in the gap's own colour rather than the panel surface, so
+//! they read as the backdrop the regions are laid on rather than as two more
+//! panels floating at the window's edges. See [`window_bar_frame`].
 //!
 //! A new top-level panel joins the look in two steps: take [`region_frame`]
 //! and hand its rect to the [`paint_regions`] call at the end of `draw_ui`.
@@ -26,10 +29,10 @@
 
 use egui::{Color32, Id, Rect, Shape, Stroke, StrokeKind};
 
-/// Corner radius of a region: the toolbar tiles' rounding, so the panels and
-/// the tools floating over the scene read as one family. Blender rounds its
-/// editors harder (`EDITORRADIUS` is 6), but it has nothing else on screen to
-/// agree with.
+/// Corner radius shared by regions and rounded controls. Toolbar buttons stay
+/// square themselves; when one reaches a region corner, the mask below applies
+/// this rounding to it along with the panel. Blender rounds its editors harder
+/// (`EDITORRADIUS` is 6), but it has nothing else on screen to agree with.
 const REGION_RADIUS: u8 = crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
 
 /// Gap each region leaves around its own fill.
@@ -125,6 +128,26 @@ fn region_stroke(visuals: &egui::Visuals) -> Stroke {
     Stroke::new(1.0, color)
 }
 
+/// Fill for a bar that spans the window instead of sitting in a region.
+///
+/// The gap's colour: the menu bar and the status bar are the window's own
+/// background rather than surfaces on it, so a bar and the gap beside it are
+/// one continuous field with no seam between them. With the chrome off there
+/// is no gap and no backdrop to belong to, so they fall back to the panel
+/// surface and are told apart by their separator lines as before.
+pub(crate) fn window_bar_fill(ui: &egui::Ui) -> Color32 {
+    if enabled(ui.ctx()) { window_fill(ui.visuals()) } else { ui.visuals().panel_fill }
+}
+
+/// Frame for such a bar: [`window_bar_fill`], with the panel frame's margins.
+///
+/// Pair it with [`show_separator_line`], which is what drops the line egui
+/// would otherwise draw along the bar's inner edge - with the bar and the gap
+/// the same colour, that line is the only thing left saying "panel".
+pub(crate) fn window_bar_frame(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::side_top_panel(ui.style()).fill(window_bar_fill(ui))
+}
+
 /// Frame for a top-level region: the default panel frame, rounded and inset by
 /// the gap.
 ///
@@ -140,6 +163,21 @@ pub(crate) fn region_frame(ui: &egui::Ui) -> egui::Frame {
     }
 }
 
+/// Which of a gap's four sides actually take space.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Gap {
+    /// All four, for something parted from a neighbour on every side.
+    All,
+    /// Left and right only.
+    ///
+    /// What lies above and below the workspace is the menu bar and the status
+    /// bar, and those are painted in the gap's own colour already - see
+    /// [`window_bar_frame`]. A spacer against one of them adds nothing to look
+    /// at and doubles the distance to the first region, which reads as a band
+    /// of dead space rather than a seam.
+    Sides,
+}
+
 /// Claim half a gap of window background around whatever `ui` lays out next.
 ///
 /// Called once before the regions, so the window edge reads the same as the
@@ -150,18 +188,21 @@ pub(crate) fn region_frame(ui: &egui::Ui) -> egui::Frame {
 /// (`Context::is_pointer_over_egui`). Space the chrome takes has to be claimed
 /// the way a panel claims it, or the scene keeps taking scrolls and clicks
 /// meant for the gap - and `salt` keeps the two calls' panel ids apart.
-pub(crate) fn claim_gap(ui: &mut egui::Ui, salt: &str) {
+pub(crate) fn claim_gap(ui: &mut egui::Ui, salt: &str, sides: Gap) {
     // Not resizable, and no separator: a spacer is chrome, not something the
     // user can grab. With the chrome off they are shown at zero width rather
     // than skipped, because a panel that is not shown is one child fewer on
     // the root ui - and every panel after it would take a different auto id,
     // losing the sizes the user had dragged.
     let width = margin(ui.ctx());
-    let spacer = move |panel: egui::Panel| panel.exact_size(width).resizable(false).show_separator_line(false).frame(egui::Frame::NONE);
-    spacer(egui::Panel::top(egui::Id::new((salt, "top")))).show(ui, |_| {});
-    spacer(egui::Panel::bottom(egui::Id::new((salt, "bottom")))).show(ui, |_| {});
-    spacer(egui::Panel::left(egui::Id::new((salt, "left")))).show(ui, |_| {});
-    spacer(egui::Panel::right(egui::Id::new((salt, "right")))).show(ui, |_| {});
+    // A side that is switched off is still shown, at nothing, for the same
+    // reason a gap is with the chrome off.
+    let vertical = if sides == Gap::All { width } else { 0.0 };
+    let spacer = |size: f32| move |panel: egui::Panel| panel.exact_size(size).resizable(false).show_separator_line(false).frame(egui::Frame::NONE);
+    spacer(vertical)(egui::Panel::top(egui::Id::new((salt, "top")))).show(ui, |_| {});
+    spacer(vertical)(egui::Panel::bottom(egui::Id::new((salt, "bottom")))).show(ui, |_| {});
+    spacer(width)(egui::Panel::left(egui::Id::new((salt, "left")))).show(ui, |_| {});
+    spacer(width)(egui::Panel::right(egui::Id::new((salt, "right")))).show(ui, |_| {});
 }
 
 /// The rect a region's fill occupies, given the rect its panel claimed.
@@ -250,47 +291,18 @@ pub(crate) fn paint_regions(ctx: &egui::Context, regions: impl IntoIterator<Item
         if !region.is_positive() {
             continue;
         }
-        // Square: a panel's neighbour is another panel, so the far side of
-        // every seam is covered by a band of its own.
-        paint_region_chrome(&painter, visuals, region, 0);
-    }
-}
-
-/// Round off a region that floats in a layer of its own instead of claiming a
-/// panel, painting into that layer rather than the background.
-///
-/// [`paint_regions`] works from the background layer, under everything the
-/// panels drew. A floating region is *above* that layer, so the gap around it
-/// and its outline have to be painted with its own painter or the fill it drew
-/// would be all that shows - square-cornered, with nothing to separate it from
-/// what it floats over. Call it after the fill.
-///
-/// The gap's outer corners are rounded too, because here it is a notch cut
-/// into one continuous surface rather than a seam between two panels - to the
-/// same radius, so the notch turns the same corner the fill inside it does.
-pub(crate) fn paint_floating_region(painter: &egui::Painter, visuals: &egui::Visuals, region: Rect) {
-    if !region.is_positive() {
-        return;
-    }
-    if enabled(painter.ctx()) {
-        paint_region_chrome(painter, visuals, region, REGION_RADIUS);
-    } else {
-        // No gap to notch out of the scene, but the tile still has to read as
-        // a tile over it: its own fill is rounded either way, so the outline
-        // that separates it from the scene turns the same corner it does.
-        painter.rect_stroke(region, REGION_RADIUS, region_stroke(visuals), StrokeKind::Inside);
+        paint_region_chrome(&painter, visuals, region);
     }
 }
 
 /// The gap around a region's fill, its corners cut back, and its outline.
-///
-/// `gap_radius` rounds the far side of the gap: the outer edge of the band,
-/// where whatever the region sits against resumes.
-fn paint_region_chrome(painter: &egui::Painter, visuals: &egui::Visuals, region: Rect, gap_radius: u8) {
+fn paint_region_chrome(painter: &egui::Painter, visuals: &egui::Visuals, region: Rect) {
     let fill = window_fill(visuals);
     // The band runs along the seam itself, the mask hugs the fill: between
     // them the whole margin is covered, corners and line ends included.
-    painter.rect_stroke(region.expand(f32::from(REGION_MARGIN)), gap_radius, Stroke::new(SEAM_BAND_WIDTH, fill), StrokeKind::Middle);
+    // The band's outer edge is square: a panel's neighbour is another panel,
+    // so the far side of every seam is covered by a band of its own.
+    painter.rect_stroke(region.expand(f32::from(REGION_MARGIN)), 0, Stroke::new(SEAM_BAND_WIDTH, fill), StrokeKind::Middle);
     painter.rect_stroke(region, REGION_RADIUS, Stroke::new(MASK_WIDTH, fill), StrokeKind::Outside);
     painter.rect_stroke(region, REGION_RADIUS, region_stroke(visuals), StrokeKind::Inside);
 }

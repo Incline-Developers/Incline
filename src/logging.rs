@@ -255,11 +255,11 @@ pub(crate) struct LoggingGuard {
 #[cfg(not(target_arch = "wasm32"))]
 fn diagnostic_filter() -> EnvFilter {
     let mut filter = EnvFilter::builder()
-        .with_env_var("INCLINE_LOG")
+        .with_env_var("INCLINE_DESIGN_LOG")
         .with_default_directive(tracing::Level::INFO.into())
         .from_env_lossy();
     if std::env::var_os("PI_INCLUDE_DIAG").is_some() {
-        filter = filter.add_directive("incline::include=debug".parse().expect("static diagnostic filter must be valid"));
+        filter = filter.add_directive("incline_design::include=debug".parse().expect("static diagnostic filter must be valid"));
     }
     filter
 }
@@ -272,7 +272,7 @@ pub(crate) fn init() -> LoggingGuard {
     let (file_layer, file_writer_guard) = if let Some(logs_dir) = logs_dir {
         let appender = tracing_appender::rolling::RollingFileAppender::builder()
             .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("incline")
+            .filename_prefix("incline_design")
             .filename_suffix("jsonl")
             .max_log_files(10)
             .build(logs_dir);
@@ -313,7 +313,7 @@ pub(crate) fn init() -> LoggingGuard {
             return;
         }
         let backtrace = Backtrace::force_capture();
-        tracing::error!(target: "incline::panic", panic = %panic_info, backtrace = %backtrace, "Incline panicked");
+        tracing::error!(target: "incline_design::panic", panic = %panic_info, backtrace = %backtrace, "Incline Design panicked");
         default_hook(panic_info);
     }));
 
@@ -403,7 +403,7 @@ fn complete_if_settled(entry: &mut ConsoleEntry) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 fn trace_activity_started(id: ConsoleEntryId, title: &str, summary: &str) {
     tracing::info!(
-        target: "incline::activity",
+        target: "incline_design::activity",
         activity_id = id.0,
         phase = "started",
         user_visible = true,
@@ -455,7 +455,7 @@ impl CompletedActivity {
 fn trace_activity_completed(activity: &CompletedActivity) {
     match activity.severity {
         ConsoleSeverity::Error => tracing::error!(
-            target: "incline::activity",
+            target: "incline_design::activity",
             activity_id = activity.id.0,
             phase = "completed",
             outcome = activity.outcome,
@@ -466,7 +466,7 @@ fn trace_activity_completed(activity: &CompletedActivity) {
             "Activity completed"
         ),
         ConsoleSeverity::Warn => tracing::warn!(
-            target: "incline::activity",
+            target: "incline_design::activity",
             activity_id = activity.id.0,
             phase = "completed",
             outcome = activity.outcome,
@@ -477,7 +477,7 @@ fn trace_activity_completed(activity: &CompletedActivity) {
             "Activity completed"
         ),
         ConsoleSeverity::Info | ConsoleSeverity::Success => tracing::info!(
-            target: "incline::activity",
+            target: "incline_design::activity",
             activity_id = activity.id.0,
             phase = "completed",
             outcome = activity.outcome,
@@ -619,10 +619,10 @@ pub(crate) fn log_to_distributor(args: fmt::Arguments<'_>, severity: ConsoleSeve
 
     #[cfg(not(target_arch = "wasm32"))]
     match (severity, ACTIVE_REPORT.get().map(|id| id.0)) {
-        (ConsoleSeverity::Error, activity_id) => tracing::error!(target: "incline::activity", source_target = target, activity_id, user_visible = true, message = %message),
-        (ConsoleSeverity::Warn, activity_id) => tracing::warn!(target: "incline::activity", source_target = target, activity_id, user_visible = true, message = %message),
+        (ConsoleSeverity::Error, activity_id) => tracing::error!(target: "incline_design::activity", source_target = target, activity_id, user_visible = true, message = %message),
+        (ConsoleSeverity::Warn, activity_id) => tracing::warn!(target: "incline_design::activity", source_target = target, activity_id, user_visible = true, message = %message),
         (ConsoleSeverity::Info | ConsoleSeverity::Success, activity_id) => {
-            tracing::info!(target: "incline::activity", source_target = target, activity_id, user_visible = true, message = %message)
+            tracing::info!(target: "incline_design::activity", source_target = target, activity_id, user_visible = true, message = %message)
         }
     }
 
@@ -662,7 +662,7 @@ macro_rules! userspace_error {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn startup_log() {
-    let id = begin_command_report(CommandReportSpec::new("Application Startup", "Initialising Incline"));
+    let id = begin_command_report(CommandReportSpec::new("Application Startup", "Initialising Incline Design"));
     with_report_scope(id, || {
         userspace_log!("APPLICATION NAME: {}", crate::APP_NAME);
         userspace_log!("Application ID: {}", crate::APP_ID);
