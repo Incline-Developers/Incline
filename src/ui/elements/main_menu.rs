@@ -23,6 +23,9 @@ use crate::{
     },
 };
 
+/// Extra space above the bar's contents, on top of the panel frame's own
+/// margin, so the menus and tabs are not pinned to the window's top edge.
+const TOP_PADDING: i8 = 3;
 /// Side of the application mark at the left of the bar.
 const LOGO_SIZE: f32 = 18.0;
 /// Space either side of the mark, so it reads as a mark rather than as the
@@ -75,9 +78,14 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
     // so it reads as the backdrop the workspace is laid on rather than as a
     // panel of its own. See `chrome::window_bar_frame`.
     let bar_fill = crate::ui::chrome::window_bar_fill(ui);
+    let frame = crate::ui::chrome::window_bar_frame(ui);
+    let frame = frame.inner_margin(egui::Margin {
+        top: frame.inner_margin.top + TOP_PADDING,
+        ..frame.inner_margin
+    });
     egui::Panel::top("main_menu")
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        .frame(crate::ui::chrome::window_bar_frame(ui))
+        .frame(frame)
         .show(ui, |ui| {
             // Too narrow a window scrolls the row rather than clipping the
             // workspace tabs off the end of it. See `elements::bar_strip`.
