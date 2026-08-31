@@ -40,6 +40,15 @@ const MIN_HEIGHT: f32 = 120.0;
 /// the sections stay reachable however short the window gets.
 const MIN_TREE_HEIGHT: f32 = 72.0;
 
+/// Effective outer-height limits for the properties panel in the available
+/// workspace. Kept public within the UI so the console and bottom-toolbar
+/// stack can stop at the same two horizontal lines.
+pub(crate) fn height_limits(available_height: f32) -> (f32, f32) {
+    let min = MIN_HEIGHT.min(available_height);
+    let max = (available_height - MIN_TREE_HEIGHT).max(min).min(available_height);
+    (min, max)
+}
+
 /// What the panel can show this frame, given the current selection.
 struct PropertyContext {
     /// Selected block model to describe, if any.
@@ -109,14 +118,14 @@ pub(crate) fn draw_properties(
     // Only the first frame uses this; after that the panel remembers its
     // dragged size.
     let available_height = ui.available_height();
-    let default_height = (available_height / 3.0).clamp(180.0, 640.0);
+    let (min_height, max_height) = height_limits(available_height);
+    let default_height = (available_height / 3.0).clamp(180.0, 640.0).clamp(min_height, max_height);
     // Never take the last of the tree's height: a short window would otherwise
     // leave it with a sliver the section headers spill straight out of.
-    let max_height = (available_height - MIN_TREE_HEIGHT).max(MIN_HEIGHT);
     egui::Panel::bottom(PANEL_ID)
         .resizable(true)
         .default_size(default_height)
-        .min_size(MIN_HEIGHT)
+        .min_size(min_height)
         .max_size(max_height)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .frame(crate::ui::chrome::region_frame(ui).fill(content_fill).inner_margin(egui::Margin::ZERO))

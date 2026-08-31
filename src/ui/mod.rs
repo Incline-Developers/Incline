@@ -501,8 +501,15 @@ fn draw_ui(
     // before showing the console so dragging it to its maximum cannot starve the
     // toolbar (or the side panels drawn afterward) of layout space.
     let console_rect = editor.show_console.then(|| {
-        let max_height = (root_ui.available_height() - elements::toolbars::bottom_toolbar_height(root_ui.ctx())).max(0.0);
-        elements::console::draw_console(root_ui, max_height, frame_context.console_snapshot)
+        let available_height = root_ui.available_height();
+        let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
+        let (properties_min, properties_max) = elements::properties::height_limits(available_height);
+        // The properties panel and this two-region stack share a bottom edge.
+        // Offset both properties limits by the toolbar so the top of the
+        // toolbar lands on the properties panel's top at either drag limit.
+        let console_min = (properties_min - toolbar_height).max(0.0);
+        let console_max = (properties_max - toolbar_height).max(console_min);
+        elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
