@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "Incline"
+name = "Incline-Design"
 version = "0.3.1"
 dependencies = [
  "anyhow",

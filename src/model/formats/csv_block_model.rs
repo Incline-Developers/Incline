@@ -273,7 +273,7 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
                     values.push(code as f64);
                 } else {
                     let code = u32::try_from(resource_categories[resource].len())
-                        .map_err(|_| CsvBlockModelError::Invalid(format!("CSV column '{}' has more categories than Incline can represent", headers[index])))?;
+                        .map_err(|_| CsvBlockModelError::Invalid(format!("CSV column '{}' has more categories than Incline Design can represent", headers[index])))?;
                     resource_categories[resource].insert(field.to_owned(), code);
                     values.push(code as f64);
                 }

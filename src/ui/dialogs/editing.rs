@@ -390,10 +390,10 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                         select_project_action_column(ui, "Project", COLUMN_WIDTH, |ui| {
                             // Startup is already sitting on an empty project,
                             // so this only has to get the splash out of the way.
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "create_project.svg")), "New project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "create_project.svg")), "New Project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 commands.push(UiCommand::CloseStartupDialog);
                             }
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_project.svg")), "Load project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_project.svg")), "Load Project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 commands.push(UiCommand::OpenProject);
                             }
                         });
@@ -406,8 +406,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                             }
                             // Escape dismisses the splash rather than firing
                             // this row: leaving is a deliberate click only.
-                            let exit = format!("Exit {}", crate::APP_NAME);
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), &exit, COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Exit Application", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
                                 commands.push(UiCommand::RequestExit);
                             }
                         });
@@ -447,7 +446,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                         ui.set_width(PANEL_SIZE - 24.0);
                         ui.horizontal_wrapped(|ui| {
                             ui.label(egui::RichText::new(
-                                "Incline Web is not recommended for production use. Only use \
+                                "Incline Design Web is not recommended for production use. Only use \
                                      it as a demo.",
                             ));
                             ui.hyperlink_to("Download the free native version at our website ↗", "https://inclinedesign.net");
@@ -474,7 +473,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(egui::RichText::new(format!("Incline {newest_release} is available")).strong());
+                                ui.label(egui::RichText::new(format!("Incline Design {newest_release} is available")).strong());
                                 ui.label(egui::RichText::new(format!("Currently installed: {}", crate::APP_RELEASE)).color(ui.visuals().weak_text_color()));
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

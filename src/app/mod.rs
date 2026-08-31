@@ -329,7 +329,7 @@ pub(crate) struct App<'a> {
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
     /// One-shot website release check. Failures are logged and otherwise
-    /// ignored so starting Incline never depends on network availability.
+    /// ignored so starting Incline Design never depends on network availability.
     #[cfg(not(target_arch = "wasm32"))]
     pending_release_check: Option<mpsc::Receiver<Result<Option<String>>>>,
     #[cfg(target_arch = "wasm32")]

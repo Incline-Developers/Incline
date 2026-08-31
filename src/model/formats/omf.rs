@@ -113,7 +113,7 @@ pub(crate) struct ImportedBlockModel {
     pub(crate) visible: bool,
     pub(crate) color: [f32; 4],
     pub(crate) slice: Option<crate::model::block_model::BlockModelSlice>,
-    /// Ramps keyed by variable name, resolved from Incline's own style
+    /// Ramps keyed by variable name, resolved from Incline Design's own style
     /// metadata where the source carried it and otherwise from the OMF
     /// colormaps on the attributes themselves. A variable absent here has its
     /// ramp invented at load from the data.
@@ -185,7 +185,7 @@ pub(crate) fn to_bytes(snapshot: ProjectSnapshot, progress: &Phase) -> Result<Ve
 
 fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progress: &Phase) -> Result<W> {
     if snapshot.is_empty() {
-        bail!("There is no open Incline data to export");
+        bail!("There is no open Incline Design data to export");
     }
     let mut writer = omf_crate::file::Writer::new(output).context("create OMF writer")?;
     let total = snapshot.item_count().max(1) as u64;
@@ -232,7 +232,7 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
     }
 
     make_element_names_unique(&mut elements);
-    let mut project = omf_crate::Project::new(if snapshot.name.trim().is_empty() { "Incline project" } else { &snapshot.name });
+    let mut project = omf_crate::Project::new(if snapshot.name.trim().is_empty() { "Incline Design project" } else { &snapshot.name });
     project.application = format!("Incline {}", env!("CARGO_PKG_VERSION"));
     project.description = "Mining data exported by Incline".to_owned();
     if let Some(design) = snapshot.designs.as_ref()
@@ -515,7 +515,7 @@ fn category_gradient(variable: &crate::model::formats::block_model_data::BlockVa
         .collect()
 }
 
-/// An OMF `NumberColormap` as an Incline colormap. A move, not a translation:
+/// An OMF `NumberColormap` as an Incline Design colormap. A move, not a translation:
 /// gradients are kept whole (the render side caps its own working copy) and
 /// boundary inclusiveness is preserved.
 fn read_number_colormap<R: omf_crate::file::ReadAt>(reader: &omf_crate::file::Reader<R>, colormap: &omf_crate::NumberColormap) -> Result<ColorTransferFunction> {
@@ -652,7 +652,7 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
                 writer.array_numbers(codes.iter().map(|code| Some(i64::from(*code))))?,
             );
             // One colour per name, in the same order - OMF's `gradient` is
-            // exactly Incline's per-category ramp, so other applications see
+            // exactly Incline Design's per-category ramp, so other applications see
             // the colours the user chose rather than inventing their own.
             let gradient = category_gradient(variable, &codes, open.color_transfers.get(&variable.name));
             let indices = writer.array_indices(indices)?;
@@ -946,7 +946,7 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
 }
 
 /// OMF 1 containers open with this magic and an `OMF-v...` version string.
-/// Incline reads OMF 2 only, so they are named in the error rather than left
+/// Incline Design reads OMF 2 only, so they are named in the error rather than left
 /// to fail later as an unrecognised archive.
 fn reject_omf1(bytes: &[u8]) -> Result<()> {
     const OMF1_MAGIC: [u8; 4] = [0x84, 0x83, 0x82, 0x81];
@@ -956,7 +956,7 @@ fn reject_omf1(bytes: &[u8]) -> Result<()> {
     let version = String::from_utf8_lossy(bytes.get(4..36).unwrap_or_default());
     let version = version.trim_end_matches('\0');
     let detail = if version.starts_with("OMF-") { format!(" ({version})") } else { String::new() };
-    bail!("This is an OMF 1 file{detail}. Incline reads OMF 2 only; re-export it as OMF 2 from the application that wrote it.");
+    bail!("This is an OMF 1 file{detail}. Incline Design reads OMF 2 only; re-export it as OMF 2 from the application that wrote it.");
 }
 
 struct Decoder<'a, R: omf_crate::file::ReadAt> {
@@ -1036,15 +1036,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         if !element.description.trim().is_empty() {
             self.bundle
                 .warnings
-                .push(format!("Element '{}' has a description that Incline does not retain", element.name));
+                .push(format!("Element '{}' has a description that Incline Design does not retain", element.name));
         }
 
-        let incline_kind = kind(element);
+        let incline_design_kind = kind(element);
         let unsupported_attributes = element
             .attributes
             .iter()
             .filter(|attribute| {
-                if matches!(incline_kind, Some("designs" | "design_database" | "drillhole_dataset" | "drillhole" | "raster")) {
+                if matches!(incline_design_kind, Some("designs" | "design_database" | "drillhole_dataset" | "drillhole" | "raster")) {
                     return false;
                 }
                 match &element.geometry {
@@ -1069,7 +1069,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         for attribute in &element.attributes {
             if !attribute.description.trim().is_empty() || !attribute.metadata.is_empty() {
                 self.bundle.warnings.push(format!(
-                    "Attribute '{}' on element '{}' has descriptive metadata that Incline does not retain",
+                    "Attribute '{}' on element '{}' has descriptive metadata that Incline Design does not retain",
                     attribute.name, element.name
                 ));
             }
@@ -1078,7 +1078,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     fn read_design(&mut self, element: &omf_crate::Element) -> Result<ProjectFile> {
         let omf_crate::Geometry::Composite(composite) = &element.geometry else {
-            bail!("Incline designs element '{}' is not an OMF composite", element.name);
+            bail!("Incline Design designs element '{}' is not an OMF composite", element.name);
         };
         let mut document = Document::new();
         for layer_element in &composite.elements {
@@ -1138,7 +1138,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                             continue;
                         }
                         Err(error) => self.bundle.warnings.push(format!(
-                            "Design object '{}' has invalid Incline metadata and was reconstructed from native geometry where possible: {error}",
+                            "Design object '{}' has invalid Incline Design metadata and was reconstructed from native geometry where possible: {error}",
                             object_element.name
                         )),
                     }
@@ -1470,7 +1470,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     ///
     /// The attribute is the authority: a number attribute's `colormap` and a
     /// category attribute's `gradient` are where a colormap lives, so that is
-    /// where Incline reads it from and writes it back to. `incline:style` is
+    /// where Incline Design reads it from and writes it back to. `incline:style` is
     /// consulted only to migrate projects written before that was true, and is
     /// never written any more - one representation, so nothing can drift.
     ///
@@ -1576,7 +1576,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                             .flatten()
                     });
                 let codes = original_codes.unwrap_or_else(|| (0..names.len() as u32).collect());
-                // The file's own palette, when it ships one, beats Incline's
+                // The file's own palette, when it ships one, beats Incline Design's
                 // generic categorical colours.
                 let category_colors = gradient
                     .as_ref()
@@ -1697,7 +1697,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 omf_crate::AttributeData::MappedTexture { image, texcoords } => {
                     let omf_crate::Geometry::Surface(surface) = &element.geometry else {
                         self.bundle.warnings.push(format!(
-                            "Skipped mapped texture '{}' on '{}': only surface textures can become Incline rasters",
+                            "Skipped mapped texture '{}' on '{}': only surface textures can become Incline Design rasters",
                             attribute.name, element.name
                         ));
                         continue;
@@ -1853,7 +1853,7 @@ fn affine_from_texcoords(vertices: &[DVec3], texcoords: &[[f64; 2]]) -> Option<[
 
 fn ensure_items(count: u64, description: &str) -> Result<usize> {
     if count > MAX_ARRAY_ITEMS {
-        bail!("OMF {description} count {count} exceeds Incline's import limit of {MAX_ARRAY_ITEMS}");
+        bail!("OMF {description} count {count} exceeds Incline Design's import limit of {MAX_ARRAY_ITEMS}");
     }
     usize::try_from(count).with_context(|| format!("OMF {description} count exceeds addressable memory"))
 }

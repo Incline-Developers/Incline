@@ -672,7 +672,7 @@ impl<'a> App<'a> {
                 }
                 self.ensure_project_has_no_pending_text_edit(project_index)?;
                 self.ensure_project_save_path_available(project_index, &path)?;
-                let new_name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned();
+                let new_name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline Design project").to_owned();
                 let (previous_name, snapshot_hash, snapshot_layer_hashes) = {
                     let project = &mut self.workspace.projects[project_index];
                     let previous_name = std::mem::replace(&mut project.project.metadata.name, new_name.clone());
@@ -916,7 +916,7 @@ impl<'a> App<'a> {
                                     if save_as_previous_name.is_some() {
                                         self.workspace.projects[index].path = Some(save.path.clone());
                                         self.workspace.projects[index].project.metadata.name =
-                                            save.path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline project").to_owned();
+                                            save.path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline Design project").to_owned();
                                         userspace_log!("Saved project as: {}", save.path.display());
                                     } else {
                                         userspace_log!("Saved project: {}", save.path.display());
@@ -1746,7 +1746,7 @@ impl<'a> App<'a> {
         self.editor.exit_confirm_open = false;
         // `save_dirty_project` reporting true only means no Save As dialog is
         // outstanding. The write itself may still be running in the background,
-        // and an OMF Incline cannot round-trip replaces the save with a
+        // and an OMF Incline Design cannot round-trip replaces the save with a
         // confirmation prompt - exiting on that alone quits without writing.
         if started && !self.project_save_is_in_flight() && self.pending_file_dialogs.is_empty() && !self.has_unsaved_changes_for_exit() {
             self.finish_deferred_exit();

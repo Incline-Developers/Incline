@@ -54,7 +54,7 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
     vec![
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("layer.svg")),
-            tooltip: "New layer",
+            tooltip: "New Layer",
             action: LeftToolAction::NewLayer,
             enabled: project_active,
         },
@@ -196,7 +196,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                             tool_button(
                                 ui,
                                 egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
-                                "Measure distance",
+                                "Measure Distance",
                                 editor,
                                 commands,
                                 ActiveTool::MeasureDistance,
@@ -243,7 +243,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "snap_to_surface.svg")),
-        "Cursor: Snap to surface",
+        "Cursor: Snap to Surface",
         editor,
         CursorMode::SnapToSurface,
         side,
@@ -252,7 +252,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "snap_to_line.svg")),
-        "Cursor: Snap to line",
+        "Cursor: Snap to Line",
         editor,
         CursorMode::SnapToLine,
         side,
@@ -261,7 +261,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "snap_to_point.svg")),
-        "Cursor: Snap to point",
+        "Cursor: Snap to Point",
         editor,
         CursorMode::SnapToPoint,
         side,

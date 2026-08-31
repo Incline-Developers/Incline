@@ -306,7 +306,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
     }
 
     let zoom = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to Extents")
             .id_salt("zoom_to_extents")
             .button_side(side),
     );
@@ -315,7 +315,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
     }
 
     let reset = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset View")
             .id_salt("reset_view")
             .button_side(side),
     );

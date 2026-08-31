@@ -69,7 +69,7 @@ pub(crate) fn draw_lossy_save_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCom
     let mut open = true;
     DragableMenu::new("Confirm OMF Rewrite").open(&mut open).min_width(420.0).show(ui.ctx(), |ui| {
         ui.set_max_width(520.0);
-        ui.label("Incline cannot reproduce all content from the original OMF. Saving will omit the following content:");
+        ui.label("Incline Design cannot reproduce all content from the original OMF. Saving will omit the following content:");
         egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
             for warning in warnings {
                 ui.label(format!("• {warning}"));
@@ -191,7 +191,7 @@ pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<Ui
         #[cfg(not(target_arch = "wasm32"))]
         {
             ui.label(if removing {
-                format!("Save changes to '{name}' before removing it from Incline?")
+                format!("Save changes to '{name}' before removing it from Incline Design?")
             } else {
                 format!("Save changes to '{name}' before closing it?")
             });

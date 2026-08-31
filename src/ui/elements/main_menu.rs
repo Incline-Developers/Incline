@@ -250,11 +250,11 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             ui.close();
         }
         context_menu_separator(ui);
-        if ContextMenuAction::new("New project...").show(ui).clicked() {
+        if ContextMenuAction::new("New Project...").show(ui).clicked() {
             commands.push(UiCommand::NewProject);
             ui.close();
         }
-        if ContextMenuAction::new("Open project...").show(ui).clicked() {
+        if ContextMenuAction::new("Open Project...").show(ui).clicked() {
             commands.push(UiCommand::OpenProject);
             ui.close();
         }
@@ -290,7 +290,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             editor.show_about = true;
             ui.close();
         }
-        if ContextMenuAction::new(format!("Exit {}", crate::APP_NAME)).show(ui).clicked() {
+        if ContextMenuAction::new("Exit Application").show(ui).clicked() {
             commands.push(UiCommand::RequestExit);
             ui.close();
         }

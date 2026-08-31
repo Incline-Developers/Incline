@@ -18,7 +18,10 @@ use crate::app::App;
 
 pub(crate) type Size = (f32, f32);
 /// Application display name.
-pub(crate) const APP_NAME: &str = env!("CARGO_PKG_NAME");
+///
+/// A literal rather than `CARGO_PKG_NAME`: the crate name cannot hold the
+/// space the product name has.
+pub(crate) const APP_NAME: &str = "Incline Design";
 /// Native package identifier used by platform integrations.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const APP_ID: &str = "net.inclinedesign.incline";
@@ -46,7 +49,7 @@ fn main() {
 
     wasm_bindgen_futures::spawn_local(async {
         if let Err(error) = start_web().await {
-            log::error!("Incline Web startup failed: {error}");
+            log::error!("Incline Design Web startup failed: {error}");
             show_web_startup_error(&error);
         }
     });
@@ -76,7 +79,7 @@ async fn start_web() -> std::result::Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn show_web_startup_ready() {
     if let Some(window) = web_sys::window()
-        && let Ok(handler) = js_sys::Reflect::get(&window, &wasm_bindgen::JsValue::from_str("inclineStartupReady"))
+        && let Ok(handler) = js_sys::Reflect::get(&window, &wasm_bindgen::JsValue::from_str("inclineDesignStartupReady"))
         && let Some(handler) = wasm_bindgen::JsCast::dyn_ref::<js_sys::Function>(&handler)
     {
         let _ = handler.call0(&wasm_bindgen::JsValue::UNDEFINED);
@@ -89,7 +92,7 @@ pub(crate) fn show_web_startup_error(message: &str) {
     let Some(window) = web_sys::window() else {
         return;
     };
-    if let Ok(handler) = js_sys::Reflect::get(&window, &JsValue::from_str("inclineStartupError"))
+    if let Ok(handler) = js_sys::Reflect::get(&window, &JsValue::from_str("inclineDesignStartupError"))
         && let Some(handler) = handler.dyn_ref::<js_sys::Function>()
     {
         let _ = handler.call1(&JsValue::UNDEFINED, &JsValue::from_str(message));

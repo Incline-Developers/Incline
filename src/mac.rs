@@ -1,6 +1,6 @@
 //! macOS system menu bar.
 //!
-//! Incline's other targets draw their menu inside the egui window. On macOS,
+//! Incline Design's other targets draw their menu inside the egui window. On macOS,
 //! AppKit owns the equivalent commands so they appear in the global menu bar
 //! and participate in standard Command-key handling.
 
@@ -178,7 +178,7 @@ define_class!(
 
     impl MenuTarget {
         // SAFETY: This signature matches the AppKit target/action selector.
-        #[unsafe(method(performInclineMenuAction:))]
+        #[unsafe(method(performInclineDesignMenuAction:))]
         fn perform_action(&self, sender: &NSMenuItem) {
             if let Some(action) = MacMenuAction::from_tag(sender.tag()) {
                 action_queue().push(action);
@@ -244,7 +244,7 @@ fn add_disabled_submenu(root: &NSMenu, title: &str, mtm: MainThreadMarker) {
 }
 
 fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, target: &MenuTarget, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
-    let item = menu_item(title, Some(sel!(performInclineMenuAction:)), key, mtm);
+    let item = menu_item(title, Some(sel!(performInclineDesignMenuAction:)), key, mtm);
     item.setTag(action.tag());
     // NSMenuItem's target is weak. representedObject retains the target for
     // exactly as long as the item remains installed in the application menu.
@@ -256,7 +256,7 @@ fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, targ
     item
 }
 
-/// Replace winit's fallback macOS menu with Incline's native menu bar.
+/// Replace winit's fallback macOS menu with Incline Design's native menu bar.
 pub(crate) fn install_menu_bar() {
     let Some(mtm) = MainThreadMarker::new() else {
         log::error!("Cannot install the macOS menu bar away from the main thread");
@@ -277,8 +277,8 @@ pub(crate) fn install_menu_bar() {
 
     let file_menu = menu("File", mtm);
     file_menu.setAutoenablesItems(false);
-    add_action(&file_menu, "New project…", "n", MacMenuAction::NewProject, &target, mtm);
-    add_action(&file_menu, "Open project…", "o", MacMenuAction::OpenProject, &target, mtm);
+    add_action(&file_menu, "New Project…", "n", MacMenuAction::NewProject, &target, mtm);
+    add_action(&file_menu, "Open Project…", "o", MacMenuAction::OpenProject, &target, mtm);
     // Empty until the first sync pass fills it - see `rebuild_recent_menu`.
     let recent_menu = menu("Open Recent", mtm);
     recent_menu.setAutoenablesItems(false);

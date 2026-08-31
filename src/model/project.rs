@@ -143,7 +143,7 @@ pub(crate) struct OpenProject {
     #[cfg(target_arch = "wasm32")]
     pub(crate) persistence: ProjectPersistence,
     pub(crate) project: ProjectFile,
-    /// Content reported by the OMF decoder that Incline cannot guarantee it
+    /// Content reported by the OMF decoder that Incline Design cannot guarantee it
     /// will reproduce. Native Open retains these until a confirmed rewrite
     /// succeeds; Merge reports them without attaching them to the target.
     pub(crate) lossy_save_warnings: Vec<String>,

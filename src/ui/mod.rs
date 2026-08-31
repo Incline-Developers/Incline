@@ -1292,7 +1292,7 @@ fn theme_visuals(dark_mode: bool, selection_color: egui::Color32) -> egui::Visua
     let mut visuals = if dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
     visuals.selection.bg_fill = selection_color.gamma_multiply(0.35);
     visuals.selection.stroke.color = selection_color;
-    // Incline's UI is flat: no drop shadows on windows, popups, or menus.
+    // Incline Design's UI is flat: no drop shadows on windows, popups, or menus.
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals

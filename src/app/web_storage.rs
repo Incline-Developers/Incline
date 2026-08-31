@@ -42,7 +42,7 @@ const DB_VERSION = 6;
 // trip through the browser's storage thread, and startup alone makes six calls.
 let dbPromise = null;
 
-function openInclineDb() {
+function openInclineDesignDb() {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -67,7 +67,7 @@ function openInclineDb() {
             resolve(db);
         };
         request.onerror = () => reject(request.error || new Error("IndexedDB open failed"));
-        request.onblocked = () => reject(new Error("IndexedDB upgrade is blocked by another Incline tab"));
+        request.onblocked = () => reject(new Error("IndexedDB upgrade is blocked by another Incline Design tab"));
     });
     // A failed open must not be cached, or every later call replays the failure.
     dbPromise = dbPromise.catch(error => {
@@ -92,29 +92,29 @@ function transactionDone(transaction) {
     });
 }
 
-export async function inclinePutProject(recordJson) {
-    const db = await openInclineDb();
+export async function inclineDesignPutProject(recordJson) {
+    const db = await openInclineDesignDb();
     const tx = db.transaction("projects", "readwrite");
     tx.objectStore("projects").put(JSON.parse(recordJson));
     await transactionDone(tx);
 }
 
-export async function inclineDeleteProject(projectId) {
-    const db = await openInclineDb();
+export async function inclineDesignDeleteProject(projectId) {
+    const db = await openInclineDesignDb();
     const tx = db.transaction("projects", "readwrite");
     tx.objectStore("projects").delete(projectId);
     await transactionDone(tx);
 }
 
-export async function inclineSaveSession(sessionJson) {
-    const db = await openInclineDb();
+export async function inclineDesignSaveSession(sessionJson) {
+    const db = await openInclineDesignDb();
     const tx = db.transaction("session", "readwrite");
     tx.objectStore("session").put(JSON.parse(sessionJson));
     await transactionDone(tx);
 }
 
-export async function inclineLoadSessionProjects() {
-    const db = await openInclineDb();
+export async function inclineDesignLoadSessionProjects() {
+    const db = await openInclineDesignDb();
     const projectTx = db.transaction("projects", "readonly");
     const records = await requestValue(projectTx.objectStore("projects").getAll());
     // Old JSON-design records intentionally remain in IndexedDB but are not
@@ -127,34 +127,34 @@ export async function inclineLoadSessionProjects() {
     });
 }
 
-export async function inclineGetProject(projectId) {
-    const db = await openInclineDb();
+export async function inclineDesignGetProject(projectId) {
+    const db = await openInclineDesignDb();
     const tx = db.transaction("projects", "readonly");
     const record = await requestValue(tx.objectStore("projects").get(projectId));
     return JSON.stringify(record && Array.isArray(record.omf_bytes) ? record : null);
 }
 
-export function inclineInstallDirtyGuard() {
-    if (window.__inclineDirtyGuardInstalled) return;
-    window.__inclineDirtyGuardInstalled = true;
-    window.__inclineDirty = false;
+export function inclineDesignInstallDirtyGuard() {
+    if (window.__inclineDesignDirtyGuardInstalled) return;
+    window.__inclineDesignDirtyGuardInstalled = true;
+    window.__inclineDesignDirty = false;
     addEventListener("beforeunload", event => {
-        if (!window.__inclineDirty) return;
+        if (!window.__inclineDesignDirty) return;
         event.preventDefault();
         // Modern browsers deliberately replace this with their own standard
-        // confirmation text. The in-app Exit action provides Incline's full
+        // confirmation text. The in-app Exit action provides Incline Design's full
         // explanation and the Save and Exit action.
         event.returnValue = "Are you sure you want to quit with unsaved project changes?";
     });
 }
 
-export function inclineSetDirty(dirty) {
-    window.__inclineDirty = Boolean(dirty);
+export function inclineDesignSetDirty(dirty) {
+    window.__inclineDesignDirty = Boolean(dirty);
 }
 
-export function inclineInstallPasteListener(callback) {
-    if (window.__inclinePasteListenerInstalled) return;
-    window.__inclinePasteListenerInstalled = true;
+export function inclineDesignInstallPasteListener(callback) {
+    if (window.__inclineDesignPasteListenerInstalled) return;
+    window.__inclineDesignPasteListenerInstalled = true;
 
     const isEditable = target =>
         target instanceof HTMLInputElement ||
@@ -183,21 +183,21 @@ export function inclineInstallPasteListener(callback) {
 }
 "#)]
 extern "C" {
-    #[wasm_bindgen(js_name = inclinePutProject)]
+    #[wasm_bindgen(js_name = inclineDesignPutProject)]
     fn js_put_project(record_json: &str) -> js_sys::Promise;
-    #[wasm_bindgen(js_name = inclineDeleteProject)]
+    #[wasm_bindgen(js_name = inclineDesignDeleteProject)]
     fn js_delete_project(project_id: &str) -> js_sys::Promise;
-    #[wasm_bindgen(js_name = inclineSaveSession)]
+    #[wasm_bindgen(js_name = inclineDesignSaveSession)]
     fn js_save_session(session_json: &str) -> js_sys::Promise;
-    #[wasm_bindgen(js_name = inclineLoadSessionProjects)]
+    #[wasm_bindgen(js_name = inclineDesignLoadSessionProjects)]
     fn js_load_session_projects() -> js_sys::Promise;
-    #[wasm_bindgen(js_name = inclineGetProject)]
+    #[wasm_bindgen(js_name = inclineDesignGetProject)]
     fn js_get_project(project_id: &str) -> js_sys::Promise;
-    #[wasm_bindgen(js_name = inclineInstallDirtyGuard)]
+    #[wasm_bindgen(js_name = inclineDesignInstallDirtyGuard)]
     fn js_install_dirty_guard();
-    #[wasm_bindgen(js_name = inclineSetDirty)]
+    #[wasm_bindgen(js_name = inclineDesignSetDirty)]
     fn js_set_dirty(dirty: bool);
-    #[wasm_bindgen(js_name = inclineInstallPasteListener)]
+    #[wasm_bindgen(js_name = inclineDesignInstallPasteListener)]
     fn js_install_paste_listener(callback: &js_sys::Function);
 }
 

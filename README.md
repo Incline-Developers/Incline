@@ -1,14 +1,14 @@
-# Incline
+# Incline Design
 
-[Incline](https://inclinedesign.net/) is a free open-source mine design application that makes mine design accessible for those who do not wish to be bound by expensive and restrictive licences.
+[Incline Design](https://inclinedesign.net/) is a free open-source mine design application that makes mine design accessible for those who do not wish to be bound by expensive and restrictive licences.
 
-Cross-platform, lightweight, and built for mining professionals. Incline is free for everyone.
+Cross-platform, lightweight, and built for mining professionals. Incline Design is free for everyone.
 
 ![Screenshot of the app](./docs/poster.png)
 
 ## Getting Started
 
-Check out the [releases page](https://inclinedesign.net/downloads/) and grab the latest version of Incline!
+Check out the [releases page](https://inclinedesign.net/downloads/) and grab the latest version of Incline Design!
 
 ## Features
 
@@ -25,7 +25,7 @@ The [`examples`](examples/) directory contains an import-ready project with a co
 
 ## License
 
-Incline is licensed under the GNU General Public License. See [LICENSE](LICENSE.md) for the full terms.
+Incline Design is licensed under the GNU General Public License. See [LICENSE](LICENSE.md) for the full terms.
 
 ## Maintainers
 

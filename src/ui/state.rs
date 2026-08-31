@@ -2619,13 +2619,13 @@ impl UiCommand {
             Self::TogglePointCloudVisible(id) => report("Set Point Cloud Visibility", format!("{id:?}")),
             Self::RemovePointCloud(id) => report("Remove Point Cloud", format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report("Import CSV Block Model", path.display().to_string()),
-            Self::ExportOmf => report("Export OMF", "All open Incline data".to_owned()),
+            Self::ExportOmf => report("Export OMF", "All open Incline Design data".to_owned()),
             Self::ExportProjectDxf(id) => report("Export Project to DXF", format!("Project {id}")),
             Self::ExportViewportImage => report("Export Viewport Image", "Choose a destination".to_owned()),
             Self::ExportLayerDxf(id) => report("Export Layer to DXF", format!("{id:?}")),
             Self::ExportTriangulationAs(id, format) => report("Export Triangulation", format!("{id:?} · {format:?}")),
             Self::ExportBlockModelCsv(id) => report("Export Block Model CSV", format!("{id:?}")),
-            Self::RequestExit => report("Exit Incline", "Checking unsaved work".to_owned()),
+            Self::RequestExit => report("Exit Incline Design", "Checking unsaved work".to_owned()),
             Self::SaveAndExit => report("Save and Exit", "Saving the current project".to_owned()),
             Self::ExitWithoutSaving => report("Exit Without Saving", "Discarding unsaved changes".to_owned()),
             Self::CreateLayer { name } => report("Create Layer", name.clone()),
@@ -2784,7 +2784,7 @@ pub(crate) struct UiProjectEntry {
     pub(crate) path: Option<PathBuf>,
 }
 
-/// A project Incline remembers, listed under Recent on the welcome splash.
+/// A project Incline Design remembers, listed under Recent on the welcome splash.
 /// Only the active entry has a decoded [`UiProjectEntry`].
 #[derive(Clone, Debug)]
 pub(crate) struct UiTrackedProjectEntry {

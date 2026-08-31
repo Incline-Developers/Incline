@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Incline Web</title>
+    <title>Incline Design Web</title>
     <link data-trunk rel="icon" type="image/svg+xml" href="res/logo.svg" />
     <link data-trunk rel="copy-file" href="_headers" />
 
@@ -77,20 +77,20 @@
                 item.textContent = message;
                 panel.appendChild(item);
             };
-            window.inclineStartupError = (message) => {
+            window.inclineDesignStartupError = (message) => {
                 console.error(message);
-                show("error", `Incline could not start: ${message}`);
+                show("error", `Incline Design could not start: ${message}`);
             };
             const loading = document.createElement("div");
             loading.className = "startup-message startup-info";
-            loading.textContent = "Starting Incline Web…";
+            loading.textContent = "Starting Incline Design Web…";
             panel.appendChild(loading);
-            window.inclineStartupReady = () => loading.remove();
+            window.inclineDesignStartupReady = () => loading.remove();
 
             const touch = 0 < navigator.maxTouchPoints
                 || window.matchMedia?.("(pointer: coarse)").matches;
             if (touch) {
-                show("warning", "Incline Web is designed for mouse and keyboard; touch input is not fully supported.");
+                show("warning", "Incline Design Web is designed for mouse and keyboard; touch input is not fully supported.");
             }
 
             const missing = [];
@@ -111,18 +111,18 @@
                 missing.push("WebAssembly shared-memory support");
             }
             if (missing.length) {
-                window.inclineStartupError(`This browser is missing ${missing.join(", ")}. Use a current browser over HTTPS or localhost and configure the required isolation headers.`);
+                window.inclineDesignStartupError(`This browser is missing ${missing.join(", ")}. Use a current browser over HTTPS or localhost and configure the required isolation headers.`);
             }
 
             addEventListener("error", event => {
                 const message = event.error?.message || event.message;
                 if (message) {
-                    window.inclineStartupError(message);
+                    window.inclineDesignStartupError(message);
                 }
             });
             addEventListener("unhandledrejection", event => {
                 const message = event.reason?.message || String(event.reason || "Unknown startup failure");
-                window.inclineStartupError(message);
+                window.inclineDesignStartupError(message);
             });
         })();
     </script>

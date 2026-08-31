@@ -1,4 +1,4 @@
-Incline — a free open-source mine design application
+Incline Design — a free open-source mine design application
 
 Copyright (C) 2026 Leo Timmins and Lucas Timmins
 

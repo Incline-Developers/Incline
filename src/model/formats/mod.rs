@@ -821,7 +821,7 @@ fn read_ply_integer(bytes: &[u8], offset: &mut usize, data_type: PlyScalar) -> R
 pub fn write_obj_with_progress(mesh: &Triangulation, writer: &mut impl Write, progress: &mut dyn FnMut(u64, u64)) -> io::Result<()> {
     let vertex_count = mesh.vertex_count();
     let total = write_item_total(vertex_count + mesh.face_count());
-    writeln!(writer, "# exported by Incline")?;
+    writeln!(writer, "# exported by Incline Design")?;
     for (i, v) in mesh.vertices().iter().enumerate() {
         writeln!(writer, "v {:.12} {:.12} {:.12}", v.x, v.y, v.z)?;
         if i % WRITE_PROGRESS_STRIDE == 0 {
@@ -852,7 +852,7 @@ pub fn write_stl_with_progress(mesh: &Triangulation, writer: &mut impl Write, pr
     }
 
     let mut header = [0u8; 80];
-    let label = b"binary STL from Incline";
+    let label = b"binary STL from Incline Design";
     header[..label.len()].copy_from_slice(label);
     writer.write_all(&header)?;
     writer.write_all(&stl_face_count.to_le_bytes())?;
@@ -896,7 +896,7 @@ fn stl_normal(vertices: [Vertex; 3]) -> io::Result<[f64; 3]> {
 }
 
 pub fn write_ply_with_progress(mesh: &Triangulation, writer: &mut impl Write, progress: &mut dyn FnMut(u64, u64)) -> io::Result<()> {
-    writeln!(writer, "ply\nformat ascii 1.0\ncomment exported by Incline")?;
+    writeln!(writer, "ply\nformat ascii 1.0\ncomment exported by Incline Design")?;
     writeln!(writer, "element vertex {}\nproperty double x\nproperty double y\nproperty double z", mesh.vertex_count())?;
     writeln!(writer, "element face {}\nproperty list uchar uint vertex_indices\nend_header", mesh.face_count())?;
     let vertex_count = mesh.vertex_count();

@@ -229,7 +229,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
         .map_err(|error| anyhow::anyhow!("Pit/stockpile clip failed after vertical rim extension: {error:#}"))?
     };
     if diag {
-        log::debug!(target: "incline::include", "include diag: shape clip {:?}", stage_start.elapsed());
+        log::debug!(target: "incline_design::include", "include diag: shape clip {:?}", stage_start.elapsed());
     }
     // The stages below are each a single pass over one of the meshes, so the
     // bar steps between them; the weights reflect the relative cost of each
@@ -251,7 +251,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
         rings_from_boundary_segments_bridged(&clipped_shape.topology_segments, Some(&bridge))?
     };
     if diag {
-        log::debug!(target: "incline::include", "include diag: rings {:?}", stage_start.elapsed());
+        log::debug!(target: "incline_design::include", "include diag: rings {:?}", stage_start.elapsed());
     }
     progress.set_fraction(0.45);
     if std::env::var("PI_INCLUDE_DIAG").is_ok() {
@@ -260,7 +260,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
         sizes.truncate(12);
         let areas: Vec<f64> = cut_rings.iter().map(|ring| signed_area_xy(ring).abs()).collect();
         let max_area = areas.iter().copied().fold(0.0f64, f64::max);
-        log::debug!(target: "incline::include",
+        log::debug!(target: "incline_design::include",
             "include diag: {} segments -> {} rings, largest sizes {:?}, max ring area {max_area:.0}",
             clipped_shape.topology_segments.len(),
             cut_rings.len(),
@@ -283,7 +283,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
     let stage_start = web_time::Instant::now();
     let coverage = build_ring_coverage(&cut_rings)?;
     if diag {
-        log::debug!(target: "incline::include", "include diag: coverage {:?}", stage_start.elapsed());
+        log::debug!(target: "incline_design::include", "include diag: coverage {:?}", stage_start.elapsed());
     }
     progress.set_fraction(0.55);
 
@@ -292,7 +292,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
     let candidate_count = candidate_boundary_edges.len();
     let boundary_edges = filter_presence_boundary_edges(candidate_boundary_edges, topology, topology_spatial);
     if diag {
-        log::debug!(target: "incline::include",
+        log::debug!(target: "incline_design::include",
             "include diag: boundary scan {:?} ({} boundary edges, {} interior cracks dropped)",
             stage_start.elapsed(),
             boundary_edges.len(),
@@ -305,7 +305,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
     let stage_start = web_time::Instant::now();
     let shape_coverage = build_shape_cell_coverage(&cut_rings, topology, topology_spatial, &boundary_edges)?;
     if diag {
-        log::debug!(target: "incline::include", "include diag: shape coverage {:?}", stage_start.elapsed());
+        log::debug!(target: "incline_design::include", "include diag: shape coverage {:?}", stage_start.elapsed());
     }
     progress.set_fraction(0.75);
 
@@ -319,13 +319,13 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
     };
     let (shape_surface_vertices, shape_surface_faces) = clip_shape_faces_by_cells(&shape_vertices, &shape_faces, &cap_mask, &shape_coverage, &shape_context);
     if diag {
-        log::debug!(target: "incline::include", "include diag: shape emit {:?} ({} surface faces)", stage_start.elapsed(), shape_surface_faces.len());
+        log::debug!(target: "incline_design::include", "include diag: shape emit {:?} ({} surface faces)", stage_start.elapsed(), shape_surface_faces.len());
     }
 
     let stage_start = web_time::Instant::now();
     let affected = fragment_topology_faces_by_coverage(topology, &coverage, &progress.phase(0.8, 0.95));
     if diag {
-        log::debug!(target: "incline::include", "include diag: fragment {:?}", stage_start.elapsed());
+        log::debug!(target: "incline_design::include", "include diag: fragment {:?}", stage_start.elapsed());
     }
     let stage_start = web_time::Instant::now();
     let mut affected_cursor = 0usize;
@@ -369,7 +369,7 @@ pub(super) fn include_shape_mesh_in_topology_with_spatial(
     append_mesh(clipped_shape.vertices, clipped_shape.faces, &mut output_vertices, &mut output_faces);
     append_mesh(shape_surface_vertices, shape_surface_faces, &mut output_vertices, &mut output_faces);
     if diag {
-        log::debug!(target: "incline::include", "include diag: assemble {:?}", stage_start.elapsed());
+        log::debug!(target: "incline_design::include", "include diag: assemble {:?}", stage_start.elapsed());
     }
 
     Ok(IncludedShapeMesh {

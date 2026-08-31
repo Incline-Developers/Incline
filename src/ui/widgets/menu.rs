@@ -186,7 +186,7 @@ fn danger_fill(visuals: &egui::Visuals) -> egui::Color32 {
 /// A non-resizable, non-collapsible floating menu with a draggable title bar.
 ///
 /// This intentionally uses an [`egui::Area`] instead of [`egui::Window`] so
-/// Incline controls the frame, title bar, close button, and shadow.
+/// Incline Design controls the frame, title bar, close button, and shadow.
 pub(crate) struct DragableMenu<'open> {
     id: egui::Id,
     title: egui::WidgetText,

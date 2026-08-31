@@ -81,7 +81,7 @@ pub(crate) fn reserve(bytes: usize, description: &str) -> Result<MemoryReservati
         let requested = used.checked_add(bytes).ok_or_else(|| format!("{description} memory estimate overflows"))?;
         if requested > WORKING_SET_LIMIT {
             return Err(format!(
-                "{description} needs {bytes} bytes, but only {} bytes remain in Incline's 3 GiB browser working-set budget",
+                "{description} needs {bytes} bytes, but only {} bytes remain in Incline Design's 3 GiB browser working-set budget",
                 WORKING_SET_LIMIT.saturating_sub(used)
             ));
         }
