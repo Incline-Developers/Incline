@@ -94,7 +94,6 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
                         if editor.active_workspace == Workspace::Production {
-                            ui.add_space(CLUSTER_GAP - BUTTON_GAP);
                             main_menu::draw_production_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                         }
                     });
@@ -178,23 +177,6 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         commands.push(UiCommand::SaveProject);
     }
 
-    // In the browser, saving only reaches IndexedDB, so taking a copy away
-    // with you is a project action of its own.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let download = ui.add_enabled(
-            !project.projects.is_empty(),
-            ToolbarButton::new(egui::Image::new(unthemed_icon!("open_mining_format.svg")), "Download the current project as an .omf file")
-                .id_salt("download_project")
-                .button_side(side),
-        );
-        if download.clicked() {
-            commands.push(UiCommand::DownloadProject);
-        }
-    }
-
-    ui.add_space(CLUSTER_GAP - BUTTON_GAP);
-
     // The same two dialogs the File menu opens; only one of the pair is ever
     // up, so opening one closes the other.
     let has_project = project.projects.iter().any(|entry| entry.is_active);
@@ -218,8 +200,6 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         editor.show_import = false;
         editor.show_export = true;
     }
-
-    ui.add_space(CLUSTER_GAP - BUTTON_GAP);
 
     let undo = ui.add_enabled(
         editor.can_undo,

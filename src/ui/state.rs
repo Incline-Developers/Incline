@@ -2154,8 +2154,6 @@ pub(crate) enum UiCommand {
     /// Make one block model the selection, so its properties tab is shown.
     SelectBlockModel(BlockModelId),
     SaveProject,
-    #[cfg(target_arch = "wasm32")]
-    DownloadProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
     SaveAndCloseProject(u32),
@@ -2554,8 +2552,6 @@ impl UiCommand {
             Self::SaveAndReplaceProject => report("Save and Replace Project", "Current project".to_owned()),
             Self::DiscardAndReplaceProject => report("Discard and Replace Project", "Current project".to_owned()),
             Self::ConfirmLossyProjectSave => report("Confirm OMF Rewrite", "Save despite unsupported content".to_owned()),
-            #[cfg(target_arch = "wasm32")]
-            Self::DownloadProject => report("Download OMF", "Current project".to_owned()),
             #[cfg(not(target_arch = "wasm32"))]
             Self::SaveProjectAs(id) => report("Save Project As", format!("Project {id}")),
             Self::CloseProjectForce(id) => report("Close Project", format!("Project {id}")),

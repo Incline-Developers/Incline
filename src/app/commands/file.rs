@@ -1500,41 +1500,6 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Download a portable `.omf` copy of the current browser project. This is
-    /// an export and deliberately does not update the save baseline.
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn download_project(&mut self) -> Result<()> {
-        if self.workspace.active_project().is_none() {
-            return Ok(());
-        }
-        if self.has_pending_move_delta() {
-            self.commit_pending_move();
-        }
-        if let Some(active_index) = self.workspace.active_index {
-            self.ensure_project_has_no_pending_text_edit(active_index)?;
-        }
-
-        let snapshot = self.omf_export_snapshot()?;
-        let file_name = format!("{}.omf", snapshot.name.trim_end_matches(".omf"));
-
-        self.spawn_job(
-            "Encoding project download…",
-            vec![crate::app::jobs::JobKey::Anonymous],
-            move |cancel| {
-                if cancel.is_cancelled() {
-                    anyhow::bail!("Cancelled");
-                }
-                let progress = crate::model::progress::Progress::new();
-                Ok((file_name, formats::omf::to_bytes(snapshot, &progress.phase(0.0, 1.0))?))
-            },
-            move |_app, result| match result {
-                Ok((file_name, bytes)) => Self::trigger_browser_download(file_name, bytes, "application/octet-stream", "project"),
-                Err(error) => userspace_warn!("Project download encoding failed: {error:#}"),
-            },
-        );
-        Ok(())
-    }
-
     pub(crate) fn choose_export_layer_dxf(&mut self, layer: LayerId) {
         if self.has_pending_move_delta() {
             self.commit_pending_move();

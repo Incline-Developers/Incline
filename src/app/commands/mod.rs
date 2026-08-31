@@ -381,8 +381,6 @@ impl<'a> App<'a> {
                 self.cancel_lossy_project_save();
                 Ok(())
             }
-            #[cfg(target_arch = "wasm32")]
-            UiCommand::DownloadProject => self.download_project(),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SaveProjectAs(runtime_id) => {
                 self.spawn_save_project_as_dialog(runtime_id);

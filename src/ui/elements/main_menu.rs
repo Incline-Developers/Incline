@@ -205,11 +205,6 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             }
             ui.close();
         }
-        #[cfg(target_arch = "wasm32")]
-        if ContextMenuAction::new("Download OMF").enabled(!project.projects.is_empty()).show(ui).clicked() {
-            commands.push(UiCommand::DownloadProject);
-            ui.close();
-        }
         context_menu_separator(ui);
         if ContextMenuAction::new("New project...").show(ui).clicked() {
             commands.push(UiCommand::NewProject);
