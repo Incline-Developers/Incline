@@ -175,6 +175,26 @@ impl Object {
         }
     }
 
+    /// World-space bounds used by generic spatial/object information.
+    ///
+    /// Text includes its laid-out rotated rectangle and polylines include arc
+    /// bulges, so callers see the same extent the viewport uses rather than
+    /// merely the stored anchor points.
+    pub(crate) fn world_bounds(&self) -> Option<(DVec3, DVec3)> {
+        match self {
+            Object::Point { pos, .. } => Some((*pos, *pos)),
+            Object::Polyline { verts, closed, .. } => crate::model::geometry::polyline_bulge_bounds(verts, *closed),
+            Object::Text {
+                pos, content, height, rotation, ..
+            } => {
+                let corners = crate::model::geometry::text_bounds_corners(*pos, content, *height, *rotation);
+                let min = corners.iter().copied().fold(DVec3::splat(f64::INFINITY), DVec3::min);
+                let max = corners.iter().copied().fold(DVec3::splat(f64::NEG_INFINITY), DVec3::max);
+                min.is_finite().then_some((min, max))
+            }
+        }
+    }
+
     /// Content fingerprint for dirty tracking. Ids are masked to their local
     /// 32-bit half so the hash is stable across runtime namespacing; floats
     /// hash by bit pattern so a reverted edit hashes back to the saved value.

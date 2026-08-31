@@ -1,5 +1,6 @@
 //! Custom egui widget implementations used across the UI.
 
+pub(crate) mod collapsible_section;
 pub(crate) mod context_menu;
 pub(crate) mod explorer;
 pub(crate) mod menu;

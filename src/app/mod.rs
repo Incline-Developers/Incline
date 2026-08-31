@@ -1274,17 +1274,24 @@ impl<'a> App<'a> {
         let mut triangulations = self
             .triangulations
             .iter()
-            .map(|tri| UiTriangulationEntry {
-                id: tri.id,
-                name: tri.name.clone(),
-                source_name: tri.state.source_name.clone(),
-                visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
-                is_active: self.active_triangulation == Some(tri.id),
-                is_loaded: tri.state.loaded,
-                dirty: tri.state.is_dirty(),
-                color: tri.color,
-                vertex_count: tri.mesh.vertex_count(),
-                triangle_count: tri.mesh.face_count(),
+            .map(|tri| {
+                let bounds = tri.mesh.bounds();
+                UiTriangulationEntry {
+                    id: tri.id,
+                    name: tri.name.clone(),
+                    source_name: tri.state.source_name.clone(),
+                    visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
+                    is_active: self.active_triangulation == Some(tri.id),
+                    is_loaded: tri.state.loaded,
+                    dirty: tri.state.is_dirty(),
+                    color: tri.color,
+                    vertex_count: tri.mesh.vertex_count(),
+                    triangle_count: tri.mesh.face_count(),
+                    bounds: Some((
+                        glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z),
+                        glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z),
+                    )),
+                }
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -1299,6 +1306,7 @@ impl<'a> App<'a> {
                 dirty: model.state.is_dirty(),
                 _block_count: model.renderable_block_indices.len(),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
+                bounds: model.world_bounds(),
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self
@@ -1313,6 +1321,7 @@ impl<'a> App<'a> {
                 dirty: dataset.state.is_dirty(),
                 hole_count: dataset.dataset.holes.len(),
                 field_count: dataset.dataset.fields.len(),
+                bounds: dataset.dataset.bounds,
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -1326,6 +1335,7 @@ impl<'a> App<'a> {
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.points.len(),
+                bounds: Some(cloud.bounds),
             })
             .collect::<Vec<_>>();
         let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();

@@ -914,6 +914,10 @@ pub(crate) struct EditorState {
     /// last non-empty selection held, kept after that selection is cleared so
     /// the tab stays put. Entries are dropped once the object is gone.
     pub(crate) property_objects: Vec<ObjectId>,
+    /// Scene entities described by the generic Object properties tab. Like
+    /// the type-specific memories, this keeps the last non-empty selection so
+    /// the panel does not go blank merely because the canvas was deselected.
+    pub(crate) property_entities: Vec<SceneEntityId>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
     /// Whether the selected polylines cross anywhere, refreshed by
@@ -1462,6 +1466,7 @@ impl EditorState {
         self.canvas_context_menu_px = None;
         self.design_line_weight_input = None;
         self.property_objects.clear();
+        self.property_entities.clear();
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
@@ -1693,6 +1698,7 @@ impl EditorState {
             canvas_context_menu_px: None,
             design_line_weight_input: None,
             property_objects: Vec::new(),
+            property_entities: Vec::new(),
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,
@@ -1919,7 +1925,7 @@ impl EditorState {
             bezier_dragging_cp: None,
             bezier_hover_cp: None,
             bezier_dialog_open: false,
-            active_property_tab: PropertyTab::Interface,
+            active_property_tab: PropertyTab::Object,
             active_workspace: Workspace::Production,
             show_import: false,
             show_export: false,
@@ -2768,6 +2774,7 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -2798,6 +2805,7 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) color: [f32; 4],
     pub(crate) vertex_count: usize,
     pub(crate) triangle_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -2810,6 +2818,7 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
     pub(crate) variable_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -2822,6 +2831,7 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 /// Active triangulation id and face colour, as surfaced to the canvas context menu.
@@ -2904,15 +2914,16 @@ impl Workspace {
 
 /// A section of the explorer's properties panel.
 ///
-/// The first four are the application settings, always available. The last
-/// three describe the current selection and only appear while there is
-/// something they apply to.
+/// The first four are the application settings. Object is always available
+/// and describes the last selection; the last three add type-specific fields
+/// and only appear while there is something they apply to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
     Developer,
+    Object,
     BlockModel,
     Triangulation,
     Design,
