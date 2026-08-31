@@ -29,8 +29,9 @@
 
 use egui::{Color32, Id, Rect, Shape, Stroke, StrokeKind};
 
-/// Corner radius of a region: the tool cells' rounding, so the panels and the
-/// buttons on them read as one family. Blender rounds its editors harder
+/// Corner radius shared by regions and rounded controls. Toolbar buttons stay
+/// square themselves; when one reaches a region corner, the mask below applies
+/// this rounding to it along with the panel. Blender rounds its editors harder
 /// (`EDITORRADIUS` is 6), but it has nothing else on screen to agree with.
 const REGION_RADIUS: u8 = crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
 

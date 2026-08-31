@@ -493,7 +493,7 @@ fn draw_ui(
 
     // The bar spans the window, so it is claimed before the explorer: the
     // column, the tools and the scene all start below it.
-    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands, main_menu_rect.height());
+    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
     let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
 
@@ -501,7 +501,7 @@ fn draw_ui(
     // before showing the console so dragging it to its maximum cannot starve the
     // toolbar (or the side panels drawn afterward) of layout space.
     let console_rect = editor.show_console.then(|| {
-        let max_height = (root_ui.available_height() - elements::toolbars::BOTTOM_TOOLBAR_HEIGHT).max(0.0);
+        let max_height = (root_ui.available_height() - elements::toolbars::bottom_toolbar_height(root_ui.ctx())).max(0.0);
         elements::console::draw_console(root_ui, max_height, frame_context.console_snapshot)
     });
     if console_rect.is_none() {

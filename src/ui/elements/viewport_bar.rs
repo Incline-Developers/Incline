@@ -26,29 +26,15 @@ use crate::ui::{
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
-        toolbar::{ColorSquarePicker, HatchPicker, ToolbarButton},
+        toolbar::{ColorSquarePicker, HatchPicker, TOOL_CELL_SIZE, ToolbarButton},
     },
 };
 
-/// Space between the bar's ends and its outermost buttons.
-const BAR_MARGIN: i8 = 6;
 /// Gap between buttons in the same cluster.
-const BUTTON_GAP: f32 = 2.0;
-/// Air left above and below a button inside the bar, so its fill stops short
-/// of the region's rounded edges rather than running into them.
-const BUTTON_INSET: f32 = 2.0;
-/// How much taller than the menu bar this one is drawn.
-///
-/// The two rows still read as one rhythm, but the menus in this one are a run
-/// of text: at exactly the menu bar's height their hover fill reached the
-/// bar's own edges, which read as overflowing it. This is the air that fill
-/// needed, and the buttons grow with it.
-const BAR_HEADROOM: f32 = 6.0;
+const BUTTON_GAP: f32 = 0.0;
 /// How much shorter than a button a menu label's hover fill is drawn, so the
 /// dropdowns read as labels in the bar rather than as more buttons.
 const MENU_ROW_INSET: f32 = 6.0;
-/// Bounds on a button's side, whatever height the menu bar hands down.
-const BUTTON_SIDE_RANGE: std::ops::RangeInclusive<f32> = 14.0..=28.0;
 /// Gap between two clusters of buttons. The floating tiles' gap reads as more
 /// space than it is, because the tiles pad themselves; this is the docked
 /// equivalent of that separation.
@@ -76,23 +62,17 @@ const SHIFT_MODIFIER: &str = "Shift+";
 
 /// Draw the viewport bar and return what it claimed.
 ///
-/// `menu_bar_height` is what the menu bar above claimed, and this bar's own
-/// surface is that plus [`BAR_HEADROOM`]: the two rows across the top of the
-/// window are one rhythm, as Blender's topbar and tool settings are, with just
-/// enough more here for a hovered menu label to sit inside. The buttons are
-/// then sized from the room that leaves rather than the bar being sized from
-/// the buttons.
-pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, menu_bar_height: f32) -> egui::Rect {
-    // The menu bar spans the window and stays square; this is a region, so it
-    // claims its gap on top of the surface the two are being matched on.
-    let claimed = menu_bar_height + BAR_HEADROOM + 2.0 * crate::ui::chrome::margin(ui.ctx());
+/// Its visible surface uses [`TOOL_CELL_SIZE`], the same thickness as the left
+/// and bottom toolbars; the panel claims its chrome margins around that.
+pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> egui::Rect {
+    let claimed = TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin(ui.ctx());
     egui::Panel::top("viewport_bar")
         .resizable(false)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .exact_size(claimed)
-        // Only the sides are padded: the height is worked out above, and the
-        // gap around the region is its spacing.
-        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::symmetric(BAR_MARGIN, 0)))
+        // Buttons meet the region edges so its later chrome pass can mask their
+        // outer corners; explicit cluster gaps provide all the spacing needed.
+        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             // Once the window is too narrow to hold all three clusters the bar
             // stops narrowing and scrolls instead, rather than letting them
@@ -104,7 +84,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                 // shifting the ids of these persistent controls on that rerun.
                 let contents_id = ui.make_persistent_id("viewport_bar_contents");
                 ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
-                    let side = (strip.height() - 2.0 * BUTTON_INSET).clamp(*BUTTON_SIDE_RANGE.start(), *BUTTON_SIDE_RANGE.end());
+                    let side = strip.height();
                     // Deliberately *not* raising `interact_size.y` to match: the
                     // combo box and the number field in the centre take their
                     // height from it, and a taller bar is not a reason to grow
@@ -192,7 +172,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         has_unsaved,
         ToolbarButton::new(egui::Image::new(themed_icon!(ui, "save_project.svg")), format!("Save Project ({PRIMARY_MODIFIER}S)"))
             .id_salt("save_project")
-            .side(side),
+            .button_side(side),
     );
     if save.clicked() {
         commands.push(UiCommand::SaveProject);
@@ -206,7 +186,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
             !project.projects.is_empty(),
             ToolbarButton::new(egui::Image::new(unthemed_icon!("open_mining_format.svg")), "Download the current project as an .omf file")
                 .id_salt("download_project")
-                .side(side),
+                .button_side(side),
         );
         if download.clicked() {
             commands.push(UiCommand::DownloadProject);
@@ -222,7 +202,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         has_project,
         ToolbarButton::new(egui::Image::new(themed_icon!(ui, "import_data.svg")), "Import...")
             .id_salt("import")
-            .side(side),
+            .button_side(side),
     );
     if import.clicked() {
         editor.show_import = true;
@@ -232,7 +212,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         has_project,
         ToolbarButton::new(egui::Image::new(themed_icon!(ui, "export_data.svg")), "Export...")
             .id_salt("export")
-            .side(side),
+            .button_side(side),
     );
     if export.clicked() {
         editor.show_import = false;
@@ -245,7 +225,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         editor.can_undo,
         ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), format!("Undo ({PRIMARY_MODIFIER}Z)"))
             .id_salt("undo")
-            .side(side),
+            .button_side(side),
     );
     if undo.clicked() {
         commands.push(UiCommand::Undo);
@@ -254,7 +234,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
         editor.can_redo,
         ToolbarButton::new(egui::Image::new(themed_icon!(ui, "redo.svg")), format!("Redo ({PRIMARY_MODIFIER}{SHIFT_MODIFIER}Z)"))
             .id_salt("redo")
-            .side(side),
+            .button_side(side),
     );
     if redo.clicked() {
         commands.push(UiCommand::Redo);
@@ -304,14 +284,14 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     }
 
     part(ui);
-
+    ui.label("Color:");
     let mut line_c32 = rgba_to_color32(editor.tool_line_color);
     if ColorSquarePicker::new(&mut line_c32).show(ui).changed() {
         editor.tool_line_color = color32_to_rgba(line_c32);
     }
 
     part(ui);
-
+    ui.label("Fill:");
     HatchPicker::new(&mut editor.tool_hatch, rgba_to_color32(editor.tool_line_color)).show(ui);
 }
 
@@ -331,7 +311,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
             if editor.fly_mode_enabled { "Disable Flying Mode" } else { "Enable Flying Mode" },
         )
         .id_salt("fly_mode")
-        .side(side)
+        .button_side(side)
         .selected(editor.fly_mode_enabled),
     );
     if fly.clicked() {
@@ -347,7 +327,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
             if editor.slice_mode_enabled { "Exit Slice View" } else { "Vertical Slice View" },
         )
         .id_salt("vertical_slice")
-        .side(side)
+        .button_side(side)
         .selected(slice_engaged),
     );
     if slice.clicked() {
@@ -364,7 +344,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
             if editor.topology_wireframes_enabled { "Hide Wireframes" } else { "Show Wireframes" },
         )
         .id_salt("wireframes")
-        .side(side)
+        .button_side(side)
         .selected(editor.topology_wireframes_enabled),
     );
     if wireframes.clicked() {
@@ -377,7 +357,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
             if editor.show_points { "Hide Points" } else { "Show Points" },
         )
         .id_salt("show_points")
-        .side(side)
+        .button_side(side)
         .selected(editor.show_points),
     );
     if points.clicked() {
@@ -390,7 +370,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
             if editor.xray_enabled { "Disable X-Ray Vision" } else { "Enable X-Ray Vision" },
         )
         .id_salt("xray")
-        .side(side)
+        .button_side(side)
         .selected(editor.xray_enabled),
     );
     if xray.clicked() {
@@ -403,7 +383,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
             format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
         )
         .id_salt("vertical_exaggeration")
-        .side(side)
+        .button_side(side)
         .selected(editor.vertical_exaggeration != 1.0),
     );
     if exaggeration.clicked() {
@@ -414,7 +394,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
     let zoom = ui.add(
         ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to extents")
             .id_salt("zoom_to_extents")
-            .side(side),
+            .button_side(side),
     );
     if zoom.clicked() {
         commands.push(UiCommand::ZoomToExtents);
@@ -423,7 +403,7 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
     let reset = ui.add(
         ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset view")
             .id_salt("reset_view")
-            .side(side),
+            .button_side(side),
     );
     if reset.clicked() {
         commands.push(UiCommand::ResetView);

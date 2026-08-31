@@ -10,15 +10,13 @@ use crate::ui::{
     EditorState,
     state::{ActiveTool, CursorMode, UiCommand},
     themed_icon, unthemed_icon,
-    widgets::toolbar::{TOOL_CELL_SIZE, ToolCellButton, ToolbarButton, tool_cell_run},
+    widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
 };
 
-pub(crate) const BOTTOM_TOOLBAR_HEIGHT: f32 = 32.0;
-
-/// Space between the bottom strip's edge and its buttons. The same on every
-/// side, so the strip reads as a sleeve around the run of buttons rather than
-/// a frame with a border.
-const BOTTOM_STRIP_MARGIN: i8 = 2;
+/// Height claimed by the bottom toolbar, including its chrome margins.
+pub(crate) fn bottom_toolbar_height(ctx: &egui::Context) -> f32 {
+    TOOL_CELL_SIZE + 2.0 * crate::ui::chrome::margin(ctx)
+}
 
 /// Id of the drawing toolbar's column panel.
 pub(crate) const LEFT_TOOLBAR_PANEL_ID: &str = "left_toolbar_panel";
@@ -89,7 +87,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
     };
-    let button = ToolCellButton::new(tool.icon.clone(), tool.tooltip).id_salt(("left_tool", tool.tooltip)).selected(selected);
+    let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip).id_salt(("left_tool", tool.tooltip)).selected(selected);
     if !ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner.clicked() {
         return;
     }
@@ -129,9 +127,8 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
         .resizable(false)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .exact_size(width)
-        // No padding on the region: the cells run edge to edge, so a selected
-        // tool's fill reaches its rounded corners the way it used to reach a
-        // tile's.
+        // No padding on the region: the square cell fills run edge to edge,
+        // and the region chrome masks whichever ones reach its corners.
         .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
@@ -141,11 +138,9 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
                 for column in tools.chunks(rows) {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        tool_cell_run(ui, |ui| {
-                            for tool in column {
-                                draw_left_tool(ui, tool, editor, commands);
-                            }
-                        });
+                        for tool in column {
+                            draw_left_tool(ui, tool, editor, commands);
+                        }
                     });
                 }
             });
@@ -160,19 +155,21 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
 /// explorer's rows rather than as whole-scene toolbar actions: see
 /// `ExplorerEntry::toggles`.
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
+    let claimed = bottom_toolbar_height(ui.ctx());
     egui::Panel::bottom("bottom_tools_strip")
         .resizable(false)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        .default_size(BOTTOM_TOOLBAR_HEIGHT)
-        // An even sleeve on all four sides: the buttons carry their own fill,
-        // so the strip is only the surface they sit on, not a frame around
-        // them - the space beside the first button matches the space over it.
-        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::same(BOTTOM_STRIP_MARGIN)))
+        .exact_size(claimed)
+        // The cells meet the region on every side; the chrome painted after
+        // them is what rounds whichever fill reaches an outer corner.
+        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
+            let side = ui.available_height();
             let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
                 ui.horizontal_centered(|ui| {
-                    cursor_mode_button(ui, egui::Image::new(themed_icon!(ui, "cursor_select.svg")), "Cursor: Regular", editor, CursorMode::Select);
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    cursor_mode_button(ui, egui::Image::new(themed_icon!(ui, "cursor_select.svg")), "Cursor: Regular", editor, CursorMode::Select, side);
 
                     cursor_mode_button(
                         ui,
@@ -180,6 +177,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                         "Cursor: Snap to surface",
                         editor,
                         CursorMode::SnapToSurface,
+                        side,
                     );
 
                     cursor_mode_button(
@@ -188,6 +186,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                         "Cursor: Snap to line",
                         editor,
                         CursorMode::SnapToLine,
+                        side,
                     );
 
                     cursor_mode_button(
@@ -196,6 +195,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                         "Cursor: Snap to point",
                         editor,
                         CursorMode::SnapToPoint,
+                        side,
                     );
 
                     ui.add_space(12.);
@@ -208,6 +208,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                             editor,
                             commands,
                             ActiveTool::MeasureDistance,
+                            side,
                         );
 
                         tool_button(
@@ -217,6 +218,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                             editor,
                             commands,
                             ActiveTool::MeasureBatterAngle,
+                            side,
                         );
                     });
 
@@ -241,9 +243,10 @@ pub(crate) fn tool_button(
     editor: &mut EditorState,
     commands: &mut Vec<UiCommand>,
     tool: ActiveTool,
+    side: f32,
 ) -> egui::Response {
     let selected = editor.active_tool == tool;
-    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("tool", tooltip)).selected(selected));
+    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("tool", tooltip)).button_side(side).selected(selected));
 
     if response.clicked() {
         commands.push(UiCommand::SetActiveTool(tool));
@@ -253,9 +256,9 @@ pub(crate) fn tool_button(
 }
 
 /// Draw a cursor mode button; sets `editor.cursor_mode` on click.
-pub(crate) fn cursor_mode_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, mode: CursorMode) -> egui::Response {
+pub(crate) fn cursor_mode_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, mode: CursorMode, side: f32) -> egui::Response {
     let selected = editor.cursor_mode == mode;
-    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).selected(selected));
+    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).button_side(side).selected(selected));
 
     if response.clicked() {
         editor.cursor_mode = mode;
