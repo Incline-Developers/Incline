@@ -38,12 +38,21 @@ pub(crate) fn reserve_fixed_stripes(ui: &egui::Ui) -> (egui::layers::ShapeIdx, f
 /// painting one shape for the whole tree makes the pattern indifferent to
 /// which row currently sits where.
 pub(crate) fn paint_fixed_stripes(ui: &egui::Ui, slot: egui::layers::ShapeIdx, top: f32, stripe: egui::Color32) {
-    let height = row_height(ui);
-    let bottom = ui.available_rect_before_wrap().bottom();
-    if bottom <= top {
-        return;
+    let bands = stripe_bands(ui.clip_rect().x_range(), top, ui.available_rect_before_wrap().bottom(), row_height(ui), stripe);
+    ui.painter().set(slot, bands);
+}
+
+/// The alternating bands themselves: one shape tiling `top..bottom` in
+/// `height`-tall rows, every other one filled.
+///
+/// Split out from [`paint_fixed_stripes`] so any list that wants the same
+/// banding - the welcome splash's Recent box, for one - can anchor it to its
+/// own box rather than to the explorer's panel, and can tile the full box
+/// whether or not the entries reach the bottom of it.
+pub(crate) fn stripe_bands(x_range: egui::Rangef, top: f32, bottom: f32, height: f32, stripe: egui::Color32) -> egui::Shape {
+    if bottom <= top || height <= 0.0 {
+        return egui::Shape::Noop;
     }
-    let x_range = ui.clip_rect().x_range();
     let mut shapes = Vec::new();
     let mut band_top = top;
     let mut band_index = 0usize;
@@ -55,7 +64,7 @@ pub(crate) fn paint_fixed_stripes(ui: &egui::Ui, slot: egui::layers::ShapeIdx, t
         band_top += height;
         band_index += 1;
     }
-    ui.painter().set(slot, egui::Shape::Vec(shapes));
+    egui::Shape::Vec(shapes)
 }
 
 /// A section's empty-state line ("No design layers"), as a tree row.

@@ -501,17 +501,24 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
     frame.show(ui, |ui| {
         let inset = f32::from(INSET);
         ui.set_width(width - inset * 2.0);
-        egui::ScrollArea::vertical()
+        // The banding belongs to the box, not to the entries: it tiles the
+        // whole list the way the explorer's does, so a couple of entries read
+        // as a striped list rather than as one stray dark bar. Reserved here,
+        // outside the scroll area, so the bands sit behind the rows and can be
+        // measured against the box itself once its rect and scroll offset are
+        // known - inside, the only rect wide enough to band is the dialog's
+        // clip rect, which is the whole window.
+        let stripes_slot = ui.painter().add(egui::Shape::Noop);
+        let scroll = egui::ScrollArea::vertical()
             .id_salt("recent_projects_scroll")
             .max_height(height - inset * 2.0)
             .min_scrolled_height(0.0)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                for (index, entry) in recent.iter().enumerate() {
+                for entry in recent.iter() {
                     let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                    let fill = if index % 2 == 1 { stripe } else { surface };
-                    let row = select_project_action_row_with_fill(ui, egui::Image::new(themed_icon!(ui, "recent_project.svg")), &label, ui.available_width(), row_height, fill);
+                    let row = select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "recent_project.svg")), &label, ui.available_width(), row_height);
                     #[cfg(not(target_arch = "wasm32"))]
                     let row = row.on_hover_text(format!("{}\n{}", entry.name, entry.path.display()));
                     #[cfg(target_arch = "wasm32")]
@@ -541,6 +548,14 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                     });
                 }
             });
+        // Anchored to the content's top edge - the box top less however far the
+        // list is scrolled - so the bands travel with the rows rather than
+        // staying put under them.
+        let box_rect = scroll.inner_rect;
+        let bands = crate::ui::widgets::explorer::stripe_bands(box_rect.x_range(), box_rect.top() - scroll.state.offset.y, box_rect.bottom(), row_height, stripe);
+        // Clipped to the box: when the list is scrolled the first band starts
+        // above the box's top edge.
+        ui.painter().with_clip_rect(box_rect).set(stripes_slot, bands);
     });
 }
 
