@@ -93,9 +93,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
                     let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
-                        if editor.active_workspace.has_production_tools() {
-                            main_menu::draw_production_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
-                        }
+                        main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                     });
                     let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         draw_view_tools(ui, editor, commands, side);

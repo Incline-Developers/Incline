@@ -3009,7 +3009,7 @@ impl Workspace {
     pub(crate) fn opens_section(self, section: ExplorerSection) -> bool {
         match self {
             Self::Production => true,
-            Self::DrillAndBlast => section == ExplorerSection::DrillHoles,
+            Self::DrillAndBlast => matches!(section, ExplorerSection::Triangulations | ExplorerSection::DrillHoles),
             Self::Geology => matches!(section, ExplorerSection::Triangulations | ExplorerSection::BlockModels | ExplorerSection::DrillHoles),
         }
     }

@@ -358,8 +358,8 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
     });
 }
 
-/// Draw the menus belonging to the Production workspace, for the viewport bar
-/// to place at the head of its own row.
+/// Draw the menus belonging to the active workspace, for the viewport bar to
+/// place at the head of its own row.
 ///
 /// These act on what is in the scene rather than on the application, so they
 /// follow the workspace rather than sitting in the menu bar above it. On macOS
@@ -374,7 +374,7 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
 /// they take only what they use. Every dropdown here is a `MenuBarMenu`, which
 /// carries its own menu config rather than reading the bar's, so the only
 /// thing the wrapper would have added is the flat button style below.
-pub(crate) fn draw_production_menus(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, row_height: f32) {
+pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, row_height: f32) {
     #[cfg(target_os = "macos")]
     {
         let _ = (ui, editor, project, commands, row_height);
@@ -388,6 +388,37 @@ pub(crate) fn draw_production_menus(ui: &mut egui::Ui, editor: &EditorState, pro
         spacing.interact_size.y = row_height;
         spacing.button_padding = egui::vec2(MENU_LABEL_PADDING, 0.0);
         spacing.item_spacing.x = MENU_LABEL_GAP;
+
+        if editor.active_workspace == Workspace::DrillAndBlast {
+            MenuBarMenu::new("Triangulation").show(ui, |_| {});
+            MenuBarMenu::new("Drill Holes").show(ui, |_| {});
+            return;
+        }
+
+        if editor.active_workspace == Workspace::Geology {
+            MenuBarMenu::new("Triangulation").show(ui, |_| {});
+
+            MenuBarMenu::new("Block Model").show(ui, |ui| {
+                if ContextMenuAction::new("Create Ore Triangulation...")
+                    .enabled(!project.block_models.is_empty())
+                    .show(ui)
+                    .clicked()
+                {
+                    commands.push(UiCommand::OpenCreateOreTriangulation);
+                    ui.close();
+                }
+            });
+
+            MenuBarMenu::new("Drill Holes").show(ui, |ui| {
+                let has_loaded_holes = project.drill_holes.iter().any(|dataset| dataset.is_loaded);
+                if ContextMenuAction::new("Create Block Model...").enabled(has_loaded_holes).show(ui).clicked() {
+                    commands.push(UiCommand::OpenCreateBlockModel(None));
+                    ui.close();
+                }
+            });
+            return;
+        }
+
         MenuBarMenu::new("Design").show(ui, |ui| {
             // Every entry here acts on the current design selection.
             let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
@@ -466,23 +497,9 @@ pub(crate) fn draw_production_menus(ui: &mut egui::Ui, editor: &EditorState, pro
             }
         });
 
-        MenuBarMenu::new("Block Model").show(ui, |ui| {
-            if ContextMenuAction::new("Create Ore Triangulation...")
-                .enabled(!project.block_models.is_empty())
-                .show(ui)
-                .clicked()
-            {
-                commands.push(UiCommand::OpenCreateOreTriangulation);
-                ui.close();
-            }
-        });
-
-        MenuBarMenu::new("Drill Holes").show(ui, |ui| {
-            let has_loaded_holes = project.drill_holes.iter().any(|dataset| dataset.is_loaded);
-            if ContextMenuAction::new("Create Block Model...").enabled(has_loaded_holes).show(ui).clicked() {
-                commands.push(UiCommand::OpenCreateBlockModel(None));
-                ui.close();
-            }
-        });
+        // Keep the Production menu run stable after these actions move to
+        // Geology. Both placeholders open empty menus.
+        MenuBarMenu::new("Block Model").show(ui, |_| {});
+        MenuBarMenu::new("Drill Holes").show(ui, |_| {});
     });
 }

@@ -17,7 +17,7 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 
 use crate::{
     model::SceneEntityId,
-    ui::state::{EditorState, UiProjectView, ViewToggle},
+    ui::state::{EditorState, UiProjectView, ViewToggle, Workspace},
 };
 
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
@@ -37,8 +37,8 @@ struct MenuState {
     has_selection_intersections: bool,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
-    /// Whether the open workspace carries the production menus.
-    has_production_menus: bool,
+    /// The workspace decides which discipline menus are visible and active.
+    active_workspace: Workspace,
     /// The View menu's switches, in the order [`VIEW_TOGGLES`] lists them.
     view_toggles: [bool; VIEW_TOGGLES.len()],
     /// The File > Open Recent rows, as name and the project each opens.
@@ -90,14 +90,16 @@ pub(crate) enum MacMenuAction {
 /// the same three - see [`crate::ui::elements::main_menu`].
 pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid];
 
-/// The root menus that belong to the production workspace, by title.
-///
-/// They are hidden with it, which is what the other targets get by leaving the
-/// viewport bar's dropdowns undrawn - see
-/// [`crate::ui::elements::main_menu::draw_production_menus`]. Hidden rather
-/// than disabled: a workspace not carrying a menu is not the same as its
-/// actions having nothing to act on, which is what greying one out says.
-const PRODUCTION_MENUS: [&str; 6] = ["Design", "Triangulation", "Raster", "Point Cloud", "Block Model", "Drill Holes"];
+/// Root menus that disappear entirely outside Production.
+const PRODUCTION_ONLY_MENUS: [&str; 3] = ["Design", "Raster", "Point Cloud"];
+/// Tags distinguish the live and empty root items, which deliberately share a
+/// title and trade places as the workspace changes.
+const TRIANGULATION_MENU_TAG: isize = -1;
+const TRIANGULATION_PLACEHOLDER_TAG: isize = -2;
+const BLOCK_MODEL_MENU_TAG: isize = -3;
+const BLOCK_MODEL_PLACEHOLDER_TAG: isize = -4;
+const DRILL_HOLES_MENU_TAG: isize = -5;
+const DRILL_HOLES_PLACEHOLDER_TAG: isize = -6;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -266,6 +268,7 @@ pub(crate) fn install_menu_bar() {
     let app = NSApplication::sharedApplication(mtm);
     let target = MenuTarget::new(mtm);
     let root = menu(crate::APP_NAME, mtm);
+    root.setAutoenablesItems(false);
     *last_menu_state() = None;
 
     let application_menu = menu(crate::APP_NAME, mtm);
@@ -361,7 +364,11 @@ pub(crate) fn install_menu_bar() {
     );
     add_separator(&triangulation_menu, mtm);
     add_action(&triangulation_menu, "Generate Contour Lines…", "", MacMenuAction::OpenContourTriangulation, &target, mtm);
-    add_submenu(&root, "Triangulation", &triangulation_menu, mtm);
+    let triangulation_item = add_submenu(&root, "Triangulation", &triangulation_menu, mtm);
+    triangulation_item.setTag(TRIANGULATION_MENU_TAG);
+    let empty_triangulation_menu = menu("Triangulation", mtm);
+    let empty_triangulation_item = add_submenu(&root, "Triangulation", &empty_triangulation_menu, mtm);
+    empty_triangulation_item.setTag(TRIANGULATION_PLACEHOLDER_TAG);
 
     let raster_menu = menu("Raster", mtm);
     raster_menu.setAutoenablesItems(false);
@@ -376,12 +383,21 @@ pub(crate) fn install_menu_bar() {
     let block_model_menu = menu("Block Model", mtm);
     block_model_menu.setAutoenablesItems(false);
     add_action(&block_model_menu, "Create Ore Triangulation…", "", MacMenuAction::OpenCreateOreTriangulation, &target, mtm);
-    add_submenu(&root, "Block Model", &block_model_menu, mtm);
+    let block_model_item = add_submenu(&root, "Block Model", &block_model_menu, mtm);
+    block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
+    let empty_block_model_menu = menu("Block Model", mtm);
+    let empty_block_model_item = add_submenu(&root, "Block Model", &empty_block_model_menu, mtm);
+    empty_block_model_item.setTag(BLOCK_MODEL_PLACEHOLDER_TAG);
 
     let drill_hole_menu = menu("Drill Holes", mtm);
     drill_hole_menu.setAutoenablesItems(false);
     add_action(&drill_hole_menu, "Create Block Model…", "", MacMenuAction::OpenCreateBlockModel, &target, mtm);
-    add_submenu(&root, "Drill Holes", &drill_hole_menu, mtm);
+    let drill_hole_item = add_submenu(&root, "Drill Holes", &drill_hole_menu, mtm);
+    drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
+
+    let empty_drill_hole_menu = menu("Drill Holes", mtm);
+    let empty_drill_hole_item = add_submenu(&root, "Drill Holes", &empty_drill_hole_menu, mtm);
+    empty_drill_hole_item.setTag(DRILL_HOLES_PLACEHOLDER_TAG);
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -407,12 +423,35 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
     }
 }
 
-/// Show or hide the production workspace's root menus.
-fn set_production_menus_visible(root: &NSMenu, visible: bool) {
-    for title in PRODUCTION_MENUS {
+/// Match the native discipline menus to the active workspace.
+fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
+    for title in PRODUCTION_ONLY_MENUS {
         if let Some(item) = root.itemWithTitle(&NSString::from_str(title)) {
-            item.setHidden(!visible);
+            item.setHidden(workspace != Workspace::Production);
         }
+    }
+
+    if let Some(item) = find_item(root, TRIANGULATION_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Production);
+    }
+    if let Some(item) = find_item(root, TRIANGULATION_PLACEHOLDER_TAG) {
+        item.setHidden(workspace == Workspace::Production);
+    }
+
+    if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Geology);
+    }
+    if let Some(item) = find_item(root, BLOCK_MODEL_PLACEHOLDER_TAG) {
+        item.setHidden(workspace != Workspace::Production);
+    }
+
+    // Geology gets the live Drill Holes submenu; the other workspaces get the
+    // empty one. Every visible discipline menu remains enabled.
+    if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {
+        item.setHidden(workspace != Workspace::Geology);
+    }
+    if let Some(item) = find_item(root, DRILL_HOLES_PLACEHOLDER_TAG) {
+        item.setHidden(workspace == Workspace::Geology);
     }
 }
 
@@ -466,7 +505,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_design_selection: editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
         has_selection_intersections: editor.selection_has_intersections,
         has_project_file: project.active_path.is_some(),
-        has_production_menus: editor.active_workspace.has_production_tools(),
+        active_workspace: editor.active_workspace,
         view_toggles: {
             let preferences = editor.current_preferences();
             VIEW_TOGGLES.map(|toggle| toggle.get(&preferences))
@@ -487,7 +526,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     drop(previous);
 
     rebuild_recent_menu(&root, &state.recent, mtm);
-    set_production_menus_visible(&root, state.has_production_menus);
+    set_workspace_menus(&root, state.active_workspace);
 
     set_enabled(&root, MacMenuAction::SaveProject, state.can_save);
     set_enabled(&root, MacMenuAction::SaveProjectAs, state.has_project);
