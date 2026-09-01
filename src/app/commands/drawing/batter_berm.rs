@@ -76,6 +76,7 @@ impl<'a> App<'a> {
         let bench_height = self.editor.batter_berm_bench_height;
         let benches = self.editor.batter_berm_benches;
         let mode = self.editor.batter_berm_mode;
+        let direction_up = self.editor.batter_berm_direction_up;
         let preview_key = BatterBermPreviewKey {
             target_id: object_id,
             document_revision,
@@ -84,6 +85,7 @@ impl<'a> App<'a> {
             bench_height,
             benches,
             mode,
+            direction_up,
         };
         if self.editor.batter_berm_preview_key == Some(preview_key) {
             return;
@@ -102,13 +104,14 @@ impl<'a> App<'a> {
             return;
         }
 
-        let (side, delta_height) = mode_to_side_and_dz(&src_verts, closed, mode, bench_height);
+        let (side, delta_height, outward) = mode_to_side_and_dz(&src_verts, closed, mode, direction_up, bench_height);
         let batter_horiz = batter_horizontal_dist(angle_deg, bench_height);
         let generation = compute_batter_berm_rings(
             &src_verts,
             BatterBermGenerationParams {
                 closed,
                 side,
+                outward,
                 batter_horiz,
                 berm_width,
                 delta_height,
@@ -204,14 +207,26 @@ impl<'a> App<'a> {
     }
 }
 
-/// Both pit and stockpile go inward. Pit goes down, stockpile goes up.
-fn mode_to_side_and_dz(verts: &[glam::DVec3], closed: bool, mode: BatterBermMode, bench_height: f64) -> (f64, f64) {
-    let side = inward_side(verts, closed);
-    let delta_z = match mode {
-        BatterBermMode::Pit => -bench_height,
-        BatterBermMode::Stockpile => bench_height,
-    };
-    (side, delta_z)
+/// Resolve the Type + Direction selectors into a horizontal offset side, a
+/// per-bench vertical step, and whether the rings expand outward.
+///
+/// Direction alone sets the vertical sign: `direction_up` rises by
+/// `bench_height`, otherwise it falls. The horizontal side is the combination
+/// of the two selectors:
+///
+/// | Type      | Direction | Horizontal |
+/// |-----------|-----------|------------|
+/// | Pit       | Up        | outward    |
+/// | Pit       | Down      | inward     |
+/// | Stockpile | Up        | inward     |
+/// | Stockpile | Down      | outward    |
+fn mode_to_side_and_dz(verts: &[glam::DVec3], closed: bool, mode: BatterBermMode, direction_up: bool, bench_height: f64) -> (f64, f64, bool) {
+    let inward = inward_side(verts, closed);
+    // Pit + Up and Stockpile + Down step outward; the other two step inward.
+    let steps_outward = matches!(mode, BatterBermMode::Pit) == direction_up;
+    let side = if steps_outward { -inward } else { inward };
+    let delta_z = if direction_up { bench_height } else { -bench_height };
+    (side, delta_z, steps_outward)
 }
 
 /// Returns the sign that offsets geometry inward for the given polyline.
@@ -252,6 +267,9 @@ struct BatterBermGeneration {
 struct BatterBermGenerationParams {
     closed: bool,
     side: f64,
+    /// `true` when successive rings grow away from the source boundary
+    /// (Pit + Up, Stockpile + Down); `false` when they shrink inward.
+    outward: bool,
     batter_horiz: f64,
     berm_width: f64,
     delta_height: f64,
@@ -292,7 +310,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
         // nominal berm width while the surviving sides remain exactly one
         // berm width apart.
         let toe = clean_offset(batter_ring_offset(src_verts, params.closed, params.side * toe_distance, level_delta_z), params.closed);
-        if !valid_inward_offset(&previous, &toe, params.closed) {
+        if !valid_offset(&previous, &toe, params.closed, params.outward) {
             return BatterBermGeneration {
                 rings,
                 completed_benches,
@@ -307,7 +325,7 @@ fn compute_batter_berm_rings(src_verts: &[glam::DVec3], params: BatterBermGenera
             };
         }
         let berm = clean_offset(batter_ring_offset(src_verts, params.closed, params.side * berm_distance, level_delta_z), params.closed);
-        if !valid_inward_offset(&toe, &berm, params.closed) {
+        if !valid_offset(&toe, &berm, params.closed, params.outward) {
             return BatterBermGeneration {
                 rings,
                 completed_benches,
@@ -442,7 +460,12 @@ fn push_distinct_offset_point(points: &mut Vec<glam::DVec3>, point: glam::DVec3)
     }
 }
 
-fn valid_inward_offset(previous: &[glam::DVec3], next: &[glam::DVec3], closed: bool) -> bool {
+/// Validate one generated ring against the one before it. An inward step must
+/// shrink and stay inside its predecessor; an outward step (`outward == true`)
+/// must grow and fully contain it. Either way the winding must not flip and the
+/// smaller ring's vertices plus edge midpoints must lie inside the larger one,
+/// which catches a cleaned ring that folded across or escaped the boundary.
+fn valid_offset(previous: &[glam::DVec3], next: &[glam::DVec3], closed: bool, outward: bool) -> bool {
     use crate::model::geometry::{point_in_polyline_xy, signed_area_xy};
 
     if !closed {
@@ -454,17 +477,24 @@ fn valid_inward_offset(previous: &[glam::DVec3], next: &[glam::DVec3], closed: b
 
     let previous_area = signed_area_xy(previous);
     let next_area = signed_area_xy(next);
+    if previous_area.signum() != next_area.signum() {
+        return false;
+    }
     let area_tolerance = previous_area.abs().max(1.0) * 1e-9;
-    if previous_area.signum() != next_area.signum() || next_area.abs() >= previous_area.abs() - area_tolerance {
+    let area_grew = next_area.abs() >= previous_area.abs() - area_tolerance;
+    let area_shrank = next_area.abs() <= previous_area.abs() + area_tolerance;
+    if (outward && area_shrank) || (!outward && area_grew) {
         return false;
     }
 
-    // Checking vertices plus edge midpoints catches a cleaned ring that has
-    // folded across or escaped the preceding boundary.
-    for i in 0..next.len() {
-        let a = next[i];
-        let b = next[(i + 1) % next.len()];
-        if !point_in_polyline_xy(a.truncate(), previous) || !point_in_polyline_xy(a.lerp(b, 0.5).truncate(), previous) {
+    // The inner ring is the predecessor when stepping outward, otherwise the
+    // new ring. Every one of its vertices (and edge midpoints) must sit inside
+    // the outer ring.
+    let (inner, outer) = if outward { (previous, next) } else { (next, previous) };
+    for i in 0..inner.len() {
+        let a = inner[i];
+        let b = inner[(i + 1) % inner.len()];
+        if !point_in_polyline_xy(a.truncate(), outer) || !point_in_polyline_xy(a.lerp(b, 0.5).truncate(), outer) {
             return false;
         }
     }

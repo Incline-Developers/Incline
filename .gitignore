@@ -27,3 +27,6 @@ profile.json.gz
 # Development
 tmp/
 .vscode/
+
+# datasets
+examples/
