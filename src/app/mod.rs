@@ -547,6 +547,10 @@ impl<'a> App<'a> {
         self.editor.fly_invert_horizontal_look = config.fly_invert_horizontal_look;
         self.editor.fly_near_clip_limit = io::finite_clamped(config.fly_near_clip_limit, 0.01, 100.0, io::default_fly_near_clip_limit());
         self.editor.fly_max_clip_span = io::finite_clamped(config.fly_max_clip_span, 100.0, 1_000_000.0, io::default_fly_max_clip_span());
+        // Ids are handed out per run, so the palette's own counter starts
+        // past whatever the file held.
+        self.editor.delay_products = crate::ui::state::delay_products_from_stored(&config.delay_products);
+        self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.configure_graphics_camera_preferences();
     }
 

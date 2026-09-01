@@ -1358,6 +1358,17 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    /// The Drill & Blast workspace's stored products, in the order the palette
+    /// lays them out.
+    pub(crate) delay_products: Vec<DelayProduct>,
+    /// Id the next product added to that palette takes.
+    pub(crate) next_delay_product_id: u64,
+    /// Whether the palette's New Product dialog is open.
+    pub(crate) new_delay_product_open: bool,
+    /// What that dialog has been filled in with so far.
+    pub(crate) new_delay_product_delay_ms: u32,
+    pub(crate) new_delay_product_name: String,
+    pub(crate) new_delay_product_color: egui::Color32,
     pub(crate) show_import: bool,
     pub(crate) show_export: bool,
     /// Whether the About dialog is open.
@@ -1427,6 +1438,7 @@ impl EditorState {
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
             || self.new_layer_dialog_open
+            || self.new_delay_product_open
             || self.renaming_item.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
@@ -1449,6 +1461,18 @@ impl EditorState {
                     false
                 }
             }
+    }
+
+    /// Open the palette's New Product dialog on a blank entry.
+    ///
+    /// The last one entered is not kept: a product is added once and the next
+    /// one is a different delay, so the dialog starts where the built-ins do
+    /// rather than on whatever was typed last.
+    pub(crate) fn begin_new_delay_product(&mut self) {
+        self.new_delay_product_delay_ms = 0;
+        self.new_delay_product_name.clear();
+        self.new_delay_product_color = NEW_DELAY_PRODUCT_COLOR;
+        self.new_delay_product_open = true;
     }
 
     pub(crate) fn update_contour_layer_name_from_surface(&mut self, surface_name: &str) {
@@ -1960,6 +1984,12 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Object,
             active_workspace: Workspace::Production,
+            delay_products: builtin_delay_products(),
+            next_delay_product_id: builtin_delay_products().len() as u64,
+            new_delay_product_open: false,
+            new_delay_product_delay_ms: 0,
+            new_delay_product_name: String::new(),
+            new_delay_product_color: NEW_DELAY_PRODUCT_COLOR,
             show_import: false,
             show_export: false,
             show_about: false,
@@ -2221,6 +2251,15 @@ pub(crate) enum UiCommand {
     CreateLayer {
         name: String,
     },
+    /// Add a product to the Drill & Blast palette, as the New Product dialog
+    /// filled it in.
+    AddDelayProduct {
+        delay_ms: u32,
+        name: String,
+        color: egui::Color32,
+    },
+    /// Drop one stored product from that palette.
+    DeleteDelayProduct(DelayProductId),
     FinishPolyClose,
     CommitStrokeOpen,
     CommitCircleTypedRadius,
@@ -2629,6 +2668,8 @@ impl UiCommand {
             Self::SaveAndExit => report("Save and Exit", "Saving the current project".to_owned()),
             Self::ExitWithoutSaving => report("Exit Without Saving", "Discarding unsaved changes".to_owned()),
             Self::CreateLayer { name } => report("Create Layer", name.clone()),
+            Self::AddDelayProduct { delay_ms, name, .. } => report("Add Product", format!("{delay_ms} ms · {name}")),
+            Self::DeleteDelayProduct(id) => report("Delete Product", format!("{id:?}")),
             Self::FinishPolyClose => report("Create Polyline", "Finish closed polyline".to_owned()),
             Self::CommitStrokeOpen => report("Create Line", "Finish open polyline".to_owned()),
             Self::CommitCircleTypedRadius => report("Create Circle", "Use typed radius".to_owned()),
@@ -2998,6 +3039,67 @@ impl Workspace {
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
+}
+
+/// Identity of one product in the Drill & Blast palette.
+///
+/// Handed out by [`EditorState::next_delay_product_id`], so a product keeps
+/// its identity as others around it are added and deleted and the palette's
+/// right-click menu can name the one it acts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DelayProductId(pub(crate) u64);
+
+/// One product the Drill & Blast workspace keeps.
+///
+/// Interhole delays are the only kind so far: a firing time in milliseconds,
+/// the name it is ordered by, and the colour a tie-in is drawn in.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DelayProduct {
+    pub(crate) id: DelayProductId,
+    /// Milliseconds between one hole firing and the next.
+    pub(crate) delay_ms: u32,
+    pub(crate) name: String,
+    pub(crate) color: egui::Color32,
+}
+
+impl DelayProduct {
+    /// The product as the config file holds it: everything but the id, which
+    /// is handed out afresh each run.
+    pub(crate) fn to_stored(&self) -> crate::app::io::StoredDelayProduct {
+        crate::app::io::StoredDelayProduct {
+            delay_ms: self.delay_ms,
+            name: self.name.clone(),
+            color: self.color.to_srgba_unmultiplied(),
+        }
+    }
+}
+
+/// Colour a product being entered starts on, until the user picks another.
+const NEW_DELAY_PRODUCT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x6E, 0xC1, 0xF0);
+
+/// Stored products as the palette holds them: ids handed out in order, and
+/// the whole palette sorted by delay - which is the order it is read in, and
+/// the order a hand-edited config file need not have been written in.
+pub(crate) fn delay_products_from_stored(stored: &[crate::app::io::StoredDelayProduct]) -> Vec<DelayProduct> {
+    let mut products: Vec<_> = stored
+        .iter()
+        .enumerate()
+        .map(|(index, product)| DelayProduct {
+            id: DelayProductId(index as u64),
+            delay_ms: product.delay_ms,
+            name: product.name.clone(),
+            color: egui::Color32::from_rgba_unmultiplied(product.color[0], product.color[1], product.color[2], product.color[3]),
+        })
+        .collect();
+    // Stable, so two products on the same delay keep the order they were
+    // added in.
+    products.sort_by_key(|product| product.delay_ms);
+    products
+}
+
+/// The palette a fresh installation starts with.
+pub(crate) fn builtin_delay_products() -> Vec<DelayProduct> {
+    delay_products_from_stored(&crate::app::io::default_delay_products())
 }
 
 /// A section of the explorer's properties panel.

@@ -12,6 +12,7 @@ pub(crate) mod console;
 pub(crate) mod cursors;
 pub(crate) mod explorer;
 pub(crate) mod main_menu;
+pub(crate) mod products;
 pub(crate) mod properties;
 pub(crate) mod status_bar;
 pub(crate) mod toolbars;
