@@ -2962,35 +2962,30 @@ impl UiProjectView {
 /// menu bar's tabs switch between.
 ///
 /// The tab decides what the viewport bar carries, the way Blender's workspace
-/// tabs decide what its editors show. Production and Drill & Blast are built
-/// out; the rest name where the remaining disciplines will land and stay
-/// disabled in the bar until they have something behind them.
+/// tabs decide what its editors show. Production, Drill & Blast and Geology are
+/// built out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
-    Schedule,
-    Simulate,
 }
 
 impl Workspace {
     /// Every workspace, in the order the tabs are drawn.
-    pub(crate) const ALL: [Self; 5] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Schedule, Self::Simulate];
+    pub(crate) const ALL: [Self; 3] = [Self::Production, Self::DrillAndBlast, Self::Geology];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Production => "Production",
             Self::DrillAndBlast => "Drill & Blast",
             Self::Geology => "Geology",
-            Self::Schedule => "Schedule",
-            Self::Simulate => "Simulate",
         }
     }
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast)
+        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology)
     }
 
     /// Whether this workspace carries the mine production tools.
@@ -3010,13 +3005,12 @@ impl Workspace {
     /// the viewport bar carries: switching to a workspace opens the sections
     /// that discipline works on and collapses the rest, rather than following
     /// whatever the project happens to hold. Between switches the headers are
-    /// left exactly as the user set them. The unimplemented workspaces open
-    /// nothing until they have editors of their own.
+    /// left exactly as the user set them.
     pub(crate) fn opens_section(self, section: ExplorerSection) -> bool {
         match self {
             Self::Production => true,
             Self::DrillAndBlast => section == ExplorerSection::DrillHoles,
-            Self::Geology | Self::Schedule | Self::Simulate => false,
+            Self::Geology => matches!(section, ExplorerSection::Triangulations | ExplorerSection::BlockModels | ExplorerSection::DrillHoles),
         }
     }
 }
