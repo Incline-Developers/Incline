@@ -440,8 +440,11 @@ pub(crate) struct TriCreateDiagnostic {
     pub(crate) segments_world: Vec<[DVec3; 2]>,
 }
 
-/// Whether the Batter Berm tool is generating a pit or a stockpile.
-/// Pit: each iteration goes inward and downward. Stockpile: inward and upward.
+/// Whether the Batter Berm tool is generating a pit or a stockpile. Combined
+/// with [`BatterBermPreviewKey::direction_up`] this picks the horizontal
+/// offset side: Pit + Up and Stockpile + Down step outward; Pit + Down and
+/// Stockpile + Up step inward. The Direction selector alone sets the vertical
+/// step (Up rises, Down falls).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum BatterBermMode {
     Pit,
@@ -457,6 +460,9 @@ pub(crate) struct BatterBermPreviewKey {
     pub(crate) bench_height: f64,
     pub(crate) benches: u32,
     pub(crate) mode: BatterBermMode,
+    /// `true` = each bench rises (Direction: Up); `false` = each bench falls
+    /// (Direction: Down).
+    pub(crate) direction_up: bool,
 }
 
 /// Which sub-mode the Relimit Line tool is operating in.
@@ -1275,6 +1281,10 @@ pub(crate) struct EditorState {
     /// current boundary and design parameters.
     pub(crate) batter_berm_max_benches: u32,
     pub(crate) batter_berm_mode: BatterBermMode,
+    /// Direction selector: `true` = each bench rises (Up), `false` = each bench
+    /// falls (Down). Together with [`Self::batter_berm_mode`] this decides
+    /// whether the rings step inward or outward - see [`BatterBermMode`].
+    pub(crate) batter_berm_direction_up: bool,
     /// All iteration rings in world coords: [toe_ring_0, berm_ring_0, toe_ring_1, berm_ring_1, …]
     pub(crate) batter_berm_rings_world: Vec<Vec<DVec3>>,
     pub(crate) batter_berm_source_world: Vec<DVec3>,
@@ -1896,6 +1906,8 @@ impl EditorState {
             batter_berm_benches: 1,
             batter_berm_max_benches: 0,
             batter_berm_mode: BatterBermMode::Pit,
+            // Down keeps the historical default (Pit + Down = inward + down).
+            batter_berm_direction_up: false,
             batter_berm_rings_world: Vec::new(),
             batter_berm_source_world: Vec::new(),
             batter_berm_rings_screen_px: Vec::new(),

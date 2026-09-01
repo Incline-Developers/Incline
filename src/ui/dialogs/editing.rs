@@ -808,7 +808,10 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
             });
 
             MenuField::new("Type")
-                .help_text("Pit steps inward and down; Stockpile steps inward and up.")
+                .help_text(
+                    "Type and Direction together set the offset side. Pit + Up and Stockpile + Down \
+                     step outward; Pit + Down and Stockpile + Up step inward.",
+                )
                 .show(ui, |ui, row_height, _| {
                     let gap = ui.spacing().item_spacing.x;
                     let button_width = (CONTROL_WIDTH - gap) * 0.5;
@@ -828,6 +831,22 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                             .clicked()
                         {
                             editor.batter_berm_mode = BatterBermMode::Stockpile;
+                        }
+                    })
+                    .response
+                });
+
+            MenuField::new("Direction")
+                .help_text("Up raises each bench by the bench height; Down lowers it. This also flips the offset side - see Type.")
+                .show(ui, |ui, row_height, _| {
+                    let gap = ui.spacing().item_spacing.x;
+                    let button_width = (CONTROL_WIDTH - gap) * 0.5;
+                    ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        if ui.add(MenuButton::new("Up").selected(editor.batter_berm_direction_up).min_width(button_width)).clicked() {
+                            editor.batter_berm_direction_up = true;
+                        }
+                        if ui.add(MenuButton::new("Down").selected(!editor.batter_berm_direction_up).min_width(button_width)).clicked() {
+                            editor.batter_berm_direction_up = false;
                         }
                     })
                     .response
