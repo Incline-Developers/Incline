@@ -15,7 +15,7 @@ pub(crate) mod raster_cache;
 pub(crate) mod static_strokes;
 
 pub(crate) use design_points::DesignPointGpuCache;
-pub(crate) use drill_hole_cache::{DrillHoleGpuCache, DrillSegmentInstance};
+pub(crate) use drill_hole_cache::{DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance};
 pub(crate) use gpu_cache::{BlockModelGpuCache, EdgeInstance, TriangulationGpuCache};
 pub(crate) use point_cloud_cache::{PointCloudGpuCache, PointInstance, PointPosition};
 pub(crate) use raster_cache::RasterGpuCache;

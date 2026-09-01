@@ -6,7 +6,10 @@ use std::{
 use glam::DVec3;
 use wgpu::util::DeviceExt;
 
-use crate::model::drill_hole::{DrillColorState, DrillFieldKind, DrillHoleId, DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset};
+use crate::model::drill_hole::{
+    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
+    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,9 +22,24 @@ pub(crate) struct DrillSegmentInstance {
     pub(crate) _pad1: f32,
 }
 
+/// The disc drawn at the top of a hole so its collar reads at a glance
+/// instead of being the indistinguishable end of a cylinder.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct DrillCollarInstance {
+    pub(crate) center: [f32; 3],
+    pub(crate) marker_radius: f32,
+    pub(crate) outline: [f32; 3],
+    pub(crate) pixel_diameter: f32,
+    pub(crate) fill: [f32; 3],
+    pub(crate) hole_radius: f32,
+}
+
 pub(crate) struct CachedDrillHoles {
     pub(crate) buffer: Option<wgpu::Buffer>,
     pub(crate) count: u32,
+    pub(crate) collar_buffer: Option<wgpu::Buffer>,
+    pub(crate) collar_count: u32,
     key: u64,
 }
 
@@ -50,11 +68,21 @@ impl DrillHoleGpuCache {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
+            let collars = build_collar_instances(dataset, scene_origin, selected);
+            let collar_buffer = (!collars.is_empty()).then(|| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Drillhole Collar Instances"),
+                    contents: bytemuck::cast_slice(&collars),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+            });
             self.entries.insert(
                 dataset.id,
                 CachedDrillHoles {
                     buffer,
                     count: instances.len().min(u32::MAX as usize) as u32,
+                    collar_buffer,
+                    collar_count: collars.len().min(u32::MAX as usize) as u32,
                     key,
                 },
             );
@@ -65,7 +93,7 @@ impl DrillHoleGpuCache {
         self.entries.get(&id)
     }
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.values().all(|entry| entry.count == 0)
+        self.entries.values().all(|entry| entry.count == 0 && entry.collar_count == 0)
     }
 }
 
@@ -158,6 +186,37 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected
         }
     }
     instances
+}
+
+fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected: bool) -> Vec<DrillCollarInstance> {
+    if !dataset.state.loaded || !dataset.visible {
+        return Vec::new();
+    }
+    let (outline, fill) = if selected {
+        let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
+        (COLLAR_MARKER_FILL_COLOR, [red, green, blue])
+    } else {
+        (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR)
+    };
+    dataset
+        .dataset
+        .holes
+        .iter()
+        .map(|hole| {
+            // The trace's first station is the collar; `hole.collar` only
+            // stands in for a dataset that arrived without one.
+            let center = hole.trace.first().map_or(hole.collar, |station| station.position);
+            let hole_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5);
+            DrillCollarInstance {
+                center: (center - scene_origin).as_vec3().to_array(),
+                marker_radius: (hole_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
+                outline,
+                pixel_diameter: COLLAR_MARKER_PIXEL_DIAMETER,
+                fill,
+                hole_radius: hole_radius as f32,
+            }
+        })
+        .collect()
 }
 
 fn evaluate_color(kind: DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {

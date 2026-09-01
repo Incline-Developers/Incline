@@ -179,6 +179,7 @@ impl<'a> Graphics<'a> {
         let edge_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/edge.wgsl"));
         let point_cloud_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/point_cloud.wgsl"));
         let drill_hole_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/drill_hole.wgsl"));
+        let drill_collar_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/drill_collar.wgsl"));
         let design_point_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/design_point.wgsl"));
 
         let camera = Camera::new(DVec3::new(0.0, 0.0, 10.0), (-90.0_f64).to_radians(), 0.0);
@@ -581,6 +582,11 @@ impl<'a> Graphics<'a> {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
         }];
+        let drill_collar_instance_buffers = [wgpu::VertexBufferLayout {
+            array_stride: size_of::<DrillCollarInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
+        }];
 
         let create_stroke_pipeline = |label, depth_stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -780,6 +786,48 @@ impl<'a> Graphics<'a> {
         let mut xray_drill_hole_depth = Self::depth_state(false, 0);
         xray_drill_hole_depth.depth_compare = Some(wgpu::CompareFunction::Always);
         let xray_drill_hole_render_pipeline = create_drill_hole_pipeline("X-Ray Drillhole Cylinder Pipeline", xray_drill_hole_depth);
+        let create_drill_collar_pipeline = |label, depth_stencil| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&render_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &drill_collar_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &drill_collar_instance_buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &drill_collar_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: scene_format,
+                        // The marker is a disc cut out of its quad, so its rim
+                        // needs coverage blending to stay round rather than
+                        // stepped. Only that one-pixel rim is ever blended.
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_stencil),
+                multisample: wgpu::MultisampleState {
+                    count: sample_count,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let drill_collar_render_pipeline = create_drill_collar_pipeline("Opaque Drillhole Collar Pipeline", Self::depth_state(true, 0));
+        let mut xray_drill_collar_depth = Self::depth_state(false, 0);
+        xray_drill_collar_depth.depth_compare = Some(wgpu::CompareFunction::Always);
+        let xray_drill_collar_render_pipeline = create_drill_collar_pipeline("X-Ray Drillhole Collar Pipeline", xray_drill_collar_depth);
         let mut overlay_depth = Self::depth_state(false, 0);
         overlay_depth.depth_compare = Some(wgpu::CompareFunction::Always);
         let design_point_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1377,6 +1425,8 @@ impl<'a> Graphics<'a> {
             point_cloud_uncolored_render_pipeline,
             drill_hole_render_pipeline,
             xray_drill_hole_render_pipeline,
+            drill_collar_render_pipeline,
+            xray_drill_collar_render_pipeline,
             design_point_render_pipeline,
             edge_style_bind_group_layout,
             overlay_render_pipeline,

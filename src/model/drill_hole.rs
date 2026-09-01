@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState};
 
 pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
+/// Screen diameter of the marker drawn at every collar. It is the floor, not
+/// the size: a hole wide enough on screen grows its marker past it.
+pub(crate) const COLLAR_MARKER_PIXEL_DIAMETER: f32 = 11.0;
+/// How much wider than the hole itself the collar marker is drawn.
+pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 2.5;
+pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
+pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
