@@ -52,6 +52,37 @@
             border-color: #b87900;
         }
 
+        .startup-dismissible {
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .startup-dismissible > span {
+            flex: 1 1 auto;
+        }
+
+        .startup-dismiss {
+            flex: none;
+            margin: -4px -7px -4px 0;
+            padding: 4px 7px;
+            border: none;
+            border-radius: 4px;
+            background: none;
+            color: inherit;
+            font: inherit;
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            opacity: 0.75;
+        }
+
+        .startup-dismiss:hover {
+            background: #0002;
+            opacity: 1;
+        }
+
         .startup-info {
             color: #e8edf3;
             background: #26313d;
@@ -71,10 +102,24 @@
     <script>
         (() => {
             const panel = document.getElementById("startup-panel");
-            const show = (kind, message) => {
+            const show = (kind, message, dismissible) => {
                 const item = document.createElement("div");
                 item.className = `startup-message startup-${kind}`;
-                item.textContent = message;
+                if (dismissible) {
+                    item.classList.add("startup-dismissible");
+                    const text = document.createElement("span");
+                    text.textContent = message;
+                    item.appendChild(text);
+                    const dismiss = document.createElement("button");
+                    dismiss.type = "button";
+                    dismiss.className = "startup-dismiss";
+                    dismiss.textContent = "✕";
+                    dismiss.setAttribute("aria-label", "Dismiss");
+                    dismiss.addEventListener("click", () => item.remove());
+                    item.appendChild(dismiss);
+                } else {
+                    item.textContent = message;
+                }
                 panel.appendChild(item);
             };
             window.inclineDesignStartupError = (message) => {
@@ -90,7 +135,7 @@
             const touch = 0 < navigator.maxTouchPoints
                 || window.matchMedia?.("(pointer: coarse)").matches;
             if (touch) {
-                show("warning", "Incline Design Web is designed for mouse and keyboard; touch input is not fully supported.");
+                show("warning", "Incline Design Web is designed for mouse and keyboard; touch input is not fully supported.", true);
             }
 
             const missing = [];
