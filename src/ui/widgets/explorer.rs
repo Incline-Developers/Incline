@@ -1,5 +1,3 @@
-use crate::ui::state::{ExplorerSection, Workspace};
-
 /// Width of the gutter an entry's label is indented by, matching the space the
 /// section heading's icon occupies so labels line up under the heading text.
 const ENTRY_LABEL_GUTTER: f32 = 20.0;
@@ -274,22 +272,6 @@ impl egui::Widget for ExplorerEntry {
     }
 }
 
-/// Set a section's open state from the workspace tab that is selected.
-///
-/// Only the workspace is recorded, so the arrangement is applied on the frame
-/// the tab changes and never afterwards: a header the user collapsed by hand
-/// stays collapsed until the next tab change.
-fn apply_workspace_open(ctx: &egui::Context, id: egui::Id, workspace: Workspace, open: bool) {
-    let state_id = id.with("explorer_header_workspace_open");
-    if ctx.data_mut(|d| d.get_temp::<Workspace>(state_id)) == Some(workspace) {
-        return;
-    }
-    ctx.data_mut(|d| d.insert_temp(state_id, workspace));
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, open);
-    state.set_open(open);
-    state.store(ctx);
-}
-
 /// A collapsible explorer section heading.
 pub(crate) struct ExplorerHeader {
     id: egui::Id,
@@ -300,9 +282,8 @@ pub(crate) struct ExplorerHeader {
     /// Heading tint, matching the section's entry icons. `None` uses the
     /// theme's normal text colour.
     color: Option<egui::Color32>,
-    /// The workspace this section belongs to, and whether that workspace
-    /// opens it: see [`apply_workspace_open`].
-    workspace_open: Option<(Workspace, bool)>,
+    /// Whether the section starts open the first time it is drawn.
+    default_open: bool,
 }
 
 impl ExplorerHeader {
@@ -313,7 +294,7 @@ impl ExplorerHeader {
             icon: None,
             dirty: false,
             color: None,
-            workspace_open: None,
+            default_open: true,
         }
     }
 
@@ -340,14 +321,6 @@ impl ExplorerHeader {
         self
     }
 
-    /// Let `workspace` decide whether this section is open: see
-    /// [`apply_workspace_open`]. Switching tabs re-syncs the header against
-    /// the incoming workspace's arrangement.
-    pub(crate) fn workspace_open(mut self, section: ExplorerSection, workspace: Workspace) -> Self {
-        self.workspace_open = Some((workspace, workspace.opens_section(section)));
-        self
-    }
-
     pub(crate) fn show<R>(
         self,
         ui: &mut egui::Ui,
@@ -359,15 +332,8 @@ impl ExplorerHeader {
             icon,
             dirty,
             color,
-            workspace_open,
+            default_open,
         } = self;
-        let default_open = match workspace_open {
-            Some((workspace, open)) => {
-                apply_workspace_open(ui.ctx(), id, workspace, open);
-                open
-            }
-            None => false,
-        };
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
         if dirty && !state.is_open() {
             title.push_str(" *");

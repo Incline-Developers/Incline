@@ -2998,21 +2998,6 @@ impl Workspace {
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
-
-    /// Whether the explorer opens `section` when this workspace is selected.
-    ///
-    /// The tab decides the arrangement of the tree, the way it decides what
-    /// the viewport bar carries: switching to a workspace opens the sections
-    /// that discipline works on and collapses the rest, rather than following
-    /// whatever the project happens to hold. Between switches the headers are
-    /// left exactly as the user set them.
-    pub(crate) fn opens_section(self, section: ExplorerSection) -> bool {
-        match self {
-            Self::Production => true,
-            Self::DrillAndBlast => matches!(section, ExplorerSection::Triangulations | ExplorerSection::DrillHoles),
-            Self::Geology => matches!(section, ExplorerSection::Triangulations | ExplorerSection::BlockModels | ExplorerSection::DrillHoles),
-        }
-    }
 }
 
 /// A section of the explorer's properties panel.
