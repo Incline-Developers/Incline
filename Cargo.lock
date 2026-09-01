@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Incline-Design"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1110,9 +1110,9 @@ dependencies = [
 
 [[package]]
 name = "fontmesh"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a23822e306418a696ba8bef0dba0c10325ebf71754aa9c5b95c6d01cd2f270b5"
+checksum = "1b8f5c77820e94b619851e5723b03eeb0a9a69b796283b6826a67536488400c0"
 dependencies = [
  "glam 0.30.10",
  "lyon_tessellation",
@@ -1407,9 +1407,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hexf-parse"
@@ -1841,9 +1841,9 @@ dependencies = [
 
 [[package]]
 name = "lyon_algorithms"
-version = "1.0.20"
+version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8575c0d003ae459399623c4def180c63b77f343b1a7fee64f249b349e7699a31"
+checksum = "cdfa8785f95e57914ddb35e3b59994aeba6f5e79e9cfd03da1c269f010f36009"
 dependencies = [
  "lyon_path",
  "num-traits 0.2.19",
@@ -1872,9 +1872,9 @@ dependencies = [
 
 [[package]]
 name = "lyon_tessellation"
-version = "1.0.20"
+version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e43b7e44161571868f5c931d12583592c223c5583eef86b08aa02b7048a3552"
+checksum = "dabea159dc6eea9171a541b458134b70ca95e3162d068132b2b3b9bc01aad06e"
 dependencies = [
  "float_next_after",
  "lyon_path",
