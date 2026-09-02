@@ -120,7 +120,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             enabled: has_active_dataset,
         },
         LeftTool {
-            icon: egui::Image::new(themed_icon!(ui, "tie_holes.svg")),
+            icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
             tooltip: tr!(literal = "Tie Holes"),
             action: LeftToolAction::Tool(ActiveTool::TieHoles),
             enabled: has_active_dataset,
