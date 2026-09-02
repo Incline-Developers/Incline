@@ -67,6 +67,12 @@ pub(super) const MEASUREMENT_COLOR: [f32; 4] = [1.0, 0.82, 0.15, 1.0];
 /// fuse endpoints, move-vertex handles). Near-black rather than black: linear
 /// value for sRGB (20, 20, 20), since the scene renders into an sRGB target.
 pub(super) const POINT_MARKER_COLOR: [f32; 4] = [0.007, 0.007, 0.007, 1.0];
+/// Fill for the marker naming the point a tool will actually act on: the
+/// vertex under a Move or Delete Points cursor, the one being dragged, the
+/// endpoint a fuse would close on. The amber the drawn cursor turns when a
+/// snap catches (`ui::elements::cursors`), so one colour means "this is the
+/// point it has" wherever it shows up. Linear value for sRGB (255, 220, 50).
+pub(super) const ACTIVE_POINT_COLOR: [f32; 4] = [1.0, 0.7157, 0.0319, 1.0];
 /// Logical em size used by cosmic-text layout; vector outlines are normalized
 /// and the document text height scales this into world units.
 pub(super) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
