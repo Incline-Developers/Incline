@@ -346,6 +346,7 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
     match editor.active_tool {
         ActiveTool::Move if !editor.move_tool_has_targets() => Some(tr!(literal = "Select an item")),
         ActiveTool::MoveCollar if !editor.move_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
+        ActiveTool::SetInitiationPoint => Some(tr!(literal = "Click a collar to add or edit an initiation point")),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some(tr!(literal = "Choose offset side")),
         ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some(tr!(literal = "Select a line or polyline")),
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some(tr!(literal = "Select designs")),
@@ -585,6 +586,8 @@ fn draw_ui(
     // - lays itself out in.
     let canvas_rect = scene_rect;
     *canvas_rect_out = canvas_rect;
+
+    draw_initiation_cards(root_ui, editor, canvas_rect);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
@@ -881,6 +884,7 @@ fn draw_ui(
     }
 
     dialogs::products::draw_new_product_dialog(root_ui, editor, commands);
+    dialogs::products::draw_initiation_dialog(root_ui, editor, commands);
 
     // Create Layer
     if editor.new_layer_dialog_open {
@@ -1067,6 +1071,35 @@ fn draw_ui(
     );
 
     geometry_dirty
+}
+
+/// Paint each initiation as a compact red delay card above its collar. This is
+/// egui geometry rather than scene geometry, so triangulations can never hide
+/// the number the user needs to read.
+fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    if editor.active_workspace != state::Workspace::DrillAndBlast {
+        return;
+    }
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let fill = egui::Color32::from_rgb(205, 43, 52);
+    let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(112, 18, 25));
+    let font = egui::FontId::proportional(12.0);
+    for card in &editor.initiation_cards {
+        let collar = egui::pos2(card.screen_px.0 / pixels_per_point, card.screen_px.1 / pixels_per_point);
+        let label = format!("{} ms", card.delay_ms);
+        let galley = painter.layout_no_wrap(label, font.clone(), egui::Color32::WHITE);
+        let size = egui::vec2((galley.size().x + 14.0).max(38.0), 22.0);
+        let rect = egui::Rect::from_center_size(collar - egui::vec2(0.0, 20.0), size);
+        let pointer = vec![
+            egui::pos2(collar.x - 4.0, rect.bottom() - 1.0),
+            egui::pos2(collar.x + 4.0, rect.bottom() - 1.0),
+            egui::pos2(collar.x, collar.y - 6.0),
+        ];
+        painter.add(egui::Shape::convex_polygon(pointer, fill, stroke));
+        painter.rect(rect, 3.0, fill, stroke, egui::StrokeKind::Inside);
+        painter.galley(rect.center() - galley.size() * 0.5, galley, egui::Color32::WHITE);
+    }
 }
 
 /// Draw dialogs after the workspace so modal lifecycle state is never hidden.

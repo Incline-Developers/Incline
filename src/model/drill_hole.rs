@@ -17,6 +17,9 @@ pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 2.5;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
+/// Screen width a tie-in connector is drawn at. Wider than a hole's own
+/// minimum so the surface run reads over the collars it joins.
+pub(crate) const TIE_PIXEL_DIAMETER: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
@@ -73,6 +76,79 @@ pub(crate) struct DrillInterval {
     pub(crate) values: BTreeMap<String, DrillValue>,
 }
 
+/// One surface connector: the delay laid between two holes, and which way the
+/// round travels over it.
+///
+/// The product is carried by value rather than by [`crate::ui::state::DelayProductId`].
+/// The palette is application configuration - its ids are handed out afresh
+/// each run and its order is by delay - so an id stored here would repoint at
+/// whatever product took its place. A tie is a record of what was actually
+/// laid, which is why editing the palette leaves a tied round alone.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct TieIn {
+    /// Index of the hole the signal arrives at first.
+    pub(crate) from: usize,
+    /// ...and of the one it fires onward into.
+    pub(crate) to: usize,
+    pub(crate) delay_ms: u32,
+    pub(crate) product: String,
+    pub(crate) color: [f32; 3],
+}
+
+impl TieIn {
+    /// Whether this connector joins the same two holes as `other`, whichever
+    /// way round either runs. Two holes are joined by one connector or none -
+    /// there is nowhere to put a second - so this is the identity a new tie
+    /// overwrites on.
+    pub(crate) fn joins(&self, from: usize, to: usize) -> bool {
+        (self.from == from && self.to == to) || (self.from == to && self.to == from)
+    }
+}
+
+/// Where a round starts, and how long after the shot is fired it goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Initiation {
+    pub(crate) hole: usize,
+    pub(crate) delay_ms: u32,
+}
+
+/// Ties as a file holds them: keyed by hole name, because a hole's index is
+/// only stable for as long as the dataset stays loaded - see [`DrillHoleRef`] -
+/// and ties outlive that.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct StoredTieIns {
+    #[serde(default)]
+    pub(crate) ties: Vec<StoredTieIn>,
+    /// Every hole that can start the round. New files use this collection;
+    /// `initiation` below is retained only so projects written by the first
+    /// tie-in implementation still open without losing their start point.
+    #[serde(default)]
+    pub(crate) initiations: Vec<StoredInitiation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) initiation: Option<StoredInitiation>,
+}
+
+impl StoredTieIns {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ties.is_empty() && self.initiations.is_empty() && self.initiation.is_none()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StoredTieIn {
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) delay_ms: u32,
+    pub(crate) product: String,
+    pub(crate) color: [f32; 3],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StoredInitiation {
+    pub(crate) hole: String,
+    pub(crate) delay_ms: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
@@ -120,6 +196,12 @@ impl DrillHole {
         }
     }
 
+    /// Where the collar stands. The trace's first station is it; `collar`
+    /// only stands in for a dataset that arrived without a trace.
+    pub(crate) fn collar_position(&self) -> DVec3 {
+        self.trace.first().map_or(self.collar, |station| station.position)
+    }
+
     pub(crate) fn position_at_depth(&self, depth: f64) -> Option<DVec3> {
         let first = *self.trace.first()?;
         if depth <= first.depth {
@@ -155,6 +237,12 @@ pub(crate) struct DrillHoleDataset {
     pub(crate) holes: Vec<DrillHole>,
     pub(crate) fields: Vec<DrillField>,
     pub(crate) bounds: Option<(DVec3, DVec3)>,
+    /// The surface connectors tying the pattern in. Content rather than
+    /// styling: they dirty the project and are undone with everything else.
+    pub(crate) ties: Vec<TieIn>,
+    /// Holes the round can start at. One initiation per collar, with any
+    /// number of collars participating in the same firing graph.
+    pub(crate) initiations: Vec<Initiation>,
 }
 
 impl DrillHoleDataset {
@@ -162,7 +250,130 @@ impl DrillHoleDataset {
         holes.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.dhid, &b.dhid));
         let fields = collect_fields(&holes);
         let bounds = drill_bounds(&holes);
-        Self { holes, fields, bounds }
+        Self {
+            holes,
+            fields,
+            bounds,
+            ties: Vec::new(),
+            initiations: Vec::new(),
+        }
+    }
+
+    /// The connector between two holes, whichever way round it runs.
+    pub(crate) fn tie_between(&self, from: usize, to: usize) -> Option<&TieIn> {
+        self.ties.iter().find(|tie| tie.joins(from, to))
+    }
+
+    /// When each hole fires, in milliseconds from the shot going off, or
+    /// `None` for a hole no signal reaches.
+    ///
+    /// A hole fires on the *first* signal to arrive, so this is a multi-source
+    /// shortest path from the initiation points rather than a walk of the graph: a round
+    /// tied in a loop is well defined, and a connector that arrives after its
+    /// hole has already gone simply does nothing.
+    pub(crate) fn firing_times(&self) -> Vec<Option<u32>> {
+        let mut times = vec![None; self.holes.len()];
+        let mut queue = std::collections::BinaryHeap::new();
+        for initiation in self.initiations.iter().filter(|initiation| initiation.hole < self.holes.len()) {
+            if times[initiation.hole].is_none_or(|existing| initiation.delay_ms < existing) {
+                times[initiation.hole] = Some(initiation.delay_ms);
+                queue.push(std::cmp::Reverse((initiation.delay_ms, initiation.hole)));
+            }
+        }
+        while let Some(std::cmp::Reverse((time, hole))) = queue.pop() {
+            if times[hole].is_some_and(|settled| settled < time) {
+                continue;
+            }
+            for tie in self.ties.iter().filter(|tie| tie.from == hole) {
+                let Some(arrival) = times.get_mut(tie.to) else {
+                    continue;
+                };
+                let candidate = time.saturating_add(tie.delay_ms);
+                if arrival.is_none_or(|existing| candidate < existing) {
+                    *arrival = Some(candidate);
+                    queue.push(std::cmp::Reverse((candidate, tie.to)));
+                }
+            }
+        }
+        times
+    }
+
+    /// The ties as a file holds them, keyed by hole name.
+    pub(crate) fn stored_ties(&self) -> StoredTieIns {
+        let name = |index: usize| self.holes.get(index).map(|hole| hole.dhid.clone());
+        StoredTieIns {
+            ties: self
+                .ties
+                .iter()
+                .filter_map(|tie| {
+                    Some(StoredTieIn {
+                        from: name(tie.from)?,
+                        to: name(tie.to)?,
+                        delay_ms: tie.delay_ms,
+                        product: tie.product.clone(),
+                        color: tie.color,
+                    })
+                })
+                .collect(),
+            initiations: self
+                .initiations
+                .iter()
+                .filter_map(|initiation| {
+                    Some(StoredInitiation {
+                        hole: name(initiation.hole)?,
+                        delay_ms: initiation.delay_ms,
+                    })
+                })
+                .collect(),
+            initiation: None,
+        }
+    }
+
+    /// Resolve stored ties back onto this dataset's holes, reporting how many
+    /// were dropped because a hole they named is no longer here. Called after
+    /// construction, since it is [`Self::new`] that fixes the hole order the
+    /// indices are against.
+    pub(crate) fn apply_stored_ties(&mut self, stored: StoredTieIns) -> usize {
+        let index_of = |name: &str| self.holes.iter().position(|hole| hole.dhid == name);
+        let mut dropped = 0;
+        self.ties = stored
+            .ties
+            .into_iter()
+            .filter_map(|tie| {
+                let (Some(from), Some(to)) = (index_of(&tie.from), index_of(&tie.to)) else {
+                    dropped += 1;
+                    return None;
+                };
+                Some(TieIn {
+                    from,
+                    to,
+                    delay_ms: tie.delay_ms,
+                    product: tie.product,
+                    color: tie.color,
+                })
+            })
+            .collect();
+        let stored_initiations = stored.initiations.into_iter().chain(stored.initiation);
+        self.initiations = stored_initiations
+            .filter_map(|initiation| {
+                let Some(hole) = index_of(&initiation.hole) else {
+                    dropped += 1;
+                    return None;
+                };
+                Some(Initiation {
+                    hole,
+                    delay_ms: initiation.delay_ms,
+                })
+            })
+            .collect();
+        // A collar has one editable initiation card. If a malformed file
+        // names it twice, keep the last value rather than drawing stacked
+        // cards or feeding duplicate sources into the firing graph.
+        self.initiations.reverse();
+        let mut seen = std::collections::HashSet::new();
+        self.initiations.retain(|initiation| seen.insert(initiation.hole));
+        self.initiations.reverse();
+        dropped
     }
 
     /// Approximate retained size, used by the undo history's memory budget.
@@ -197,6 +408,8 @@ impl DrillHoleDataset {
                             .fold(0usize, usize::saturating_add)
                 })
                 .fold(0usize, usize::saturating_add)
+            + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
+            + self.initiations.len() * size_of::<Initiation>()
     }
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {

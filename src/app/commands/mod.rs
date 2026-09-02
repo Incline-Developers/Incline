@@ -316,6 +316,10 @@ impl<'a> App<'a> {
                 self.delete_delay_product(id);
                 Ok(())
             }
+            UiCommand::SetInitiation { target, delay_ms } => {
+                self.set_initiation(target, delay_ms);
+                Ok(())
+            }
             UiCommand::RequestDeleteLayer(layer_id) => {
                 self.activate_project_for_layer(layer_id);
                 let layer_name = self

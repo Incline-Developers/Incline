@@ -139,6 +139,7 @@ impl EditorState {
     pub(crate) fn clear_scene_selection(&mut self) {
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
+        self.selected_tie_ins.clear();
     }
 
     fn replace_selection(&mut self, handle: SceneEntityId) {
@@ -183,7 +184,7 @@ impl EditorState {
     /// removes cannot depend on callers picking the right invalidation.
     pub(crate) fn render_style_key(&self) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
-        fn set_key(handles: &HashSet<SceneEntityId>) -> u64 {
+        fn set_key<T: Hash>(handles: &HashSet<T>) -> u64 {
             // XOR-fold per-element hashes: HashSet iteration order is
             // unstable, so the combination must be commutative.
             handles.iter().fold(handles.len() as u64, |acc, handle| {
@@ -194,6 +195,8 @@ impl EditorState {
         }
         let mut hasher = DefaultHasher::new();
         set_key(&self.selected_handles).hash(&mut hasher);
+        set_key(&self.selected_drill_holes).hash(&mut hasher);
+        set_key(&self.selected_tie_ins).hash(&mut hasher);
         set_key(&self.hidden_handles).hash(&mut hasher);
         set_key(&self.frozen_handles).hash(&mut hasher);
         set_key(&self.translucent_handles).hash(&mut hasher);
@@ -813,6 +816,10 @@ pub(crate) struct EditorState {
     /// selects the dataset into [`Self::selected_handles`] and leaves this
     /// empty; the two are never populated for the same drill hole at once.
     pub(crate) selected_drill_holes: HashSet<DrillHoleRef>,
+    /// Surface connectors selected directly in Drill & Blast. They are not
+    /// scene entities in their own right, so their stable dataset/hole pair
+    /// lives beside the individual-hole selection.
+    pub(crate) selected_tie_ins: HashSet<TieInRef>,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
@@ -1426,6 +1433,34 @@ pub(crate) struct EditorState {
     pub(crate) delay_products: Vec<DelayProduct>,
     /// Id the next product added to that palette takes.
     pub(crate) next_delay_product_id: u64,
+    /// The product a tie-in is laid with: the card standing selected in the
+    /// palette. `None` only while the palette is empty.
+    pub(crate) active_delay_product: Option<DelayProductId>,
+    /// The hole a tie-in chain is running from. Set by the first click of a
+    /// tie-in and moved to the far end of every leg confirmed after it, so a
+    /// row ties in with one click per leg; cleared by Escape, by a right
+    /// click, and by anything that changes what is being tied.
+    pub(crate) tie_anchor: Option<DrillHoleRef>,
+    /// The legs a click would lay right now, refreshed each frame from the
+    /// anchor and the cursor - see `App::refresh_tie_preview`. The commit
+    /// reads the same list, so what is drawn is exactly what is tied.
+    pub(crate) tie_preview: Vec<TiePreviewLeg>,
+    /// Where the anchor stands, for the overlay to mark it: a chain waiting
+    /// for its next leg has to be visible with the pointer over nothing.
+    pub(crate) tie_anchor_world: Option<DVec3>,
+    /// World point under the pointer that the screen-space snap corridor ends
+    /// at. The preview paints the whole corridor, not only the holes it found.
+    pub(crate) tie_path_end_world: Option<DVec3>,
+    /// What the active dataset's tie-in adds up to, for the products panel.
+    pub(crate) blast_round: BlastRoundSummary,
+    /// The dataset and revision [`Self::blast_round`] was worked out from, so
+    /// a pattern is only walked again when its content has moved on.
+    pub(crate) blast_round_key: Option<(u64, u64)>,
+    /// Collar currently being edited by the initiation dialog.
+    pub(crate) initiation_dialog: Option<InitiationDialog>,
+    /// Projected initiation cards, rebuilt from all visible drill datasets
+    /// each frame so the UI can keep them above scene depth.
+    pub(crate) initiation_cards: Vec<InitiationCard>,
     /// Whether the palette's New Product dialog is open.
     pub(crate) new_delay_product_open: bool,
     /// What that dialog has been filled in with so far.
@@ -1477,11 +1512,7 @@ impl EditorState {
                 *mode = if forward { mode.next() } else { mode.previous() };
                 true
             }
-            Workspace::DrillAndBlast => {
-                let cursor = &mut self.cursors.blast;
-                *cursor = if forward { cursor.next() } else { cursor.previous() };
-                true
-            }
+            Workspace::DrillAndBlast => false,
             Workspace::Geology => false,
         }
     }
@@ -1536,6 +1567,7 @@ impl EditorState {
             || self.insert_point_at_elevation_dialog.is_some()
             || self.new_layer_dialog_open
             || self.new_delay_product_open
+            || self.initiation_dialog.is_some()
             || self.renaming_item.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
@@ -1593,6 +1625,7 @@ impl EditorState {
     pub(crate) fn clear_project_transients(&mut self) {
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
+        self.selected_tie_ins.clear();
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
@@ -1601,6 +1634,9 @@ impl EditorState {
         self.translucent_handles.clear();
         self.active_layer = None;
         self.active_drill_hole = None;
+        self.end_tie_chain();
+        self.initiation_dialog = None;
+        self.initiation_cards.clear();
         self.active_tool = ActiveTool::None;
         #[cfg(target_arch = "wasm32")]
         {
@@ -1774,6 +1810,7 @@ impl EditorState {
         Self {
             selected_handles: HashSet::new(),
             selected_drill_holes: HashSet::new(),
+            selected_tie_ins: HashSet::new(),
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
@@ -2095,6 +2132,15 @@ impl EditorState {
             active_workspace: Workspace::Production,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
+            active_delay_product: builtin_delay_products().first().map(|product| product.id),
+            tie_anchor: None,
+            tie_preview: Vec::new(),
+            tie_anchor_world: None,
+            tie_path_end_world: None,
+            blast_round: BlastRoundSummary::default(),
+            blast_round_key: None,
+            initiation_dialog: None,
+            initiation_cards: Vec::new(),
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
             new_delay_product_name: String::new(),
@@ -2150,6 +2196,30 @@ impl EditorState {
                 }
             }
         }
+    }
+
+    /// Put down whatever tie-in chain is running: the anchor it would carry
+    /// on from and the preview of the leg it would lay. Report whether there
+    /// was one, so a caller that has to redraw only does so when something
+    /// left the screen.
+    pub(crate) fn end_tie_chain(&mut self) -> bool {
+        let running = self.tie_anchor.is_some() || !self.tie_preview.is_empty();
+        self.tie_anchor = None;
+        self.tie_preview.clear();
+        self.tie_anchor_world = None;
+        self.tie_path_end_world = None;
+        running
+    }
+
+    /// The product a tie-in laid now would be made of.
+    pub(crate) fn active_product(&self) -> Option<&DelayProduct> {
+        let id = self.active_delay_product?;
+        self.delay_products.iter().find(|product| product.id == id)
+    }
+
+    /// Whether the Drill & Blast Tie Holes tool owns canvas clicks.
+    pub(crate) fn tying_holes(&self) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast && self.active_tool == ActiveTool::TieHoles
     }
 
     /// Whether the active translate tool has anything to move: design
@@ -2225,6 +2295,11 @@ pub(crate) enum ActiveTool {
     /// Drill & Blast's translate tool, which moves the holes it is given the
     /// way [`Self::Move`] moves design geometry.
     MoveCollar,
+    /// Lay a product along the visible screen-space corridor between collars.
+    TieHoles,
+    /// Drill & Blast's initiation tool: a click puts the point a round starts
+    /// at on the hole under the cursor, at the delay the products panel holds.
+    SetInitiationPoint,
     Chamfer,
     BatterBermOffset,
     Bezier,
@@ -2256,41 +2331,18 @@ pub(crate) enum CursorMode {
     SnapToPoint,
 }
 
-/// What a click in the scene does while the Drill & Blast workspace is up.
-///
-/// The production workspace's [`CursorMode`] is about what a pick *snaps* to
-/// while something is being drawn; this is about what a pick is *for*, which
-/// is the question Drill & Blast asks instead. `Select` is a plain pick with
-/// nothing armed - the same thing a click did before there were modes here -
-/// and `TieHoles` is the mode a round is tied in under, which is why the delay
-/// palette is only live while it is the one selected.
+/// What a plain scene click does while Drill & Blast is up. Tie-in creation is
+/// intentionally an [`ActiveTool`] rather than another cursor mode.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum BlastCursor {
     Select,
-    TieHoles,
-}
-
-impl BlastCursor {
-    pub(crate) fn next(self) -> Self {
-        match self {
-            Self::Select => Self::TieHoles,
-            Self::TieHoles => Self::Select,
-        }
-    }
-
-    /// With two cursors in the run, either way round lands on the other one.
-    pub(crate) fn previous(self) -> Self {
-        self.next()
-    }
 }
 
 /// The cursor every workspace keeps, one field each.
 ///
-/// A cursor mode belongs to the discipline whose tools read it - production
-/// snaps for the tools it draws with, Drill & Blast arms a tie-in - so leaving
-/// one workspace and coming back finds its cursor where it was left rather
-/// than wherever another workspace's run last put it. Geology has no cursor
-/// of its own yet, and so has nothing here.
+/// A cursor mode belongs to the discipline whose tools read it. Production
+/// owns snapping modes; Drill & Blast currently owns only plain selection.
+/// Geology has no cursor of its own yet.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WorkspaceCursors {
     /// What a production pick snaps to.
@@ -2476,6 +2528,11 @@ pub(crate) enum UiCommand {
     },
     /// Drop one stored product from that palette.
     DeleteDelayProduct(DelayProductId),
+    /// Apply or remove one collar's initiation delay after its dialog closes.
+    SetInitiation {
+        target: DrillHoleRef,
+        delay_ms: Option<u32>,
+    },
     FinishPolyClose,
     CommitStrokeOpen,
     CommitCircleTypedRadius,
@@ -2801,6 +2858,7 @@ impl UiCommand {
             | Self::ApplyPreferences(_)
             | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
+            | Self::SetInitiation { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
             | Self::CancelChamfer
@@ -3348,6 +3406,72 @@ impl DelayProduct {
             color: self.color.to_srgba_unmultiplied(),
         }
     }
+}
+
+/// What the active dataset's tie-in adds up to, as the products panel reads
+/// it back.
+///
+/// Derived from the dataset rather than stored: it is recomputed by
+/// `App::refresh_blast_round` whenever the pattern's content changes, which is
+/// what keeps a delay the user typed into a connector visible as the time the
+/// round takes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlastRoundSummary {
+    /// Names and delays of every collar feeding the round.
+    pub(crate) initiations: Vec<(String, u32)>,
+    pub(crate) connectors: usize,
+    /// When the last hole to fire goes, which is how long the round runs for.
+    pub(crate) duration_ms: Option<u32>,
+    /// Holes no signal reaches: tied to nothing, or tied only into a run that
+    /// never reaches the initiation point.
+    pub(crate) unreached: usize,
+}
+
+/// One tie-in connector as selection state addresses it. Hole order is
+/// canonical here because selection is about the physical connector, while
+/// [`crate::model::drill_hole::TieIn`] retains direction for firing order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TieInRef {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) a: usize,
+    pub(crate) b: usize,
+}
+
+impl TieInRef {
+    pub(crate) fn new(dataset: DrillHoleId, from: usize, to: usize) -> Self {
+        let (a, b) = if from <= to { (from, to) } else { (to, from) };
+        Self { dataset, a, b }
+    }
+}
+
+/// Draft held while the user edits one initiation point.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InitiationDialog {
+    pub(crate) target: DrillHoleRef,
+    pub(crate) hole_name: String,
+    pub(crate) delay_ms: u32,
+    pub(crate) existing: bool,
+}
+
+/// Screen-space red delay card projected above an initiated collar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InitiationCard {
+    pub(crate) target: DrillHoleRef,
+    pub(crate) delay_ms: u32,
+    pub(crate) screen_px: (f32, f32),
+}
+
+/// One leg of the tie-in a click would confirm: the two holes it joins, where
+/// they stand, and whether laying it would replace a connector already there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TiePreviewLeg {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    pub(crate) start: DVec3,
+    pub(crate) end: DVec3,
+    /// The pair is already tied, and confirming would overwrite it. Drawn
+    /// broken rather than solid, so nothing is replaced unannounced.
+    pub(crate) overwrite: bool,
 }
 
 /// Colour a product being entered starts on, until the user picks another.

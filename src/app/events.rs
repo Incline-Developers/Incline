@@ -159,6 +159,8 @@ impl<'a> App<'a> {
                     // redraws generated directly by the compositor during resize.
                     self.redraw_requested = false;
                     self.refresh_intersection_availability();
+                    self.refresh_tie_preview();
+                    self.refresh_blast_round();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
                         let title = project.projects.first().map_or_else(
@@ -797,7 +799,11 @@ impl<'a> App<'a> {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
-                ActiveTool::None => self.begin_select_or_drag(),
+                ActiveTool::None => {
+                    if !self.select_tie_at_cursor() {
+                        self.begin_select_or_drag();
+                    }
+                }
                 ActiveTool::Move => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
                         match hit_gizmo_handle(&self.editor, cursor_px) {
@@ -827,6 +833,7 @@ impl<'a> App<'a> {
                         None => self.begin_select_or_drag(),
                     }
                 }
+                ActiveTool::TieHoles => self.tie_holes_click(),
                 ActiveTool::Chamfer => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
                         if self.editor.chamfer_gizmo_hovered {
@@ -848,6 +855,7 @@ impl<'a> App<'a> {
                         }
                     }
                 }
+                ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
@@ -934,7 +942,12 @@ impl<'a> App<'a> {
                 }
                 _ => false,
             } && !orbit_was_active;
-            if is_quick_press && matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle) {
+            if is_quick_press && self.editor.tie_anchor.is_some() {
+                // The same thing a right click does to a polyline being drawn:
+                // put the run down, without the canvas menu over the pattern.
+                self.end_tie_chain();
+                self.redraw_requested = true;
+            } else if is_quick_press && matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle) {
                 self.try_finish_tool();
                 self.redraw_requested = true;
             } else if is_quick_press && self.editor.active_tool != ActiveTool::None {
@@ -1169,7 +1182,10 @@ impl<'a> App<'a> {
         }
         match &key {
             KeyCode::Escape => {
-                if self.editor.canvas_context_menu_open {
+                if self.editor.tie_anchor.is_some() {
+                    self.end_tie_chain();
+                    self.redraw_requested = true;
+                } else if self.editor.canvas_context_menu_open {
                     self.editor.canvas_context_menu_open = false;
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
@@ -1275,6 +1291,10 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled => {
+                if !self.editor.selected_tie_ins.is_empty() {
+                    self.delete_selected_tie_ins();
+                    return;
+                }
                 let object_count = self.editor.selected_handles.iter().filter(|h| matches!(h, crate::model::SceneEntityId::Object(_))).count();
                 if object_count > 0 {
                     self.editor.delete_confirm_open = true;
@@ -1359,6 +1379,9 @@ impl<'a> App<'a> {
         let next_tool = if previous_tool == tool { ActiveTool::None } else { tool };
 
         match previous_tool {
+            ActiveTool::TieHoles if next_tool != ActiveTool::TieHoles => {
+                self.end_tie_chain();
+            }
             ActiveTool::OffsetElement if next_tool != ActiveTool::OffsetElement => {
                 self.cancel_offset();
             }

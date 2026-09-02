@@ -8,7 +8,7 @@ use wgpu::util::DeviceExt;
 
 use crate::model::drill_hole::{
     COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
-    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset,
+    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_PIXEL_DIAMETER,
 };
 
 #[repr(C)]
@@ -38,6 +38,8 @@ pub(crate) struct DrillCollarInstance {
 pub(crate) struct CachedDrillHoles {
     pub(crate) buffer: Option<wgpu::Buffer>,
     pub(crate) count: u32,
+    pub(crate) tie_buffer: Option<wgpu::Buffer>,
+    pub(crate) tie_count: u32,
     pub(crate) collar_buffer: Option<wgpu::Buffer>,
     pub(crate) collar_count: u32,
     key: u64,
@@ -68,6 +70,14 @@ impl DrillHoleGpuCache {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
+            let ties = build_tie_instances(dataset, scene_origin, &selection);
+            let tie_buffer = (!ties.is_empty()).then(|| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Drillhole Tie-In Instances"),
+                    contents: bytemuck::cast_slice(&ties),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+            });
             let collars = build_collar_instances(dataset, scene_origin, &selection);
             let collar_buffer = (!collars.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -81,6 +91,8 @@ impl DrillHoleGpuCache {
                 CachedDrillHoles {
                     buffer,
                     count: instances.len().min(u32::MAX as usize) as u32,
+                    tie_buffer,
+                    tie_count: ties.len().min(u32::MAX as usize) as u32,
                     collar_buffer,
                     collar_count: collars.len().min(u32::MAX as usize) as u32,
                     key,
@@ -93,7 +105,7 @@ impl DrillHoleGpuCache {
         self.entries.get(&id)
     }
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.values().all(|entry| entry.count == 0 && entry.collar_count == 0)
+        self.entries.values().all(|entry| entry.count == 0 && entry.tie_count == 0 && entry.collar_count == 0)
     }
 }
 
@@ -108,15 +120,20 @@ struct HoleSelection {
     /// Indices of the individually selected holes, ascending, so the cache
     /// key below hashes the same set the same way every frame.
     holes: Vec<usize>,
+    /// Canonical hole pairs of selected tie-ins in this dataset.
+    ties: Vec<(usize, usize)>,
 }
 
 impl HoleSelection {
     fn of(dataset: &OpenDrillHoleDataset, editor: &crate::ui::state::EditorState) -> Self {
         let mut holes: Vec<usize> = editor.selected_drill_holes.iter().filter(|hole| hole.dataset == dataset.id).map(|hole| hole.hole).collect();
         holes.sort_unstable();
+        let mut ties: Vec<_> = editor.selected_tie_ins.iter().filter(|tie| tie.dataset == dataset.id).map(|tie| (tie.a, tie.b)).collect();
+        ties.sort_unstable();
         Self {
             whole: editor.selected_handles.contains(&dataset.entity_id()),
             holes,
+            ties,
         }
     }
 
@@ -128,6 +145,11 @@ impl HoleSelection {
     /// colours need to know before they are worked out hole by hole.
     fn any(&self) -> bool {
         self.whole || !self.holes.is_empty()
+    }
+
+    fn contains_tie(&self, from: usize, to: usize) -> bool {
+        let pair = if from <= to { (from, to) } else { (to, from) };
+        self.ties.binary_search(&pair).is_ok()
     }
 }
 
@@ -141,6 +163,7 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
     dataset.state.revision().hash(&mut hash);
     selection.whole.hash(&mut hash);
     selection.holes.hash(&mut hash);
+    selection.ties.hash(&mut hash);
     for value in scene_origin.to_array() {
         value.to_bits().hash(&mut hash);
     }
@@ -228,6 +251,35 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
     instances
 }
 
+/// The surface connectors, drawn collar to collar through the same instanced
+/// cylinder the traces use: a tie has no thickness of its own, so it is a
+/// segment of zero world radius held at a fixed screen width.
+fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
+    let holes = &dataset.dataset.holes;
+    dataset
+        .dataset
+        .ties
+        .iter()
+        .filter_map(|tie| {
+            let start = holes.get(tie.from)?.collar_position();
+            let end = holes.get(tie.to)?.collar_position();
+            (start.distance_squared(end) > 1.0e-18).then_some(DrillSegmentInstance {
+                start: (start - scene_origin).as_vec3().to_array(),
+                radius: 0.0,
+                end: (end - scene_origin).as_vec3().to_array(),
+                pixel_diameter: TIE_PIXEL_DIAMETER,
+                color: if selection.contains_tie(tie.from, tie.to) {
+                    let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
+                    [red, green, blue]
+                } else {
+                    tie.color
+                },
+                _pad1: 0.0,
+            })
+        })
+        .collect()
+}
+
 fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
     if !dataset.state.loaded || !dataset.visible {
         return Vec::new();
@@ -246,9 +298,7 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
                 Some(colors) if selection.contains(index) => colors,
                 _ => (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR),
             };
-            // The trace's first station is the collar; `hole.collar` only
-            // stands in for a dataset that arrived without one.
-            let center = hole.trace.first().map_or(hole.collar, |station| station.position);
+            let center = hole.collar_position();
             let hole_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5);
             DrillCollarInstance {
                 center: (center - scene_origin).as_vec3().to_array(),

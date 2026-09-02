@@ -196,7 +196,6 @@ fn cursor_glyph(editor: &crate::ui::state::EditorState) -> CursorGlyph {
         },
         Workspace::DrillAndBlast => match editor.cursors.blast {
             BlastCursor::Select => CursorGlyph::None,
-            BlastCursor::TieHoles => CursorGlyph::Square,
         },
         Workspace::Geology => CursorGlyph::None,
     }

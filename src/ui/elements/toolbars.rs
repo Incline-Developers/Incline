@@ -91,11 +91,10 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
-/// nudge its holes, then say where it starts.
+/// nudge its holes, tie them together, then say where it starts.
 ///
-/// Move Collar is the one with something behind it; the other two are
-/// placeholders - the cells, their icons and their enablement are here, but
-/// nothing is wired to them yet.
+/// Creating a pattern is still a placeholder - its cell, icon and enablement
+/// are here, but nothing is wired to it yet.
 fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     // Setting the initiation point acts on the pattern the viewport bar's
     // centre run names, and reads it the same way that run does: a dataset
@@ -121,9 +120,15 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             enabled: has_active_dataset,
         },
         LeftTool {
+            icon: egui::Image::new(themed_icon!(ui, "tie_holes.svg")),
+            tooltip: tr!(literal = "Tie Holes"),
+            action: LeftToolAction::Tool(ActiveTool::TieHoles),
+            enabled: has_active_dataset,
+        },
+        LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
-            tooltip: tr!(literal = "Set Initiation Point [PLACEHOLDER]"),
-            action: LeftToolAction::Placeholder,
+            tooltip: tr!(literal = "Set Initiation Point"),
+            action: LeftToolAction::Tool(ActiveTool::SetInitiationPoint),
             enabled: has_active_dataset,
         },
     ]
@@ -338,10 +343,8 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
 /// The Drill & Blast workspace's cursor run, standing where production's
 /// snapping modes do.
 ///
-/// Two so far: a plain pick, and the mode a round is tied in under. The tie-in
-/// mark is the same one a delay product's card is read by - see
-/// `products::paint_tie_in_mark` - so the tool and the palette it arms say the
-/// same thing.
+/// Drill & Blast currently needs only the ordinary selection cursor. Tie-in
+/// creation is a tool in the left run, beside Move Collar and Initiation.
 fn draw_blast_cursors(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     blast_cursor_button(
         ui,
@@ -349,15 +352,6 @@ fn draw_blast_cursors(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
         tr!(literal = "Select").as_str(),
         editor,
         BlastCursor::Select,
-        side,
-    );
-
-    blast_cursor_button(
-        ui,
-        egui::Image::new(themed_icon!(ui, "tie_holes.svg")),
-        tr!(literal = "Tie Holes").as_str(),
-        editor,
-        BlastCursor::TieHoles,
         side,
     );
 }

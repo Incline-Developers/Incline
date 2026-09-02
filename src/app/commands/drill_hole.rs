@@ -238,7 +238,14 @@ impl<'a> App<'a> {
         if self.editor.active_drill_hole == Some(id) {
             self.editor.active_drill_hole = None;
         }
+        if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
+            self.editor.end_tie_chain();
+        }
         self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
+        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
+            self.editor.initiation_dialog = None;
+        }
         self.invalidate_topology_bounds_and_redraw();
     }
 
@@ -254,7 +261,14 @@ impl<'a> App<'a> {
         if self.editor.active_drill_hole == Some(id) {
             self.editor.active_drill_hole = None;
         }
+        if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
+            self.editor.end_tie_chain();
+        }
         self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
+        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
+            self.editor.initiation_dialog = None;
+        }
         self.delete_project_item(ItemRef::DrillHole(id));
         self.request_topology_redraw();
     }

@@ -317,6 +317,9 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     // in the outgoing one has nothing left to act on.
     if editor.active_drill_hole != previous {
         commands.push(UiCommand::ClearSelection);
+        // A tie-in runs between holes of one dataset, so it goes with it.
+        editor.end_tie_chain();
+        editor.initiation_dialog = None;
     }
 }
 

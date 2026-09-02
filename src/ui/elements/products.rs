@@ -15,7 +15,8 @@ use crate::{
     i18n::tr,
     ui::{
         EditorState,
-        state::{BlastCursor, DelayProduct, UiCommand},
+        elements::properties::read_only_row,
+        state::{DelayProduct, UiCommand},
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{ContextMenuAction, context_menu_popup},
@@ -73,6 +74,9 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
             CollapsibleSection::new("delay_palette", tr!(literal = "Delay Palette"))
                 .default_open(true)
                 .show(ui, |ui| draw_delay_palette(ui, editor, commands));
+            CollapsibleSection::new("initiation", tr!(literal = "Initiation"))
+                .default_open(true)
+                .show(ui, |ui| draw_initiation(ui, editor));
         })
         .response
         .rect
@@ -85,12 +89,11 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
 /// clipping when it is narrowed.
 ///
 /// A product is something a click in the scene applies, so the cards are live
-/// only while the Tie Holes cursor is the one armed - see
-/// [`BlastCursor::TieHoles`]. The New Product cell is not one of them: adding
-/// to the palette is editing the palette, which is worth doing before a round
-/// is tied in as much as during one.
+/// only while the Tie Holes tool is armed. The New Product cell is not one of
+/// them: adding to the palette is editing the palette, which is worth doing
+/// before a round is tied in as much as during one.
 fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    let tying = editor.cursors.blast == BlastCursor::TieHoles;
+    let tying = editor.tying_holes();
     let available = ui.available_width();
     let columns = (((available + CARD_GAP) / (MIN_CARD_WIDTH + CARD_GAP)).floor() as usize).max(1);
     let card_width = ((available - CARD_GAP * (columns - 1) as f32) / columns as f32).floor().max(1.0);
@@ -99,6 +102,7 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
     // the products leave off in rather than starting a block of its own.
     let cells = editor.delay_products.len() + 1;
     let mut delete = None;
+    let mut select = None;
     let mut add = false;
 
     ui.vertical(|ui| {
@@ -109,10 +113,15 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
                 for cell in row * columns..((row + 1) * columns).min(cells) {
                     match editor.delay_products.get(cell) {
                         Some(product) => {
+                            let chosen = editor.active_delay_product == Some(product.id);
                             // `add_enabled_ui` fades what is painted inside it
                             // toward the background, which is the whole of what
                             // a card with nothing to apply it says.
-                            if ui.add_enabled_ui(tying, |ui| draw_product_card(ui, product, card_width)).inner {
+                            let card = ui.add_enabled_ui(tying, |ui| draw_product_card(ui, product, card_width, chosen)).inner;
+                            if card.clicked {
+                                select = Some(product.id);
+                            }
+                            if card.delete {
                                 delete = Some(product.id);
                             }
                         }
@@ -123,6 +132,9 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
         }
     });
 
+    if let Some(id) = select {
+        editor.active_delay_product = Some(id);
+    }
     if add {
         editor.begin_new_delay_product();
     }
@@ -131,8 +143,17 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
     }
 }
 
-/// Draw one product's card, and report whether its menu asked for it to go.
-fn draw_product_card(ui: &mut egui::Ui, product: &DelayProduct, width: f32) -> bool {
+/// What a click on a product's card asked for.
+struct CardResponse {
+    /// Make this the product a tie-in is laid with.
+    clicked: bool,
+    /// Its context menu asked for it to go.
+    delete: bool,
+}
+
+/// Draw one product's card, `chosen` marking the one a tie-in would be laid
+/// with, and report what was asked of it.
+fn draw_product_card(ui: &mut egui::Ui, product: &DelayProduct, width: f32, chosen: bool) -> CardResponse {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, CARD_HEIGHT), egui::Sense::click());
     let mut delete = false;
     context_menu_popup(&response, format!("{} ms {}", product.delay_ms, product.name), |ui| {
@@ -143,21 +164,52 @@ fn draw_product_card(ui: &mut egui::Ui, product: &DelayProduct, width: f32) -> b
     });
 
     if !ui.is_rect_visible(rect) {
-        return delete;
+        return CardResponse {
+            clicked: response.clicked(),
+            delete,
+        };
     }
-    paint_card_frame(ui, rect, response.hovered());
+    paint_card_frame(ui, rect, response.hovered(), chosen);
     paint_tie_in_mark(ui, rect, product.color);
     let text = ui.visuals().text_color();
     paint_row(ui, rect, VALUE_CENTER, &product.delay_ms.to_string(), 19.0, text);
     paint_row(ui, rect, NAME_CENTER, &product.name.to_uppercase(), 9.0, ui.visuals().weak_text_color());
-    delete
+    CardResponse {
+        clicked: response.clicked(),
+        delete,
+    }
+}
+
+/// Read back the active round. Initiation delays are edited on their collars,
+/// so this section deliberately contains no delay input.
+fn draw_initiation(ui: &mut egui::Ui, editor: &mut EditorState) {
+    let round = &editor.blast_round;
+    if round.initiations.is_empty() {
+        read_only_row(ui, tr!(literal = "Initiations").as_str(), tr!(literal = "Not set").as_str());
+    } else {
+        for (index, (hole, delay)) in round.initiations.iter().enumerate() {
+            read_only_row(ui, &format!("IP {}", index + 1), &format!("{hole} · {delay} ms"));
+        }
+    }
+    read_only_row(ui, tr!(literal = "Connectors").as_str(), &round.connectors.to_string());
+    read_only_row(
+        ui,
+        tr!(literal = "Round").as_str(),
+        &match round.duration_ms {
+            Some(duration) => format!("{duration} ms"),
+            None => "—".to_owned(),
+        },
+    );
+    if round.unreached > 0 {
+        read_only_row(ui, tr!(literal = "Unreached").as_str(), &format!("{} hole(s)", round.unreached));
+    }
 }
 
 /// Draw the cell that opens the New Product dialog, and report a click on it.
 fn draw_new_product_card(ui: &mut egui::Ui, width: f32) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, CARD_HEIGHT), egui::Sense::click());
     if ui.is_rect_visible(rect) {
-        paint_card_frame(ui, rect, response.hovered());
+        paint_card_frame(ui, rect, response.hovered(), false);
         // The plus stands where a product's mark and delay both are, so the
         // cell reads as the same shape with nothing in it yet.
         let color = if response.hovered() {
@@ -175,15 +227,22 @@ fn draw_new_product_card(ui: &mut egui::Ui, width: f32) -> bool {
 }
 
 /// The card's surface: a step up from the section it sits in, lit while the
-/// pointer is over it.
-fn paint_card_frame(ui: &egui::Ui, rect: egui::Rect, hovered: bool) {
+/// pointer is over it and ringed while it is the one a tie-in is laid with.
+fn paint_card_frame(ui: &egui::Ui, rect: egui::Rect, hovered: bool, chosen: bool) {
     let dark = ui.visuals().dark_mode;
     let panel = ui.visuals().panel_fill;
-    let fill = shifted(panel, if dark { 14 } else { -6 } + if hovered { 8 } else { 0 });
+    let fill = shifted(panel, if dark { 14 } else { -6 } + if hovered { 8 } else { 0 } + if chosen { 6 } else { 0 });
     let border = shifted(panel, if dark { 30 } else { -34 });
     ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, fill);
-    ui.painter()
-        .rect_stroke(rect, GROUP_CORNER_RADIUS, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    // The selection ring is the same accent every selected control in the
+    // interface carries, so which product is armed reads the way a selected
+    // row does rather than as a mark of the palette's own.
+    let stroke = if chosen {
+        egui::Stroke::new(1.6, ui.visuals().selection.stroke.color)
+    } else {
+        egui::Stroke::new(1.0, border)
+    };
+    ui.painter().rect_stroke(rect, GROUP_CORNER_RADIUS, stroke, egui::StrokeKind::Inside);
 }
 
 /// The tie-in mark at the head of a product's card: the run of cord it delays,

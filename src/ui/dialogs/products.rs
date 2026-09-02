@@ -58,3 +58,42 @@ pub(crate) fn draw_new_product_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         editor.new_delay_product_open = false;
     }
 }
+
+/// Edit the initiation delay belonging to the collar clicked by the
+/// Initiation Point tool. Existing points can be removed here as well; the
+/// Delete key remains reserved for selected tie-in connectors.
+pub(crate) fn draw_initiation_dialog(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let Some(dialog) = editor.initiation_dialog.as_mut() else {
+        return;
+    };
+    let mut open = true;
+    let mut close = false;
+    let target = dialog.target;
+    let existing = dialog.existing;
+    let title = format!("Initiation · {}", dialog.hole_name);
+    DragableMenu::new(title).open(&mut open).min_width(300.0).show(ui.ctx(), |ui| {
+        MenuFieldU32::new("Delay", &mut dialog.delay_ms, 0..=MAX_DELAY_MS)
+            .suffix(" ms")
+            .help_text("How long after the shot is fired this collar initiates the round.")
+            .show(ui);
+        menu::menu_actions(ui, |ui| {
+            if menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(if existing { "Update" } else { "Add Initiation" }).primary()).clicked() {
+                commands.push(UiCommand::SetInitiation {
+                    target,
+                    delay_ms: Some(dialog.delay_ms),
+                });
+                close = true;
+            }
+            if existing && ui.add(MenuButton::new("Remove")).clicked() {
+                commands.push(UiCommand::SetInitiation { target, delay_ms: None });
+                close = true;
+            }
+            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                close = true;
+            }
+        });
+    });
+    if close || !open {
+        editor.initiation_dialog = None;
+    }
+}

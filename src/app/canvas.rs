@@ -433,6 +433,7 @@ impl<'a> App<'a> {
             if !preserve {
                 self.editor.selected_handles.clear();
                 self.editor.selected_drill_holes.clear();
+                self.editor.selected_tie_ins.clear();
                 self.active_triangulation = None;
                 if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
                     self.editor.move_vertex_target = None;
@@ -518,6 +519,7 @@ impl<'a> App<'a> {
             if !self.modifiers.control_key() {
                 self.editor.selected_handles.clear();
                 self.editor.selected_drill_holes.clear();
+                self.editor.selected_tie_ins.clear();
             }
             self.editor.selected_drill_holes.extend(enclosed);
         }

@@ -30,6 +30,15 @@ fn nearest_screen_segment(cursor: (f32, f32), segments: impl IntoIterator<Item =
         .map(|(index, segment, _)| (index, segment))
 }
 
+/// How far off the run between the anchor and the cursor a collar may stand
+/// and still be tied in, in physical pixels.
+///
+/// Measured on screen rather than in the ground: a row of holes is never
+/// exactly straight, and what the user is aiming along is the row as they can
+/// see it. The collar marker is 11px across, so this is a corridor a little
+/// wider than the marks themselves.
+pub(crate) const TIE_CORRIDOR_PIXELS: f32 = 12.0;
+
 /// Screen length of a Move gizmo axis that lies square to the camera, in
 /// logical points. Every other part of the gizmo is sized from this.
 const GIZMO_LENGTH_POINTS: f64 = 80.0;
@@ -59,6 +68,50 @@ fn fade_ramp(value: f32, min: f32, max: f32) -> f32 {
     } else {
         (value - min) / (max - min)
     }
+}
+
+/// The holes a tie-in run from `anchor` to the cursor would pass through, in
+/// the order the round travels, starting with the anchor itself.
+///
+/// Everything standing in the corridor between the two is taken, not just what
+/// is under the pointer: aiming down a row is how a round is tied in, and a
+/// row is tied one leg per click only when the legs between are found for the
+/// user. Order is by distance along the run, so a chain drawn back on itself
+/// still fires the way it was drawn.
+pub(crate) fn tie_chain_between(holes: &[crate::model::drill_hole::DrillHole], anchor: usize, cursor_px: (f32, f32), project: impl Fn(DVec3) -> Option<(f32, f32)>) -> Vec<usize> {
+    let Some(anchor_hole) = holes.get(anchor) else {
+        return Vec::new();
+    };
+    let Some(start) = project(anchor_hole.collar_position()) else {
+        return Vec::new();
+    };
+    let run = (cursor_px.0 - start.0, cursor_px.1 - start.1);
+    let length_sq = run.0 * run.0 + run.1 * run.1;
+    if length_sq <= f32::EPSILON {
+        return Vec::new();
+    }
+    let mut along: Vec<(f32, usize)> = holes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != anchor)
+        .filter_map(|(index, hole)| {
+            let point = project(hole.collar_position())?;
+            let offset = (point.0 - start.0, point.1 - start.1);
+            let t = (offset.0 * run.0 + offset.1 * run.1) / length_sq;
+            // Behind the anchor, or beyond where the pointer has reached: not
+            // on the run being drawn.
+            if !(0.0..=1.0).contains(&t) {
+                return None;
+            }
+            let across = (offset.0 - t * run.0, offset.1 - t * run.1);
+            (across.0.hypot(across.1) <= TIE_CORRIDOR_PIXELS).then_some((t, index))
+        })
+        .collect();
+    if along.is_empty() {
+        return Vec::new();
+    }
+    along.sort_by(|(a, _), (b, _)| a.total_cmp(b));
+    std::iter::once(anchor).chain(along.into_iter().map(|(_, index)| index)).collect()
 }
 
 pub(crate) fn projected_relimit_candidate_nearest_cursor(
@@ -191,6 +244,29 @@ impl<'a> Graphics<'a> {
             .then_some(editor.cursor_world)
             .flatten()
             .and_then(|world| self.world_to_window_px(&self.view_proj(), world));
+
+        if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
+            let view_proj = self.view_proj();
+            editor.initiation_cards = drill_holes
+                .iter()
+                .filter(|dataset| dataset.state.loaded && dataset.visible && !editor.hidden_handles.contains(&dataset.entity_id()))
+                .flat_map(|dataset| {
+                    dataset.dataset.initiations.iter().filter_map(|initiation| {
+                        let hole = dataset.dataset.holes.get(initiation.hole)?;
+                        Some(crate::ui::state::InitiationCard {
+                            target: crate::model::drill_hole::DrillHoleRef {
+                                dataset: dataset.id,
+                                hole: initiation.hole,
+                            },
+                            delay_ms: initiation.delay_ms,
+                            screen_px: self.world_to_window_px(&view_proj, hole.collar_position())?,
+                        })
+                    })
+                })
+                .collect();
+        } else {
+            editor.initiation_cards.clear();
+        }
 
         if let Some(failure) = &editor.tri_create_failure {
             let vp = self.view_proj();

@@ -1477,6 +1477,35 @@ impl EditTarget<'_> {
         self.touch_item(ItemRef::DrillHole(dataset));
     }
 
+    /// Clear every hole pair named by either side of a tie-in edit, then lay
+    /// `insert` across them. One connector to a pair, so a pair is cleared
+    /// before it is written whichever direction the old one ran in.
+    fn write_tie_ins(&mut self, dataset: drill_hole::DrillHoleId, remove: &[drill_hole::TieIn], insert: &[drill_hole::TieIn]) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        data.ties.retain(|tie| !remove.iter().chain(insert).any(|touched| tie.joins(touched.from, touched.to)));
+        data.ties.extend(insert.iter().cloned());
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
+    /// Replace the initiation on the collar named by either side of the edit.
+    /// Other initiation points remain untouched, which makes each red card an
+    /// independently undoable part of a multi-start round.
+    fn set_initiation(&mut self, dataset: drill_hole::DrillHoleId, remove: Option<drill_hole::Initiation>, insert: Option<drill_hole::Initiation>) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        data.initiations
+            .retain(|initiation| ![remove, insert].into_iter().flatten().any(|touched| touched.hole == initiation.hole));
+        if let Some(initiation) = insert {
+            data.initiations.push(initiation);
+        }
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
     fn insert_item(&mut self, index: usize, item: OpenItem) {
         let handle = item.item_ref();
         match item {
@@ -1574,6 +1603,24 @@ pub(crate) enum Command {
         originals: Vec<(usize, drill_hole::HolePlacement)>,
         delta: DVec3,
     },
+    /// Lay, replace or lift the surface connectors of a tie-in.
+    ///
+    /// The two sides name the same pairs of holes: `before` is whatever was
+    /// tied across them, `after` what is tied across them now. Every pair
+    /// either side names is cleared before the new ties go on, so overwriting
+    /// an existing connector, laying a fresh one and cutting one out are all
+    /// the same command - the last with an empty `after`.
+    SetTieIns {
+        dataset: drill_hole::DrillHoleId,
+        before: Vec<drill_hole::TieIn>,
+        after: Vec<drill_hole::TieIn>,
+    },
+    /// Move, set or lift the hole a round starts at.
+    SetInitiation {
+        dataset: drill_hole::DrillHoleId,
+        before: Option<drill_hole::Initiation>,
+        after: Option<drill_hole::Initiation>,
+    },
     /// Delete a project item. The item itself is moved into the command when
     /// it is applied and moved back out when it is reverted, so a deletion
     /// sitting in the undo stack never holds a second copy of a mesh.
@@ -1617,6 +1664,12 @@ impl Command {
                 Command::SetLayerVisible { .. } | Command::SetObjectHidden { .. } => 0,
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
+                Command::SetTieIns { before, after, .. } => before
+                    .iter()
+                    .chain(after)
+                    .map(|tie| size_of::<drill_hole::TieIn>() + tie.product.len())
+                    .fold(0usize, usize::saturating_add),
+                Command::SetInitiation { .. } => 0,
                 Command::MoveCollars { originals, .. } => originals
                     .iter()
                     .map(|(_, placement)| size_of::<drill_hole::HolePlacement>() + placement.trace.len() * size_of::<drill_hole::TraceStation>())
@@ -1673,7 +1726,7 @@ impl Command {
                     into.push(*item);
                 }
             }
-            Command::MoveCollars { dataset, .. } => {
+            Command::MoveCollars { dataset, .. } | Command::SetTieIns { dataset, .. } | Command::SetInitiation { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
                     into.push(item);
@@ -1757,6 +1810,8 @@ impl Command {
             Command::SetItemStyle { item, after, .. } => target.set_item_style(*item, after),
             Command::RenameItem { item, after, .. } => target.set_item_name(*item, after),
             Command::MoveCollars { dataset, originals, delta } => target.move_collars(*dataset, originals, *delta),
+            Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
+            Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
             Command::DeleteItem { item, index, removed } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {
                     *index = taken_index;
@@ -1828,6 +1883,10 @@ impl Command {
             Command::RenameItem { item, before, .. } => target.set_item_name(*item, before),
             // A zero delta puts every captured hole back exactly where it was.
             Command::MoveCollars { dataset, originals, .. } => target.move_collars(*dataset, originals, DVec3::ZERO),
+            // The same clear-then-write, with the two sides swapped: the pairs
+            // the edit touched are named by both of them.
+            Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
+            Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
             Command::DeleteItem { index, removed, .. } => {
                 if let Some(item) = removed.take() {
                     target.insert_item(*index, item);

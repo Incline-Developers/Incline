@@ -6,6 +6,7 @@ pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod release_check; // Checks the website for a newer published release
+pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
 #[cfg(target_arch = "wasm32")]
@@ -587,6 +588,7 @@ impl<'a> App<'a> {
         // past whatever the file held.
         self.editor.delay_products = crate::ui::state::delay_products_from_stored(&config.delay_products);
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
+        self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
         self.configure_graphics_camera_preferences();
     }
 
@@ -901,7 +903,19 @@ impl<'a> App<'a> {
         if self.editor.active_drill_hole.is_some_and(|id| !self.drill_holes.iter().any(|item| item.id == id)) {
             self.editor.active_drill_hole = None;
         }
+        if self.editor.tie_anchor.is_some_and(|anchor| !self.drill_holes.iter().any(|item| item.id == anchor.dataset)) {
+            self.editor.end_tie_chain();
+        }
         self.editor.selected_drill_holes.retain(|hole| self.drill_holes.iter().any(|item| item.id == hole.dataset));
+        self.editor.selected_tie_ins.retain(|tie| self.drill_holes.iter().any(|item| item.id == tie.dataset));
+        if self
+            .editor
+            .initiation_dialog
+            .as_ref()
+            .is_some_and(|dialog| !self.drill_holes.iter().any(|item| item.id == dialog.target.dataset))
+        {
+            self.editor.initiation_dialog = None;
+        }
     }
 
     /// Carry out the follow-up work an applied or reverted command reported:

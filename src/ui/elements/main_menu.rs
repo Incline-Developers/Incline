@@ -174,6 +174,10 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
         return;
     }
     editor.active_workspace = workspace;
+    // A tie-in is Drill & Blast's own run; it does not wait on the other side
+    // of a trip through production.
+    editor.end_tie_chain();
+    editor.initiation_dialog = None;
     // A selection is made in one discipline's terms - production selects a
     // drill hole dataset whole where Drill & Blast selects one hole of it - so
     // it is left behind with the workspace that made it rather than carried
@@ -184,7 +188,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     // drawing tools are on the way in.
     let survives = match editor.active_tool {
         ActiveTool::None | ActiveTool::VerticalSlice => true,
-        ActiveTool::MoveCollar => workspace == Workspace::DrillAndBlast,
+        ActiveTool::MoveCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint => workspace == Workspace::DrillAndBlast,
         _ => workspace.has_production_tools(),
     };
     if !survives {
