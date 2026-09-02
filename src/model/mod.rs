@@ -463,18 +463,6 @@ impl Document {
         changed
     }
 
-    /// Reveal every individually hidden design object.
-    pub(crate) fn reveal_all_objects(&mut self) -> bool {
-        if self.hidden_objects.is_empty() {
-            return false;
-        }
-        let changed = std::mem::take(&mut self.hidden_objects);
-        self.touch();
-        let revision = self.revision;
-        self.object_revisions.extend(changed.into_iter().map(|id| (id, revision)));
-        true
-    }
-
     /// Convert impossible imported two-vertex closed polylines into open ones.
     ///
     /// Some external design formats encode ordinary two-point strings as
@@ -1011,8 +999,508 @@ impl Document {
     }
 }
 
-/// A reversible edit to the document.
-#[derive(Clone, Debug)]
+/// A project-owned item that is not part of the design document: the things
+/// the explorer lists under Triangulations, Block Models, Drillholes, Point
+/// Clouds and Rasters.
+///
+/// [`SceneEntityId`] cannot serve here - rasters are project content but not
+/// scene entities, and design objects are document content rather than items -
+/// so this is the identity the undo history uses when it names an item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ItemRef {
+    Triangulation(triangulation::TriangulationId),
+    BlockModel(block_model::BlockModelId),
+    DrillHole(drill_hole::DrillHoleId),
+    PointCloud(point_cloud::PointCloudId),
+    Raster(raster::RasterTextureId),
+}
+
+impl ItemRef {
+    pub(crate) fn from_entity(entity: SceneEntityId) -> Option<Self> {
+        match entity {
+            SceneEntityId::Object(_) => None,
+            SceneEntityId::Triangulation(id) => Some(Self::Triangulation(id)),
+            SceneEntityId::BlockModel(id) => Some(Self::BlockModel(id)),
+            SceneEntityId::DrillHole(id) => Some(Self::DrillHole(id)),
+            SceneEntityId::PointCloud(id) => Some(Self::PointCloud(id)),
+        }
+    }
+}
+
+/// Every persisted presentation field of one project item.
+///
+/// Deliberately one snapshot per item kind rather than a command per field:
+/// visibility, colour, ramps and drapes are all small, they are all saved into
+/// OMF the same way, and a new styling field then becomes a field here instead
+/// of a new [`Command`] variant plus its undo, redo and byte-estimate arms.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ItemStyle {
+    Triangulation {
+        visible: bool,
+        color: [f32; 4],
+        line_color: [f32; 4],
+        line_weight: Option<f32>,
+        raster_texture: Option<raster::RasterTextureId>,
+        raster_opacity: f32,
+    },
+    BlockModel {
+        visible: bool,
+        color: [f32; 4],
+        slice: Option<block_model::BlockModelSlice>,
+        active_color_variable: Option<String>,
+        color_transfers: std::collections::BTreeMap<String, block_model::ColorTransferFunction>,
+        hide_empty_color_values: bool,
+    },
+    DrillHole {
+        visible: bool,
+        color: drill_hole::DrillColorState,
+    },
+    PointCloud {
+        visible: bool,
+        color: [f32; 4],
+        point_size: f32,
+    },
+    Raster {
+        visible: bool,
+    },
+}
+
+impl ItemStyle {
+    pub(crate) fn of_triangulation(item: &triangulation::OpenTriangulation) -> Self {
+        Self::Triangulation {
+            visible: item.visible,
+            color: item.color,
+            line_color: item.line_color,
+            line_weight: item.line_weight,
+            raster_texture: item.raster_texture,
+            raster_opacity: item.raster_opacity,
+        }
+    }
+
+    pub(crate) fn of_block_model(item: &block_model::OpenBlockModel) -> Self {
+        Self::BlockModel {
+            visible: item.visible,
+            color: item.color,
+            slice: item.slice,
+            active_color_variable: item.active_color_variable.clone(),
+            color_transfers: item.color_transfers.clone(),
+            hide_empty_color_values: item.hide_empty_color_values,
+        }
+    }
+
+    pub(crate) fn of_drill_hole(item: &drill_hole::OpenDrillHoleDataset) -> Self {
+        Self::DrillHole {
+            visible: item.visible,
+            color: item.color.clone(),
+        }
+    }
+
+    pub(crate) fn of_point_cloud(item: &point_cloud::OpenPointCloud) -> Self {
+        Self::PointCloud {
+            visible: item.visible,
+            color: item.color,
+            point_size: item.point_size,
+        }
+    }
+
+    pub(crate) fn of_raster(item: &raster::OpenRasterTexture) -> Self {
+        Self::Raster { visible: item.visible }
+    }
+
+    pub(crate) fn visible(&self) -> bool {
+        match self {
+            Self::Triangulation { visible, .. }
+            | Self::BlockModel { visible, .. }
+            | Self::DrillHole { visible, .. }
+            | Self::PointCloud { visible, .. }
+            | Self::Raster { visible } => *visible,
+        }
+    }
+
+    /// The same style with only its visibility changed - how every show/hide
+    /// action builds the `after` half of its command.
+    pub(crate) fn with_visible(mut self, value: bool) -> Self {
+        match &mut self {
+            Self::Triangulation { visible, .. }
+            | Self::BlockModel { visible, .. }
+            | Self::DrillHole { visible, .. }
+            | Self::PointCloud { visible, .. }
+            | Self::Raster { visible } => *visible = value,
+        }
+        self
+    }
+
+    /// The same style with only its base colour changed. A raster has none:
+    /// its colours are its pixels.
+    pub(crate) fn with_color(mut self, value: [f32; 4]) -> Self {
+        match &mut self {
+            Self::Triangulation { color, .. } | Self::BlockModel { color, .. } | Self::PointCloud { color, .. } => *color = value,
+            Self::DrillHole { .. } | Self::Raster { .. } => {}
+        }
+        self
+    }
+
+    /// The same triangulation style with a different raster draped over it, or
+    /// none. Ignored for every other kind, which cannot carry a drape.
+    pub(crate) fn with_raster_texture(mut self, value: Option<raster::RasterTextureId>) -> Self {
+        if let Self::Triangulation { raster_texture, .. } = &mut self {
+            *raster_texture = value;
+        }
+        self
+    }
+
+    /// The same block-model style with a different crop, or none.
+    pub(crate) fn with_slice(mut self, value: Option<block_model::BlockModelSlice>) -> Self {
+        if let Self::BlockModel { slice, .. } = &mut self {
+            *slice = value;
+        }
+        self
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        size_of::<Self>()
+            + match self {
+                Self::BlockModel {
+                    active_color_variable,
+                    color_transfers,
+                    ..
+                } => {
+                    active_color_variable.as_ref().map_or(0, String::len)
+                        + color_transfers
+                            .iter()
+                            .map(|(name, transfer)| name.len() + size_of::<block_model::ColorTransferFunction>() + transfer.gradient_len() * size_of::<[f32; 4]>())
+                            .fold(0usize, usize::saturating_add)
+                }
+                Self::DrillHole { color, .. } => {
+                    color.active_field.as_ref().map_or(0, String::len)
+                        + color.stops.len() * size_of::<drill_hole::DrillColorStop>()
+                        + color
+                            .categories
+                            .iter()
+                            .map(|category| size_of::<drill_hole::DrillCategoryColor>() + category.value.len())
+                            .fold(0usize, usize::saturating_add)
+                }
+                _ => 0,
+            }
+    }
+}
+
+/// A whole project item, lifted out of the app while a deletion of it sits in
+/// the undo stack. Boxed because a block model's metadata dwarfs every other
+/// [`Command`] variant, and `Command`'s size is paid by every entry.
+pub(crate) enum OpenItem {
+    Triangulation(Box<triangulation::OpenTriangulation>),
+    BlockModel(Box<block_model::OpenBlockModel>),
+    DrillHole(Box<drill_hole::OpenDrillHoleDataset>),
+    PointCloud(Box<point_cloud::OpenPointCloud>),
+    Raster(Box<raster::OpenRasterTexture>),
+}
+
+impl OpenItem {
+    pub(crate) fn item_ref(&self) -> ItemRef {
+        match self {
+            Self::Triangulation(item) => ItemRef::Triangulation(item.id),
+            Self::BlockModel(item) => ItemRef::BlockModel(item.id),
+            Self::DrillHole(item) => ItemRef::DrillHole(item.id),
+            Self::PointCloud(item) => ItemRef::PointCloud(item.id),
+            Self::Raster(item) => ItemRef::Raster(item.id),
+        }
+    }
+
+    /// Retained size, counted for the history's memory budget. Buffers shared
+    /// through an `Arc` are counted in full: over-counting only makes the
+    /// budget evict a deletion sooner, while under-counting would let a stack
+    /// of deleted meshes outgrow it.
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Triangulation(item) => {
+                size_of::<triangulation::OpenTriangulation>()
+                    + item.name.len()
+                    + item.mesh.estimated_bytes()
+                    + item.edges.len() * size_of::<[u32; 2]>()
+                    + item.surface_face_order.len() * size_of::<u32>()
+            }
+            Self::BlockModel(item) => size_of::<block_model::OpenBlockModel>() + item.name.len() + item.estimated_bytes(),
+            Self::DrillHole(item) => size_of::<drill_hole::OpenDrillHoleDataset>() + item.name.len() + item.dataset.estimated_bytes(),
+            Self::PointCloud(item) => {
+                size_of::<point_cloud::OpenPointCloud>()
+                    + item.name.len()
+                    + item.points.len() * size_of::<DVec3>()
+                    + item.colors.as_ref().map_or(0, |colors| colors.len() * size_of::<u32>())
+            }
+            Self::Raster(item) => size_of::<raster::OpenRasterTexture>() + item.name.len() + item.full_rgba.len() + item.rgba.len(),
+        }
+    }
+}
+
+impl std::fmt::Debug for OpenItem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_tuple("OpenItem").field(&self.item_ref()).finish()
+    }
+}
+
+/// Work an applied or reverted [`Command`] leaves for the caller: what to
+/// invalidate, and any item that needs its background decode restarting.
+///
+/// A command mutates project state only; anything that touches the GPU, the
+/// job queue or the session file is reported here and done by `App`, which is
+/// what keeps the model layer free of app plumbing.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StepEffects {
+    /// Design document content changed: rebuild scene geometry.
+    pub(crate) document_changed: bool,
+    /// A project item changed: refresh topology bounds and redraw.
+    pub(crate) items_changed: bool,
+    /// Items were added or removed: the session file no longer matches.
+    pub(crate) membership_changed: bool,
+    /// Block models whose active colour variable changed and whose values
+    /// therefore have to be decoded again before they can render.
+    pub(crate) block_model_decodes: Vec<block_model::BlockModelId>,
+}
+
+/// Everything a [`Command`] is allowed to mutate: the active project's design
+/// document, its content epoch, and the project items the app holds alongside
+/// it.
+///
+/// Undo used to reach only the document, which is why moving a drillhole
+/// collar or hiding a surface could dirty a project but never be taken back.
+/// Widening the target - rather than giving items a second, parallel history -
+/// is what keeps one Ctrl-Z timeline over edits that touch both.
+pub(crate) struct EditTarget<'a> {
+    pub(crate) document: &'a mut Document,
+    pub(crate) content: &'a mut project::ProjectContentState,
+    pub(crate) triangulations: &'a mut Vec<triangulation::OpenTriangulation>,
+    pub(crate) block_models: &'a mut Vec<block_model::OpenBlockModel>,
+    pub(crate) drill_holes: &'a mut Vec<drill_hole::OpenDrillHoleDataset>,
+    pub(crate) point_clouds: &'a mut Vec<point_cloud::OpenPointCloud>,
+    pub(crate) rasters: &'a mut Vec<raster::OpenRasterTexture>,
+    /// Accumulated by `apply`/`revert`; drained by the caller once the whole
+    /// step is done, so one batch invalidates once.
+    pub(crate) effects: StepEffects,
+}
+
+impl EditTarget<'_> {
+    fn item_state_mut(&mut self, item: ItemRef) -> Option<&mut project::ProjectItemState> {
+        match item {
+            ItemRef::Triangulation(id) => self.triangulations.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
+            ItemRef::BlockModel(id) => self.block_models.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
+            ItemRef::DrillHole(id) => self.drill_holes.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
+            ItemRef::PointCloud(id) => self.point_clouds.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
+            ItemRef::Raster(id) => self.rasters.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
+        }
+    }
+
+    fn item_epoch(&self, item: ItemRef) -> Option<u64> {
+        match item {
+            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
+            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
+            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
+            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
+            ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
+        }
+    }
+
+    /// Mark one item and the project's content as changed, and report the
+    /// redraw the caller owes. Every item mutation funnels through here so a
+    /// command can never dirty an item without also dirtying the project that
+    /// serializes it.
+    fn touch_item(&mut self, item: ItemRef) {
+        if let Some(state) = self.item_state_mut(item) {
+            state.touch();
+        }
+        self.content.touch();
+        self.effects.items_changed = true;
+    }
+
+    /// Write a style snapshot back onto its item. A mismatched pair (a block
+    /// model style handed a triangulation id) is ignored rather than partially
+    /// applied, so a malformed command cannot leave an item half-styled.
+    fn set_item_style(&mut self, item: ItemRef, style: &ItemStyle) {
+        let mut changed = false;
+        match (item, style) {
+            (
+                ItemRef::Triangulation(id),
+                ItemStyle::Triangulation {
+                    visible,
+                    color,
+                    line_color,
+                    line_weight,
+                    raster_texture,
+                    raster_opacity,
+                },
+            ) => {
+                if let Some(entry) = self.triangulations.iter_mut().find(|entry| entry.id == id) {
+                    entry.visible = *visible;
+                    entry.color = *color;
+                    entry.line_color = *line_color;
+                    entry.line_weight = *line_weight;
+                    entry.raster_texture = *raster_texture;
+                    entry.raster_opacity = *raster_opacity;
+                    changed = true;
+                }
+            }
+            (
+                ItemRef::BlockModel(id),
+                ItemStyle::BlockModel {
+                    visible,
+                    color,
+                    slice,
+                    active_color_variable,
+                    color_transfers,
+                    hide_empty_color_values,
+                },
+            ) => {
+                if let Some(entry) = self.block_models.iter_mut().find(|entry| entry.id == id) {
+                    let variable_changed = entry.active_color_variable != *active_color_variable;
+                    entry.visible = *visible;
+                    entry.color = *color;
+                    entry.slice = *slice;
+                    entry.active_color_variable = active_color_variable.clone();
+                    entry.color_transfers = color_transfers.clone();
+                    entry.hide_empty_color_values = *hide_empty_color_values;
+                    if variable_changed {
+                        // The decoded values cached against the old variable
+                        // no longer describe what is being coloured; drop them
+                        // and let the caller queue the decode.
+                        match active_color_variable {
+                            Some(variable) => entry.begin_active_values_decode(variable),
+                            None => entry.clear_active_values_cache(),
+                        }
+                        self.effects.block_model_decodes.push(id);
+                    }
+                    changed = true;
+                }
+            }
+            (ItemRef::DrillHole(id), ItemStyle::DrillHole { visible, color }) => {
+                if let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == id) {
+                    entry.visible = *visible;
+                    entry.color = color.clone();
+                    changed = true;
+                }
+            }
+            (ItemRef::PointCloud(id), ItemStyle::PointCloud { visible, color, point_size }) => {
+                if let Some(entry) = self.point_clouds.iter_mut().find(|entry| entry.id == id) {
+                    entry.visible = *visible;
+                    entry.color = *color;
+                    entry.point_size = *point_size;
+                    changed = true;
+                }
+            }
+            (ItemRef::Raster(id), ItemStyle::Raster { visible }) => {
+                if let Some(entry) = self.rasters.iter_mut().find(|entry| entry.id == id) {
+                    entry.visible = *visible;
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+        if changed {
+            self.touch_item(item);
+        }
+    }
+
+    fn set_item_name(&mut self, item: ItemRef, name: &str) {
+        let target = match item {
+            ItemRef::Triangulation(id) => self.triangulations.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
+            ItemRef::BlockModel(id) => self.block_models.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
+            ItemRef::DrillHole(id) => self.drill_holes.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
+            ItemRef::PointCloud(id) => self.point_clouds.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
+            ItemRef::Raster(id) => self.rasters.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
+        };
+        let Some(target) = target else {
+            return;
+        };
+        if target == name {
+            return;
+        }
+        name.clone_into(target);
+        self.touch_item(item);
+    }
+
+    /// Lift an item out of the project, returning where it stood so undo can
+    /// put it back in explorer order rather than at the end.
+    fn take_item(&mut self, item: ItemRef) -> Option<(usize, OpenItem)> {
+        fn take<T>(items: &mut Vec<T>, index: Option<usize>) -> Option<(usize, T)> {
+            index.map(|index| (index, items.remove(index)))
+        }
+        let taken = match item {
+            ItemRef::Triangulation(id) => {
+                let index = self.triangulations.iter().position(|entry| entry.id == id);
+                take(self.triangulations, index).map(|(index, entry)| (index, OpenItem::Triangulation(Box::new(entry))))
+            }
+            ItemRef::BlockModel(id) => {
+                let index = self.block_models.iter().position(|entry| entry.id == id);
+                take(self.block_models, index).map(|(index, entry)| (index, OpenItem::BlockModel(Box::new(entry))))
+            }
+            ItemRef::DrillHole(id) => {
+                let index = self.drill_holes.iter().position(|entry| entry.id == id);
+                take(self.drill_holes, index).map(|(index, entry)| (index, OpenItem::DrillHole(Box::new(entry))))
+            }
+            ItemRef::PointCloud(id) => {
+                let index = self.point_clouds.iter().position(|entry| entry.id == id);
+                take(self.point_clouds, index).map(|(index, entry)| (index, OpenItem::PointCloud(Box::new(entry))))
+            }
+            ItemRef::Raster(id) => {
+                let index = self.rasters.iter().position(|entry| entry.id == id);
+                take(self.rasters, index).map(|(index, entry)| (index, OpenItem::Raster(Box::new(entry))))
+            }
+        };
+        if taken.is_some() {
+            self.content.touch();
+            self.effects.items_changed = true;
+            self.effects.membership_changed = true;
+        }
+        taken
+    }
+
+    /// Rewrite every captured hole as its original translated by `delta`, so a
+    /// zero delta restores. The dataset is unshared once and its extent
+    /// recomputed, and its revision carries the change through to the instance
+    /// cache in `rendering::scene::drill_hole_cache`.
+    fn move_collars(&mut self, dataset: drill_hole::DrillHoleId, originals: &[(usize, drill_hole::HolePlacement)], delta: DVec3) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        let mut moved = false;
+        for (index, original) in originals {
+            let Some(hole) = data.holes.get_mut(*index) else {
+                continue;
+            };
+            hole.set_placement(original, delta);
+            moved = true;
+        }
+        if !moved {
+            return;
+        }
+        data.refresh_bounds();
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
+    fn insert_item(&mut self, index: usize, item: OpenItem) {
+        let handle = item.item_ref();
+        match item {
+            OpenItem::Triangulation(entry) => self.triangulations.insert(index.min(self.triangulations.len()), *entry),
+            OpenItem::BlockModel(entry) => self.block_models.insert(index.min(self.block_models.len()), *entry),
+            OpenItem::DrillHole(entry) => self.drill_holes.insert(index.min(self.drill_holes.len()), *entry),
+            OpenItem::PointCloud(entry) => self.point_clouds.insert(index.min(self.point_clouds.len()), *entry),
+            OpenItem::Raster(entry) => self.rasters.insert(index.min(self.rasters.len()), *entry),
+        }
+        // The restored item keeps the epoch it was deleted with, so undoing a
+        // delete of never-edited content leaves the project exactly as clean
+        // as it was before the delete.
+        self.content.touch();
+        self.effects.items_changed = true;
+        self.effects.membership_changed = true;
+        if let ItemRef::BlockModel(id) = handle {
+            self.effects.block_model_decodes.push(id);
+        }
+    }
+}
+
+/// A reversible edit to the project: the design document, the project items
+/// beside it, or both in one step.
+#[derive(Debug)]
 pub(crate) enum Command {
     AddObject(Object),
     DeleteObject {
@@ -1047,6 +1535,55 @@ pub(crate) enum Command {
         /// Original global draw-order position of every object on the layer.
         objects: Vec<(usize, Object)>,
     },
+    /// Show or hide a design layer.
+    SetLayerVisible {
+        id: LayerId,
+        before: bool,
+        after: bool,
+    },
+    /// Persisted per-object visibility (canvas Hide Selection / Reveal All).
+    SetObjectHidden {
+        id: ObjectId,
+        before: bool,
+        after: bool,
+    },
+    /// Replace every persisted presentation field of one project item. This
+    /// is what makes showing, hiding, colouring, ramping and draping an item
+    /// undoable, all through one variant.
+    SetItemStyle {
+        item: ItemRef,
+        before: ItemStyle,
+        after: ItemStyle,
+    },
+    /// Rename a project item. Layers have [`Command::RenameLayer`]; they live
+    /// in the document rather than in the item collections.
+    RenameItem {
+        item: ItemRef,
+        before: String,
+        after: String,
+    },
+    /// Move drillhole collars, and the traces hanging off them, by `delta`.
+    ///
+    /// The captured placements are the originals, so applying writes
+    /// `original + delta` and reverting writes `original` - the same
+    /// rewrite-from-the-original rule a live Move Collar preview uses, which
+    /// is what stops repeated apply/revert cycles accumulating drift.
+    MoveCollars {
+        dataset: drill_hole::DrillHoleId,
+        /// Hole index within the dataset, paired with where it started.
+        originals: Vec<(usize, drill_hole::HolePlacement)>,
+        delta: DVec3,
+    },
+    /// Delete a project item. The item itself is moved into the command when
+    /// it is applied and moved back out when it is reverted, so a deletion
+    /// sitting in the undo stack never holds a second copy of a mesh.
+    DeleteItem {
+        item: ItemRef,
+        /// Explorer position captured on apply, so undo restores the order.
+        index: usize,
+        /// `Some` exactly while the deletion stands.
+        removed: Option<OpenItem>,
+    },
 }
 
 impl Command {
@@ -1077,21 +1614,104 @@ impl Command {
                 Command::DeleteLayerSnapshot { layer, objects, .. } => {
                     layer_bytes(layer).saturating_add(objects.iter().map(|(_, object)| object_bytes(object)).fold(0usize, usize::saturating_add))
                 }
+                Command::SetLayerVisible { .. } | Command::SetObjectHidden { .. } => 0,
+                Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
+                Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
+                Command::MoveCollars { originals, .. } => originals
+                    .iter()
+                    .map(|(_, placement)| size_of::<drill_hole::HolePlacement>() + placement.trace.len() * size_of::<drill_hole::TraceStation>())
+                    .fold(0usize, usize::saturating_add),
+                // Counted while the deletion stands. Reverting hands the item
+                // back to the project, and the entry - now only a redo - is
+                // over-counted until it is dropped, which is the safe way to
+                // be wrong about a budget.
+                Command::DeleteItem { removed, .. } => removed.as_ref().map_or(0, OpenItem::estimated_bytes),
             }
     }
 
-    fn apply(&mut self, doc: &mut Document) {
+    /// Whether `other` continues the same edit this command started, and so
+    /// should extend its history entry rather than push a new one.
+    ///
+    /// This is what keeps one colour-picker drag to a single undo step: the
+    /// picker reports a new value every frame it moves, and without merging a
+    /// drag across the wheel leaves hundreds of entries behind. Matching is by
+    /// target alone - the same item, or the same objects in the same order -
+    /// because the caller only offers a merge while one pointer gesture is
+    /// still running, which is the real boundary between two deliberate edits.
+    fn merges_with(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Command::SetItemStyle { item, .. }, Command::SetItemStyle { item: candidate, .. }) => item == candidate,
+            (Command::Replace { after, .. }, Command::Replace { before: candidate, .. }) => after.id() == candidate.id(),
+            (Command::Batch(commands), Command::Batch(candidates)) => {
+                !commands.is_empty() && commands.len() == candidates.len() && commands.iter().zip(candidates).all(|(command, candidate)| command.merges_with(candidate))
+            }
+            _ => false,
+        }
+    }
+
+    /// Absorb a continuation of this edit: take its end state and keep our own
+    /// start state, so the merged entry still undoes to where the edit began.
+    fn merge_from(&mut self, other: Self) {
+        match (self, other) {
+            (Command::SetItemStyle { after, .. }, Command::SetItemStyle { after: latest, .. }) => *after = latest,
+            (Command::Replace { after, .. }, Command::Replace { after: latest, .. }) => *after = latest,
+            (Command::Batch(commands), Command::Batch(latest)) => {
+                for (command, latest) in commands.iter_mut().zip(latest) {
+                    command.merge_from(latest);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every project item this command touches, so the history can capture and
+    /// restore their content epochs around an apply or a revert.
+    fn touched_items(&self, into: &mut Vec<ItemRef>) {
         match self {
-            Command::AddObject(object) => doc.insert_object(object.clone()),
+            Command::SetItemStyle { item, .. } | Command::RenameItem { item, .. } | Command::DeleteItem { item, .. } => {
+                if !into.contains(item) {
+                    into.push(*item);
+                }
+            }
+            Command::MoveCollars { dataset, .. } => {
+                let item = ItemRef::DrillHole(*dataset);
+                if !into.contains(&item) {
+                    into.push(item);
+                }
+            }
+            Command::Batch(commands) => {
+                for command in commands {
+                    command.touched_items(into);
+                }
+            }
+            Command::AddObject(_)
+            | Command::DeleteObject { .. }
+            | Command::Replace { .. }
+            | Command::RenameLayer { .. }
+            | Command::AddLayerSnapshot { .. }
+            | Command::DeleteLayerSnapshot { .. }
+            | Command::SetLayerVisible { .. }
+            | Command::SetObjectHidden { .. } => {}
+        }
+    }
+
+    fn apply(&mut self, target: &mut EditTarget<'_>) {
+        match self {
+            Command::AddObject(object) => {
+                target.document.insert_object(object.clone());
+                target.effects.document_changed = true;
+            }
             Command::DeleteObject { object, index } => {
-                *index = doc.object_position(object.id());
-                doc.remove_object(object.id());
+                *index = target.document.object_position(object.id());
+                target.document.remove_object(object.id());
+                target.effects.document_changed = true;
             }
             Command::Replace { after, .. } => {
-                doc.replace_object(after.clone());
+                target.document.replace_object(after.clone());
+                target.effects.document_changed = true;
             }
             Command::Batch(cmds) => {
-                if cmds.iter().all(|command| matches!(command, Command::DeleteObject { .. })) {
+                if !cmds.is_empty() && cmds.iter().all(|command| matches!(command, Command::DeleteObject { .. })) {
                     let ids: std::collections::HashSet<_> = cmds
                         .iter()
                         .filter_map(|command| match command {
@@ -1099,42 +1719,72 @@ impl Command {
                             _ => None,
                         })
                         .collect();
-                    let positions = doc.remove_objects_bulk(&ids);
+                    let positions = target.document.remove_objects_bulk(&ids);
                     for command in cmds {
                         if let Command::DeleteObject { object, index } = command {
                             *index = positions.get(&object.id()).copied();
                         }
                     }
+                    target.effects.document_changed = true;
                 } else {
                     for cmd in cmds {
-                        cmd.apply(doc);
+                        cmd.apply(target);
                     }
                 }
             }
-            Command::RenameLayer { id, after, .. } => doc.rename_layer(*id, after.clone()),
-            Command::AddLayerSnapshot { layer, objects } => doc.append_layer_snapshot(layer, objects.iter()),
+            Command::RenameLayer { id, after, .. } => {
+                target.document.rename_layer(*id, after.clone());
+                target.effects.document_changed = true;
+            }
+            Command::AddLayerSnapshot { layer, objects } => {
+                target.document.append_layer_snapshot(layer, objects.iter());
+                target.effects.document_changed = true;
+            }
             Command::DeleteLayerSnapshot { layer, objects, .. } => {
                 let ids = objects.iter().map(|(_, object)| object.id()).collect::<std::collections::HashSet<_>>();
-                doc.remove_objects_bulk(&ids);
-                doc.delete_layer(layer.id);
+                target.document.remove_objects_bulk(&ids);
+                target.document.delete_layer(layer.id);
+                target.effects.document_changed = true;
+            }
+            Command::SetLayerVisible { id, after, .. } => {
+                target.document.set_layer_visible(*id, *after);
+                target.effects.document_changed = true;
+            }
+            Command::SetObjectHidden { id, after, .. } => {
+                target.document.set_object_hidden(*id, *after);
+                target.effects.document_changed = true;
+            }
+            Command::SetItemStyle { item, after, .. } => target.set_item_style(*item, after),
+            Command::RenameItem { item, after, .. } => target.set_item_name(*item, after),
+            Command::MoveCollars { dataset, originals, delta } => target.move_collars(*dataset, originals, *delta),
+            Command::DeleteItem { item, index, removed } => {
+                if let Some((taken_index, taken)) = target.take_item(*item) {
+                    *index = taken_index;
+                    *removed = Some(taken);
+                }
             }
         }
     }
 
-    fn revert(&self, doc: &mut Document) {
+    fn revert(&mut self, target: &mut EditTarget<'_>) {
         match self {
             Command::AddObject(object) => {
-                doc.remove_object(object.id());
+                target.document.remove_object(object.id());
+                target.effects.document_changed = true;
             }
-            Command::DeleteObject { object, index } => match index {
-                Some(index) => doc.insert_object_at(*index, object.clone()),
-                None => doc.insert_object(object.clone()),
-            },
+            Command::DeleteObject { object, index } => {
+                match index {
+                    Some(index) => target.document.insert_object_at(*index, object.clone()),
+                    None => target.document.insert_object(object.clone()),
+                }
+                target.effects.document_changed = true;
+            }
             Command::Replace { before, .. } => {
-                doc.replace_object(before.clone());
+                target.document.replace_object(before.clone());
+                target.effects.document_changed = true;
             }
             Command::Batch(cmds) => {
-                if cmds.iter().all(|command| matches!(command, Command::DeleteObject { .. })) {
+                if !cmds.is_empty() && cmds.iter().all(|command| matches!(command, Command::DeleteObject { .. })) {
                     let inserts = cmds
                         .iter()
                         .filter_map(|command| match command {
@@ -1142,23 +1792,96 @@ impl Command {
                             _ => None,
                         })
                         .collect();
-                    doc.restore_objects_bulk(inserts);
+                    target.document.restore_objects_bulk(inserts);
+                    target.effects.document_changed = true;
                 } else {
-                    for cmd in cmds.iter().rev() {
-                        cmd.revert(doc);
+                    for cmd in cmds.iter_mut().rev() {
+                        cmd.revert(target);
                     }
                 }
             }
-            Command::RenameLayer { id, before, .. } => doc.rename_layer(*id, before.clone()),
+            Command::RenameLayer { id, before, .. } => {
+                target.document.rename_layer(*id, before.clone());
+                target.effects.document_changed = true;
+            }
             Command::AddLayerSnapshot { layer, objects } => {
                 for object in objects {
-                    doc.remove_object(object.id());
+                    target.document.remove_object(object.id());
                 }
-                doc.delete_layer(layer.id);
+                target.document.delete_layer(layer.id);
+                target.effects.document_changed = true;
             }
             Command::DeleteLayerSnapshot { layer, layer_index, objects } => {
-                doc.insert_layer_at(*layer_index, layer.clone());
-                doc.restore_objects_bulk(objects.clone());
+                target.document.insert_layer_at(*layer_index, layer.clone());
+                target.document.restore_objects_bulk(objects.clone());
+                target.effects.document_changed = true;
+            }
+            Command::SetLayerVisible { id, before, .. } => {
+                target.document.set_layer_visible(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::SetObjectHidden { id, before, .. } => {
+                target.document.set_object_hidden(*id, *before);
+                target.effects.document_changed = true;
+            }
+            Command::SetItemStyle { item, before, .. } => target.set_item_style(*item, before),
+            Command::RenameItem { item, before, .. } => target.set_item_name(*item, before),
+            // A zero delta puts every captured hole back exactly where it was.
+            Command::MoveCollars { dataset, originals, .. } => target.move_collars(*dataset, originals, DVec3::ZERO),
+            Command::DeleteItem { index, removed, .. } => {
+                if let Some(item) = removed.take() {
+                    target.insert_item(*index, item);
+                }
+            }
+        }
+    }
+}
+
+/// The content epochs of everything one history entry touches, captured either
+/// side of its command.
+///
+/// Restoring an epoch is what tells the project "this is the content you had
+/// then", so undoing back to the last save clears the dirty markers instead of
+/// leaving them stuck on. The project's own epoch is always captured: an item
+/// edit dirties the aggregate that serializes it too.
+#[derive(Clone, Debug, Default)]
+struct EpochSnapshot {
+    project: u64,
+    items: Vec<(ItemRef, u64)>,
+}
+
+impl EpochSnapshot {
+    fn capture(target: &EditTarget<'_>, items: &[ItemRef]) -> Self {
+        Self {
+            project: target.content.epoch(),
+            items: items.iter().filter_map(|item| target.item_epoch(*item).map(|epoch| (*item, epoch))).collect(),
+        }
+    }
+
+    fn epoch_of(&self, item: ItemRef) -> Option<u64> {
+        self.items.iter().find(|(other, _)| *other == item).map(|(_, epoch)| *epoch)
+    }
+
+    /// Roll epochs forward or back to this snapshot, for the project and for
+    /// every item that was still holding exactly what this entry `left_behind`
+    /// when the step began.
+    ///
+    /// A mismatch means something outside the history has changed that item
+    /// since - a background job, an import, an unrecorded edit - so its
+    /// content corresponds to neither epoch and it keeps the fresh one the
+    /// step just minted. Without the guard, undo could mark genuinely unsaved
+    /// content as saved.
+    fn restore(&self, target: &mut EditTarget<'_>, before_step: &Self, left_behind: &Self) {
+        if before_step.project == left_behind.project {
+            target.content.restore_epoch(self.project);
+        }
+        for (item, epoch) in &self.items {
+            let current = before_step.epoch_of(*item);
+            if current.is_none() || current != left_behind.epoch_of(*item) {
+                continue;
+            }
+            if let Some(state) = target.item_state_mut(*item) {
+                state.restore_epoch(*epoch);
             }
         }
     }
@@ -1166,6 +1889,10 @@ impl Command {
 
 struct HistoryEntry {
     command: Command,
+    /// Epochs before the command was first applied, and after it - so undo and
+    /// redo each put back the identity that matches the content they restore.
+    before: EpochSnapshot,
+    after: EpochSnapshot,
     estimated_bytes: usize,
     sequence: u64,
 }
@@ -1182,6 +1909,11 @@ pub(crate) struct History {
     retained_bytes: usize,
     next_sequence: u64,
     max_retained_bytes: usize,
+    /// Whether the newest undo entry was pushed by an edit whose gesture is
+    /// still running, and so may still be extended. Cleared the moment the
+    /// gesture ends, which is what stops two separate drags of the same
+    /// colour picker collapsing into one undo step.
+    open_run: bool,
 }
 
 impl Default for History {
@@ -1193,6 +1925,7 @@ impl Default for History {
             // Large enough for production geometry edits, but finite so a
             // long session cannot retain unbounded cloned meshes forever.
             max_retained_bytes: 1024 * 1024 * 1024,
+            open_run: false,
         }
     }
 }
@@ -1212,34 +1945,93 @@ impl History {
 
     pub(crate) fn clear(&mut self) {
         self.retained_bytes = 0;
+        self.open_run = false;
         self.project.undo.clear();
         self.project.redo.clear();
     }
 
-    pub(crate) fn execute(&mut self, doc: &mut Document, mut command: Command) {
-        command.apply(doc);
-        self.push_applied(command);
+    /// Apply `command` and record it.
+    ///
+    /// `continuing` says the edit belongs to a gesture the user has not
+    /// finished - a pointer still down on a colour wheel or a slider. Such an
+    /// edit extends the entry an identical earlier edit left, instead of
+    /// pushing its own, so the whole gesture undoes at once.
+    pub(crate) fn execute(&mut self, target: &mut EditTarget<'_>, mut command: Command, continuing: bool) {
+        let mut items = Vec::new();
+        command.touched_items(&mut items);
+        let before = EpochSnapshot::capture(target, &items);
+        command.apply(target);
+        let after = EpochSnapshot::capture(target, &items);
+        self.push_entry(command, before, after, continuing);
     }
 
     /// Apply and record a command produced by a project-scoped background job.
     /// The caller validates the open-project runtime token before invoking it.
-    pub(crate) fn execute_for(&mut self, _runtime_id: u32, doc: &mut Document, mut command: Command) {
-        command.apply(doc);
-        self.push_applied(command);
+    /// A job's result is never part of a pointer gesture, so it never merges.
+    pub(crate) fn execute_for(&mut self, _runtime_id: u32, target: &mut EditTarget<'_>, command: Command) {
+        self.execute(target, command, false);
     }
 
-    /// Record a command whose effect is already applied to the document
-    /// (e.g. an interactive drag-move committed on mouse release).
-    pub(crate) fn push_applied(&mut self, command: Command) {
+    /// End any gesture in progress, so the next edit starts its own entry.
+    /// Called when the pointer stops driving a widget.
+    pub(crate) fn end_interaction(&mut self) {
+        self.open_run = false;
+    }
+
+    /// Record a command whose effect is already applied (e.g. an interactive
+    /// drag-move committed on mouse release).
+    ///
+    /// Only for document edits: the epochs either side are taken as they stand
+    /// now, so an item mutation recorded this way could not be un-dirtied by
+    /// undo. Item edits go through [`Self::execute`], which applies the
+    /// command itself and therefore sees both epochs.
+    pub(crate) fn push_applied(&mut self, project_epoch: u64, command: Command) {
+        debug_assert!(
+            {
+                let mut items = Vec::new();
+                command.touched_items(&mut items);
+                items.is_empty()
+            },
+            "push_applied cannot capture the epochs an item edit needs; use execute"
+        );
+        let snapshot = EpochSnapshot {
+            project: project_epoch,
+            items: Vec::new(),
+        };
+        self.push_entry(command, snapshot.clone(), snapshot, false);
+    }
+
+    fn push_entry(&mut self, command: Command, before: EpochSnapshot, after: EpochSnapshot, continuing: bool) {
         self.retained_bytes = self
             .retained_bytes
             .saturating_sub(self.project.redo.iter().map(|entry| entry.estimated_bytes).sum::<usize>());
         self.project.redo.clear();
+
+        if continuing
+            && let Some(entry) = self.project.undo.last_mut()
+            && self.open_run
+            && entry.command.merges_with(&command)
+        {
+            entry.command.merge_from(command);
+            // The entry keeps the epochs the gesture started from and takes
+            // the ones it now stands at, so undoing it still returns to where
+            // the gesture began.
+            entry.after = after;
+            self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
+            entry.estimated_bytes = entry.command.estimated_bytes();
+            self.retained_bytes = self.retained_bytes.saturating_add(entry.estimated_bytes);
+            self.enforce_memory_budget();
+            return;
+        }
+
+        self.open_run = continuing;
         let estimated_bytes = command.estimated_bytes();
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
         self.project.undo.push(HistoryEntry {
             command,
+            before,
+            after,
             estimated_bytes,
             sequence,
         });
@@ -1248,10 +2040,22 @@ impl History {
     }
 
     /// Revert the most recent command. Returns `true` if something was undone.
-    pub(crate) fn undo(&mut self, doc: &mut Document) -> bool {
+    pub(crate) fn undo(&mut self, target: &mut EditTarget<'_>) -> bool {
+        // Whatever gesture was running, the entry it was extending is no
+        // longer the newest one.
+        self.open_run = false;
         match self.project.undo.pop() {
-            Some(entry) => {
-                entry.command.revert(doc);
+            Some(mut entry) => {
+                let mut items = Vec::new();
+                entry.command.touched_items(&mut items);
+                // Captured before the revert, so `restore` can tell content it
+                // left behind from content something else has since changed.
+                let current = EpochSnapshot::capture(target, &items);
+                entry.command.revert(target);
+                entry.before.restore(target, &current, &entry.after);
+                self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
+                entry.estimated_bytes = entry.command.estimated_bytes();
+                self.retained_bytes = self.retained_bytes.saturating_add(entry.estimated_bytes);
                 self.project.redo.push(entry);
                 true
             }
@@ -1268,10 +2072,18 @@ impl History {
     }
 
     /// Re-apply the most recently undone command. Returns `true` on success.
-    pub(crate) fn redo(&mut self, doc: &mut Document) -> bool {
+    pub(crate) fn redo(&mut self, target: &mut EditTarget<'_>) -> bool {
+        self.open_run = false;
         match self.project.redo.pop() {
             Some(mut entry) => {
-                entry.command.apply(doc);
+                let mut items = Vec::new();
+                entry.command.touched_items(&mut items);
+                let current = EpochSnapshot::capture(target, &items);
+                entry.command.apply(target);
+                entry.after.restore(target, &current, &entry.before);
+                self.retained_bytes = self.retained_bytes.saturating_sub(entry.estimated_bytes);
+                entry.estimated_bytes = entry.command.estimated_bytes();
+                self.retained_bytes = self.retained_bytes.saturating_add(entry.estimated_bytes);
                 self.project.undo.push(entry);
                 true
             }

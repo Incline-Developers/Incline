@@ -211,6 +211,7 @@ impl<'a> App<'a> {
                                 if completing_topology_load && !self.graphics.as_ref().is_some_and(|graphics| graphics.point_cloud_uploads_pending()) {
                                     self.finish_topology_load();
                                 }
+                                self.set_ui_pointer_gesture_active(ui_output.pointer_gesture_active);
                                 self.handle_ui_commands(ui_output.commands);
                                 self.sync_slice_preview_window(event_loop);
                                 if let Some(graphics) = self.graphics.as_mut() {

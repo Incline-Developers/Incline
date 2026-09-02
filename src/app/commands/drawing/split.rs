@@ -189,10 +189,11 @@ impl<'a> App<'a> {
             line_weight: *line_weight,
         };
 
-        self.history.execute(
-            doc,
-            Command::Batch(vec![Command::delete_object(source), Command::AddObject(first_object), Command::AddObject(second_object)]),
-        );
+        self.execute_edit(Command::Batch(vec![
+            Command::delete_object(source),
+            Command::AddObject(first_object),
+            Command::AddObject(second_object),
+        ]));
 
         self.editor.selected_handles.clear();
         self.clear_split_at_points_state();

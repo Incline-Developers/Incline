@@ -43,7 +43,7 @@ impl<'a> App<'a> {
 
         let moved = commands.len();
         if moved > 0 {
-            self.history.push_applied(Command::Batch(commands));
+            self.record_applied_edit(Command::Batch(commands));
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
                     crate::i18n::tr!(literal = "Move Selection"),
@@ -78,15 +78,13 @@ impl<'a> App<'a> {
         self.gizmo_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
-        // A collar preview is already written into the dataset it belongs to,
-        // and holes are not part of the undo history, so keeping it is only a
-        // matter of dropping the originals it would otherwise be rolled back
-        // to.
-        if self.collar_move_session.take().is_some() {
-            self.touch_active_project_content();
-            self.reset_move_editor_state();
-            self.invalidate_geometry();
-            self.invalidate_overlay();
+        // A collar preview is already written into the dataset it belongs to.
+        // Its delta is not carried on the session, so it is read back off the
+        // first hole the preview moved - every hole shares one delta - and the
+        // move is then committed through the same path an interactive release
+        // takes, so it lands on the undo stack rather than merely standing.
+        if let Some(delta) = self.pending_collar_move_delta() {
+            self.apply_collar_move_delta(delta);
             return;
         }
 
@@ -111,7 +109,7 @@ impl<'a> App<'a> {
 
         let moved = commands.len();
         if moved > 0 {
-            self.history.push_applied(Command::Batch(commands));
+            self.record_applied_edit(Command::Batch(commands));
         }
 
         self.reset_move_editor_state();
@@ -374,14 +372,27 @@ impl<'a> App<'a> {
         let Some(project_runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
             return;
         };
-        let originals = targets
+        let originals: Vec<_> = targets
             .into_iter()
             .filter_map(|target| {
                 let dataset = self.drill_holes.iter().find(|dataset| dataset.id == target.dataset)?;
                 Some((target, dataset.dataset.holes.get(target.hole)?.placement()))
             })
             .collect();
-        self.collar_move_session = Some(CollarMoveSession { project_runtime_id, originals });
+        let mut epochs: Vec<(crate::model::drill_hole::DrillHoleId, u64)> = Vec::new();
+        for (target, _) in &originals {
+            if epochs.iter().any(|(id, _)| *id == target.dataset) {
+                continue;
+            }
+            if let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == target.dataset) {
+                epochs.push((dataset.id, dataset.state.epoch()));
+            }
+        }
+        self.collar_move_session = Some(CollarMoveSession {
+            project_runtime_id,
+            originals,
+            epochs,
+        });
     }
 
     /// Roll back a live Move Collar preview if it is holding holes in the
@@ -398,6 +409,16 @@ impl<'a> App<'a> {
         }
     }
 
+    /// How far a live Move Collar preview currently stands from where it was
+    /// captured, or `None` when no preview is standing.
+    fn pending_collar_move_delta(&self) -> Option<DVec3> {
+        let session = self.collar_move_session.as_ref()?;
+        let (target, original) = session.originals.first()?;
+        let dataset = self.drill_holes.iter().find(|dataset| dataset.id == target.dataset)?;
+        let hole = dataset.dataset.holes.get(target.hole)?;
+        Some(hole.collar - original.collar)
+    }
+
     fn preview_collar_move_delta(&mut self, delta: DVec3) {
         // The session is taken rather than borrowed so the originals can be
         // read while the datasets holding them are written, without cloning
@@ -410,19 +431,33 @@ impl<'a> App<'a> {
     }
 
     /// Put the captured holes back exactly as they were, ending the preview.
+    ///
+    /// The datasets' content epochs go back too: the preview wrote to them,
+    /// but the content it wrote is gone, so an abandoned drag must not leave
+    /// them looking edited.
     fn restore_collar_move_session(&mut self) {
         let Some(session) = self.collar_move_session.take() else {
             return;
         };
         self.write_collar_holes(&session.originals, DVec3::ZERO);
+        self.restore_collar_epochs(&session.epochs);
         self.invalidate_topology_bounds_and_redraw();
     }
 
-    /// Settle a collar move at `delta`, leaving the datasets holding it.
+    fn restore_collar_epochs(&mut self, epochs: &[(crate::model::drill_hole::DrillHoleId, u64)]) {
+        for (id, epoch) in epochs {
+            if let Some(dataset) = self.drill_holes.iter_mut().find(|dataset| dataset.id == *id) {
+                dataset.state.restore_epoch(*epoch);
+            }
+        }
+    }
+
+    /// Settle a collar move at `delta` as one undo step.
     ///
-    /// Drillhole geometry is not part of the document, so - unlike the design
-    /// move this mirrors - there is no `Command` to push: the datasets are
-    /// marked dirty and the move stands until it is saved.
+    /// The live preview is rolled back first - positions and epochs both - so
+    /// the command applies from the state the drag started in and undo has
+    /// somewhere clean to return to. Applying it immediately rewrites the same
+    /// positions the preview was already showing, so nothing moves on screen.
     fn apply_collar_move_delta(&mut self, delta: DVec3) {
         self.ensure_collar_move_session();
         let Some(session) = self.collar_move_session.take() else {
@@ -430,20 +465,36 @@ impl<'a> App<'a> {
         };
         // A project switch under a live preview leaves the holes where they
         // were rather than committing them against whatever is open now.
-        if self.workspace.active_project().map(|project| project.runtime_id) != Some(session.project_runtime_id) {
-            self.write_collar_holes(&session.originals, DVec3::ZERO);
+        let same_project = self.workspace.active_project().map(|project| project.runtime_id) == Some(session.project_runtime_id);
+        self.write_collar_holes(&session.originals, DVec3::ZERO);
+        self.restore_collar_epochs(&session.epochs);
+        let moved = session.originals.len();
+        if !same_project || moved == 0 || delta == DVec3::ZERO {
             self.reset_move_editor_state();
+            self.invalidate_topology_bounds_and_redraw();
             return;
         }
-        self.write_collar_holes(&session.originals, delta);
-        let moved = session.originals.len();
-        if moved > 0 && delta != DVec3::ZERO {
-            self.touch_active_project_content();
-            crate::logging::report_completed_action(
-                CommandReportSpec::new("Move Collar", format!("{moved} hole(s)")),
-                format!("Applied move delta ({delta}) to {moved} drillhole collar(s)"),
-            );
+
+        let mut per_dataset: Vec<(crate::model::drill_hole::DrillHoleId, Vec<(usize, HolePlacement)>)> = Vec::new();
+        for (target, placement) in session.originals {
+            match per_dataset.iter_mut().find(|(id, _)| *id == target.dataset) {
+                Some((_, holes)) => holes.push((target.hole, placement)),
+                None => per_dataset.push((target.dataset, vec![(target.hole, placement)])),
+            }
         }
+        let commands: Vec<Command> = per_dataset
+            .into_iter()
+            .map(|(dataset, originals)| Command::MoveCollars { dataset, originals, delta })
+            .collect();
+        self.execute_edit(if commands.len() == 1 {
+            commands.into_iter().next().expect("checked length")
+        } else {
+            Command::Batch(commands)
+        });
+        crate::logging::report_completed_action(
+            CommandReportSpec::new("Move Collar", format!("{moved} hole(s)")),
+            format!("Applied move delta ({delta}) to {moved} drillhole collar(s)"),
+        );
         self.reset_move_editor_state();
         self.invalidate_topology_bounds_and_redraw();
         self.invalidate_geometry();

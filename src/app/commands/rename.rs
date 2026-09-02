@@ -1,27 +1,17 @@
 //! Renaming explorer items.
 //!
-//! Design layers live in the `Document`, so renaming one is an undoable
-//! `Command`. Every other kind is an App-owned project item whose name is a
-//! plain field: renaming it in place bumps the item's revision, which is what
-//! marks the project dirty and re-derives the `UiProjectView`.
+//! Design layers live in the `Document` and project items live beside it, but
+//! both renames are undoable `Command`s against the same history - the item
+//! one through [`Command::RenameItem`], which bumps the item's revision and so
+//! re-derives the `UiProjectView` as well as marking the project dirty.
 
 use crate::{
     app::App,
     i18n::{tr, tr_format},
-    model::{Command, LayerId, project::unique_item_name},
+    model::{Command, ItemRef, LayerId, project::unique_item_name},
     ui::state::RenameTarget,
     userspace_log, userspace_warn,
 };
-
-/// Rename the item with `$id` in `$collection` and mark it unsaved.
-macro_rules! rename_item {
-    ($collection:expr, $id:expr, $name:expr) => {
-        if let Some(item) = $collection.iter_mut().find(|item| item.id == $id) {
-            item.name = $name;
-            item.state.touch();
-        }
-    };
-}
 
 /// Names of the other items of the same kind, which a rename must not collide with.
 macro_rules! sibling_names {
@@ -64,16 +54,11 @@ impl<'a> App<'a> {
         }
         if is_loaded {
             self.editor.active_layer = Some(layer_id);
-            if let Some(project) = self.workspace.active_project_mut() {
-                self.history.execute(
-                    &mut project.project.document,
-                    Command::RenameLayer {
-                        id: layer_id,
-                        before,
-                        after: new_name,
-                    },
-                );
-            }
+            self.execute_edit(Command::RenameLayer {
+                id: layer_id,
+                before,
+                after: new_name,
+            });
         } else {
             self.history.clear();
             if self.editor.active_layer == Some(layer_id) {
@@ -109,14 +94,19 @@ impl<'a> App<'a> {
             RenameTarget::DrillHole(id) => sibling_names!(self.drill_holes, id),
         };
         let name = unique_item_name(requested.clone(), siblings.iter().map(String::as_str));
-        match target {
+        let item = match target {
             RenameTarget::Layer(_) => return,
-            RenameTarget::Triangulation(id) => rename_item!(self.triangulations, id, name.clone()),
-            RenameTarget::Raster(id) => rename_item!(self.raster_textures, id, name.clone()),
-            RenameTarget::PointCloud(id) => rename_item!(self.point_clouds, id, name.clone()),
-            RenameTarget::BlockModel(id) => rename_item!(self.block_models, id, name.clone()),
-            RenameTarget::DrillHole(id) => rename_item!(self.drill_holes, id, name.clone()),
-        }
+            RenameTarget::Triangulation(id) => ItemRef::Triangulation(id),
+            RenameTarget::Raster(id) => ItemRef::Raster(id),
+            RenameTarget::PointCloud(id) => ItemRef::PointCloud(id),
+            RenameTarget::BlockModel(id) => ItemRef::BlockModel(id),
+            RenameTarget::DrillHole(id) => ItemRef::DrillHole(id),
+        };
+        self.execute_edit(Command::RenameItem {
+            item,
+            before: before.clone(),
+            after: name.clone(),
+        });
         if name == requested {
             userspace_log!("{}", tr_format!(literal = "Renamed '%before%' to '%name%'", before = before, name = name));
         } else {
@@ -130,7 +120,6 @@ impl<'a> App<'a> {
                 )
             );
         }
-        self.touch_active_project_content();
         self.redraw_requested = true;
     }
 }

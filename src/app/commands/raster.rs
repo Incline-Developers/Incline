@@ -12,7 +12,10 @@ use crate::model::raster::{decode_raster, is_supported_raster_path};
 use crate::{
     app::App,
     i18n::tr_format,
-    model::raster::{OpenRasterTexture, RasterTextureId},
+    model::{
+        Command, ItemRef,
+        raster::{OpenRasterTexture, RasterTextureId},
+    },
     userspace_log,
 };
 
@@ -171,22 +174,35 @@ impl<'a> App<'a> {
             .iter_mut()
             .find(|triangulation| triangulation.id == triangulation_id)
             .context("The active triangulation is no longer loaded")?;
-        if triangulation.raster_texture.take().is_some() {
-            triangulation.state.touch();
-            self.touch_active_project_content();
+        if triangulation.raster_texture.is_some() {
+            self.set_triangulation_drapes(&[triangulation_id], None);
         }
         self.redraw_requested = true;
         Ok(())
     }
 
+    /// Set (or clear) the draped raster on several triangulations as one undo
+    /// step. Returns how many actually changed.
+    fn set_triangulation_drapes(&mut self, triangulations: &[crate::model::triangulation::TriangulationId], raster: Option<RasterTextureId>) -> usize {
+        let commands: Vec<Command> = triangulations
+            .iter()
+            .filter_map(|id| self.item_style_command(ItemRef::Triangulation(*id), |style| style.with_raster_texture(raster)))
+            .collect();
+        let changed = commands.len();
+        if !commands.is_empty() {
+            self.execute_edit(Command::Batch(commands));
+            self.redraw_requested = true;
+        }
+        changed
+    }
+
     pub(crate) fn toggle_raster_visible(&mut self, id: RasterTextureId) {
-        let Some(raster) = self.raster_textures.iter_mut().find(|raster| raster.id == id) else {
+        let item = ItemRef::Raster(id);
+        let Some(style) = self.item_style(item) else {
             return;
         };
-        raster.visible = !raster.visible;
-        raster.state.touch();
-        self.touch_active_project_content();
-        self.redraw_requested = true;
+        let visible = !style.visible();
+        self.set_item_style(item, style.with_visible(visible));
     }
 
     /// Drop runtime use of the raster while retaining its project-owned pixels.
@@ -200,20 +216,29 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn remove_raster(&mut self, id: RasterTextureId) {
-        let mut changed = self.raster_textures.iter().any(|raster| raster.id == id);
-        self.raster_textures.retain(|raster| raster.id != id);
-        for triangulation in &mut self.triangulations {
-            if triangulation.raster_texture == Some(id) {
-                triangulation.raster_texture = None;
-                triangulation.state.touch();
-                changed = true;
-            }
+        if !self.raster_textures.iter().any(|raster| raster.id == id) {
+            return;
         }
-        if changed {
-            self.touch_active_project_content();
-            self.persist_session();
-            self.redraw_requested = true;
-        }
+        // Undraping first means undo re-adds the raster and then puts the
+        // drapes back onto it, rather than restoring drapes that point at a
+        // texture that is not there yet.
+        let draped: Vec<_> = self
+            .triangulations
+            .iter()
+            .filter(|triangulation| triangulation.raster_texture == Some(id))
+            .map(|triangulation| triangulation.id)
+            .collect();
+        let mut commands: Vec<Command> = draped
+            .iter()
+            .filter_map(|triangulation| self.item_style_command(ItemRef::Triangulation(*triangulation), |style| style.with_raster_texture(None)))
+            .collect();
+        commands.push(Command::DeleteItem {
+            item: ItemRef::Raster(id),
+            index: 0,
+            removed: None,
+        });
+        self.execute_edit(Command::Batch(commands));
+        self.redraw_requested = true;
     }
 
     /// Drape the raster over every loaded triangulation whose
@@ -224,70 +249,64 @@ impl<'a> App<'a> {
         let raster_id = raster.id;
         let raster_name = raster.name.clone();
         let world_to_uv = raster.world_to_uv;
-        let mut overlaps_any = false;
-        let mut changed = false;
-        for triangulation in &mut self.triangulations {
-            let bounds = triangulation.mesh.bounds();
-            if !raster_overlaps_extent(world_to_uv, [bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]) {
-                continue;
-            }
-            overlaps_any = true;
-            if triangulation.raster_texture != Some(raster_id) {
-                triangulation.raster_texture = Some(raster_id);
-                triangulation.state.touch();
+        let overlapping: Vec<_> = self
+            .triangulations
+            .iter()
+            .filter(|triangulation| {
+                let bounds = triangulation.mesh.bounds();
+                raster_overlaps_extent(world_to_uv, [bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y])
+            })
+            .map(|triangulation| (triangulation.id, triangulation.name.clone()))
+            .collect();
+        if overlapping.is_empty() {
+            anyhow::bail!("No loaded triangulation overlaps the extents of {raster_name}");
+        }
+        for (id, name) in &overlapping {
+            if self
+                .triangulations
+                .iter()
+                .any(|triangulation| triangulation.id == *id && triangulation.raster_texture != Some(raster_id))
+            {
                 userspace_log!(
                     "{}",
                     tr_format!(
                         literal = "Draped raster %raster% over triangulation %triangulation% (overlapping extents)",
                         raster = raster_name.clone(),
-                        triangulation = triangulation.name.clone()
+                        triangulation = name
                     )
                 );
-                changed = true;
             }
         }
-        if !overlaps_any {
-            anyhow::bail!("No loaded triangulation overlaps the extents of {raster_name}");
-        }
-        if changed {
-            self.touch_active_project_content();
-            self.redraw_requested = true;
-        }
+        let ids: Vec<_> = overlapping.into_iter().map(|(id, _)| id).collect();
+        self.set_triangulation_drapes(&ids, Some(raster_id));
         Ok(())
     }
 
     /// Undrape every raster at once, returning all of them to the flat
     /// plan-view image. Menu-bar counterpart to per-raster [`Self::undrape_raster`].
     pub(crate) fn undrape_all_rasters(&mut self) {
-        let mut count = 0usize;
-        for triangulation in &mut self.triangulations {
-            if triangulation.raster_texture.take().is_some() {
-                triangulation.state.touch();
-                count += 1;
-            }
-        }
+        let draped: Vec<_> = self
+            .triangulations
+            .iter()
+            .filter(|triangulation| triangulation.raster_texture.is_some())
+            .map(|triangulation| triangulation.id)
+            .collect();
+        let count = self.set_triangulation_drapes(&draped, None);
         if count > 0 {
             userspace_log!("{}", tr_format!(literal = "Undraped rasters from %count% triangulation(s)", count = count));
-            self.touch_active_project_content();
-            self.redraw_requested = true;
         }
     }
 
     /// Remove the raster from every triangulation it is draped
     /// over, returning it to the flat plan-view image.
     pub(crate) fn undrape_raster(&mut self, id: RasterTextureId) {
-        let mut changed = false;
-        for triangulation in &mut self.triangulations {
-            if triangulation.raster_texture == Some(id) {
-                triangulation.raster_texture = None;
-                triangulation.state.touch();
-                changed = true;
-            }
-        }
-        if changed {
-            self.touch_active_project_content();
-            self.redraw_requested = true;
-        }
+        let draped: Vec<_> = self
+            .triangulations
+            .iter()
+            .filter(|triangulation| triangulation.raster_texture == Some(id))
+            .map(|triangulation| triangulation.id)
+            .collect();
+        self.set_triangulation_drapes(&draped, None);
     }
 }
 

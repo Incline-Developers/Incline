@@ -3057,6 +3057,11 @@ pub(crate) struct UiFrameOutput {
     /// pass runs before this frame's egui layout. See
     /// `Graphics::apply_canvas_rect`.
     pub(crate) canvas_rect: ViewportRect,
+    /// Whether the pointer is still driving a widget as this frame ends - a
+    /// colour wheel or slider mid-drag. Edits reported while it is set belong
+    /// to a gesture the user has not finished, so they extend one undo entry
+    /// and report to the console once, instead of once per frame.
+    pub(crate) pointer_gesture_active: bool,
 }
 
 /// One loaded layer shown in the explorer tree.

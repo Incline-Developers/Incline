@@ -68,7 +68,7 @@ impl<'a> App<'a> {
         let created = if let Some(project) = self.workspace.active_project_mut() {
             let doc = &mut project.project.document;
             let id = doc.allocate_object_id();
-            self.history.execute(doc, Command::AddObject(Object::Point { id, layer, pos: world, color }));
+            self.execute_edit(Command::AddObject(Object::Point { id, layer, pos: world, color }));
             true
         } else {
             false
@@ -353,18 +353,15 @@ impl<'a> App<'a> {
         if let Some(project) = self.workspace.active_project_mut() {
             let doc = &mut project.project.document;
             let id = doc.allocate_object_id();
-            self.history.execute(
-                doc,
-                Command::AddObject(Object::Polyline {
-                    id,
-                    layer,
-                    verts,
-                    closed,
-                    color,
-                    fill,
-                    line_weight,
-                }),
-            );
+            self.execute_edit(Command::AddObject(Object::Polyline {
+                id,
+                layer,
+                verts,
+                closed,
+                color,
+                fill,
+                line_weight,
+            }));
             true
         } else {
             false

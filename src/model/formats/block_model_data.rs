@@ -186,6 +186,18 @@ impl BlockModelData {
         })
     }
 
+    /// Approximate retained size, used by the undo history's memory budget.
+    /// Columns shared through an `Arc` are counted in full: over-counting only
+    /// evicts a deleted model from the stack sooner than strictly necessary.
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self
+                .numeric_values
+                .iter()
+                .map(|(name, values)| name.len() + values.len() * size_of::<f64>())
+                .fold(0usize, usize::saturating_add)
+    }
+
     pub(crate) fn shared_numeric_values(&self, name: &str) -> Option<Arc<Vec<f64>>> {
         self.numeric_values.get(name).map(Arc::clone)
     }

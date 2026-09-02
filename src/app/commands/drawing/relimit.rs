@@ -253,8 +253,8 @@ impl<'a> App<'a> {
             }
         }
 
-        let changed = if let Some(project) = self.workspace.active_project_mut() {
-            self.history.execute(&mut project.project.document, Command::Replace { before, after });
+        let changed = if self.workspace.has_active_project() {
+            self.execute_edit(Command::Replace { before, after });
             true
         } else {
             false
@@ -289,8 +289,8 @@ impl<'a> App<'a> {
             }
         }
 
-        let changed = if let Some(project) = self.workspace.active_project_mut() {
-            self.history.execute(&mut project.project.document, Command::Replace { before, after });
+        let changed = if self.workspace.has_active_project() {
+            self.execute_edit(Command::Replace { before, after });
             true
         } else {
             false

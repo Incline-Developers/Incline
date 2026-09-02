@@ -639,7 +639,7 @@ impl<'a> App<'a> {
         if drag.moved
             && let Some(after) = self.active_document().get_object(drag.object_id).cloned()
         {
-            self.history.push_applied(Command::Replace { before: drag.before, after });
+            self.record_applied_edit(Command::Replace { before: drag.before, after });
         }
     }
 

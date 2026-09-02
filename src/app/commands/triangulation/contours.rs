@@ -164,8 +164,10 @@ impl<'a> App<'a> {
             } else {
                 crate::model::Command::Batch(objects.into_iter().map(crate::model::Command::AddObject).collect())
             };
-            app.history.execute_for(project_runtime_id, &mut project.project.document, command);
-            project.loaded_layers.insert(layer_id);
+            app.execute_edit_for(project_runtime_id, command);
+            if let Some(project) = app.workspace.active_project_mut() {
+                project.loaded_layers.insert(layer_id);
+            }
             if project_is_active {
                 app.editor.active_layer = Some(layer_id);
             }

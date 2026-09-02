@@ -242,27 +242,26 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn toggle_triangulation_visible(&mut self, id: TriangulationId) {
-        let Some(tri) = self.triangulations.iter_mut().find(|tri| tri.id == id) else {
+        let Some(tri) = self.triangulations.iter().find(|tri| tri.id == id) else {
             return;
         };
         let handle = tri.entity_id();
-        let was_visible = tri.visible && !self.editor.hidden_handles.contains(&handle);
-        tri.visible = !was_visible;
-        tri.state.touch();
-        if tri.visible {
+        let name = tri.name.clone();
+        let visible = !(tri.visible && !self.editor.hidden_handles.contains(&handle));
+        if visible {
             // A toolbar hide is stored on the scene entity, while the explorer
             // stores visibility on the triangulation. Showing from either UI
             // must clear both sources of hidden state.
             self.editor.hidden_handles.remove(&handle);
         }
-        let message = if tri.visible {
-            tr_format!(literal = "Shown triangulation '%name%'", name = tri.name)
+        let message = if visible {
+            tr_format!(literal = "Shown triangulation '%name%'", name = name)
         } else {
-            tr_format!(literal = "Hidden triangulation '%name%'", name = tri.name)
+            tr_format!(literal = "Hidden triangulation '%name%'", name = name)
         };
+        let style = ItemStyle::of_triangulation(tri).with_visible(visible);
         userspace_log!("{}", message);
-        self.touch_active_project_content();
-        self.invalidate_topology_bounds_and_redraw();
+        self.set_item_style(ItemRef::Triangulation(id), style);
     }
 
     pub(crate) fn close_triangulation(&mut self, id: TriangulationId) {
@@ -287,21 +286,19 @@ impl<'a> App<'a> {
 
     /// Delete an embedded mesh from the active project.
     pub(crate) fn remove_triangulation(&mut self, id: TriangulationId) {
-        if let Some(idx) = self.triangulations.iter().position(|triangulation| triangulation.id == id) {
-            let tri = self.triangulations.remove(idx);
-            let handle = tri.entity_id();
-            self.clear_triangulation_entity_state(handle);
-            self.clear_dialog_refs_to_triangulation(tri.id);
-            let removed_id = tri.id;
-            self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::Triangulation(removed_id));
-            if self.active_triangulation == Some(tri.id) {
-                self.active_triangulation = None;
-            }
-            self.invalidate_topology_bounds_and_redraw();
-            userspace_log!("{}", tr_format!(literal = "Deleted triangulation '%name%' from project", name = tri.name));
-            self.touch_active_project_content();
+        let Some(name) = self.triangulations.iter().find(|triangulation| triangulation.id == id).map(|tri| tri.name.clone()) else {
+            return;
+        };
+        self.clear_triangulation_entity_state(SceneEntityId::Triangulation(id));
+        self.clear_dialog_refs_to_triangulation(id);
+        self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::Triangulation(id));
+        if self.active_triangulation == Some(id) {
+            self.active_triangulation = None;
         }
-        self.persist_session();
+        // Rasters draped onto this surface are a property of the surface, so
+        // they come back with it; nothing else references it.
+        self.delete_project_item(ItemRef::Triangulation(id));
+        userspace_log!("{}", tr_format!(literal = "Deleted triangulation '%name%' from project", name = name));
     }
 
     fn clear_dialog_refs_to_triangulation(&mut self, id: TriangulationId) {
@@ -341,19 +338,15 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn set_triangulation_color(&mut self, tri_id: TriangulationId, new_color: [f32; 4]) {
-        if let Some(tri) = self.triangulations.iter_mut().find(|t| t.id == tri_id) {
-            tri.color = new_color;
-            tri.state.touch();
-            self.touch_active_project_content();
+        let item = ItemRef::Triangulation(tri_id);
+        if let Some(style) = self.item_style(item) {
+            self.set_item_style(item, style.with_color(new_color));
         }
-        userspace_log!(
-            "{}",
-            tr_format!(
-                literal = "Set triangulation %tri_id% color to %color%",
-                tri_id = format!("{tri_id:?}"),
-                color = format!("{new_color:?}")
-            )
-        );
+        self.log_when_gesture_ends(tr_format!(
+            literal = "Set triangulation %tri_id% color to %color%",
+            tri_id = format!("{tri_id:?}"),
+            color = format!("{new_color:?}")
+        ));
         self.request_topology_redraw();
     }
     /// Apply the result of a background job that produces one triangulation

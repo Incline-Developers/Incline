@@ -194,6 +194,11 @@ impl Gui {
         }
 
         let pixels_per_point = full_output.pixels_per_point;
+        // Read once the frame's widgets have run. A held button is the gesture:
+        // `dragged_id` alone would miss the press before the pointer has moved
+        // far enough for egui to call it a drag, and a colour wheel reports a
+        // new value from that first frame.
+        let pointer_gesture_active = self.ctx.input(|input| input.pointer.any_down()) || self.ctx.dragged_id().is_some();
         let paint_jobs = self.ctx.tessellate(full_output.shapes, pixels_per_point);
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: screen_size,
@@ -245,6 +250,7 @@ impl Gui {
             geometry_dirty,
             commands,
             canvas_rect,
+            pointer_gesture_active,
         }
     }
 }

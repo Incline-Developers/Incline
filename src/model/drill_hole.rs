@@ -165,6 +165,40 @@ impl DrillHoleDataset {
         Self { holes, fields, bounds }
     }
 
+    /// Approximate retained size, used by the undo history's memory budget.
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self
+                .holes
+                .iter()
+                .map(|hole| {
+                    size_of::<DrillHole>()
+                        + hole.dhid.len()
+                        + hole.trace.len() * size_of::<TraceStation>()
+                        + hole.render_ranges.len() * size_of::<(f64, f64)>()
+                        + hole
+                            .intervals
+                            .iter()
+                            .map(|interval| {
+                                size_of::<DrillInterval>()
+                                    + interval
+                                        .values
+                                        .iter()
+                                        .map(|(key, value)| {
+                                            key.len()
+                                                + size_of::<DrillValue>()
+                                                + match value {
+                                                    DrillValue::Category(text) => text.len(),
+                                                    DrillValue::Numeric(_) => 0,
+                                                }
+                                        })
+                                        .fold(0usize, usize::saturating_add)
+                            })
+                            .fold(0usize, usize::saturating_add)
+                })
+                .fold(0usize, usize::saturating_add)
+    }
+
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {
         self.fields.iter().find(|field| field.key == key)
     }

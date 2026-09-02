@@ -51,6 +51,11 @@ impl Triangulation {
         self.faces.len()
     }
 
+    /// Approximate retained size, used by the undo history's memory budget.
+    pub fn estimated_bytes(&self) -> usize {
+        size_of::<Self>() + self.vertices.len() * size_of::<Vertex>() + self.faces.len() * size_of::<Face>()
+    }
+
     pub fn vertices(&self) -> &[Vertex] {
         &self.vertices
     }

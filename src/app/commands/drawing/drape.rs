@@ -99,10 +99,8 @@ impl<'a> App<'a> {
             .collect();
         let changed_objects = replacements.len();
 
-        if !replacements.is_empty()
-            && let Some(project) = self.workspace.active_project_mut()
-        {
-            self.history.execute(&mut project.project.document, Command::Batch(replacements));
+        if !replacements.is_empty() {
+            self.execute_edit(Command::Batch(replacements));
         }
 
         let selected_objects = self.editor.drape_object_ids.clone();

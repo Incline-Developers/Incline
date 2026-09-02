@@ -161,7 +161,7 @@ impl<'a> App<'a> {
         }
 
         if before != after {
-            self.history.execute(doc, Command::Replace { before, after });
+            self.execute_edit(Command::Replace { before, after });
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
                     crate::i18n::tr!(literal = "Create Bezier Curve"),
