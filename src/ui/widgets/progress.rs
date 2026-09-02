@@ -1,123 +1,96 @@
-//! The background-task progress bar that sits at the right end of the bottom
-//! toolbar.
+//! The background-task readout that sits at the right end of the bottom
+//! toolbar: a ring that fills green around its circumference, with the task
+//! text and the counts to its left.
 //!
-//! Painted rather than assembled from `egui::ProgressBar`, for three reasons:
-//! an indeterminate task has to animate without reading as "done" (egui only
-//! shimmers the *filled* part, so a marquee chunk is the only honest shape for
-//! it), the fill carries a static diagonal hatch rather than a flat shade,
-//! and the task label rides inside the bar, switching colour where it
-//! crosses the fill edge instead of being drawn twice over two backgrounds.
+//! Painted rather than assembled from `egui::ProgressBar`, for two reasons: a
+//! ring is not a shape egui offers at all, and an indeterminate task has to
+//! animate without reading as "done", which a chunk of arc sweeping round the
+//! ring says and a filled ring cannot.
 
 use thousands::Separable;
 
 use crate::ui::{EditorState, widgets::shifted};
 
-/// Share of the room left on the strip that the bar takes, so it grows and
-/// shrinks with the window rather than with whatever a task happens to be
-/// called.
-const BAR_WIDTH_FRACTION: f32 = 0.3;
-/// Width the bar never drops below, in points. Wide enough that the fill has
-/// somewhere to travel and the counts have room.
-const BAR_MIN_WIDTH: f32 = 240.0;
-/// Width the bar never grows past: past this it stops reading as a readout at
-/// the end of the strip and starts reading as half the toolbar.
-const BAR_MAX_WIDTH: f32 = 520.0;
-/// Below this there is no room for the bar at all, so a cramped toolbar drops
-/// it rather than overlapping the tools beside it.
-const BAR_HIDE_WIDTH: f32 = 96.0;
-/// Space left above and below the bar. Everything else the strip has is the
-/// bar's: it is a readout, and the room it leaves is only what keeps it off
-/// the edges of its own panel.
-const BAR_VERTICAL_MARGIN: f32 = 1.0;
-/// Range the bar's height is held to, whatever the strip gives it.
-const BAR_HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 16.0..=32.0;
-/// Corner rounding of the bar: the one radius everything in the window is
-/// rounded to - the panels' regions, the toolbar tiles, the buttons.
-const BAR_CORNER_RADIUS: f32 = crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS as f32;
-/// Width of the ring of toolbar surface painted around the bar to cut its
-/// corners back, the way [`crate::ui::chrome`] finishes off a region: the fill
-/// and the stripes are clipped to a rectangle, which a square corner overshoots
-/// by `radius * (sqrt(2) - 1)`.
-const BAR_MASK_WIDTH: f32 = 2.0;
-/// Inset of the text from each end of the bar, and the least space kept
-/// between the task text and the percentage.
-const BAR_TEXT_INSET: f32 = 6.0;
+/// Space left above and below the ring, which is what sets its diameter: the
+/// readout is as tall as the strip allows, less what keeps it off the edges of
+/// its own panel. The same clearance the strip's tool icons keep, so the ring
+/// sits in the row rather than filling it - and enough that the region's own
+/// outline, drawn over the inside of its edge, has nothing to cut into.
+const RING_VERTICAL_MARGIN: f32 = 5.0;
+/// Range the ring's diameter is held to, whatever the strip gives it. Below
+/// the floor the arc is too fine to read as a fill; above the ceiling the
+/// readout starts competing with the tools beside it.
+const RING_DIAMETER_RANGE: std::ops::RangeInclusive<f32> = 12.0..=22.0;
+/// Thickness of the ring, as a share of its diameter, and the points it is
+/// held between. Proportional so the ring keeps its weight across the range of
+/// diameters the strip can hand it.
+const RING_STROKE_FRACTION: f32 = 0.16;
+const RING_STROKE_RANGE: std::ops::RangeInclusive<f32> = 2.0..=4.0;
+/// Gap between the text and the ring, and between the task text and the counts.
+const TEXT_GAP: f32 = 8.0;
+/// Room left between the ring and the end of the strip. The region's own
+/// outline is drawn over the inside of its edge, so a ring sitting flush
+/// against it comes back cut down one side.
+const END_INSET: f32 = 6.0;
+/// Least room the task text is given before it is dropped in favour of the
+/// counts: below this an elided label is all ellipsis and says nothing.
+const TASK_MIN_WIDTH: f32 = 48.0;
+/// One full turn of the indeterminate chunk, in seconds.
+const SPIN_PERIOD: f64 = 1.4;
+/// Share of the circumference the indeterminate chunk covers.
+const SPIN_FRACTION: f32 = 0.25;
 
-/// Fraction of the bar covered by the indeterminate marquee chunk.
-const MARQUEE_FRACTION: f32 = 0.3;
-/// Seconds for one full there-and-back sweep of the marquee chunk.
-const MARQUEE_PERIOD: f64 = 2.0;
+/// The unfilled part of the ring: the toolbar's own grey, moved a few levels
+/// off it. The readout is something to glance at rather than something to look
+/// at, so its track stays within a narrow band of the surface it sits on.
+const TRACK_SHIFT_DARK: i16 = -10;
+const TRACK_SHIFT_LIGHT: i16 = -18;
 
-/// Spacing between the diagonal stripes over the fill, in points.
-const STRIPE_PERIOD: f32 = 14.0;
-/// Width of one stripe, as a fraction of the spacing. A half means a stripe
-/// and the gap after it are the same width.
-const STRIPE_DUTY: f32 = 0.5;
-/// Opacity of a stripe over the fill. Barely there: the stripes are meant to
-/// give the fill some texture, not to read as a pattern in their own right.
-const STRIPE_ALPHA: u8 = 14;
+/// The filled part of the ring. Darkened in the light theme so it holds its
+/// own against a bright surface rather than glowing off it.
+const FILL_DARK: egui::Color32 = egui::Color32::from_rgb(0x50, 0xC8, 0x6E);
+const FILL_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x96, 0x4C);
 
-/// Every shade in the bar is the toolbar's own grey, moved this many levels
-/// off it: the empty track, the line around it, the fill, and the leading edge
-/// of a partial fill. The bar is a readout in the corner of the toolbar rather
-/// than something to look at, so the whole widget stays within a narrow band
-/// of the surface it sits on - it should be findable, not conspicuous.
-const TRACK_SHIFT_DARK: i16 = -8;
-const TRACK_SHIFT_LIGHT: i16 = -12;
-const TRACK_STROKE_SHIFT_DARK: i16 = -16;
-const TRACK_STROKE_SHIFT_LIGHT: i16 = -24;
-/// The fill, top and bottom of its gradient. A handful of levels the other
-/// side of the surface from the track, so it separates from the track without
-/// either of them separating from the toolbar.
-const FILL_SHIFT_DARK: (i16, i16) = (4, -2);
-const FILL_SHIFT_LIGHT: (i16, i16) = (-24, -30);
-/// The leading edge of a partial fill, so the boundary the bar is advancing
-/// reads as an edge rather than as where the shade stops. One step past the
-/// fill, not a highlight.
-const EDGE_SHIFT_DARK: i16 = 14;
-const EDGE_SHIFT_LIGHT: i16 = -42;
+/// Text style beside the ring: the same as the status bar's readouts, which is
+/// what this is.
+const TEXT_STYLE: egui::TextStyle = egui::TextStyle::Body;
 
-/// Text style inside the bar: the same as the status bar's readouts, which is
-/// what the bar reads as now that it is as tall as the strip it sits in.
-const BAR_TEXT_STYLE: egui::TextStyle = egui::TextStyle::Body;
-
-/// How the bar's fill is laid out this frame.
-enum BarFill {
-    /// Fill from the left to `0.0..=1.0` of the width.
+/// How the ring's fill is laid out this frame.
+enum RingFill {
+    /// Filled clockwise from twelve o'clock to `0.0..=1.0` of the way round.
     Fraction(f32),
-    /// A chunk sweeping back and forth: a running task with no percentage.
-    Marquee,
+    /// A chunk of arc turning about the ring: a running task with no percentage.
+    Spinner,
 }
 
-/// Draw the task progress bar for whatever the editor is reporting.
+/// Draw the task progress readout for whatever the editor is reporting.
 ///
-/// Once the first task of the session has run the bar stays put, sitting at
-/// 100% with the last task's "…: Finished" text; before then there is nothing
-/// to report and nothing is drawn. Unlike the old status-bar slot the toolbar
-/// has a fixed height, so the empty case needn't reserve any space.
+/// Once the first task of the session has run the readout stays put, sitting
+/// at a full ring with the last task's "…: Finished" text; before then there
+/// is nothing to report and nothing is drawn. The toolbar has a fixed height,
+/// so the empty case needn't reserve any space.
 pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState) {
     match &editor.status_message {
         Some(message) => match message.progress {
             Some(progress) => {
                 let progress = progress.clamp(0.0, 1.0);
-                draw_bar(ui, &bar_status_text(progress, message.units), &message.text, BarFill::Fraction(progress));
+                draw_ring(ui, &ring_status_text(progress, message.units), &message.text, RingFill::Fraction(progress));
             }
-            None => draw_bar(ui, "", &message.text, BarFill::Marquee),
+            None => draw_ring(ui, "", &message.text, RingFill::Spinner),
         },
-        // Idle: hold the last task at 100%. Nothing about the parked bar
-        // moves, so it costs no repaints.
+        // Idle: hold the last task at a full ring. Nothing about the parked
+        // readout moves, so it costs no repaints.
         None => {
             if let Some(finished) = &editor.last_finished_task {
-                let status = bar_status_text(1.0, finished.total_units.map(|total| (total, total)));
-                draw_bar(ui, &status, &format!("{}: Finished", finished.text), BarFill::Fraction(1.0));
+                let status = ring_status_text(1.0, finished.total_units.map(|total| (total, total)));
+                draw_ring(ui, &status, &format!("{}: Finished", finished.text), RingFill::Fraction(1.0));
             }
         }
     }
 }
 
-/// Right-hand end of the bar: percentage, plus item counts when the task
-/// reports them.
-fn bar_status_text(fraction: f32, units: Option<(u64, u64)>) -> String {
+/// The counts beside the ring: percentage, plus items when the task reports them.
+fn ring_status_text(fraction: f32, units: Option<(u64, u64)>) -> String {
     let percent = format!("{:.0}%", fraction * 100.0);
     match units {
         Some((done, total)) => format!("{percent} ({} of {})", done.separate_with_commas(), total.separate_with_commas()),
@@ -125,183 +98,114 @@ fn bar_status_text(fraction: f32, units: Option<(u64, u64)>) -> String {
     }
 }
 
-/// The room the bar asks for: a share of what the strip has left, held between
-/// [`BAR_MIN_WIDTH`] and [`BAR_MAX_WIDTH`].
+/// Paint the readout: the texts, then the ring at the right end of them.
 ///
-/// Sized from the window rather than from the label, so the bar keeps one
-/// width across a session's tasks and only moves when the window or the panels
-/// beside it do. What the strip has left is already the toolbar minus the
-/// tools, so the bar cannot crowd them however wide the window gets.
-///
-/// It is one row of the strip tall, less the margin that keeps it off the
-/// panel's edges.
-fn bar_size(ui: &egui::Ui) -> egui::Vec2 {
+/// Only as wide as it needs to be. The strip lays it out right to left, so the
+/// ring keeps one place at the end of the toolbar and the text grows leftwards
+/// away from it - the counts nearest the ring, the task label beyond them.
+fn draw_ring(ui: &mut egui::Ui, status: &str, task: &str, fill: RingFill) {
     let available = ui.available_width();
-    let width = (available * BAR_WIDTH_FRACTION).clamp(BAR_MIN_WIDTH, BAR_MAX_WIDTH).min(available);
-    let height = (ui.available_height() - 2.0 * BAR_VERTICAL_MARGIN).clamp(*BAR_HEIGHT_RANGE.start(), *BAR_HEIGHT_RANGE.end());
-    egui::vec2(width, height)
-}
-
-/// Paint the bar itself.
-///
-/// Both texts ride inside it: `task` against its left end, `status`
-/// (percentage and item counts) against its right.
-fn draw_bar(ui: &mut egui::Ui, status: &str, task: &str, fill: BarFill) {
-    let size = bar_size(ui);
-    if size.x < BAR_HIDE_WIDTH {
+    let diameter = (ui.available_height() - 2.0 * RING_VERTICAL_MARGIN).clamp(*RING_DIAMETER_RANGE.start(), *RING_DIAMETER_RANGE.end());
+    if available < diameter + END_INSET {
         return;
     }
+
+    // What the ring leaves is the text's, and the counts have first claim on
+    // it: a percentage with nothing beside it still says how far along the
+    // task is, where a label with no percentage does not.
+    let font = TEXT_STYLE.resolve(ui.style());
+    let painter = ui.painter().clone();
+    let mut text_budget = available - diameter - END_INSET - TEXT_GAP;
+    let status_galley = (!status.is_empty() && text_budget > 0.0).then(|| {
+        // Truncated as well, so a cramped strip can't hand the readout a
+        // wider block of text than the toolbar has room for.
+        let mut job = egui::text::LayoutJob::simple_singleline(status.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text_budget);
+        let galley = painter.layout_job(job);
+        text_budget -= galley.size().x + TEXT_GAP;
+        galley
+    });
+    let task_galley = (!task.is_empty() && text_budget >= TASK_MIN_WIDTH).then(|| {
+        // Elided rather than clipped: a label cut mid-glyph reads as a drawing
+        // bug, an ellipsis reads as "there is more, hover for it".
+        let mut job = egui::text::LayoutJob::simple_singleline(task.to_owned(), font, egui::Color32::PLACEHOLDER);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text_budget);
+        painter.layout_job(job)
+    });
+
+    let text_width: f32 = [status_galley.as_ref(), task_galley.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|galley| galley.size().x + TEXT_GAP)
+        .sum();
+    let size = egui::vec2(text_width + diameter + END_INSET, ui.available_height());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
-    // The label is clipped to whatever the counts leave it, so a long one - a
+    // The label is elided to whatever the counts leave it, so a long one - a
     // full export path, say - is only readable on hover.
     response.on_hover_text(task);
 
     let visuals = ui.visuals();
-    let surface = visuals.panel_fill;
-    let track = shifted(surface, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
-    let track_stroke = shifted(surface, if visuals.dark_mode { TRACK_STROKE_SHIFT_DARK } else { TRACK_STROKE_SHIFT_LIGHT });
-    let text_on_track = visuals.text_color();
-    // The fill is the panel's own grey, a few levels off the track. Over
-    // something that close the text only needs to firm up, never invert.
-    let (top_shift, bottom_shift) = if visuals.dark_mode { FILL_SHIFT_DARK } else { FILL_SHIFT_LIGHT };
-    let fill_colors = (shifted(surface, top_shift), shifted(surface, bottom_shift));
-    let fill_edge = shifted(surface, if visuals.dark_mode { EDGE_SHIFT_DARK } else { EDGE_SHIFT_LIGHT });
-    let text_on_fill = visuals.strong_text_color();
+    let track = shifted(visuals.panel_fill, if visuals.dark_mode { TRACK_SHIFT_DARK } else { TRACK_SHIFT_LIGHT });
+    let filled = if visuals.dark_mode { FILL_DARK } else { FILL_LIGHT };
 
-    let filled = match fill {
-        BarFill::Fraction(fraction) => {
-            let width = rect.width() * fraction.clamp(0.0, 1.0);
-            egui::Rect::from_min_size(rect.min, egui::vec2(width, rect.height()))
-        }
-        BarFill::Marquee => {
+    let center = egui::pos2(rect.right() - END_INSET - diameter / 2.0, rect.center().y);
+    let radius = diameter / 2.0;
+    let width = (diameter * RING_STROKE_FRACTION).clamp(*RING_STROKE_RANGE.start(), *RING_STROKE_RANGE.end());
+    // The track is the whole circumference, so the ring reads as a ring at 0%
+    // rather than as nothing at all.
+    painter.circle_stroke(center, radius - width / 2.0, egui::Stroke::new(width, track));
+
+    let (start, sweep) = match fill {
+        // Clockwise from twelve o'clock: y grows downwards, so a positive
+        // angle from straight up is already clockwise on screen.
+        RingFill::Fraction(fraction) => (0.0, fraction.clamp(0.0, 1.0) * std::f32::consts::TAU),
+        RingFill::Spinner => {
             ui.ctx().request_repaint();
-            // Cosine ease so the chunk slows at each end rather than snapping around.
-            let time = ui.input(|i| i.time);
-            let t = (0.5 - 0.5 * (time * std::f64::consts::TAU / MARQUEE_PERIOD).cos()) as f32;
-            let width = rect.width() * MARQUEE_FRACTION;
-            let left = egui::lerp(rect.left()..=(rect.right() - width), t);
-            egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(width, rect.height()))
+            let turns = (ui.input(|i| i.time) / SPIN_PERIOD).rem_euclid(1.0) as f32;
+            (turns * std::f32::consts::TAU, SPIN_FRACTION * std::f32::consts::TAU)
         }
     };
-    let marquee = matches!(fill, BarFill::Marquee);
+    paint_arc(&painter, center, radius - width / 2.0, start, sweep, egui::Stroke::new(width, filled));
 
-    let painter = ui.painter().clone();
-    painter.rect_filled(rect, BAR_CORNER_RADIUS, track);
-
-    if filled.width() > 0.5 {
-        paint_fill(&painter, filled, fill_colors);
-        // The stripes are texture on the fill, not an animation: they are
-        // pinned to the bar, so a determinate fill uncovers them as it grows
-        // and the marquee chunk slides over them. Nothing here asks for a
-        // repaint, which is what lets the app go idle once a task ends.
-        paint_stripes(&painter.with_clip_rect(filled), rect);
-        // Only on a determinate fill, and only where it stops short of the end
-        // of the bar: at 100% the edge is the bar's own, and a line down it
-        // would read as a seam. The marquee chunk has no advancing boundary to
-        // mark, so a line down one of its ends reads as an artefact rather
-        // than as an edge.
-        if !marquee && filled.right() < rect.right() - 0.5 {
-            painter.vline(filled.right() - 0.5, filled.y_range(), egui::Stroke::new(1.0, fill_edge));
+    // Both texts sit on the toolbar rather than on the ring, so neither needs
+    // to change colour anywhere: the counts take the strong shade, the label
+    // the ordinary one, which is the pairing the status bar uses.
+    let mut right = rect.right() - END_INSET - diameter - TEXT_GAP;
+    for (galley, color) in [(status_galley, visuals.strong_text_color()), (task_galley, visuals.text_color())] {
+        if let Some(galley) = galley {
+            let pos = egui::pos2(right - galley.size().x, rect.center().y - galley.size().y / 2.0);
+            painter.galley(pos, galley, color);
+            right = pos.x - TEXT_GAP;
         }
     }
-
-    // Cut the square corners of the fill and the stripes back to the bar's
-    // rounding, then draw the bar's own outline over the seam that leaves.
-    painter.rect_stroke(rect, BAR_CORNER_RADIUS, egui::Stroke::new(BAR_MASK_WIDTH, surface), egui::StrokeKind::Outside);
-    painter.rect_stroke(rect, BAR_CORNER_RADIUS, egui::Stroke::new(1.0, track_stroke), egui::StrokeKind::Inside);
-
-    // The status text keeps its place at the right end; whatever is left of it
-    // is the task text's room, clipped so a long label can't overrun the
-    // counts or spill out of the bar.
-    let font = BAR_TEXT_STYLE.resolve(ui.style());
-    let mut task_right = rect.right() - BAR_TEXT_INSET;
-    if !status.is_empty() {
-        let galley = painter.layout_no_wrap(status.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
-        let status_left = rect.right() - BAR_TEXT_INSET - galley.size().x;
-        let pos = egui::pos2(status_left, rect.center().y - galley.size().y / 2.0);
-        paint_two_tone(&painter, rect, filled, galley, pos, text_on_track, text_on_fill);
-        task_right = status_left - BAR_TEXT_INSET;
-    }
-    if !task.is_empty() {
-        // Elided rather than clipped: a label cut mid-glyph reads as a drawing
-        // bug, an ellipsis reads as "there is more, hover for it".
-        let mut job = egui::text::LayoutJob::simple_singleline(task.to_owned(), font, egui::Color32::PLACEHOLDER);
-        job.wrap = egui::text::TextWrapping::truncate_at_width(task_right - rect.left() - BAR_TEXT_INSET);
-        let galley = painter.layout_job(job);
-        let pos = egui::pos2(rect.left() + BAR_TEXT_INSET, rect.center().y - galley.size().y / 2.0);
-        paint_two_tone(&painter, rect, filled, galley, pos, text_on_track, text_on_fill);
-    }
 }
 
-/// Draw one galley twice - once over the fill and once over the bare track -
-/// so a word straddling the fill edge stays legible on both sides of it.
-fn paint_two_tone(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    filled: egui::Rect,
-    galley: std::sync::Arc<egui::Galley>,
-    pos: egui::Pos2,
-    on_track: egui::Color32,
-    on_fill: egui::Color32,
-) {
-    painter.with_clip_rect(painter.clip_rect().intersect(rect)).galley(pos, galley.clone(), on_track);
-    painter.with_clip_rect(painter.clip_rect().intersect(filled)).galley(pos, galley, on_fill);
-}
-
-/// The fill's vertical gradient over `rect`, from `top` to `bottom`.
-fn paint_fill(painter: &egui::Painter, rect: egui::Rect, (top, bottom): (egui::Color32, egui::Color32)) {
-    let mut mesh = egui::Mesh::default();
-    quad(
-        &mut mesh,
-        [(rect.left_top(), top), (rect.right_top(), top), (rect.right_bottom(), bottom), (rect.left_bottom(), bottom)],
-    );
-    painter.add(egui::Shape::mesh(mesh));
-}
-
-/// Stripes leaning across the bar at 45 degrees.
+/// Stroke `sweep` radians of arc, clockwise from `start` radians past twelve
+/// o'clock.
 ///
-/// Drawn across the whole bar and left to the caller's clip rect: a stripe
-/// overhangs the fill by the bar's height at the top and the bottom, so it
-/// can't be laid out against the fill's edges directly.
-fn paint_stripes(painter: &egui::Painter, rect: egui::Rect) {
-    let lean = rect.height();
-    let width = STRIPE_PERIOD * STRIPE_DUTY;
-    let color = faded(egui::Color32::WHITE, f32::from(STRIPE_ALPHA) / 255.0);
-
-    let mut mesh = egui::Mesh::default();
-    // Start a full stripe's lean to the left of the bar, so the first one to
-    // cross into it is already whole.
-    let mut left = rect.left() - lean - STRIPE_PERIOD;
-    while left < rect.right() + STRIPE_PERIOD {
-        quad(
-            &mut mesh,
-            [
-                (egui::pos2(left + lean, rect.top()), color),
-                (egui::pos2(left + lean + width, rect.top()), color),
-                (egui::pos2(left + width, rect.bottom()), color),
-                (egui::pos2(left, rect.bottom()), color),
-            ],
-        );
-        left += STRIPE_PERIOD;
+/// Ends in a disc of the stroke's own width, which is what rounds the caps:
+/// egui strokes a path with flat ends, and a squared-off leading edge reads as
+/// a notch in the ring rather than as where the fill has got to.
+fn paint_arc(painter: &egui::Painter, center: egui::Pos2, radius: f32, start: f32, sweep: f32, stroke: egui::Stroke) {
+    if sweep <= f32::EPSILON {
+        return;
     }
-    painter.add(egui::Shape::mesh(mesh));
-}
-
-/// Append one four-cornered face, its corners given in order around it.
-fn quad(mesh: &mut egui::Mesh, corners: [(egui::Pos2, egui::Color32); 4]) {
-    let base = mesh.vertices.len() as u32;
-    for (pos, color) in corners {
-        mesh.colored_vertex(pos, color);
+    // A whole turn is a circle: the path would close on itself, and the caps
+    // would be drawn one over the other at twelve o'clock.
+    if sweep >= std::f32::consts::TAU - f32::EPSILON {
+        painter.circle_stroke(center, radius, stroke);
+        return;
     }
-    mesh.add_triangle(base, base + 1, base + 2);
-    mesh.add_triangle(base, base + 2, base + 3);
-}
 
-/// `color` at `alpha` of its opacity, premultiplied the way a mesh vertex
-/// wants it.
-fn faded(color: egui::Color32, alpha: f32) -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
+    let at = |angle: f32| egui::pos2(center.x + radius * angle.sin(), center.y - radius * angle.cos());
+    // One segment per few degrees, so the arc stays smooth at the diameters
+    // the strip hands it without paying for points a small ring can't show.
+    let steps = (sweep / (std::f32::consts::TAU / 64.0)).ceil().max(1.0) as usize;
+    let points: Vec<egui::Pos2> = (0..=steps).map(|step| at(start + sweep * step as f32 / steps as f32)).collect();
+    painter.circle_filled(points[0], stroke.width / 2.0, stroke.color);
+    painter.circle_filled(points[steps], stroke.width / 2.0, stroke.color);
+    painter.add(egui::Shape::line(points, stroke));
 }
