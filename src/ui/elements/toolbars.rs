@@ -80,7 +80,7 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
-/// then say where it starts.
+/// nudge its holes, then say where it starts.
 ///
 /// Placeholders: the cells, their icons and their enablement are here, but
 /// nothing is wired behind them yet.
@@ -99,6 +99,12 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             tooltip: "Create Drill Pattern",
             action: LeftToolAction::Placeholder,
             enabled: project_active,
+        },
+        LeftTool {
+            icon: egui::Image::new(unthemed_icon!("move_drillhole.svg")),
+            tooltip: "Move Drill Hole",
+            action: LeftToolAction::Placeholder,
+            enabled: has_active_dataset,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
