@@ -154,10 +154,15 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 /// Open `workspace`, putting down anything the tools it does not carry had
 /// picked up.
 ///
-/// The drawing tools, the slice view and flying mode leave the window with
-/// production - see [`Workspace::has_production_tools`] - so a mode still
-/// running after the switch would have nothing left to turn it off. Entering a
-/// workspace without them hands the scene back to plain orbiting first. The
+/// The drawing tools leave the window with production - see
+/// [`Workspace::has_production_tools`] - so a tool still armed after the switch
+/// would have nothing left to put it down. Entering a workspace without them
+/// hands the pointer back to plain picking first. Flying and the slice view are
+/// not among them: their buttons sit in the run every workspace carries - see
+/// `viewport_bar::draw_scene_modes` - so a mode is still there to be turned off
+/// after the switch, and one being run over a blast pattern or a geological
+/// model is the point of it being universal. Arming the slice line is the slice
+/// view's own first step rather than a drawing tool, so it survives too. The
 /// cursor mode is left as the user set it: it does nothing without a drawing
 /// tool to use it, and it is theirs again the moment production is back.
 fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace) {
@@ -173,13 +178,7 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     if workspace.has_production_tools() {
         return;
     }
-    if editor.fly_mode_enabled {
-        commands.push(UiCommand::SetFlyModeEnabled(false));
-    }
-    if editor.slice_mode_enabled {
-        commands.push(UiCommand::SetSliceModeEnabled(false));
-    }
-    if editor.active_tool != ActiveTool::None {
+    if !matches!(editor.active_tool, ActiveTool::None | ActiveTool::VerticalSlice) {
         commands.push(UiCommand::SetActiveTool(ActiveTool::None));
     }
 }

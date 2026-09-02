@@ -3165,11 +3165,11 @@ impl Workspace {
 
     /// Whether this workspace carries the mine production tools.
     ///
-    /// The drawing toolbar, the cursor modes, the design menus, the layer / Z
-    /// / colour / fill settings those tools draw with and the scene switches
-    /// that go with them all belong to production alone. A workspace without
-    /// them keeps what is true everywhere: the project actions, the camera
-    /// controls, and the editors of its own discipline.
+    /// The drawing toolbar, the cursor modes, the design menus and the layer / Z
+    /// / colour / fill settings those tools draw with all belong to production
+    /// alone. A workspace without them keeps what is true everywhere: the
+    /// project actions, the camera controls, the switches over how the scene is
+    /// drawn, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }

@@ -42,6 +42,11 @@ const MENU_ROW_INSET: f32 = 6.0;
 const CLUSTER_GAP: f32 = 12.0;
 /// Clear space kept between the centre cluster and the two beside it.
 const CENTRE_CLEARANCE: f32 = 16.0;
+/// Clear space either side of the hairline parting the view controls every
+/// workspace carries from the ones the open workspace adds - see [`divider`].
+const DIVIDER_GAP: f32 = 7.0;
+/// How far that hairline is held clear of the strip's top and bottom.
+const DIVIDER_INSET: f32 = 7.0;
 /// Gap between one drawing setting in the centre run and the next. Wider than
 /// the gap between buttons: these are labelled fields rather than a run of
 /// icons, and they read as separate settings.
@@ -356,24 +361,45 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
 /// The view controls, at the far end of the bar.
 ///
-/// One evenly spaced run: these are all questions about how the scene is being
-/// looked at, so nothing here is clustered off from anything else.
+/// Drawn into a right-to-left layout: the first button added takes the strip's
+/// right edge and each one after it is placed to the left of the last, so the
+/// run is written here in the reverse of the order it reads on screen.
 ///
-/// Drawn into a right-to-left layout, so the run is written here in the order
-/// it reads on screen and placed from the strip's right edge inward.
-///
-/// What is here is what any workspace asks of the camera; the switches over
-/// how the scene itself is drawn belong to production and are added ahead of
-/// it only there - see [`draw_production_view_tools`]. Drill & Blast fills the
-/// same slot with the blast reviews - see [`draw_blast_view_tools`].
+/// The controls every workspace carries are added first, so they hold the same
+/// place against the window's edge whichever tab is open - how the scene is
+/// drawn, then what the camera is asked - and whatever the open workspace adds
+/// is placed to the left of them, parted from them by [`divider`]. Drill &
+/// Blast's reviews of the fired pattern are the only such run so far - see
+/// [`draw_blast_view_tools`]; production adds nothing here, its own tools being
+/// the toolbar and the design menus.
 fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
-    if editor.active_workspace.has_production_tools() {
-        draw_production_view_tools(ui, editor, commands, side);
-    }
+    draw_scene_modes(ui, editor, commands, side);
+    draw_camera_tools(ui, editor, commands, side);
+
     if editor.active_workspace == Workspace::DrillAndBlast {
+        divider(ui, side);
         draw_blast_view_tools(ui, editor, project, side);
     }
+}
 
+/// Part the run every workspace carries from the run this one adds.
+///
+/// A hairline rather than a gap: the bar's buttons meet each other, so a space
+/// alone would read as a missing button. Held clear of the strip's top and
+/// bottom so it marks a seam between two runs rather than looking like an edge
+/// of the bar itself.
+fn divider(ui: &mut egui::Ui, side: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0 + 2.0 * DIVIDER_GAP, side), egui::Sense::hover());
+    let visuals = ui.visuals();
+    let color = crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 26 } else { -46 });
+    let painter = ui.painter();
+    let x = painter.round_to_pixel_center(rect.center().x);
+    painter.vline(x, (rect.top() + DIVIDER_INSET)..=(rect.bottom() - DIVIDER_INSET), egui::Stroke::new(1.0, color));
+}
+
+/// What every workspace asks of the camera: how far the scene is stretched
+/// upward, and the two ways back to a view of all of it.
+fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     let exaggeration = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
@@ -407,13 +433,14 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProj
     }
 }
 
-/// The head of that run: the switches over how the scene is drawn, which the
-/// production workspace carries and the others do not.
+/// How the scene is drawn and got at, which every workspace carries.
 ///
-/// Flying and the slice view are modes the scene is put into rather than
-/// settings, so a workspace that does not offer them cannot be left holding
-/// one - see `main_menu::select_workspace`.
-fn draw_production_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+/// Flying, the slice view, x-ray, the wireframes and the points are all ways of
+/// reading what is already in the scene rather than tools for drawing it, so
+/// they are as useful over a blast pattern or a geological model as over a pit
+/// design and they stay on the bar across the tabs - which also means a mode is
+/// never left running with the button that turns it off gone from the window.
+fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     // A right-to-left layout adds each button to the left of the last, so the
     // run is added in reverse to read left to right on screen.
     let fly = ui.add(
@@ -489,8 +516,8 @@ fn draw_production_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
     }
 }
 
-/// The blast reviews, which Drill & Blast carries in the slot production fills
-/// with its scene switches.
+/// The blast reviews, the one run a single workspace adds to the view controls:
+/// Drill & Blast's own, left of the divider.
 ///
 /// Each of these reads the fired pattern back - how much burden each hole is
 /// left to move, when the ground around it lifts, the shot played through -
