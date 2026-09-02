@@ -6,8 +6,9 @@
 //! - **Left** - the project actions that are true in every workspace (save,
 //!   import, export, undo, redo), followed by the menus belonging to the
 //!   workspace itself.
-//! - **Centre** - what the drawing tools will use next: the active layer, the
-//!   working elevation, the line colour and the fill.
+//! - **Centre** - what the workspace's tools will act on next: in Production
+//!   the active layer, the working elevation, the line colour and the fill; in
+//!   Drill & Blast the drill hole dataset being worked on.
 //! - **Right** - the view controls, which used to float on a tile hung off the
 //!   viewport's right edge.
 //!
@@ -22,7 +23,7 @@ use crate::ui::{
     EditorState, UiProjectView, color32_to_rgba,
     elements::main_menu,
     rgba_to_color32,
-    state::{ActiveTool, UiCommand, UiProjectEntry},
+    state::{ActiveTool, UiCommand, UiProjectEntry, Workspace},
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
@@ -41,6 +42,11 @@ const MENU_ROW_INSET: f32 = 6.0;
 const CLUSTER_GAP: f32 = 12.0;
 /// Clear space kept between the centre cluster and the two beside it.
 const CENTRE_CLEARANCE: f32 = 16.0;
+/// Clear space either side of the hairline parting the view controls every
+/// workspace carries from the ones the open workspace adds - see [`divider`].
+const DIVIDER_GAP: f32 = 7.0;
+/// How far that hairline is held clear of the strip's top and bottom.
+const DIVIDER_INSET: f32 = 7.0;
 /// Gap between one drawing setting in the centre run and the next. Wider than
 /// the gap between buttons: these are labelled fields rather than a run of
 /// icons, and they read as separate settings.
@@ -50,10 +56,10 @@ const CENTRE_LABEL_GAP: f32 = 4.0;
 /// Width the centre cluster is placed from on the very first frame, before it
 /// has been laid out once and can report its own.
 const CENTRE_WIDTH_GUESS: f32 = 400.0;
-/// Width of the active-layer combo box.
-const LAYER_COMBO_WIDTH: f32 = 220.0;
-/// Longest layer name shown in that combo before it is elided.
-const MAX_LAYER_DISPLAY: usize = 22;
+/// Width of the centre run's combo boxes - the active layer's, and the active
+/// drill hole dataset's - which are one behind the other as the workspace
+/// changes and so are the same width.
+const SELECTOR_COMBO_WIDTH: f32 = 220.0;
 /// Label for the primary shortcut modifier in tooltips. Spelled out rather
 /// than drawn as a glyph, so it can't land as tofu in the bundled fonts.
 const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" };
@@ -96,10 +102,10 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                     });
                     let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        draw_view_tools(ui, editor, commands, side);
+                        draw_view_tools(ui, editor, project, commands, side);
                     });
 
-                    if !editor.active_workspace.has_production_tools() {
+                    if !editor.active_workspace.has_centre_settings() {
                         // Nothing between the two clusters but the parting they
                         // would take if they met.
                         return left.width() + CLUSTER_GAP + right.width();
@@ -111,7 +117,10 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // reports its own width back for the next one. Its content
                     // is fixed-width, so that settles on the first frame and
                     // stays there.
-                    let width_id = ui.make_persistent_id("viewport_bar_centre_width");
+                    // Keyed by workspace: the runs are different widths, and
+                    // a stale one would place the incoming run off centre for
+                    // a frame after every tab switch.
+                    let width_id = ui.make_persistent_id(("viewport_bar_centre_width", editor.active_workspace.label()));
                     let width: f32 = ui.data(|data| data.get_temp(width_id)).unwrap_or(CENTRE_WIDTH_GUESS);
                     if let Some(band) = centre_band(strip, left, right) {
                         let left_edge = (strip.center().x - width / 2.0).clamp(band.left(), (band.right() - width).max(band.left()));
@@ -120,7 +129,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
                         let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            draw_drawing_settings(ui, editor, project);
+                            draw_centre_settings(ui, editor, project, commands);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
                     }
@@ -219,6 +228,88 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     }
 }
 
+/// The centre run, which each workspace fills with what its own tools act on.
+///
+/// Only the workspaces [`Workspace::has_centre_settings`] names get here; the
+/// caller leaves the middle of the bar empty for the rest.
+fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    match editor.active_workspace {
+        Workspace::DrillAndBlast => draw_blast_settings(ui, editor, project, commands),
+        _ => draw_drawing_settings(ui, editor, project),
+    }
+}
+
+/// A name as one of the centre combos shows it, cut to the room the combo
+/// leaves its text rather than let to widen the fixed-width run.
+///
+/// Measured rather than counted in characters: a fixed character budget has to
+/// assume the widest name, and so cuts every other one short of the box. egui's
+/// own truncation is no use here either - it lays the text out against
+/// `available_width`, which in the centre band is the whole gap between the
+/// clusters, so the combo would grow past [`SELECTOR_COMBO_WIDTH`] rather than
+/// elide.
+fn elide(ui: &egui::Ui, name: &str) -> String {
+    // What the combo has left once its own padding and the dropdown arrow are
+    // out - `egui::ComboBox` lays the selected text out inside exactly this.
+    let spacing = ui.spacing();
+    let room = SELECTOR_COMBO_WIDTH - 2.0 * spacing.button_padding.x - spacing.icon_spacing - spacing.icon_width;
+    let font = egui::TextStyle::Button.resolve(ui.style());
+
+    ui.ctx().fonts_mut(|fonts| {
+        let full: f32 = name.chars().map(|c| fonts.glyph_width(&font, c)).sum();
+        if full <= room {
+            return name.to_owned();
+        }
+        let room = room - fonts.glyph_width(&font, '…');
+        let mut kept = String::new();
+        let mut used = 0.0;
+        for c in name.chars() {
+            used += fonts.glyph_width(&font, c);
+            if used > room {
+                break;
+            }
+            kept.push(c);
+        }
+        kept.push('…');
+        kept
+    })
+}
+
+/// What the Drill & Blast tools act on: the drill hole dataset being edited,
+/// tied in and simulated. It is also what the workspace can select - see
+/// `App::selectable_drill_holes` - so changing it drops the selection the
+/// outgoing dataset was holding.
+///
+/// Only loaded datasets are offered - a closed one has no holes in the scene
+/// to work on - and a selection that stops being loaded reads as "None" here
+/// until another is picked, the same way the layer combo above treats a layer
+/// that has gone.
+fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+    let previous = editor.active_drill_hole;
+
+    ui.label("Drill Holes:");
+    let selected = editor
+        .active_drill_hole
+        .and_then(|id| project.drill_holes.iter().find(|dataset| dataset.id == id && dataset.is_loaded))
+        .map(|dataset| dataset.name.as_str())
+        .unwrap_or("None");
+    egui::ComboBox::from_id_salt("drill_hole_combo_box")
+        .selected_text(elide(ui, selected))
+        .width(SELECTOR_COMBO_WIDTH)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut editor.active_drill_hole, None, "None");
+            for dataset in project.drill_holes.iter().filter(|dataset| dataset.is_loaded) {
+                ui.selectable_value(&mut editor.active_drill_hole, Some(dataset.id), &dataset.name);
+            }
+        });
+    // Only holes in the active dataset can be selected, so a selection made
+    // in the outgoing one has nothing left to act on.
+    if editor.active_drill_hole != previous {
+        commands.push(UiCommand::ClearSelection);
+    }
+}
+
 /// What the drawing tools will use next: layer, elevation, line colour, fill.
 fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
     // The run's own spacing holds a label to its control; the settings are
@@ -239,14 +330,9 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
         .and_then(|id| active_layers.iter().find(|layer| layer.id == id && layer.is_loaded))
         .map(|layer| layer.name.as_str())
         .unwrap_or("None");
-    let layer_display: String = if selected_layer.chars().count() > MAX_LAYER_DISPLAY {
-        format!("{}…", selected_layer.chars().take(MAX_LAYER_DISPLAY - 1).collect::<String>())
-    } else {
-        selected_layer.to_string()
-    };
     egui::ComboBox::from_id_salt("layer_combo_box")
-        .selected_text(layer_display)
-        .width(LAYER_COMBO_WIDTH)
+        .selected_text(elide(ui, selected_layer))
+        .width(SELECTOR_COMBO_WIDTH)
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut editor.active_layer, None, "None");
             for layer in active_layers.iter().filter(|layer| layer.is_loaded) {
@@ -275,20 +361,45 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
 /// The view controls, at the far end of the bar.
 ///
-/// One evenly spaced run: these are all questions about how the scene is being
-/// looked at, so nothing here is clustered off from anything else.
+/// Drawn into a right-to-left layout: the first button added takes the strip's
+/// right edge and each one after it is placed to the left of the last, so the
+/// run is written here in the reverse of the order it reads on screen.
 ///
-/// Drawn into a right-to-left layout, so the run is written here in the order
-/// it reads on screen and placed from the strip's right edge inward.
-///
-/// What is here is what any workspace asks of the camera; the switches over
-/// how the scene itself is drawn belong to production and are added ahead of
-/// it only there - see [`draw_production_view_tools`].
-fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
-    if editor.active_workspace.has_production_tools() {
-        draw_production_view_tools(ui, editor, commands, side);
-    }
+/// The controls every workspace carries are added first, so they hold the same
+/// place against the window's edge whichever tab is open - how the scene is
+/// drawn, then what the camera is asked - and whatever the open workspace adds
+/// is placed to the left of them, parted from them by [`divider`]. Drill &
+/// Blast's reviews of the fired pattern are the only such run so far - see
+/// [`draw_blast_view_tools`]; production adds nothing here, its own tools being
+/// the toolbar and the design menus.
+fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
+    draw_scene_modes(ui, editor, commands, side);
+    draw_camera_tools(ui, editor, commands, side);
 
+    if editor.active_workspace == Workspace::DrillAndBlast {
+        divider(ui, side);
+        draw_blast_view_tools(ui, editor, project, side);
+    }
+}
+
+/// Part the run every workspace carries from the run this one adds.
+///
+/// A hairline rather than a gap: the bar's buttons meet each other, so a space
+/// alone would read as a missing button. Held clear of the strip's top and
+/// bottom so it marks a seam between two runs rather than looking like an edge
+/// of the bar itself.
+fn divider(ui: &mut egui::Ui, side: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0 + 2.0 * DIVIDER_GAP, side), egui::Sense::hover());
+    let visuals = ui.visuals();
+    let color = crate::ui::widgets::shifted(visuals.panel_fill, if visuals.dark_mode { 26 } else { -46 });
+    let painter = ui.painter();
+    let x = painter.round_to_pixel_center(rect.center().x);
+    painter.vline(x, (rect.top() + DIVIDER_INSET)..=(rect.bottom() - DIVIDER_INSET), egui::Stroke::new(1.0, color));
+}
+
+/// What every workspace asks of the camera: how far the scene is stretched
+/// upward, and the two ways back to a view of all of it.
+fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     let exaggeration = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
@@ -322,13 +433,14 @@ fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut V
     }
 }
 
-/// The head of that run: the switches over how the scene is drawn, which the
-/// production workspace carries and the others do not.
+/// How the scene is drawn and got at, which every workspace carries.
 ///
-/// Flying and the slice view are modes the scene is put into rather than
-/// settings, so a workspace that does not offer them cannot be left holding
-/// one - see `main_menu::select_workspace`.
-fn draw_production_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+/// Flying, the slice view, x-ray, the wireframes and the points are all ways of
+/// reading what is already in the scene rather than tools for drawing it, so
+/// they are as useful over a blast pattern or a geological model as over a pit
+/// design and they stay on the bar across the tabs - which also means a mode is
+/// never left running with the button that turns it off gone from the window.
+fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     // A right-to-left layout adds each button to the left of the last, so the
     // run is added in reverse to read left to right on screen.
     let fly = ui.add(
@@ -402,4 +514,45 @@ fn draw_production_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
     if xray.clicked() {
         editor.xray_enabled = !editor.xray_enabled;
     }
+}
+
+/// The blast reviews, the one run a single workspace adds to the view controls:
+/// Drill & Blast's own, left of the divider.
+///
+/// Each of these reads the fired pattern back - how much burden each hole is
+/// left to move, when the ground around it lifts, the shot played through -
+/// so all three act on the dataset the centre run names, and none of them has
+/// anything to work on until one is picked there.
+///
+/// Placeholders: the buttons, their icons and their enablement are here, but
+/// nothing is wired behind them yet.
+fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, side: f32) {
+    // The centre run shows "None" for a dataset that is no longer loaded, and
+    // these follow it: a stale id is not something to review.
+    let has_active_dataset = editor
+        .active_drill_hole
+        .is_some_and(|id| project.drill_holes.iter().any(|dataset| dataset.id == id && dataset.is_loaded));
+
+    // A right-to-left layout adds each button to the left of the last, so the
+    // run is added in reverse to read left to right on screen.
+    ui.add_enabled(
+        has_active_dataset,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), "Blast Timeline [PLACEHOLDER]")
+            .id_salt("blast_timeline")
+            .button_side(side),
+    );
+
+    ui.add_enabled(
+        has_active_dataset,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), "Contours of Equal Time [PLACEHOLDER]")
+            .id_salt("contours_of_equal_time")
+            .button_side(side),
+    );
+
+    ui.add_enabled(
+        has_active_dataset,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), "Burden Relief Heatmap [PLACEHOLDER]")
+            .id_salt("burden_relief_heatmap")
+            .button_side(side),
+    );
 }

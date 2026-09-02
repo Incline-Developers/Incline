@@ -409,6 +409,7 @@ impl<'a> Graphics<'a> {
         self.update_tool_projections(editor, document);
 
         let orbit_marker_screen = self.orbit_marker_screen_pos();
+        let camera_active = self.is_camera_active();
         let camera_forward = self.camera.forward();
         let camera_up = self.camera.up();
         let world_per_physical_pixel = (!self.projection.is_perspective()).then(|| 2.0 * self.projection.zoom / f64::from(self.viewport_rect.height.max(1)));
@@ -425,6 +426,7 @@ impl<'a> Graphics<'a> {
             drill_holes,
             [self.size.width, self.size.height],
             orbit_marker_screen,
+            camera_active,
             [camera_forward.x as f32, camera_forward.y as f32, camera_forward.z as f32],
             [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],
             world_per_physical_pixel,

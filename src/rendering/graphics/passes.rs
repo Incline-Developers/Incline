@@ -213,6 +213,26 @@ impl<'a> Graphics<'a> {
             render_pass.set_vertex_buffer(0, buffer.slice(..));
             render_pass.draw(0..144, 0..cached.count);
         }
+        // Collar markers go over the traces they cap, in their own pass so the
+        // pipeline switch happens once rather than per dataset.
+        render_pass.set_pipeline(if xray_enabled {
+            &self.xray_drill_collar_render_pipeline
+        } else {
+            &self.drill_collar_render_pipeline
+        });
+        for dataset in drill_holes {
+            if !dataset.state.loaded || !dataset.visible || hidden.contains(&dataset.entity_id()) {
+                continue;
+            }
+            let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
+                continue;
+            };
+            let Some(buffer) = cached.collar_buffer.as_ref() else {
+                continue;
+            };
+            render_pass.set_vertex_buffer(0, buffer.slice(..));
+            render_pass.draw(0..6, 0..cached.collar_count);
+        }
     }
 
     fn draw_document_batches<'pass>(

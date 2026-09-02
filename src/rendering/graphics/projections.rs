@@ -183,6 +183,15 @@ impl<'a> Graphics<'a> {
     }
 
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document) {
+        // Where the snap landed, for the drawn cursor to mark. The snapped
+        // point is the one the tool will use, and it is not the pointer: it
+        // can sit anywhere inside the snap threshold of it.
+        editor.snap_marker_px = editor
+            .cursor_snapped
+            .then_some(editor.cursor_world)
+            .flatten()
+            .and_then(|world| self.world_to_window_px(&self.view_proj(), world));
+
         if let Some(failure) = &editor.tri_create_failure {
             let vp = self.view_proj();
             editor.tri_create_diagnostic_markers_screen_px = failure.diagnostic.markers_world.iter().filter_map(|&point| self.world_to_window_px(&vp, point)).collect();

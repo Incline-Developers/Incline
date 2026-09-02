@@ -1,4 +1,4 @@
-use crate::{app::App, userspace_log};
+use crate::{app::App, ui::state::DelayProduct, userspace_log};
 
 impl<'a> App<'a> {
     pub(crate) fn set_topology_wireframes(&mut self, enabled: bool) -> anyhow::Result<()> {
@@ -45,35 +45,7 @@ impl<'a> App<'a> {
         preferences.fly_near_clip_limit = crate::app::io::finite_clamped(preferences.fly_near_clip_limit, 0.01, 100.0, crate::app::io::default_fly_near_clip_limit());
         preferences.fly_max_clip_span = crate::app::io::finite_clamped(preferences.fly_max_clip_span, 100.0, 1_000_000.0, crate::app::io::default_fly_max_clip_span());
 
-        crate::app::io::save_config(&crate::app::io::Config {
-            dark_mode: preferences.dark_mode,
-            show_console: preferences.show_console,
-            panel_chrome: preferences.panel_chrome,
-            show_world_axis_gizmo: preferences.show_world_axis_gizmo,
-            show_xy_grid: preferences.show_xy_grid,
-            show_scale_bar: preferences.show_scale_bar,
-            renderer_background_color: preferences.renderer_background_color,
-            snap_poll_rate: preferences.snap_poll_rate,
-            frame_rate_cap: preferences.frame_rate_cap,
-            resize_frame_rate_cap: preferences.resize_frame_rate_cap,
-            block_model_interaction_resolution_divisor: preferences.block_model_interaction_resolution_divisor,
-            show_block_model_boundary_highlights: preferences.show_block_model_boundary_highlights,
-            downscale_raster_previews: preferences.downscale_raster_previews,
-            frame_counter_enabled: preferences.frame_counter_enabled,
-            debug_chunk_coloring: preferences.debug_chunk_coloring,
-            debug_clip_planes: preferences.debug_clip_planes,
-            plan_orbit_sensitivity: preferences.plan_orbit_sensitivity,
-            plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
-            plan_invert_vertical_look: preferences.plan_invert_vertical_look,
-            plan_invert_horizontal_look: preferences.plan_invert_horizontal_look,
-            plan_zoom_towards_cursor: preferences.plan_zoom_towards_cursor,
-            fly_field_of_view_degrees: preferences.fly_field_of_view_degrees,
-            fly_mouse_look_sensitivity: preferences.fly_mouse_look_sensitivity,
-            fly_invert_vertical_look: preferences.fly_invert_vertical_look,
-            fly_invert_horizontal_look: preferences.fly_invert_horizontal_look,
-            fly_near_clip_limit: preferences.fly_near_clip_limit,
-            fly_max_clip_span: preferences.fly_max_clip_span,
-        })?;
+        crate::app::io::save_config(&config_from(&preferences, self.editor.delay_products.iter().map(DelayProduct::to_stored).collect()))?;
 
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
@@ -172,5 +144,46 @@ impl<'a> App<'a> {
             self.redraw_requested = true;
         }
         userspace_log!("Zoom to extents (preserving angle)");
+    }
+}
+
+/// The config file as it stands, from the preferences being applied and the
+/// palette as it is now.
+///
+/// One place builds a [`crate::app::io::Config`], because the file is written
+/// whole: a save that left a field out of the literal would drop whatever the
+/// last one had put there. The products are passed in rather than read off the
+/// draft because they are not a preference the settings tabs edit - the
+/// palette owns them, and both callers hand over the same list.
+pub(crate) fn config_from(preferences: &crate::ui::state::PreferencesDraft, delay_products: Vec<crate::app::io::StoredDelayProduct>) -> crate::app::io::Config {
+    crate::app::io::Config {
+        dark_mode: preferences.dark_mode,
+        show_console: preferences.show_console,
+        panel_chrome: preferences.panel_chrome,
+        show_world_axis_gizmo: preferences.show_world_axis_gizmo,
+        show_xy_grid: preferences.show_xy_grid,
+        show_scale_bar: preferences.show_scale_bar,
+        renderer_background_color: preferences.renderer_background_color,
+        snap_poll_rate: preferences.snap_poll_rate,
+        frame_rate_cap: preferences.frame_rate_cap,
+        resize_frame_rate_cap: preferences.resize_frame_rate_cap,
+        block_model_interaction_resolution_divisor: preferences.block_model_interaction_resolution_divisor,
+        show_block_model_boundary_highlights: preferences.show_block_model_boundary_highlights,
+        downscale_raster_previews: preferences.downscale_raster_previews,
+        frame_counter_enabled: preferences.frame_counter_enabled,
+        debug_chunk_coloring: preferences.debug_chunk_coloring,
+        debug_clip_planes: preferences.debug_clip_planes,
+        plan_orbit_sensitivity: preferences.plan_orbit_sensitivity,
+        plan_zoom_sensitivity: preferences.plan_zoom_sensitivity,
+        plan_invert_vertical_look: preferences.plan_invert_vertical_look,
+        plan_invert_horizontal_look: preferences.plan_invert_horizontal_look,
+        plan_zoom_towards_cursor: preferences.plan_zoom_towards_cursor,
+        fly_field_of_view_degrees: preferences.fly_field_of_view_degrees,
+        fly_mouse_look_sensitivity: preferences.fly_mouse_look_sensitivity,
+        fly_invert_vertical_look: preferences.fly_invert_vertical_look,
+        fly_invert_horizontal_look: preferences.fly_invert_horizontal_look,
+        fly_near_clip_limit: preferences.fly_near_clip_limit,
+        fly_max_clip_span: preferences.fly_max_clip_span,
+        delay_products,
     }
 }

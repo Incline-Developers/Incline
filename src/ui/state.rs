@@ -18,7 +18,7 @@ use crate::{
     model::{
         Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
-        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleSource},
+        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnMapping, CsvPreview},
@@ -128,12 +128,15 @@ impl EditorState {
         self.status_message = message;
     }
 
-    fn clear_selection(&mut self) {
+    /// Drop everything selected, in every workspace's terms: whole scene
+    /// entities and the individual drill holes Drill & Blast picks.
+    pub(crate) fn clear_scene_selection(&mut self) {
         self.selected_handles.clear();
+        self.selected_drill_holes.clear();
     }
 
     fn replace_selection(&mut self, handle: SceneEntityId) {
-        self.selected_handles.clear();
+        self.clear_scene_selection();
         self.selected_handles.insert(handle);
     }
 
@@ -155,6 +158,9 @@ impl EditorState {
             self.explicitly_frozen.insert(handle);
             self.frozen_handles.insert(handle);
             self.selected_handles.remove(&handle);
+            if let SceneEntityId::DrillHole(dataset) = handle {
+                self.selected_drill_holes.retain(|hole| hole.dataset != dataset);
+            }
         } else {
             self.explicitly_frozen.remove(&handle);
             self.frozen_handles.remove(&handle);
@@ -783,6 +789,11 @@ impl RenameTarget {
 pub(crate) struct EditorState {
     // Selection & visibility
     pub(crate) selected_handles: HashSet<SceneEntityId>,
+    /// Individually selected drill holes, which the Drill & Blast workspace
+    /// works in place of whole datasets - see [`DrillHoleRef`]. Production
+    /// selects the dataset into [`Self::selected_handles`] and leaves this
+    /// empty; the two are never populated for the same drill hole at once.
+    pub(crate) selected_drill_holes: HashSet<DrillHoleRef>,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
@@ -866,6 +877,12 @@ pub(crate) struct EditorState {
     pub(crate) fly_invert_horizontal_look: bool,
     pub(crate) fly_near_clip_limit: f64,
     pub(crate) fly_max_clip_span: f64,
+    /// Whether a background task is running, mirrored from `App` so the UI can
+    /// ask egui for the busy cursor. The window's cursor is egui's to set: a
+    /// `winit::Window::set_cursor` call from App-side would desync
+    /// egui-winit's icon cache and strand whatever the pointer is showing -
+    /// including the hidden cursor the viewport draws its own crosshair over.
+    pub(crate) background_busy: bool,
     /// Transient status-bar message from a background task (e.g. "Saving to …").
     /// `None` means idle; the field is updated from `poll_saves` / `poll_jobs`
     /// each frame. Set it through [`EditorState::set_status_message`] so the
@@ -876,12 +893,19 @@ pub(crate) struct EditorState {
     /// is hidden entirely until then.
     pub(crate) last_finished_task: Option<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
-    pub(crate) cursor_mode: CursorMode,
+    /// The cursor each workspace is holding - see [`WorkspaceCursors`]. There
+    /// is no cursor mode over the application as a whole: what a pick does is
+    /// a question about the workspace it is made in.
+    pub(crate) cursors: WorkspaceCursors,
     pub(crate) tool_line_color: [f32; 4],
     pub(crate) tool_line_weight: f32,
     pub(crate) tool_hatch: ToolHatch,
     /// Active drawing layer, if any.
     pub(crate) active_layer: Option<LayerId>,
+    /// The drill hole dataset the Drill & Blast workspace works on: what its
+    /// editing, tie-in and simulation tools act against. `None` until one is
+    /// picked, and dropped again when that dataset is closed or removed.
+    pub(crate) active_drill_hole: Option<DrillHoleId>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
     /// Browser-only viewport prompt shown before creating a named project.
@@ -928,6 +952,12 @@ pub(crate) struct EditorState {
     pub(crate) z_input: f64,
     /// True when the current `cursor_world` is a snapped position (not raw ray).
     pub(crate) cursor_snapped: bool,
+    /// Where the snapped point lands on the window, in physical pixels, while
+    /// [`EditorState::cursor_snapped`] is set. Projected in
+    /// `update_tool_projections` like every other tool overlay, and read by
+    /// the drawn cursor so it can mark the target it caught rather than only
+    /// reporting that it caught one.
+    pub(crate) snap_marker_px: Option<(f32, f32)>,
     /// Physical-pixel cursor position, updated on every CursorMoved event.
     pub(crate) cursor_screen_px: Option<(f32, f32)>,
 
@@ -1368,6 +1398,17 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    /// The Drill & Blast workspace's stored products, in the order the palette
+    /// lays them out.
+    pub(crate) delay_products: Vec<DelayProduct>,
+    /// Id the next product added to that palette takes.
+    pub(crate) next_delay_product_id: u64,
+    /// Whether the palette's New Product dialog is open.
+    pub(crate) new_delay_product_open: bool,
+    /// What that dialog has been filled in with so far.
+    pub(crate) new_delay_product_delay_ms: u32,
+    pub(crate) new_delay_product_name: String,
+    pub(crate) new_delay_product_color: egui::Color32,
     pub(crate) show_import: bool,
     pub(crate) show_export: bool,
     /// Whether the About dialog is open.
@@ -1388,6 +1429,40 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
+    /// What a pick snaps to in the workspace that is up.
+    ///
+    /// Only production draws, and only its cursor run offers snapping, so
+    /// every other workspace picks plainly - the same thing
+    /// [`CursorMode::Select`] means there.
+    pub(crate) fn snap_cursor_mode(&self) -> CursorMode {
+        match self.active_workspace {
+            Workspace::Production => self.cursors.production,
+            Workspace::DrillAndBlast | Workspace::Geology => CursorMode::Select,
+        }
+    }
+
+    /// Step the active workspace's cursor one along its own run - what the
+    /// mouse's forward and back buttons do - and report whether it moved.
+    ///
+    /// A workspace with no cursor run of its own has nowhere to step, so the
+    /// buttons do nothing there rather than quietly changing another
+    /// workspace's cursor behind its back.
+    pub(crate) fn cycle_workspace_cursor(&mut self, forward: bool) -> bool {
+        match self.active_workspace {
+            Workspace::Production => {
+                let mode = &mut self.cursors.production;
+                *mode = if forward { mode.next() } else { mode.previous() };
+                true
+            }
+            Workspace::DrillAndBlast => {
+                let cursor = &mut self.cursors.blast;
+                *cursor = if forward { cursor.next() } else { cursor.previous() };
+                true
+            }
+            Workspace::Geology => false,
+        }
+    }
+
     /// Dialogs that take Enter as their confirm shortcut.
     ///
     /// The GUI only reports a key press as consumed when a text field holds
@@ -1437,6 +1512,7 @@ impl EditorState {
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
             || self.new_layer_dialog_open
+            || self.new_delay_product_open
             || self.renaming_item.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
@@ -1461,6 +1537,18 @@ impl EditorState {
             }
     }
 
+    /// Open the palette's New Product dialog on a blank entry.
+    ///
+    /// The last one entered is not kept: a product is added once and the next
+    /// one is a different delay, so the dialog starts where the built-ins do
+    /// rather than on whatever was typed last.
+    pub(crate) fn begin_new_delay_product(&mut self) {
+        self.new_delay_product_delay_ms = 0;
+        self.new_delay_product_name.clear();
+        self.new_delay_product_color = NEW_DELAY_PRODUCT_COLOR;
+        self.new_delay_product_open = true;
+    }
+
     pub(crate) fn update_contour_layer_name_from_surface(&mut self, surface_name: &str) {
         if !self.tri_contour_layer_name_auto {
             return;
@@ -1479,6 +1567,7 @@ impl EditorState {
     /// project that was just left.
     pub(crate) fn clear_project_transients(&mut self) {
         self.selected_handles.clear();
+        self.selected_drill_holes.clear();
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
@@ -1486,6 +1575,7 @@ impl EditorState {
         self.locked_rasters.clear();
         self.translucent_handles.clear();
         self.active_layer = None;
+        self.active_drill_hole = None;
         self.active_tool = ActiveTool::None;
         #[cfg(target_arch = "wasm32")]
         {
@@ -1657,6 +1747,7 @@ impl EditorState {
     pub(crate) fn new() -> Self {
         Self {
             selected_handles: HashSet::new(),
+            selected_drill_holes: HashSet::new(),
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
@@ -1698,14 +1789,16 @@ impl EditorState {
             fly_invert_horizontal_look: false,
             fly_near_clip_limit: crate::app::io::default_fly_near_clip_limit(),
             fly_max_clip_span: crate::app::io::default_fly_max_clip_span(),
+            background_busy: false,
             status_message: None,
             last_finished_task: None,
             active_tool: ActiveTool::None,
-            cursor_mode: CursorMode::Select,
+            cursors: WorkspaceCursors::default(),
             tool_line_color: [1.0, 1.0, 1.0, 1.0],
             tool_line_weight: 1.0,
             tool_hatch: ToolHatch::Clear,
             active_layer: None,
+            active_drill_hole: None,
             cursor_world: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
@@ -1731,6 +1824,7 @@ impl EditorState {
             text_editing_enabled: false,
             editing_labels_id: None,
             cursor_snapped: false,
+            snap_marker_px: None,
             z_level: 0.0,
             z_input: 0.0,
             cursor_screen_px: None,
@@ -1972,6 +2066,12 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Object,
             active_workspace: Workspace::Production,
+            delay_products: builtin_delay_products(),
+            next_delay_product_id: builtin_delay_products().len() as u64,
+            new_delay_product_open: false,
+            new_delay_product_delay_ms: 0,
+            new_delay_product_name: String::new(),
+            new_delay_product_color: NEW_DELAY_PRODUCT_COLOR,
             show_import: false,
             show_export: false,
             show_about: false,
@@ -1991,7 +2091,7 @@ impl EditorState {
 
     /// Left-click that landed on empty space: clears the selection.
     pub(crate) fn on_canvas_click(&mut self, _world: DVec3) {
-        self.clear_selection();
+        self.clear_scene_selection();
     }
 
     /// Left-click that landed on entity geometry: selects it and reports the
@@ -2002,6 +2102,26 @@ impl EditorState {
             SelectionMode::Replace => self.replace_selection(handle),
             SelectionMode::Add => self.add_selection(handle),
             SelectionMode::Toggle => self.toggle_selection(handle),
+        }
+    }
+
+    /// Left-click that landed on one drill hole, in a workspace that works a
+    /// hole at a time: selects the hole rather than the dataset holding it.
+    pub(crate) fn on_drill_hole_pick(&mut self, hole: DrillHoleRef, world: DVec3, mode: SelectionMode) {
+        self.cursor_world = Some(world);
+        match mode {
+            SelectionMode::Replace => {
+                self.clear_scene_selection();
+                self.selected_drill_holes.insert(hole);
+            }
+            SelectionMode::Add => {
+                self.selected_drill_holes.insert(hole);
+            }
+            SelectionMode::Toggle => {
+                if !self.selected_drill_holes.remove(&hole) {
+                    self.selected_drill_holes.insert(hole);
+                }
+            }
         }
     }
 
@@ -2071,12 +2191,64 @@ pub(crate) enum EditorAction {
 }
 
 /// Cursor interaction mode for canvas picks.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum CursorMode {
     Select,
     SnapToSurface,
     SnapToLine,
     SnapToPoint,
+}
+
+/// What a click in the scene does while the Drill & Blast workspace is up.
+///
+/// The production workspace's [`CursorMode`] is about what a pick *snaps* to
+/// while something is being drawn; this is about what a pick is *for*, which
+/// is the question Drill & Blast asks instead. `Select` is a plain pick with
+/// nothing armed - the same thing a click did before there were modes here -
+/// and `TieHoles` is the mode a round is tied in under, which is why the delay
+/// palette is only live while it is the one selected.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BlastCursor {
+    Select,
+    TieHoles,
+}
+
+impl BlastCursor {
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::Select => Self::TieHoles,
+            Self::TieHoles => Self::Select,
+        }
+    }
+
+    /// With two cursors in the run, either way round lands on the other one.
+    pub(crate) fn previous(self) -> Self {
+        self.next()
+    }
+}
+
+/// The cursor every workspace keeps, one field each.
+///
+/// A cursor mode belongs to the discipline whose tools read it - production
+/// snaps for the tools it draws with, Drill & Blast arms a tie-in - so leaving
+/// one workspace and coming back finds its cursor where it was left rather
+/// than wherever another workspace's run last put it. Geology has no cursor
+/// of its own yet, and so has nothing here.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorkspaceCursors {
+    /// What a production pick snaps to.
+    pub(crate) production: CursorMode,
+    /// What a Drill & Blast pick is for.
+    pub(crate) blast: BlastCursor,
+}
+
+impl Default for WorkspaceCursors {
+    fn default() -> Self {
+        Self {
+            production: CursorMode::Select,
+            blast: BlastCursor::Select,
+        }
+    }
 }
 
 impl CursorMode {
@@ -2165,6 +2337,11 @@ impl ViewToggle {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
     SetActiveTool(ActiveTool),
+    /// Drop everything selected, and rebuild the geometry that was drawing it
+    /// as selected. Switching workspaces sends this: a selection belongs to
+    /// the discipline it was made in, and the tabs are not a way of carrying
+    /// one across.
+    ClearSelection,
     SetFlyModeEnabled(bool),
     SetSliceModeEnabled(bool),
     #[cfg(not(target_arch = "wasm32"))]
@@ -2233,6 +2410,15 @@ pub(crate) enum UiCommand {
     CreateLayer {
         name: String,
     },
+    /// Add a product to the Drill & Blast palette, as the New Product dialog
+    /// filled it in.
+    AddDelayProduct {
+        delay_ms: u32,
+        name: String,
+        color: egui::Color32,
+    },
+    /// Drop one stored product from that palette.
+    DeleteDelayProduct(DelayProductId),
     FinishPolyClose,
     CommitStrokeOpen,
     CommitCircleTypedRadius,
@@ -2541,6 +2727,7 @@ impl UiCommand {
         let report = |title: &str, summary: String| Some(CommandReportSpec::new(title, summary));
         match self {
             Self::SetActiveTool(_)
+            | Self::ClearSelection
             | Self::CloseStartupDialog
             | Self::CancelCloseProject
             | Self::CancelExit
@@ -2641,6 +2828,8 @@ impl UiCommand {
             Self::SaveAndExit => report("Save and Exit", "Saving the current project".to_owned()),
             Self::ExitWithoutSaving => report("Exit Without Saving", "Discarding unsaved changes".to_owned()),
             Self::CreateLayer { name } => report("Create Layer", name.clone()),
+            Self::AddDelayProduct { delay_ms, name, .. } => report("Add Product", format!("{delay_ms} ms · {name}")),
+            Self::DeleteDelayProduct(id) => report("Delete Product", format!("{id:?}")),
             Self::FinishPolyClose => report("Create Polyline", "Finish closed polyline".to_owned()),
             Self::CommitStrokeOpen => report("Create Line", "Finish open polyline".to_owned()),
             Self::CommitCircleTypedRadius => report("Create Circle", "Use typed radius".to_owned()),
@@ -3002,29 +3191,83 @@ impl Workspace {
 
     /// Whether this workspace carries the mine production tools.
     ///
-    /// The drawing toolbar, the cursor modes, the design menus, the layer / Z
-    /// / colour / fill settings those tools draw with and the scene switches
-    /// that go with them all belong to production alone. A workspace without
-    /// them keeps what is true everywhere: the project actions, the camera
-    /// controls, and the editors of its own discipline.
+    /// The drawing toolbar, the cursor modes, the design menus and the layer / Z
+    /// / colour / fill settings those tools draw with all belong to production
+    /// alone. A workspace without them keeps what is true everywhere: the
+    /// project actions, the camera controls, the switches over how the scene is
+    /// drawn, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
 
-    /// Whether the explorer opens `section` when this workspace is selected.
-    ///
-    /// The tab decides the arrangement of the tree, the way it decides what
-    /// the viewport bar carries: switching to a workspace opens the sections
-    /// that discipline works on and collapses the rest, rather than following
-    /// whatever the project happens to hold. Between switches the headers are
-    /// left exactly as the user set them.
-    pub(crate) fn opens_section(self, section: ExplorerSection) -> bool {
-        match self {
-            Self::Production => true,
-            Self::DrillAndBlast => matches!(section, ExplorerSection::Triangulations | ExplorerSection::DrillHoles),
-            Self::Geology => matches!(section, ExplorerSection::Triangulations | ExplorerSection::BlockModels | ExplorerSection::DrillHoles),
+    /// Whether the viewport bar's centre run carries anything in this
+    /// workspace: production's drawing settings, or the drill hole Drill &
+    /// Blast works on. A workspace with neither leaves the middle of the bar
+    /// empty.
+    pub(crate) fn has_centre_settings(self) -> bool {
+        matches!(self, Self::Production | Self::DrillAndBlast)
+    }
+}
+
+/// Identity of one product in the Drill & Blast palette.
+///
+/// Handed out by [`EditorState::next_delay_product_id`], so a product keeps
+/// its identity as others around it are added and deleted and the palette's
+/// right-click menu can name the one it acts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DelayProductId(pub(crate) u64);
+
+/// One product the Drill & Blast workspace keeps.
+///
+/// Interhole delays are the only kind so far: a firing time in milliseconds,
+/// the name it is ordered by, and the colour a tie-in is drawn in.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DelayProduct {
+    pub(crate) id: DelayProductId,
+    /// Milliseconds between one hole firing and the next.
+    pub(crate) delay_ms: u32,
+    pub(crate) name: String,
+    pub(crate) color: egui::Color32,
+}
+
+impl DelayProduct {
+    /// The product as the config file holds it: everything but the id, which
+    /// is handed out afresh each run.
+    pub(crate) fn to_stored(&self) -> crate::app::io::StoredDelayProduct {
+        crate::app::io::StoredDelayProduct {
+            delay_ms: self.delay_ms,
+            name: self.name.clone(),
+            color: self.color.to_srgba_unmultiplied(),
         }
     }
+}
+
+/// Colour a product being entered starts on, until the user picks another.
+const NEW_DELAY_PRODUCT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x6E, 0xC1, 0xF0);
+
+/// Stored products as the palette holds them: ids handed out in order, and
+/// the whole palette sorted by delay - which is the order it is read in, and
+/// the order a hand-edited config file need not have been written in.
+pub(crate) fn delay_products_from_stored(stored: &[crate::app::io::StoredDelayProduct]) -> Vec<DelayProduct> {
+    let mut products: Vec<_> = stored
+        .iter()
+        .enumerate()
+        .map(|(index, product)| DelayProduct {
+            id: DelayProductId(index as u64),
+            delay_ms: product.delay_ms,
+            name: product.name.clone(),
+            color: egui::Color32::from_rgba_unmultiplied(product.color[0], product.color[1], product.color[2], product.color[3]),
+        })
+        .collect();
+    // Stable, so two products on the same delay keep the order they were
+    // added in.
+    products.sort_by_key(|product| product.delay_ms);
+    products
+}
+
+/// The palette a fresh installation starts with.
+pub(crate) fn builtin_delay_products() -> Vec<DelayProduct> {
+    delay_products_from_stored(&crate::app::io::default_delay_products())
 }
 
 /// A section of the explorer's properties panel.

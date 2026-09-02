@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState};
 
 pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
+/// Screen diameter of the marker drawn at every collar. It is the floor, not
+/// the size: a hole wide enough on screen grows its marker past it.
+pub(crate) const COLLAR_MARKER_PIXEL_DIAMETER: f32 = 11.0;
+/// How much wider than the hole itself the collar marker is drawn.
+pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 2.5;
+pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
+pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -222,6 +229,21 @@ impl OpenDrillHoleDataset {
     pub(crate) fn entity_id(&self) -> crate::model::SceneEntityId {
         crate::model::SceneEntityId::DrillHole(self.id)
     }
+}
+
+/// One hole inside a dataset.
+///
+/// A dataset is a scene entity - it is what the explorer lists, what is
+/// hidden, frozen and coloured - so [`crate::model::SceneEntityId`] names the
+/// dataset and stops there. A single hole is a part of one, the way a vertex
+/// is part of a polyline, and this is how the Drill & Blast workspace points
+/// at it: the dataset's id and the hole's index in
+/// [`DrillHoleDataset::holes`], which is fixed for as long as the dataset is
+/// loaded ([`DrillHoleDataset::new`] sorts the holes once, on import).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DrillHoleRef {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) hole: usize,
 }
 
 #[derive(Clone, Copy, Debug)]

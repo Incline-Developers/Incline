@@ -6,7 +6,10 @@ use std::{
 use glam::DVec3;
 use wgpu::util::DeviceExt;
 
-use crate::model::drill_hole::{DrillColorState, DrillFieldKind, DrillHoleId, DrillValue, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset};
+use crate::model::drill_hole::{
+    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
+    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,9 +22,24 @@ pub(crate) struct DrillSegmentInstance {
     pub(crate) _pad1: f32,
 }
 
+/// The disc drawn at the top of a hole so its collar reads at a glance
+/// instead of being the indistinguishable end of a cylinder.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct DrillCollarInstance {
+    pub(crate) center: [f32; 3],
+    pub(crate) marker_radius: f32,
+    pub(crate) outline: [f32; 3],
+    pub(crate) pixel_diameter: f32,
+    pub(crate) fill: [f32; 3],
+    pub(crate) hole_radius: f32,
+}
+
 pub(crate) struct CachedDrillHoles {
     pub(crate) buffer: Option<wgpu::Buffer>,
     pub(crate) count: u32,
+    pub(crate) collar_buffer: Option<wgpu::Buffer>,
+    pub(crate) collar_count: u32,
     key: u64,
 }
 
@@ -37,16 +55,24 @@ impl DrillHoleGpuCache {
             if !dataset.state.loaded {
                 continue;
             }
-            let selected = editor.selected_handles.contains(&dataset.entity_id());
-            let key = dataset_key(dataset, scene_origin, selected);
+            let selection = HoleSelection::of(dataset, editor);
+            let key = dataset_key(dataset, scene_origin, &selection);
             if self.entries.get(&dataset.id).is_some_and(|cached| cached.key == key) {
                 continue;
             }
-            let instances = build_instances(dataset, scene_origin, selected);
+            let instances = build_instances(dataset, scene_origin, &selection);
             let buffer = (!instances.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Drillhole Segment Instances"),
                     contents: bytemuck::cast_slice(&instances),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+            });
+            let collars = build_collar_instances(dataset, scene_origin, &selection);
+            let collar_buffer = (!collars.is_empty()).then(|| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Drillhole Collar Instances"),
+                    contents: bytemuck::cast_slice(&collars),
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
@@ -55,6 +81,8 @@ impl DrillHoleGpuCache {
                 CachedDrillHoles {
                     buffer,
                     count: instances.len().min(u32::MAX as usize) as u32,
+                    collar_buffer,
+                    collar_count: collars.len().min(u32::MAX as usize) as u32,
                     key,
                 },
             );
@@ -65,15 +93,50 @@ impl DrillHoleGpuCache {
         self.entries.get(&id)
     }
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.values().all(|entry| entry.count == 0)
+        self.entries.values().all(|entry| entry.count == 0 && entry.collar_count == 0)
     }
 }
 
-fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected: bool) -> u64 {
+/// Which of a dataset's holes are drawn as selected.
+///
+/// Production selects a dataset whole; Drill & Blast selects holes one at a
+/// time - see [`crate::ui::state::EditorState::selected_drill_holes`] - so
+/// this carries both and the instance builders ask it per hole.
+struct HoleSelection {
+    /// The whole dataset is selected: every hole in it is.
+    whole: bool,
+    /// Indices of the individually selected holes, ascending, so the cache
+    /// key below hashes the same set the same way every frame.
+    holes: Vec<usize>,
+}
+
+impl HoleSelection {
+    fn of(dataset: &OpenDrillHoleDataset, editor: &crate::ui::state::EditorState) -> Self {
+        let mut holes: Vec<usize> = editor.selected_drill_holes.iter().filter(|hole| hole.dataset == dataset.id).map(|hole| hole.hole).collect();
+        holes.sort_unstable();
+        Self {
+            whole: editor.selected_handles.contains(&dataset.entity_id()),
+            holes,
+        }
+    }
+
+    fn contains(&self, index: usize) -> bool {
+        self.whole || self.holes.binary_search(&index).is_ok()
+    }
+
+    /// Whether anything in the dataset is selected, which is all the collar
+    /// colours need to know before they are worked out hole by hole.
+    fn any(&self) -> bool {
+        self.whole || !self.holes.is_empty()
+    }
+}
+
+fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> u64 {
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
     dataset.visible.hash(&mut hash);
-    selected.hash(&mut hash);
+    selection.whole.hash(&mut hash);
+    selection.holes.hash(&mut hash);
     for value in scene_origin.to_array() {
         value.to_bits().hash(&mut hash);
     }
@@ -95,16 +158,17 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected: bo
     hash.finish()
 }
 
-fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected: bool) -> Vec<DrillSegmentInstance> {
+fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
     if !dataset.state.loaded || !dataset.visible {
         return Vec::new();
     }
     let mut instances = Vec::new();
     let field = dataset.color.active_field.as_deref().and_then(|key| dataset.dataset.field(key));
-    for hole in &dataset.dataset.holes {
+    for (index, hole) in dataset.dataset.holes.iter().enumerate() {
         if hole.trace.len() < 2 {
             continue;
         }
+        let selected = selection.contains(index);
         let min_depth = hole.trace.first().unwrap().depth;
         let max_depth = hole.trace.last().unwrap().depth;
         let mut boundaries = hole.trace.iter().map(|station| station.depth).collect::<Vec<_>>();
@@ -158,6 +222,40 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selected
         }
     }
     instances
+}
+
+fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
+    if !dataset.state.loaded || !dataset.visible {
+        return Vec::new();
+    }
+    let selected_colors = selection.any().then(|| {
+        let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
+        (COLLAR_MARKER_FILL_COLOR, [red, green, blue])
+    });
+    dataset
+        .dataset
+        .holes
+        .iter()
+        .enumerate()
+        .map(|(index, hole)| {
+            let (outline, fill) = match selected_colors {
+                Some(colors) if selection.contains(index) => colors,
+                _ => (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR),
+            };
+            // The trace's first station is the collar; `hole.collar` only
+            // stands in for a dataset that arrived without one.
+            let center = hole.trace.first().map_or(hole.collar, |station| station.position);
+            let hole_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5);
+            DrillCollarInstance {
+                center: (center - scene_origin).as_vec3().to_array(),
+                marker_radius: (hole_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
+                outline,
+                pixel_diameter: COLLAR_MARKER_PIXEL_DIAMETER,
+                fill,
+                hole_radius: hole_radius as f32,
+            }
+        })
+        .collect()
 }
 
 fn evaluate_color(kind: DrillFieldKind, value: &DrillValue, state: &DrillColorState) -> [f32; 3] {

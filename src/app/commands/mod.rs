@@ -6,6 +6,7 @@ pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
+pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
 pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
@@ -102,6 +103,12 @@ impl<'a> App<'a> {
         match command {
             UiCommand::SetActiveTool(tool) => {
                 self.set_active_tool_from_toolbar(tool);
+                Ok(())
+            }
+            UiCommand::ClearSelection => {
+                self.editor.clear_scene_selection();
+                self.active_triangulation = None;
+                self.invalidate_geometry();
                 Ok(())
             }
             UiCommand::ConfirmDrapeSelection => {
@@ -293,6 +300,14 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CreateLayer { name } => self.create_layer(name),
+            UiCommand::AddDelayProduct { delay_ms, name, color } => {
+                self.add_delay_product(delay_ms, name, color);
+                Ok(())
+            }
+            UiCommand::DeleteDelayProduct(id) => {
+                self.delete_delay_product(id);
+                Ok(())
+            }
             UiCommand::RequestDeleteLayer(layer_id) => {
                 self.activate_project_for_layer(layer_id);
                 let layer_name = self

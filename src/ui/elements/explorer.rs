@@ -76,8 +76,8 @@ pub(crate) struct ExplorerLayout {
 /// Draw the left explorer panel.
 ///
 /// Shows the open project's collapsible data sections and the properties panel
-/// below them; which sections start open is the workspace tab's decision, not
-/// the project's. The column itself has no surface: the tree and
+/// below them; every section starts open and stays exactly as the user leaves
+/// it thereafter. The column itself has no surface: the tree and
 /// the properties are separate regions inside it, with the window background
 /// showing through the seam between them. The project actions that used to
 /// head the column are in the viewport bar now.
@@ -120,17 +120,12 @@ pub(crate) fn draw_explorer(
             // borrow checker would otherwise reject against these shared reads.
             let EditorState {
                 active_layer,
-                active_workspace,
                 selected_handles,
                 locked_layers,
                 locked_rasters,
                 frozen_handles,
                 ..
             } = &*editor;
-
-            // Which sections are open is the workspace tab's decision, not the
-            // project's: see `ExplorerHeader::workspace_open`.
-            let workspace = *active_workspace;
 
             // Keep the scroll area's contents as wide as the side panel even
             // when every section is collapsed. `ScrollArea` otherwise shrinks
@@ -161,7 +156,6 @@ pub(crate) fn draw_explorer(
                     .icon(unthemed_icon!("layer.svg"))
                     .color(HEADER_DESIGNS)
                     .dirty(designs_dirty)
-                    .workspace_open(ExplorerSection::Designs, workspace)
                     .show(ui, |ui| {
                         let Some(entry) = project.projects.first() else {
                             explorer_note(ui, "No open project");
@@ -254,7 +248,6 @@ pub(crate) fn draw_explorer(
                     .icon(unthemed_icon!("triangulation.svg"))
                     .color(HEADER_TRIANGULATIONS)
                     .dirty(triangulations_dirty)
-                    .workspace_open(ExplorerSection::Triangulations, workspace)
                     .show(ui, |ui| {
                         if project.triangulations.is_empty() {
                             explorer_note(ui, "No triangulations");
@@ -352,7 +345,6 @@ pub(crate) fn draw_explorer(
                     .icon(unthemed_icon!("raster.svg"))
                     .color(HEADER_RASTERS)
                     .dirty(rasters_dirty)
-                    .workspace_open(ExplorerSection::Rasters, workspace)
                     .show(ui, |ui| {
                         if project.raster_textures.is_empty() {
                             explorer_note(ui, "No image textures");
@@ -446,7 +438,6 @@ pub(crate) fn draw_explorer(
                     .icon(unthemed_icon!("section_point_clouds.svg"))
                     .color(HEADER_POINT_CLOUDS)
                     .dirty(point_clouds_dirty)
-                    .workspace_open(ExplorerSection::PointClouds, workspace)
                     .show(ui, |ui| {
                         if project.point_clouds.is_empty() {
                             explorer_note(ui, "No point clouds");
@@ -526,7 +517,6 @@ pub(crate) fn draw_explorer(
                     .icon(unthemed_icon!("section_block_models.svg"))
                     .color(HEADER_BLOCK_MODELS)
                     .dirty(block_models_dirty)
-                    .workspace_open(ExplorerSection::BlockModels, workspace)
                     .show(ui, |ui| {
                         if project.block_models.is_empty() {
                             explorer_note(ui, "No block models");
@@ -611,7 +601,6 @@ pub(crate) fn draw_explorer(
                     .icon(unthemed_icon!("drill_hole.svg"))
                     .color(HEADER_DRILL_HOLES)
                     .dirty(drill_holes_dirty)
-                    .workspace_open(ExplorerSection::DrillHoles, workspace)
                     .show(ui, |ui| {
                         if project.drill_holes.is_empty() {
                             explorer_note(ui, "No drill holes");

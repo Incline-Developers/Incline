@@ -86,6 +86,33 @@ pub(crate) const fn default_fly_max_clip_span() -> f64 {
     150_000.0
 }
 
+/// One stored blasting product, as the config file holds it.
+///
+/// The palette's own ids are handed out per run, so nothing identifying is
+/// written: a product is its delay, its name and its colour, and the file's
+/// order is the order they load back in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct StoredDelayProduct {
+    /// Milliseconds between one hole firing and the next.
+    pub(crate) delay_ms: u32,
+    pub(crate) name: String,
+    /// Unmultiplied sRGBA bytes, so the file reads as the colour picked.
+    pub(crate) color: [u8; 4],
+}
+
+/// The delay palette a fresh installation starts with: the three interhole
+/// delays a bench pattern is usually tied in with, named after their unit.
+pub(crate) fn default_delay_products() -> Vec<StoredDelayProduct> {
+    [(17, [0xF0, 0x74, 0x70, 0xFF]), (25, [0x5C, 0xE4, 0xB8, 0xFF]), (42, [0xF0, 0xA9, 0x3C, 0xFF])]
+        .into_iter()
+        .map(|(delay_ms, color)| StoredDelayProduct {
+            delay_ms,
+            name: "ms".to_owned(),
+            color,
+        })
+        .collect()
+}
+
 pub(crate) fn finite_clamped(value: f64, min: f64, max: f64, default: f64) -> f64 {
     if value.is_finite() { value.clamp(min, max) } else { default }
 }
@@ -165,6 +192,11 @@ pub(crate) struct Config {
     pub(crate) fly_near_clip_limit: f64,
     #[serde(default = "default_fly_max_clip_span")]
     pub(crate) fly_max_clip_span: f64,
+    /// The Drill & Blast palette's products. Not a project's data - the same
+    /// delays are tied into every pattern the user opens - so they are kept
+    /// here with the rest of what outlives a project.
+    #[serde(default = "default_delay_products")]
+    pub(crate) delay_products: Vec<StoredDelayProduct>,
 }
 
 impl Default for Config {
@@ -197,6 +229,7 @@ impl Default for Config {
             fly_invert_horizontal_look: false,
             fly_near_clip_limit: default_fly_near_clip_limit(),
             fly_max_clip_span: default_fly_max_clip_span(),
+            delay_products: default_delay_products(),
         }
     }
 }

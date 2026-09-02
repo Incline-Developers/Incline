@@ -13,7 +13,11 @@ use winit::{
 use crate::{
     Size,
     model::{
-        Document, Object, SceneEntityId, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, point_cloud::OpenPointCloud, raster::OpenRasterTexture,
+        Document, Object, SceneEntityId,
+        block_model::OpenBlockModel,
+        drill_hole::{DrillHoleRef, OpenDrillHoleDataset},
+        point_cloud::OpenPointCloud,
+        raster::OpenRasterTexture,
         triangulation::OpenTriangulation,
     },
     rendering::{
@@ -22,8 +26,8 @@ use crate::{
         pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
-            BlockModelGpuCache, DesignPointGpuCache, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance, PointPosition, RasterGpuCache,
-            StaticStrokeCache, TriangulationGpuCache,
+            BlockModelGpuCache, DesignPointGpuCache, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance, PointPosition,
+            RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
             bounds::{scene_bounds, visible_object_aabbs},
             build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, TextDrawBatch},
         },
@@ -63,6 +67,12 @@ pub(super) const MEASUREMENT_COLOR: [f32; 4] = [1.0, 0.82, 0.15, 1.0];
 /// fuse endpoints, move-vertex handles). Near-black rather than black: linear
 /// value for sRGB (20, 20, 20), since the scene renders into an sRGB target.
 pub(super) const POINT_MARKER_COLOR: [f32; 4] = [0.007, 0.007, 0.007, 1.0];
+/// Fill for the marker naming the point a tool will actually act on: the
+/// vertex under a Move or Delete Points cursor, the one being dragged, the
+/// endpoint a fuse would close on. The amber the drawn cursor turns when a
+/// snap catches (`ui::elements::cursors`), so one colour means "this is the
+/// point it has" wherever it shows up. Linear value for sRGB (255, 220, 50).
+pub(super) const ACTIVE_POINT_COLOR: [f32; 4] = [1.0, 0.7157, 0.0319, 1.0];
 /// Logical em size used by cosmic-text layout; vector outlines are normalized
 /// and the document text height scales this into world units.
 pub(super) const DOC_TEXT_FONT_SIZE: f32 = 64.0;
@@ -228,6 +238,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) point_cloud_uncolored_render_pipeline: wgpu::RenderPipeline,
     pub(super) drill_hole_render_pipeline: wgpu::RenderPipeline,
     pub(super) xray_drill_hole_render_pipeline: wgpu::RenderPipeline,
+    pub(super) drill_collar_render_pipeline: wgpu::RenderPipeline,
+    pub(super) xray_drill_collar_render_pipeline: wgpu::RenderPipeline,
     pub(super) design_point_render_pipeline: wgpu::RenderPipeline,
     pub(super) edge_style_bind_group_layout: wgpu::BindGroupLayout,
     pub(super) overlay_render_pipeline: wgpu::RenderPipeline,
@@ -725,16 +737,21 @@ impl<'a> Graphics<'a> {
         }
     }
 
+    /// Pin the pointer to the window while a fly-mode look is in progress.
+    ///
+    /// Only the grab is set here. Hiding the pointer is left to the UI, which
+    /// asks for [`egui::CursorIcon::None`] while the camera is being flown:
+    /// `Window::set_cursor_visible` from this side would leave egui-winit's
+    /// icon cache believing something else is on screen, and the next thing
+    /// egui hid or showed would be skipped as a no-op.
     fn sync_cursor_grab(&self) {
         let fly_active = self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right);
         if fly_active {
             if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
                 let _ = self.window.set_cursor_grab(CursorGrabMode::Confined);
             }
-            self.window.set_cursor_visible(false);
         } else {
             let _ = self.window.set_cursor_grab(CursorGrabMode::None);
-            self.window.set_cursor_visible(true);
         }
     }
 }

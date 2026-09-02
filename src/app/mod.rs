@@ -36,7 +36,7 @@ use winit::{
     event::{DeviceEvent, *},
     event_loop::ControlFlow,
     keyboard::ModifiersState,
-    window::{CursorIcon, Icon, Window},
+    window::{Icon, Window},
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -547,6 +547,10 @@ impl<'a> App<'a> {
         self.editor.fly_invert_horizontal_look = config.fly_invert_horizontal_look;
         self.editor.fly_near_clip_limit = io::finite_clamped(config.fly_near_clip_limit, 0.01, 100.0, io::default_fly_near_clip_limit());
         self.editor.fly_max_clip_span = io::finite_clamped(config.fly_max_clip_span, 100.0, 1_000_000.0, io::default_fly_max_clip_span());
+        // Ids are handed out per run, so the palette's own counter starts
+        // past whatever the file held.
+        self.editor.delay_products = crate::ui::state::delay_products_from_stored(&config.delay_products);
+        self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
         self.configure_graphics_camera_preferences();
     }
 
@@ -1022,14 +1026,12 @@ impl<'a> App<'a> {
         self.background_tasks.has_gpu_uploads()
     }
 
-    pub(crate) fn background_tasks_pending(&self) -> bool {
-        self.background_tasks.is_busy()
-    }
-
-    fn update_background_task_cursor(&self) {
-        if let Some(window) = &self.window {
-            window.set_cursor(if self.background_tasks.is_busy() { CursorIcon::Progress } else { CursorIcon::Default });
-        }
+    /// Mirror the busy state into the editor, where `draw_ui` turns it into a
+    /// cursor request. It goes through egui rather than `Window::set_cursor`
+    /// so egui-winit's icon cache stays in step - see
+    /// [`EditorState::background_busy`].
+    fn update_background_task_cursor(&mut self) {
+        self.editor.background_busy = self.background_tasks.is_busy();
     }
 
     fn fit_view_to_extents(&mut self) {
