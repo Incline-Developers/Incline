@@ -946,6 +946,12 @@ pub(crate) struct EditorState {
     pub(crate) z_input: f64,
     /// True when the current `cursor_world` is a snapped position (not raw ray).
     pub(crate) cursor_snapped: bool,
+    /// Where the snapped point lands on the window, in physical pixels, while
+    /// [`EditorState::cursor_snapped`] is set. Projected in
+    /// `update_tool_projections` like every other tool overlay, and read by
+    /// the drawn cursor so it can mark the target it caught rather than only
+    /// reporting that it caught one.
+    pub(crate) snap_marker_px: Option<(f32, f32)>,
     /// Physical-pixel cursor position, updated on every CursorMoved event.
     pub(crate) cursor_screen_px: Option<(f32, f32)>,
 
@@ -1808,6 +1814,7 @@ impl EditorState {
             text_editing_enabled: false,
             editing_labels_id: None,
             cursor_snapped: false,
+            snap_marker_px: None,
             z_level: 0.0,
             z_input: 0.0,
             cursor_screen_px: None,

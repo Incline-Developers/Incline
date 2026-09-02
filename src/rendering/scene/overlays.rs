@@ -105,12 +105,6 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
 
-    if editor.cursor_snapped
-        && let Some(position) = editor.cursor_world
-    {
-        draw_screen_point_marker(&mut overlay, position, POINT_MARKER_COLOR);
-    }
-
     if editor.active_tool == ActiveTool::VerticalSlice
         && let Some(start) = editor.slice_pending_start
     {

@@ -148,11 +148,11 @@ pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: 
 }
 
 /// Half-width of the cursor's crosshair arms, in points.
-const CURSOR_ARM: f32 = 11.0;
+const CURSOR_ARM: f32 = 12.0;
 /// Half-width of the glyph a snap cursor carries inside its crosshair. Smaller
 /// than the arms in the same proportion the toolbar icons use, so the cursor
 /// and the button that arms it read as the same mark.
-const CURSOR_GLYPH: f32 = 7.0;
+const CURSOR_GLYPH: f32 = 8.0;
 /// Width of the dark halo drawn under every cursor stroke. The scene behind it
 /// is arbitrary - a bright raster, a dark background - so the mark carries its
 /// own contrast rather than relying on what it lands on.
@@ -160,6 +160,12 @@ const CURSOR_HALO_WIDTH: f32 = 3.2;
 /// Width of the light core drawn over the halo, matching the 1.46-in-24 stroke
 /// the cursor icons in `res/ui/` are drawn with.
 const CURSOR_CORE_WIDTH: f32 = 1.45;
+/// Radius of the hole left in the middle of a bare crosshair. The point the
+/// cursor is reporting is the one thing it must not cover.
+const CURSOR_CENTRE_GAP: f32 = 3.5;
+/// Radius of the dot marking the point a snap actually caught. Small enough to
+/// sit inside the aperture without filling it back in.
+const SNAP_DOT_RADIUS: f32 = 2.2;
 
 /// The mark drawn in place of the pointer, chosen by the active workspace's
 /// cursor rather than by the active tool: what a pick *does* is the question
@@ -173,26 +179,26 @@ enum CursorGlyph {
     Triangle,
 }
 
-/// The mark for the cursor the active workspace is holding, and whether the
-/// crosshair rules are drawn through it as they are in the toolbar icons.
+/// The mark for the cursor the active workspace is holding.
 ///
-/// Tie Holes is the one cursor without them: it is a pick box that selects a
-/// hole, not a crosshair that places a point.
-fn cursor_glyph(editor: &crate::ui::state::EditorState) -> (CursorGlyph, bool) {
+/// A cursor wears one or the other, never both: a crosshair where the pick is
+/// plain and has only a position to report, and a bare shape where it has a
+/// target, which the shape then frames rather than covers.
+fn cursor_glyph(editor: &crate::ui::state::EditorState) -> CursorGlyph {
     use crate::ui::state::{BlastCursor, CursorMode, Workspace};
 
     match editor.active_workspace {
         Workspace::Production => match editor.cursors.production {
-            CursorMode::Select => (CursorGlyph::None, true),
-            CursorMode::SnapToPoint => (CursorGlyph::Circle, true),
-            CursorMode::SnapToLine => (CursorGlyph::Square, true),
-            CursorMode::SnapToSurface => (CursorGlyph::Triangle, true),
+            CursorMode::Select => CursorGlyph::None,
+            CursorMode::SnapToPoint => CursorGlyph::Circle,
+            CursorMode::SnapToLine => CursorGlyph::Square,
+            CursorMode::SnapToSurface => CursorGlyph::Triangle,
         },
         Workspace::DrillAndBlast => match editor.cursors.blast {
-            BlastCursor::Select => (CursorGlyph::None, true),
-            BlastCursor::TieHoles => (CursorGlyph::Square, false),
+            BlastCursor::Select => CursorGlyph::None,
+            BlastCursor::TieHoles => CursorGlyph::Square,
         },
-        Workspace::Geology => (CursorGlyph::None, true),
+        Workspace::Geology => CursorGlyph::None,
     }
 }
 
@@ -272,18 +278,20 @@ pub(crate) fn draw_tool_cursor(ctx: &egui::Context, editor: &crate::ui::state::E
         egui::Color32::from_rgba_unmultiplied(238, 242, 246, 235)
     };
     let halo = egui::Color32::from_rgba_unmultiplied(12, 16, 20, 190);
-    let (glyph, crosshair) = cursor_glyph(editor);
+    let glyph = cursor_glyph(editor);
 
     // Halo first, then core, so the dark outline never lands on top of the
     // mark it is there to separate from the scene.
     for (color, width) in [(halo, CURSOR_HALO_WIDTH), (core, CURSOR_CORE_WIDTH)] {
         let stroke = egui::Stroke::new(width, color);
-        if crosshair {
-            painter.line_segment([pos - egui::vec2(CURSOR_ARM, 0.0), pos + egui::vec2(CURSOR_ARM, 0.0)], stroke);
-            painter.line_segment([pos - egui::vec2(0.0, CURSOR_ARM), pos + egui::vec2(0.0, CURSOR_ARM)], stroke);
-        }
         match glyph {
-            CursorGlyph::None => {}
+            // Arms only, and stopping short of the middle: the point the
+            // cursor is reporting is the one thing it must not cover.
+            CursorGlyph::None => {
+                for direction in [egui::vec2(1.0, 0.0), egui::vec2(-1.0, 0.0), egui::vec2(0.0, 1.0), egui::vec2(0.0, -1.0)] {
+                    painter.line_segment([pos + direction * CURSOR_CENTRE_GAP, pos + direction * CURSOR_ARM], stroke);
+                }
+            }
             CursorGlyph::Circle => {
                 painter.circle_stroke(pos, CURSOR_GLYPH, stroke);
             }
@@ -297,7 +305,7 @@ pub(crate) fn draw_tool_cursor(ctx: &egui::Context, editor: &crate::ui::state::E
             }
             CursorGlyph::Triangle => {
                 // The same upright triangle the snap-to-surface icon carries,
-                // sitting on a base through the crosshair's lower arm.
+                // centred on the pointer rather than sitting on it.
                 let apex = pos - egui::vec2(0.0, CURSOR_GLYPH);
                 let left = pos + egui::vec2(-CURSOR_GLYPH, CURSOR_GLYPH * 0.82);
                 let right = pos + egui::vec2(CURSOR_GLYPH, CURSOR_GLYPH * 0.82);
@@ -306,6 +314,15 @@ pub(crate) fn draw_tool_cursor(ctx: &egui::Context, editor: &crate::ui::state::E
                 painter.line_segment([right, apex], stroke);
             }
         }
+    }
+
+    // The point the snap actually caught. It is not the pointer - a snap pulls
+    // the placement onto the geometry, up to the snap threshold away - so the
+    // dot is drawn where the tool will place, not where the mouse is.
+    if let Some((x, y)) = editor.snap_marker_px {
+        let target = egui::pos2(x / ctx.pixels_per_point(), y / ctx.pixels_per_point());
+        painter.circle_filled(target, SNAP_DOT_RADIUS + 1.2, halo);
+        painter.circle_filled(target, SNAP_DOT_RADIUS, core);
     }
 }
 
