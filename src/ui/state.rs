@@ -876,6 +876,10 @@ pub(crate) struct EditorState {
     pub(crate) tool_hatch: ToolHatch,
     /// Active drawing layer, if any.
     pub(crate) active_layer: Option<LayerId>,
+    /// The drill hole dataset the Drill & Blast workspace works on: what its
+    /// editing, tie-in and simulation tools act against. `None` until one is
+    /// picked, and dropped again when that dataset is closed or removed.
+    pub(crate) active_drill_hole: Option<DrillHoleId>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
     /// Browser-only viewport prompt shown before creating a named project.
@@ -1500,6 +1504,7 @@ impl EditorState {
         self.locked_rasters.clear();
         self.translucent_handles.clear();
         self.active_layer = None;
+        self.active_drill_hole = None;
         self.active_tool = ActiveTool::None;
         #[cfg(target_arch = "wasm32")]
         {
@@ -1720,6 +1725,7 @@ impl EditorState {
             tool_line_weight: 1.0,
             tool_hatch: ToolHatch::Clear,
             active_layer: None,
+            active_drill_hole: None,
             cursor_world: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
@@ -3038,6 +3044,14 @@ impl Workspace {
     /// controls, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
+    }
+
+    /// Whether the viewport bar's centre run carries anything in this
+    /// workspace: production's drawing settings, or the drill hole Drill &
+    /// Blast works on. A workspace with neither leaves the middle of the bar
+    /// empty.
+    pub(crate) fn has_centre_settings(self) -> bool {
+        matches!(self, Self::Production | Self::DrillAndBlast)
     }
 }
 

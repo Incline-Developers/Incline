@@ -6,8 +6,9 @@
 //! - **Left** - the project actions that are true in every workspace (save,
 //!   import, export, undo, redo), followed by the menus belonging to the
 //!   workspace itself.
-//! - **Centre** - what the drawing tools will use next: the active layer, the
-//!   working elevation, the line colour and the fill.
+//! - **Centre** - what the workspace's tools will act on next: in Production
+//!   the active layer, the working elevation, the line colour and the fill; in
+//!   Drill & Blast the drill hole dataset being worked on.
 //! - **Right** - the view controls, which used to float on a tile hung off the
 //!   viewport's right edge.
 //!
@@ -22,7 +23,7 @@ use crate::ui::{
     EditorState, UiProjectView, color32_to_rgba,
     elements::main_menu,
     rgba_to_color32,
-    state::{ActiveTool, UiCommand, UiProjectEntry},
+    state::{ActiveTool, UiCommand, UiProjectEntry, Workspace},
     themed_icon, unthemed_icon,
     widgets::{
         menu::MenuFieldF64,
@@ -50,10 +51,12 @@ const CENTRE_LABEL_GAP: f32 = 4.0;
 /// Width the centre cluster is placed from on the very first frame, before it
 /// has been laid out once and can report its own.
 const CENTRE_WIDTH_GUESS: f32 = 400.0;
-/// Width of the active-layer combo box.
-const LAYER_COMBO_WIDTH: f32 = 220.0;
-/// Longest layer name shown in that combo before it is elided.
-const MAX_LAYER_DISPLAY: usize = 22;
+/// Width of the centre run's combo boxes - the active layer's, and the active
+/// drill hole dataset's - which are one behind the other as the workspace
+/// changes and so are the same width.
+const SELECTOR_COMBO_WIDTH: f32 = 220.0;
+/// Longest name shown in one of those combos before it is elided.
+const MAX_SELECTOR_DISPLAY: usize = 22;
 /// Label for the primary shortcut modifier in tooltips. Spelled out rather
 /// than drawn as a glyph, so it can't land as tofu in the bundled fonts.
 const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" };
@@ -99,7 +102,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         draw_view_tools(ui, editor, commands, side);
                     });
 
-                    if !editor.active_workspace.has_production_tools() {
+                    if !editor.active_workspace.has_centre_settings() {
                         // Nothing between the two clusters but the parting they
                         // would take if they met.
                         return left.width() + CLUSTER_GAP + right.width();
@@ -111,7 +114,10 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     // reports its own width back for the next one. Its content
                     // is fixed-width, so that settles on the first frame and
                     // stays there.
-                    let width_id = ui.make_persistent_id("viewport_bar_centre_width");
+                    // Keyed by workspace: the runs are different widths, and
+                    // a stale one would place the incoming run off centre for
+                    // a frame after every tab switch.
+                    let width_id = ui.make_persistent_id(("viewport_bar_centre_width", editor.active_workspace.label()));
                     let width: f32 = ui.data(|data| data.get_temp(width_id)).unwrap_or(CENTRE_WIDTH_GUESS);
                     if let Some(band) = centre_band(strip, left, right) {
                         let left_edge = (strip.center().x - width / 2.0).clamp(band.left(), (band.right() - width).max(band.left()));
@@ -120,7 +126,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
                         let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            draw_drawing_settings(ui, editor, project);
+                            draw_centre_settings(ui, editor, project);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
                     }
@@ -219,6 +225,54 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     }
 }
 
+/// The centre run, which each workspace fills with what its own tools act on.
+///
+/// Only the workspaces [`Workspace::has_centre_settings`] names get here; the
+/// caller leaves the middle of the bar empty for the rest.
+fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    match editor.active_workspace {
+        Workspace::DrillAndBlast => draw_blast_settings(ui, editor, project),
+        _ => draw_drawing_settings(ui, editor, project),
+    }
+}
+
+/// A name as one of the centre combos shows it, cut to length rather than let
+/// to widen the fixed-width run.
+fn elide(name: &str) -> String {
+    if name.chars().count() > MAX_SELECTOR_DISPLAY {
+        format!("{}…", name.chars().take(MAX_SELECTOR_DISPLAY - 1).collect::<String>())
+    } else {
+        name.to_owned()
+    }
+}
+
+/// What the Drill & Blast tools act on: the drill hole dataset being edited,
+/// tied in and simulated.
+///
+/// Only loaded datasets are offered - a closed one has no holes in the scene
+/// to work on - and a selection that stops being loaded reads as "None" here
+/// until another is picked, the same way the layer combo above treats a layer
+/// that has gone.
+fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+
+    ui.label("Drill Holes:");
+    let selected = editor
+        .active_drill_hole
+        .and_then(|id| project.drill_holes.iter().find(|dataset| dataset.id == id && dataset.is_loaded))
+        .map(|dataset| dataset.name.as_str())
+        .unwrap_or("None");
+    egui::ComboBox::from_id_salt("drill_hole_combo_box")
+        .selected_text(elide(selected))
+        .width(SELECTOR_COMBO_WIDTH)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut editor.active_drill_hole, None, "None");
+            for dataset in project.drill_holes.iter().filter(|dataset| dataset.is_loaded) {
+                ui.selectable_value(&mut editor.active_drill_hole, Some(dataset.id), &dataset.name);
+            }
+        });
+}
+
 /// What the drawing tools will use next: layer, elevation, line colour, fill.
 fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
     // The run's own spacing holds a label to its control; the settings are
@@ -239,14 +293,9 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
         .and_then(|id| active_layers.iter().find(|layer| layer.id == id && layer.is_loaded))
         .map(|layer| layer.name.as_str())
         .unwrap_or("None");
-    let layer_display: String = if selected_layer.chars().count() > MAX_LAYER_DISPLAY {
-        format!("{}…", selected_layer.chars().take(MAX_LAYER_DISPLAY - 1).collect::<String>())
-    } else {
-        selected_layer.to_string()
-    };
     egui::ComboBox::from_id_salt("layer_combo_box")
-        .selected_text(layer_display)
-        .width(LAYER_COMBO_WIDTH)
+        .selected_text(elide(selected_layer))
+        .width(SELECTOR_COMBO_WIDTH)
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut editor.active_layer, None, "None");
             for layer in active_layers.iter().filter(|layer| layer.is_loaded) {

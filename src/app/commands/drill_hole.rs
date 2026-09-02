@@ -231,6 +231,9 @@ impl<'a> App<'a> {
         if self.editor.drill_hole_color_dialog == Some(id) {
             self.editor.drill_hole_color_dialog = None;
         }
+        if self.editor.active_drill_hole == Some(id) {
+            self.editor.active_drill_hole = None;
+        }
         self.invalidate_topology_bounds_and_redraw();
     }
 
@@ -242,6 +245,9 @@ impl<'a> App<'a> {
         self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
+        if self.editor.active_drill_hole == Some(id) {
+            self.editor.active_drill_hole = None;
+        }
         let previous_len = self.drill_holes.len();
         self.drill_holes.retain(|dataset| dataset.id != id);
         if self.drill_holes.len() != previous_len {
