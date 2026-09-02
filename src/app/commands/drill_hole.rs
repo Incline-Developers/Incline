@@ -234,6 +234,7 @@ impl<'a> App<'a> {
         if self.editor.active_drill_hole == Some(id) {
             self.editor.active_drill_hole = None;
         }
+        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
         self.invalidate_topology_bounds_and_redraw();
     }
 
@@ -248,6 +249,7 @@ impl<'a> App<'a> {
         if self.editor.active_drill_hole == Some(id) {
             self.editor.active_drill_hole = None;
         }
+        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
         let previous_len = self.drill_holes.len();
         self.drill_holes.retain(|dataset| dataset.id != id);
         if self.drill_holes.len() != previous_len {

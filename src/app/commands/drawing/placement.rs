@@ -8,7 +8,7 @@ use crate::{
 impl<'a> App<'a> {
     pub(crate) fn measure_distance_click(&mut self) {
         if matches!(
-            self.editor.cursor_mode,
+            self.editor.snap_cursor_mode(),
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -30,7 +30,7 @@ impl<'a> App<'a> {
 
     pub(crate) fn measure_batter_angle_click(&mut self) {
         if matches!(
-            self.editor.cursor_mode,
+            self.editor.snap_cursor_mode(),
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -52,7 +52,7 @@ impl<'a> App<'a> {
         }
         // Block if snap mode is active but cursor isn't snapped
         if matches!(
-            self.editor.cursor_mode,
+            self.editor.snap_cursor_mode(),
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -89,7 +89,7 @@ impl<'a> App<'a> {
         }
         // Block if snap mode is active but cursor isn't snapped
         if matches!(
-            self.editor.cursor_mode,
+            self.editor.snap_cursor_mode(),
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -138,7 +138,7 @@ impl<'a> App<'a> {
             return;
         }
         if matches!(
-            self.editor.cursor_mode,
+            self.editor.snap_cursor_mode(),
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {

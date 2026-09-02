@@ -13,7 +13,11 @@ use winit::{
 use crate::{
     Size,
     model::{
-        Document, Object, SceneEntityId, block_model::OpenBlockModel, drill_hole::OpenDrillHoleDataset, point_cloud::OpenPointCloud, raster::OpenRasterTexture,
+        Document, Object, SceneEntityId,
+        block_model::OpenBlockModel,
+        drill_hole::{DrillHoleRef, OpenDrillHoleDataset},
+        point_cloud::OpenPointCloud,
+        raster::OpenRasterTexture,
         triangulation::OpenTriangulation,
     },
     rendering::{

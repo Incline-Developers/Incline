@@ -105,6 +105,12 @@ impl<'a> App<'a> {
                 self.set_active_tool_from_toolbar(tool);
                 Ok(())
             }
+            UiCommand::ClearSelection => {
+                self.editor.clear_scene_selection();
+                self.active_triangulation = None;
+                self.invalidate_geometry();
+                Ok(())
+            }
             UiCommand::ConfirmDrapeSelection => {
                 self.confirm_drape_selection();
                 Ok(())

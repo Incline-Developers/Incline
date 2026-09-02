@@ -161,7 +161,15 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 /// cursor mode is left as the user set it: it does nothing without a drawing
 /// tool to use it, and it is theirs again the moment production is back.
 fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace) {
+    if editor.active_workspace == workspace {
+        return;
+    }
     editor.active_workspace = workspace;
+    // A selection is made in one discipline's terms - production selects a
+    // drill hole dataset whole where Drill & Blast selects one hole of it - so
+    // it is left behind with the workspace that made it rather than carried
+    // into the next one.
+    commands.push(UiCommand::ClearSelection);
     if workspace.has_production_tools() {
         return;
     }

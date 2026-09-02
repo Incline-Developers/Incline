@@ -11,7 +11,7 @@ impl<'a> App<'a> {
     /// the line is flat in XY by construction.
     pub(crate) fn slice_line_click(&mut self) {
         if matches!(
-            self.editor.cursor_mode,
+            self.editor.snap_cursor_mode(),
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {

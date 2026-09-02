@@ -10,6 +10,19 @@ fn merge_aabbs(aabbs: &[(DVec3, DVec3)]) -> Option<(DVec3, DVec3)> {
     aabbs.iter().copied().reduce(|(acc_min, acc_max), (min, max)| (acc_min.min(min), acc_max.max(max)))
 }
 
+/// What a scene pick landed on.
+///
+/// `entity` is the scene entity the selection sets are keyed by; `hole` is
+/// filled in when that entity is a drill hole dataset and says which of its
+/// holes was actually under the cursor. Production selects the dataset and
+/// ignores it; Drill & Blast works a hole at a time and does not.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ScenePick {
+    pub(crate) entity: SceneEntityId,
+    pub(crate) world: DVec3,
+    pub(crate) hole: Option<DrillHoleRef>,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ScreenRect {
     min_x: f64,
@@ -439,18 +452,23 @@ impl<'a> Graphics<'a> {
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
         xray_enabled: bool,
-    ) -> Option<(SceneEntityId, DVec3)> {
+    ) -> Option<ScenePick> {
+        let plain = |(entity, world): (SceneEntityId, DVec3)| ScenePick { entity, world, hole: None };
         let document_or_surface = self.pick_at_cursor(threshold_px, triangulations, hidden, frozen, xray_enabled);
         // X-ray explicitly gives document geometry priority through opaque
         // assets. Assets remain pickable where no document geometry is hit.
-        if xray_enabled && document_or_surface.is_some() {
-            return document_or_surface;
+        if xray_enabled && let Some(hit) = document_or_surface {
+            return Some(plain(hit));
         }
 
         let view_proj = self.view_proj();
         let screen = self.screen_size();
         let (ray_origin, ray_direction) = self.cursor_model_ray();
-        let drill_hole = SceneQuery::nearest_drill_hole_entity(drill_holes, hidden, frozen, ray_origin, ray_direction, &view_proj, screen, threshold_px);
+        let drill_hole = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, ray_direction, &view_proj, screen, threshold_px).map(|(hole, world)| ScenePick {
+            entity: SceneEntityId::DrillHole(hole.dataset),
+            world,
+            hole: Some(hole),
+        });
         let block_model = self.block_model_gpu.nearest_visible_entity_hit(ray_origin, ray_direction, hidden, frozen);
         let point_cloud = self.point_cloud_gpu.nearest_visible_entity_at_screen(
             &view_proj,
@@ -462,11 +480,12 @@ impl<'a> Graphics<'a> {
         );
 
         document_or_surface
+            .map(plain)
             .into_iter()
             .chain(drill_hole)
-            .chain(block_model)
-            .chain(point_cloud)
-            .min_by(|(_, a), (_, b)| (*a - ray_origin).dot(ray_direction).total_cmp(&(*b - ray_origin).dot(ray_direction)))
+            .chain(block_model.map(plain))
+            .chain(point_cloud.map(plain))
+            .min_by(|a, b| (a.world - ray_origin).dot(ray_direction).total_cmp(&(b.world - ray_origin).dot(ray_direction)))
     }
 
     /// Pick only loaded triangulations. Dialog field pickers use this path so
@@ -595,6 +614,62 @@ impl<'a> Graphics<'a> {
         hits
     }
 
+    /// The individual drill holes a selection rectangle takes.
+    ///
+    /// The same left-to-right / right-to-left convention the design box
+    /// selection uses: `cross_select` takes a hole whose trace touches the
+    /// box at all, and a window select takes only holes drawn wholly inside
+    /// it. Holes are tested by their projected trace, so a hole standing
+    /// behind the camera contributes nothing rather than wrapping around.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn drill_holes_in_screen_rect(
+        &self,
+        drill_holes: &[OpenDrillHoleDataset],
+        start_px: (f32, f32),
+        end_px: (f32, f32),
+        cross_select: bool,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Vec<DrillHoleRef> {
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        let mut hits = Vec::new();
+
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+            let entity = dataset.entity_id();
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
+            for (index, hole) in dataset.dataset.holes.iter().enumerate() {
+                let projected: Vec<DVec2> = hole
+                    .trace
+                    .iter()
+                    .filter_map(|station| crate::rendering::pick::world_to_screen(&view_proj, station.position, screen))
+                    .collect();
+                if projected.is_empty() {
+                    continue;
+                }
+                let taken = if cross_select {
+                    projected.iter().any(|point| rect.contains(*point))
+                        || projected
+                            .windows(2)
+                            .any(|pair| segment_intersects_rect(pair[0], pair[1], rect.min_x, rect.max_x, rect.min_y, rect.max_y))
+                } else {
+                    // A trace that partly failed to project is not wholly
+                    // inside anything, whatever the stations that did project
+                    // say.
+                    projected.len() == hole.trace.len() && projected.iter().all(|point| rect.contains(*point))
+                };
+                if taken {
+                    hits.push(DrillHoleRef { dataset: dataset.id, hole: index });
+                }
+            }
+        }
+
+        hits
+    }
+
     /// Begin an orbit with the anchor at the surface or geometry point under the cursor.
     /// Falls back to the current-target depth when nothing is hit.
     /// Called from the app level where triangulations are available.
@@ -630,7 +705,7 @@ impl<'a> Graphics<'a> {
         } else {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
-            let drill_hole_hit = SceneQuery::nearest_drill_hole_entity(drill_holes, hidden, frozen, ray_origin, direction, &view_proj, screen, 0.0).map(|(_, world)| world);
+            let drill_hole_hit = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, &view_proj, screen, 0.0).map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected

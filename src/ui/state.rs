@@ -18,7 +18,7 @@ use crate::{
     model::{
         Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
-        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleSource},
+        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnMapping, CsvPreview},
@@ -128,12 +128,15 @@ impl EditorState {
         self.status_message = message;
     }
 
-    fn clear_selection(&mut self) {
+    /// Drop everything selected, in every workspace's terms: whole scene
+    /// entities and the individual drill holes Drill & Blast picks.
+    pub(crate) fn clear_scene_selection(&mut self) {
         self.selected_handles.clear();
+        self.selected_drill_holes.clear();
     }
 
     fn replace_selection(&mut self, handle: SceneEntityId) {
-        self.selected_handles.clear();
+        self.clear_scene_selection();
         self.selected_handles.insert(handle);
     }
 
@@ -155,6 +158,9 @@ impl EditorState {
             self.explicitly_frozen.insert(handle);
             self.frozen_handles.insert(handle);
             self.selected_handles.remove(&handle);
+            if let SceneEntityId::DrillHole(dataset) = handle {
+                self.selected_drill_holes.retain(|hole| hole.dataset != dataset);
+            }
         } else {
             self.explicitly_frozen.remove(&handle);
             self.frozen_handles.remove(&handle);
@@ -777,6 +783,11 @@ impl RenameTarget {
 pub(crate) struct EditorState {
     // Selection & visibility
     pub(crate) selected_handles: HashSet<SceneEntityId>,
+    /// Individually selected drill holes, which the Drill & Blast workspace
+    /// works in place of whole datasets - see [`DrillHoleRef`]. Production
+    /// selects the dataset into [`Self::selected_handles`] and leaves this
+    /// empty; the two are never populated for the same drill hole at once.
+    pub(crate) selected_drill_holes: HashSet<DrillHoleRef>,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
@@ -870,7 +881,10 @@ pub(crate) struct EditorState {
     /// is hidden entirely until then.
     pub(crate) last_finished_task: Option<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
-    pub(crate) cursor_mode: CursorMode,
+    /// The cursor each workspace is holding - see [`WorkspaceCursors`]. There
+    /// is no cursor mode over the application as a whole: what a pick does is
+    /// a question about the workspace it is made in.
+    pub(crate) cursors: WorkspaceCursors,
     pub(crate) tool_line_color: [f32; 4],
     pub(crate) tool_line_weight: f32,
     pub(crate) tool_hatch: ToolHatch,
@@ -1393,6 +1407,40 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
+    /// What a pick snaps to in the workspace that is up.
+    ///
+    /// Only production draws, and only its cursor run offers snapping, so
+    /// every other workspace picks plainly - the same thing
+    /// [`CursorMode::Select`] means there.
+    pub(crate) fn snap_cursor_mode(&self) -> CursorMode {
+        match self.active_workspace {
+            Workspace::Production => self.cursors.production,
+            Workspace::DrillAndBlast | Workspace::Geology => CursorMode::Select,
+        }
+    }
+
+    /// Step the active workspace's cursor one along its own run - what the
+    /// mouse's forward and back buttons do - and report whether it moved.
+    ///
+    /// A workspace with no cursor run of its own has nowhere to step, so the
+    /// buttons do nothing there rather than quietly changing another
+    /// workspace's cursor behind its back.
+    pub(crate) fn cycle_workspace_cursor(&mut self, forward: bool) -> bool {
+        match self.active_workspace {
+            Workspace::Production => {
+                let mode = &mut self.cursors.production;
+                *mode = if forward { mode.next() } else { mode.previous() };
+                true
+            }
+            Workspace::DrillAndBlast => {
+                let cursor = &mut self.cursors.blast;
+                *cursor = if forward { cursor.next() } else { cursor.previous() };
+                true
+            }
+            Workspace::Geology => false,
+        }
+    }
+
     /// Dialogs that take Enter as their confirm shortcut.
     ///
     /// The GUI only reports a key press as consumed when a text field holds
@@ -1497,6 +1545,7 @@ impl EditorState {
     /// project that was just left.
     pub(crate) fn clear_project_transients(&mut self) {
         self.selected_handles.clear();
+        self.selected_drill_holes.clear();
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
@@ -1676,6 +1725,7 @@ impl EditorState {
     pub(crate) fn new() -> Self {
         Self {
             selected_handles: HashSet::new(),
+            selected_drill_holes: HashSet::new(),
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
@@ -1720,7 +1770,7 @@ impl EditorState {
             status_message: None,
             last_finished_task: None,
             active_tool: ActiveTool::None,
-            cursor_mode: CursorMode::Select,
+            cursors: WorkspaceCursors::default(),
             tool_line_color: [1.0, 1.0, 1.0, 1.0],
             tool_line_weight: 1.0,
             tool_hatch: ToolHatch::Clear,
@@ -2015,7 +2065,7 @@ impl EditorState {
 
     /// Left-click that landed on empty space: clears the selection.
     pub(crate) fn on_canvas_click(&mut self, _world: DVec3) {
-        self.clear_selection();
+        self.clear_scene_selection();
     }
 
     /// Left-click that landed on entity geometry: selects it and reports the
@@ -2026,6 +2076,26 @@ impl EditorState {
             SelectionMode::Replace => self.replace_selection(handle),
             SelectionMode::Add => self.add_selection(handle),
             SelectionMode::Toggle => self.toggle_selection(handle),
+        }
+    }
+
+    /// Left-click that landed on one drill hole, in a workspace that works a
+    /// hole at a time: selects the hole rather than the dataset holding it.
+    pub(crate) fn on_drill_hole_pick(&mut self, hole: DrillHoleRef, world: DVec3, mode: SelectionMode) {
+        self.cursor_world = Some(world);
+        match mode {
+            SelectionMode::Replace => {
+                self.clear_scene_selection();
+                self.selected_drill_holes.insert(hole);
+            }
+            SelectionMode::Add => {
+                self.selected_drill_holes.insert(hole);
+            }
+            SelectionMode::Toggle => {
+                if !self.selected_drill_holes.remove(&hole) {
+                    self.selected_drill_holes.insert(hole);
+                }
+            }
         }
     }
 
@@ -2095,12 +2165,64 @@ pub(crate) enum EditorAction {
 }
 
 /// Cursor interaction mode for canvas picks.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum CursorMode {
     Select,
     SnapToSurface,
     SnapToLine,
     SnapToPoint,
+}
+
+/// What a click in the scene does while the Drill & Blast workspace is up.
+///
+/// The production workspace's [`CursorMode`] is about what a pick *snaps* to
+/// while something is being drawn; this is about what a pick is *for*, which
+/// is the question Drill & Blast asks instead. `Select` is a plain pick with
+/// nothing armed - the same thing a click did before there were modes here -
+/// and `TieHoles` is the mode a round is tied in under, which is why the delay
+/// palette is only live while it is the one selected.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BlastCursor {
+    Select,
+    TieHoles,
+}
+
+impl BlastCursor {
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::Select => Self::TieHoles,
+            Self::TieHoles => Self::Select,
+        }
+    }
+
+    /// With two cursors in the run, either way round lands on the other one.
+    pub(crate) fn previous(self) -> Self {
+        self.next()
+    }
+}
+
+/// The cursor every workspace keeps, one field each.
+///
+/// A cursor mode belongs to the discipline whose tools read it - production
+/// snaps for the tools it draws with, Drill & Blast arms a tie-in - so leaving
+/// one workspace and coming back finds its cursor where it was left rather
+/// than wherever another workspace's run last put it. Geology has no cursor
+/// of its own yet, and so has nothing here.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorkspaceCursors {
+    /// What a production pick snaps to.
+    pub(crate) production: CursorMode,
+    /// What a Drill & Blast pick is for.
+    pub(crate) blast: BlastCursor,
+}
+
+impl Default for WorkspaceCursors {
+    fn default() -> Self {
+        Self {
+            production: CursorMode::Select,
+            blast: BlastCursor::Select,
+        }
+    }
 }
 
 impl CursorMode {
@@ -2189,6 +2311,11 @@ impl ViewToggle {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
     SetActiveTool(ActiveTool),
+    /// Drop everything selected, and rebuild the geometry that was drawing it
+    /// as selected. Switching workspaces sends this: a selection belongs to
+    /// the discipline it was made in, and the tabs are not a way of carrying
+    /// one across.
+    ClearSelection,
     SetFlyModeEnabled(bool),
     SetSliceModeEnabled(bool),
     #[cfg(not(target_arch = "wasm32"))]
@@ -2574,6 +2701,7 @@ impl UiCommand {
         let report = |title: &str, summary: String| Some(CommandReportSpec::new(title, summary));
         match self {
             Self::SetActiveTool(_)
+            | Self::ClearSelection
             | Self::CloseStartupDialog
             | Self::CancelCloseProject
             | Self::CancelExit

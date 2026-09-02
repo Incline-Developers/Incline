@@ -231,6 +231,21 @@ impl OpenDrillHoleDataset {
     }
 }
 
+/// One hole inside a dataset.
+///
+/// A dataset is a scene entity - it is what the explorer lists, what is
+/// hidden, frozen and coloured - so [`crate::model::SceneEntityId`] names the
+/// dataset and stops there. A single hole is a part of one, the way a vertex
+/// is part of a polyline, and this is how the Drill & Blast workspace points
+/// at it: the dataset's id and the hole's index in
+/// [`DrillHoleDataset::holes`], which is fixed for as long as the dataset is
+/// loaded ([`DrillHoleDataset::new`] sorts the holes once, on import).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DrillHoleRef {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) hole: usize,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SurveyObservation {
     pub(crate) depth: f64,

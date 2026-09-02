@@ -13,7 +13,7 @@
 
 use crate::ui::{
     EditorState,
-    state::{DelayProduct, UiCommand},
+    state::{BlastCursor, DelayProduct, UiCommand},
     widgets::{
         collapsible_section::CollapsibleSection,
         context_menu::{ContextMenuAction, context_menu_popup},
@@ -80,7 +80,14 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
 /// The cards are packed across whatever width the panel has been dragged to,
 /// so the palette is two columns at its default width and reflows rather than
 /// clipping when it is narrowed.
+///
+/// A product is something a click in the scene applies, so the cards are live
+/// only while the Tie Holes cursor is the one armed - see
+/// [`BlastCursor::TieHoles`]. The New Product cell is not one of them: adding
+/// to the palette is editing the palette, which is worth doing before a round
+/// is tied in as much as during one.
 fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    let tying = editor.cursors.blast == BlastCursor::TieHoles;
     let available = ui.available_width();
     let columns = (((available + CARD_GAP) / (MIN_CARD_WIDTH + CARD_GAP)).floor() as usize).max(1);
     let card_width = ((available - CARD_GAP * (columns - 1) as f32) / columns as f32).floor().max(1.0);
@@ -99,7 +106,10 @@ fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
                 for cell in row * columns..((row + 1) * columns).min(cells) {
                     match editor.delay_products.get(cell) {
                         Some(product) => {
-                            if draw_product_card(ui, product, card_width) {
+                            // `add_enabled_ui` fades what is painted inside it
+                            // toward the background, which is the whole of what
+                            // a card with nothing to apply it says.
+                            if ui.add_enabled_ui(tying, |ui| draw_product_card(ui, product, card_width)).inner {
                                 delete = Some(product.id);
                             }
                         }

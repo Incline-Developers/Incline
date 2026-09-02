@@ -356,7 +356,7 @@ impl<'a> App<'a> {
                     );
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
                     let snap_mode_enabled = matches!(
-                        self.editor.cursor_mode,
+                        self.editor.snap_cursor_mode(),
                         crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
                     );
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
@@ -376,7 +376,7 @@ impl<'a> App<'a> {
                                 &self.triangulations,
                                 &self.editor.hidden_handles,
                                 &self.editor.frozen_handles,
-                                &self.editor.cursor_mode,
+                                &self.editor.snap_cursor_mode(),
                                 self.editor.xray_enabled,
                             )
                         })
@@ -760,13 +760,20 @@ impl<'a> App<'a> {
             return false;
         };
 
-        self.editor.cursor_mode = match button {
-            MouseButton::Forward => self.editor.cursor_mode.next(),
-            MouseButton::Back => self.editor.cursor_mode.previous(),
+        // The cursor belongs to the workspace that is up, so these buttons
+        // step that workspace's own run - see
+        // [`crate::ui::state::WorkspaceCursors`]. A workspace with no run of
+        // its own is left where it was, and the press is still the cursor
+        // button's rather than falling through to the scene.
+        let cycled = match button {
+            MouseButton::Forward => self.editor.cycle_workspace_cursor(true),
+            MouseButton::Back => self.editor.cycle_workspace_cursor(false),
             _ => return false,
         };
-        self.editor.cursor_snapped = false;
-        self.redraw_requested = true;
+        if cycled {
+            self.editor.cursor_snapped = false;
+            self.redraw_requested = true;
+        }
         true
     }
 
@@ -930,19 +937,30 @@ impl<'a> App<'a> {
                     g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
                         &self.triangulations,
-                        &self.drill_holes,
+                        self.selectable_drill_holes(),
                         &self.editor.hidden_handles,
                         frozen,
                         self.editor.xray_enabled,
                     )
                 });
-                if let Some((handle, world)) = picked {
+                if let Some(pick) = picked {
+                    let handle = pick.entity;
+                    // Same rule the left-click path follows: Drill & Blast
+                    // acts on the hole under the cursor, not its dataset.
+                    let hole = pick.hole.filter(|_| self.editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast);
                     if let crate::model::SceneEntityId::Object(id) = handle {
                         self.activate_project_for_object(id);
                     }
-                    if !self.editor.selected_handles.contains(&handle) {
-                        self.editor.on_canvas_pick(handle, world, crate::ui::state::SelectionMode::Replace);
-                        self.invalidate_geometry();
+                    match hole {
+                        Some(hole) if !self.editor.selected_drill_holes.contains(&hole) => {
+                            self.editor.on_drill_hole_pick(hole, pick.world, crate::ui::state::SelectionMode::Replace);
+                            self.invalidate_geometry();
+                        }
+                        None if !self.editor.selected_handles.contains(&handle) => {
+                            self.editor.on_canvas_pick(handle, pick.world, crate::ui::state::SelectionMode::Replace);
+                            self.invalidate_geometry();
+                        }
+                        _ => {}
                     }
                     self.active_triangulation = match handle {
                         crate::model::SceneEntityId::Triangulation(id) => Some(id),

@@ -1,7 +1,7 @@
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
-    model::{Command, Object, SceneEntityId},
-    ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget},
+    model::{Command, Object, SceneEntityId, drill_hole::OpenDrillHoleDataset},
+    ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget, Workspace},
 };
 
 impl<'a> App<'a> {
@@ -95,16 +95,20 @@ impl<'a> App<'a> {
                 .pick_scene_entity_at_cursor(
                     PICK_THRESHOLD_PX,
                     &self.triangulations,
-                    &self.drill_holes,
+                    self.selectable_drill_holes(),
                     &self.editor.hidden_handles,
                     frozen,
                     self.editor.xray_enabled,
                 )
-                .map(|(handle, world)| (Some(handle), world))
+                .map(|pick| (Some(pick), pick.world))
                 .or_else(|| graphics.cursor_world(self.editor.z_level).map(|world| (None, world)))
         });
         match picked {
-            Some((Some(handle), world)) => {
+            Some((Some(pick), world)) => {
+                let handle = pick.entity;
+                // Drill & Blast selects the hole the cursor was over, where
+                // production selects the dataset holding it.
+                let hole = pick.hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
                 if matches!(handle, SceneEntityId::Triangulation(_)) {
                     self.pending_topology_click = Some((handle, world));
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
@@ -117,20 +121,31 @@ impl<'a> App<'a> {
                 if let SceneEntityId::Object(object_id) = handle {
                     self.activate_project_for_object(object_id);
                 }
+                // Clicking what is already selected takes it back out of the
+                // selection, so a whole-scene entity can be dropped without
+                // going for empty space.
+                let already_selected = match hole {
+                    Some(hole) => self.editor.selected_drill_holes.contains(&hole),
+                    None => {
+                        matches!(
+                            handle,
+                            SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) | SceneEntityId::DrillHole(_) | SceneEntityId::PointCloud(_)
+                        ) && self.editor.selected_handles.contains(&handle)
+                    }
+                };
                 let selection_mode = if self.modifiers.shift_key() {
                     SelectionMode::Toggle
                 } else if self.modifiers.control_key() {
                     SelectionMode::Add
-                } else if matches!(
-                    handle,
-                    SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) | SceneEntityId::DrillHole(_) | SceneEntityId::PointCloud(_)
-                ) && self.editor.selected_handles.contains(&handle)
-                {
+                } else if already_selected {
                     SelectionMode::Toggle
                 } else {
                     SelectionMode::Replace
                 };
-                self.editor.on_canvas_pick(handle, world, selection_mode);
+                match hole {
+                    Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
+                    None => self.editor.on_canvas_pick(handle, world, selection_mode),
+                }
                 self.active_triangulation = match handle {
                     SceneEntityId::Triangulation(id) if self.editor.selected_handles.contains(&handle) => Some(id),
                     _ => None,
@@ -392,6 +407,7 @@ impl<'a> App<'a> {
             let preserve = self.modifiers.shift_key() || self.modifiers.control_key();
             if !preserve {
                 self.editor.selected_handles.clear();
+                self.editor.selected_drill_holes.clear();
                 self.active_triangulation = None;
                 if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
                     self.editor.move_vertex_target = None;
@@ -404,6 +420,12 @@ impl<'a> App<'a> {
         // Box selection: left-to-right (end.x > start.x) = cross select (any vertex
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
+        // Drill & Blast marquees drill holes, one hole at a time, where
+        // production's takes the design geometry over the same ground.
+        if self.editor.active_workspace == Workspace::DrillAndBlast {
+            self.finish_drill_hole_box_selection(start, end, cross_select);
+            return;
+        }
         let mut enclosed = self
             .graphics
             .as_ref()
@@ -437,6 +459,39 @@ impl<'a> App<'a> {
         }
         if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
             self.editor.move_vertex_target = None;
+        }
+        self.invalidate_geometry();
+    }
+
+    /// The Drill & Blast marquee: every hole the box takes, held one hole at a
+    /// time rather than as the datasets they came from.
+    fn finish_drill_hole_box_selection(&mut self, start: (f32, f32), end: (f32, f32), cross_select: bool) {
+        let enclosed = self
+            .graphics
+            .as_ref()
+            .map(|graphics| {
+                graphics.drill_holes_in_screen_rect(
+                    self.selectable_drill_holes(),
+                    start,
+                    end,
+                    cross_select,
+                    &self.editor.hidden_handles,
+                    &self.editor.frozen_handles,
+                )
+            })
+            .unwrap_or_default();
+        if self.modifiers.shift_key() {
+            for hole in enclosed {
+                if !self.editor.selected_drill_holes.remove(&hole) {
+                    self.editor.selected_drill_holes.insert(hole);
+                }
+            }
+        } else {
+            if !self.modifiers.control_key() {
+                self.editor.selected_handles.clear();
+                self.editor.selected_drill_holes.clear();
+            }
+            self.editor.selected_drill_holes.extend(enclosed);
         }
         self.invalidate_geometry();
     }
@@ -558,6 +613,26 @@ impl<'a> App<'a> {
         {
             self.history.push_applied(Command::Replace { before: drag.before, after });
         }
+    }
+
+    /// The drill hole datasets a pick may land on in the workspace that is up.
+    ///
+    /// Production picks any of them, and clicking a hole selects the dataset
+    /// it belongs to. Drill & Blast works on one dataset at a time - the one
+    /// the viewport bar names - so a hole in any other dataset is not
+    /// selectable there, and nothing is until one is chosen. Holes outside it
+    /// stay drawn and stay in the way of nothing: leaving them out of the pick
+    /// means a design string behind one is still picked, rather than the click
+    /// being swallowed by a hole that cannot be selected.
+    pub(crate) fn selectable_drill_holes(&self) -> &[OpenDrillHoleDataset] {
+        if self.editor.active_workspace != Workspace::DrillAndBlast {
+            return &self.drill_holes;
+        }
+        self.editor
+            .active_drill_hole
+            .and_then(|id| self.drill_holes.iter().find(|dataset| dataset.id == id))
+            .map(std::slice::from_ref)
+            .unwrap_or_default()
     }
 
     pub(crate) fn active_project_object_ids(&self) -> std::collections::HashSet<crate::model::ObjectId> {

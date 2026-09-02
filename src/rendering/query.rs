@@ -8,7 +8,7 @@ use crate::{
     Size,
     model::{
         Document, SceneEntityId,
-        drill_hole::{MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset},
+        drill_hole::{DrillHoleRef, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset},
         spatial::ObjectSnapIndex,
         triangulation::OpenTriangulation,
     },
@@ -41,12 +41,13 @@ impl SceneQuery {
             .min_by(|(_, a), (_, b)| (*a - ray_origin).dot(ray_direction).total_cmp(&(*b - ray_origin).dot(ray_direction)))
     }
 
-    /// Nearest selectable drill-hole dataset under a ray. Explicit source
-    /// diameters use their world-space radius; diameter-less holes use the
-    /// same minimum pixel diameter as the shader. The additional pixel
-    /// tolerance makes thin traces practical to click.
+    /// Nearest selectable drill hole under a ray, named down to the hole
+    /// itself - which dataset it belongs to is [`DrillHoleRef::dataset`].
+    /// Explicit source diameters use their world-space radius; diameter-less
+    /// holes use the same minimum pixel diameter as the shader. The
+    /// additional pixel tolerance makes thin traces practical to click.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn nearest_drill_hole_entity(
+    pub(crate) fn nearest_drill_hole(
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
@@ -55,15 +56,15 @@ impl SceneQuery {
         view_projection: &DMat4,
         screen: Size,
         threshold_px: f32,
-    ) -> Option<(SceneEntityId, DVec3)> {
+    ) -> Option<(DrillHoleRef, DVec3)> {
         let mut nearest = f64::INFINITY;
-        let mut nearest_entity = None;
+        let mut nearest_hole = None;
         for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
             let entity = dataset.entity_id();
             if hidden.contains(&entity) || frozen.contains(&entity) {
                 continue;
             }
-            for hole in &dataset.dataset.holes {
+            for (index, hole) in dataset.dataset.holes.iter().enumerate() {
                 for pair in hole.trace.windows(2) {
                     let [start, end] = [pair[0], pair[1]];
                     if end.depth <= start.depth + 1.0e-9 || start.position.distance_squared(end.position) <= 1.0e-18 {
@@ -85,12 +86,12 @@ impl SceneQuery {
                         && distance < nearest
                     {
                         nearest = distance;
-                        nearest_entity = Some(entity);
+                        nearest_hole = Some(DrillHoleRef { dataset: dataset.id, hole: index });
                     }
                 }
             }
         }
-        nearest_entity.map(|entity| (entity, ray_origin + ray_direction * nearest))
+        nearest_hole.map(|hole| (hole, ray_origin + ray_direction * nearest))
     }
 
     #[allow(clippy::too_many_arguments)]

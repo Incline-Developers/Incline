@@ -126,7 +126,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
                         let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            draw_centre_settings(ui, editor, project);
+                            draw_centre_settings(ui, editor, project, commands);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
                     }
@@ -229,9 +229,9 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 ///
 /// Only the workspaces [`Workspace::has_centre_settings`] names get here; the
 /// caller leaves the middle of the bar empty for the rest.
-fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     match editor.active_workspace {
-        Workspace::DrillAndBlast => draw_blast_settings(ui, editor, project),
+        Workspace::DrillAndBlast => draw_blast_settings(ui, editor, project, commands),
         _ => draw_drawing_settings(ui, editor, project),
     }
 }
@@ -247,14 +247,17 @@ fn elide(name: &str) -> String {
 }
 
 /// What the Drill & Blast tools act on: the drill hole dataset being edited,
-/// tied in and simulated.
+/// tied in and simulated. It is also what the workspace can select - see
+/// `App::selectable_drill_holes` - so changing it drops the selection the
+/// outgoing dataset was holding.
 ///
 /// Only loaded datasets are offered - a closed one has no holes in the scene
 /// to work on - and a selection that stops being loaded reads as "None" here
 /// until another is picked, the same way the layer combo above treats a layer
 /// that has gone.
-fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+    let previous = editor.active_drill_hole;
 
     ui.label("Drill Holes:");
     let selected = editor
@@ -271,6 +274,11 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
                 ui.selectable_value(&mut editor.active_drill_hole, Some(dataset.id), &dataset.name);
             }
         });
+    // Only holes in the active dataset can be selected, so a selection made
+    // in the outgoing one has nothing left to act on.
+    if editor.active_drill_hole != previous {
+        commands.push(UiCommand::ClearSelection);
+    }
 }
 
 /// What the drawing tools will use next: layer, elevation, line colour, fill.

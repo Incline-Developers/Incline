@@ -8,7 +8,7 @@
 
 use crate::ui::{
     EditorState,
-    state::{ActiveTool, CursorMode, UiCommand},
+    state::{ActiveTool, BlastCursor, CursorMode, UiCommand, Workspace},
     themed_icon, unthemed_icon,
     widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
 };
@@ -168,11 +168,12 @@ pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, edi
 /// explorer's rows rather than as whole-scene toolbar actions: see
 /// `ExplorerEntry::toggles`.
 ///
-/// The cursor modes go with the drawing tools they snap for, and the two
-/// measurements are of a pit being designed, so the whole run belongs to the
+/// The snapping cursor modes go with the drawing tools they snap for, and the
+/// two measurements are of a pit being designed, so that run belongs to the
 /// production workspace - see
-/// [`crate::ui::state::Workspace::has_production_tools`]. Another workspace is
-/// left with the strip and what is running on it.
+/// [`crate::ui::state::Workspace::has_production_tools`]. Drill & Blast has a
+/// cursor run of its own in its place; a workspace with neither is left with
+/// the strip and what is running on it.
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     let claimed = bottom_toolbar_height(ui.ctx());
     egui::Panel::bottom("bottom_tools_strip")
@@ -188,6 +189,10 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
+                    if editor.active_workspace == Workspace::DrillAndBlast {
+                        draw_blast_cursors(ui, editor, side);
+                    }
+
                     if editor.active_workspace.has_production_tools() {
                         draw_cursor_modes(ui, editor, side);
                         ui.add_space(12.);
@@ -268,6 +273,19 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     );
 }
 
+/// The Drill & Blast workspace's cursor run, standing where production's
+/// snapping modes do.
+///
+/// Two so far: a plain pick, and the mode a round is tied in under. The tie-in
+/// mark is the same one a delay product's card is read by - see
+/// `products::paint_tie_in_mark` - so the tool and the palette it arms say the
+/// same thing.
+fn draw_blast_cursors(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
+    blast_cursor_button(ui, egui::Image::new(themed_icon!(ui, "cursor_select.svg")), "Select", editor, BlastCursor::Select, side);
+
+    blast_cursor_button(ui, egui::Image::new(themed_icon!(ui, "tie_holes.svg")), "Tie Holes", editor, BlastCursor::TieHoles, side);
+}
+
 /// Draw a tool button in a horizontal toolbar; sets `editor.active_tool` on click.
 pub(crate) fn tool_button(
     ui: &mut egui::Ui,
@@ -288,13 +306,25 @@ pub(crate) fn tool_button(
     response
 }
 
-/// Draw a cursor mode button; sets `editor.cursor_mode` on click.
+/// Draw a cursor mode button; sets production's cursor on click.
 pub(crate) fn cursor_mode_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, mode: CursorMode, side: f32) -> egui::Response {
-    let selected = editor.cursor_mode == mode;
+    let selected = editor.cursors.production == mode;
     let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).button_side(side).selected(selected));
 
     if response.clicked() {
-        editor.cursor_mode = mode;
+        editor.cursors.production = mode;
+    }
+
+    response
+}
+
+/// Draw a Drill & Blast cursor button; sets that workspace's cursor on click.
+pub(crate) fn blast_cursor_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, cursor: BlastCursor, side: f32) -> egui::Response {
+    let selected = editor.cursors.blast == cursor;
+    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("blast_cursor", tooltip)).button_side(side).selected(selected));
+
+    if response.clicked() {
+        editor.cursors.blast = cursor;
     }
 
     response
