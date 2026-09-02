@@ -15,7 +15,6 @@ use crate::{
     i18n::tr,
     ui::{
         EditorState,
-        elements::properties::read_only_row,
         state::{DelayProduct, UiCommand},
         widgets::{
             collapsible_section::CollapsibleSection,
@@ -67,7 +66,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::same(6)))
         .show(ui, |ui| {
-            // Initiation rows can outgrow a short viewport. Keep that content
+            // The palette can outgrow a short viewport. Keep that content
             // inside the height the surrounding bottom panels left us; if it
             // overflows, scroll it rather than allowing the side panel's frame
             // and chrome rect to expand across those panels.
@@ -80,9 +79,6 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                     CollapsibleSection::new("delay_palette", tr!(literal = "Delay Palette"))
                         .default_open(true)
                         .show(ui, |ui| draw_delay_palette(ui, editor, commands));
-                    CollapsibleSection::new("initiation", tr!(literal = "Initiation"))
-                        .default_open(true)
-                        .show(ui, |ui| draw_initiation(ui, editor));
                 });
         })
         .response
@@ -184,31 +180,6 @@ fn draw_product_card(ui: &mut egui::Ui, product: &DelayProduct, width: f32, chos
     CardResponse {
         clicked: response.clicked(),
         delete,
-    }
-}
-
-/// Read back the active round. Initiation delays are edited on their collars,
-/// so this section deliberately contains no delay input.
-fn draw_initiation(ui: &mut egui::Ui, editor: &mut EditorState) {
-    let round = &editor.blast_round;
-    if round.initiations.is_empty() {
-        read_only_row(ui, tr!(literal = "Initiations").as_str(), tr!(literal = "Not set").as_str());
-    } else {
-        for (index, (hole, delay)) in round.initiations.iter().enumerate() {
-            read_only_row(ui, &format!("IP {}", index + 1), &format!("{hole} · {delay} ms"));
-        }
-    }
-    read_only_row(ui, tr!(literal = "Connectors").as_str(), &round.connectors.to_string());
-    read_only_row(
-        ui,
-        tr!(literal = "Round").as_str(),
-        &match round.duration_ms {
-            Some(duration) => format!("{duration} ms"),
-            None => "—".to_owned(),
-        },
-    );
-    if round.unreached > 0 {
-        read_only_row(ui, tr!(literal = "Unreached").as_str(), &format!("{} hole(s)", round.unreached));
     }
 }
 
