@@ -55,8 +55,6 @@ const CENTRE_WIDTH_GUESS: f32 = 400.0;
 /// drill hole dataset's - which are one behind the other as the workspace
 /// changes and so are the same width.
 const SELECTOR_COMBO_WIDTH: f32 = 220.0;
-/// Longest name shown in one of those combos before it is elided.
-const MAX_SELECTOR_DISPLAY: usize = 22;
 /// Label for the primary shortcut modifier in tooltips. Spelled out rather
 /// than drawn as a glyph, so it can't land as tofu in the bundled fonts.
 const PRIMARY_MODIFIER: &str = if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" };
@@ -236,14 +234,40 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     }
 }
 
-/// A name as one of the centre combos shows it, cut to length rather than let
-/// to widen the fixed-width run.
-fn elide(name: &str) -> String {
-    if name.chars().count() > MAX_SELECTOR_DISPLAY {
-        format!("{}…", name.chars().take(MAX_SELECTOR_DISPLAY - 1).collect::<String>())
-    } else {
-        name.to_owned()
-    }
+/// A name as one of the centre combos shows it, cut to the room the combo
+/// leaves its text rather than let to widen the fixed-width run.
+///
+/// Measured rather than counted in characters: a fixed character budget has to
+/// assume the widest name, and so cuts every other one short of the box. egui's
+/// own truncation is no use here either - it lays the text out against
+/// `available_width`, which in the centre band is the whole gap between the
+/// clusters, so the combo would grow past [`SELECTOR_COMBO_WIDTH`] rather than
+/// elide.
+fn elide(ui: &egui::Ui, name: &str) -> String {
+    // What the combo has left once its own padding and the dropdown arrow are
+    // out - `egui::ComboBox` lays the selected text out inside exactly this.
+    let spacing = ui.spacing();
+    let room = SELECTOR_COMBO_WIDTH - 2.0 * spacing.button_padding.x - spacing.icon_spacing - spacing.icon_width;
+    let font = egui::TextStyle::Button.resolve(ui.style());
+
+    ui.ctx().fonts_mut(|fonts| {
+        let full: f32 = name.chars().map(|c| fonts.glyph_width(&font, c)).sum();
+        if full <= room {
+            return name.to_owned();
+        }
+        let room = room - fonts.glyph_width(&font, '…');
+        let mut kept = String::new();
+        let mut used = 0.0;
+        for c in name.chars() {
+            used += fonts.glyph_width(&font, c);
+            if used > room {
+                break;
+            }
+            kept.push(c);
+        }
+        kept.push('…');
+        kept
+    })
 }
 
 /// What the Drill & Blast tools act on: the drill hole dataset being edited,
@@ -266,7 +290,7 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         .map(|dataset| dataset.name.as_str())
         .unwrap_or("None");
     egui::ComboBox::from_id_salt("drill_hole_combo_box")
-        .selected_text(elide(selected))
+        .selected_text(elide(ui, selected))
         .width(SELECTOR_COMBO_WIDTH)
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut editor.active_drill_hole, None, "None");
@@ -302,7 +326,7 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
         .map(|layer| layer.name.as_str())
         .unwrap_or("None");
     egui::ComboBox::from_id_salt("layer_combo_box")
-        .selected_text(elide(selected_layer))
+        .selected_text(elide(ui, selected_layer))
         .width(SELECTOR_COMBO_WIDTH)
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut editor.active_layer, None, "None");
