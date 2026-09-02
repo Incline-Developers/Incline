@@ -135,6 +135,10 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
     dataset.visible.hash(&mut hash);
+    // Hole positions are not hashed one by one: an edit to the geometry - the
+    // Move Collar tool is the only one so far - bumps the item's revision, and
+    // that is what tells the cache the instances it built are stale.
+    dataset.state.revision().hash(&mut hash);
     selection.whole.hash(&mut hash);
     selection.holes.hash(&mut hash);
     for value in scene_origin.to_array() {

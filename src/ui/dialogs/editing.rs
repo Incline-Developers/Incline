@@ -1217,7 +1217,13 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
 
 /// Draw the floating Move tool panel with dX/dY/dZ inputs and an Apply button.
 pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("move_panel", tr!(literal = "Move"), viewport_rect)
+    // One panel for both translate tools, titled by the one running it.
+    let title = if editor.active_tool == ActiveTool::MoveCollar {
+        tr!(literal = "Move Collar")
+    } else {
+        tr!(literal = "Move Design")
+    };
+    ViewportDockPanel::new("move_panel", title, viewport_rect)
         .min_width(210.0)
         .show(ui.ctx(), |ui| {
             let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)

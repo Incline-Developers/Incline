@@ -2152,6 +2152,20 @@ impl EditorState {
         }
     }
 
+    /// Whether the active translate tool has anything to move: design
+    /// entities for Move Design, individually picked holes for Move Collar.
+    /// Both tools' overlays hang off this, so neither draws a gizmo over an
+    /// empty selection.
+    pub(crate) fn move_tool_has_targets(&self) -> bool {
+        match self.active_tool {
+            // Document objects only: the whole-scene entities are selected in
+            // the same set, and neither tool moves those.
+            ActiveTool::Move => self.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
+            ActiveTool::MoveCollar => !self.selected_drill_holes.is_empty(),
+            _ => false,
+        }
+    }
+
     /// Apply a display action to the current selection. Returns `true` when the
     /// rendered geometry must be rebuilt.
     pub(crate) fn apply_action(&mut self, action: EditorAction) -> bool {
@@ -2208,10 +2222,23 @@ pub(crate) enum ActiveTool {
     FuseIntoPolyline,
     SplitAtPoints,
     Move,
+    /// Drill & Blast's translate tool, which moves the holes it is given the
+    /// way [`Self::Move`] moves design geometry.
+    MoveCollar,
     Chamfer,
     BatterBermOffset,
     Bezier,
     VerticalSlice,
+}
+
+impl ActiveTool {
+    /// The two translate tools: production's Move Design and Drill & Blast's
+    /// Move Collar. They share the gizmo, the numeric panel and every drag
+    /// path there is - what differs is only what they translate - so the
+    /// places that run that shared machinery ask this rather than naming one.
+    pub(crate) fn translates(self) -> bool {
+        matches!(self, Self::Move | Self::MoveCollar)
+    }
 }
 
 /// Immediate commands applied to the current selection (or whole drawing).

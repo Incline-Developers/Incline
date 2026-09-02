@@ -227,9 +227,9 @@ impl<'a> App<'a> {
                                 // Keep move panel preview in sync - apply whenever the panel delta
                                 // differs from the last applied preview (catches typed values that
                                 // don't always trigger changed() on every frame).
-                                if self.editor.active_tool == ActiveTool::Move
+                                if self.editor.active_tool.translates()
                                     && self.gizmo_drag.is_none()
-                                    && !self.editor.selected_handles.is_empty()
+                                    && self.editor.move_tool_has_targets()
                                     && self.editor.move_panel_delta != self.editor.move_panel_last_preview
                                 {
                                     let d = self.editor.move_panel_delta;
@@ -240,7 +240,7 @@ impl<'a> App<'a> {
                                 }
                                 // Clean up per-tool state when the tool is switched via the
                                 // toolbar.
-                                if self.editor.active_tool != ActiveTool::Move && self.has_pending_move_delta() {
+                                if !self.editor.active_tool.translates() && self.has_pending_move_delta() {
                                     self.editor.move_panel_last_preview = [f64::NAN; 3];
                                     self.cancel_move_delta();
                                 }
@@ -396,7 +396,7 @@ impl<'a> App<'a> {
                         self.move_gizmo_to_cursor();
                         self.invalidate_overlay();
                     }
-                    if self.editor.active_tool == ActiveTool::Move
+                    if self.editor.active_tool.translates()
                         && let Some(cursor_px) = self.editor.cursor_screen_px
                     {
                         let hit = hit_gizmo_handle(&self.editor, cursor_px);
@@ -566,7 +566,7 @@ impl<'a> App<'a> {
                         || self.editor.relimit_waiting_for_pick
                         || self.editor.offset_awaiting_side_pick
                         || self.gizmo_drag.is_some()
-                        || self.editor.active_tool == ActiveTool::Move
+                        || self.editor.active_tool.translates()
                         || self.editor.active_tool == ActiveTool::MeasureDistance
                         || self.editor.active_tool == ActiveTool::MeasureBatterAngle
                         || self.editor.active_tool == ActiveTool::DeletePoints
@@ -810,6 +810,20 @@ impl<'a> App<'a> {
                         }
                     } else {
                         self.begin_select_or_drag();
+                    }
+                }
+                // Move Collar has no equivalent of the vertex target: a hole
+                // is picked whole, so a press off the gizmo is an ordinary
+                // Drill & Blast selection.
+                ActiveTool::MoveCollar => {
+                    match self
+                        .editor
+                        .cursor_screen_px
+                        .and_then(|cursor_px| hit_gizmo_handle(&self.editor, cursor_px).map(|hit| (cursor_px, hit)))
+                    {
+                        Some((cursor_px, GizmoHandleHit::Plane(plane_idx, axes))) => self.begin_gizmo_plane_drag(plane_idx, axes, cursor_px),
+                        Some((cursor_px, GizmoHandleHit::Axis(axis_idx, axis))) => self.begin_gizmo_drag(axis_idx, axis, cursor_px),
+                        None => self.begin_select_or_drag(),
                     }
                 }
                 ActiveTool::Chamfer => {
@@ -1187,7 +1201,7 @@ impl<'a> App<'a> {
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
                     self.cancel_split_at_points();
-                } else if self.editor.active_tool == ActiveTool::Move {
+                } else if self.editor.active_tool.translates() {
                     self.gizmo_drag = None;
                     self.editor.gizmo_drag_axis_index = None;
                     self.editor.gizmo_drag_plane_index = None;
@@ -1245,7 +1259,7 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter if !self.editor.text_editing_enabled => {
-                if self.editor.active_tool == ActiveTool::Move {
+                if self.editor.active_tool.translates() {
                     let d = self.editor.move_panel_delta;
                     self.apply_move_delta(glam::DVec3::new(d[0], d[1], d[2]));
                     self.editor.active_tool = ActiveTool::None;
@@ -1296,7 +1310,7 @@ impl<'a> App<'a> {
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
             self.cancel_split_at_points();
-        } else if self.editor.active_tool == ActiveTool::Move {
+        } else if self.editor.active_tool.translates() {
             self.gizmo_drag = None;
             self.editor.gizmo_drag_axis_index = None;
             self.editor.gizmo_drag_plane_index = None;
@@ -1373,6 +1387,22 @@ impl<'a> App<'a> {
             self.editor.drape_phase = crate::ui::state::DrapePhase::Designs;
             self.editor.drape_object_ids.clear();
             self.editor.selected_handles.clear();
+            self.invalidate_geometry();
+        }
+        // Arming a translate tool puts down whatever it cannot translate: the
+        // selection it inherits is held to the same rule as the picks it will
+        // make from here - see `App::tool_accepts_pick` - so the gizmo never
+        // comes up over something the tool would leave where it is.
+        let held = self.editor.selected_handles.len() + self.editor.selected_drill_holes.len();
+        match next_tool {
+            ActiveTool::Move => {
+                self.editor.selected_drill_holes.clear();
+                self.editor.selected_handles.retain(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
+            }
+            ActiveTool::MoveCollar => self.editor.selected_handles.clear(),
+            _ => {}
+        }
+        if self.editor.selected_handles.len() + self.editor.selected_drill_holes.len() != held {
             self.invalidate_geometry();
         }
         if next_tool != ActiveTool::MakeCircle && self.editor.circle_draft.take().is_some() {

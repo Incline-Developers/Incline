@@ -179,10 +179,15 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     // it is left behind with the workspace that made it rather than carried
     // into the next one.
     commands.push(UiCommand::ClearSelection);
-    if workspace.has_production_tools() {
-        return;
-    }
-    if !matches!(editor.active_tool, ActiveTool::None | ActiveTool::VerticalSlice) {
+    // A tool belongs to the discipline whose cell arms it, both ways round:
+    // Drill & Blast's Move Collar is put down on the way out just as the
+    // drawing tools are on the way in.
+    let survives = match editor.active_tool {
+        ActiveTool::None | ActiveTool::VerticalSlice => true,
+        ActiveTool::MoveCollar => workspace == Workspace::DrillAndBlast,
+        _ => workspace.has_production_tools(),
+    };
+    if !survives {
         commands.push(UiCommand::SetActiveTool(ActiveTool::None));
     }
 }

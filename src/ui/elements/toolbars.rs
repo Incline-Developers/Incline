@@ -68,7 +68,7 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
         tool(themed_icon!(ui, "create_polyline.svg"), tr!(literal = "Create Polyline"), ActiveTool::MakePoly),
         tool(themed_icon!(ui, "create_circle.svg"), tr!(literal = "Create Circle"), ActiveTool::MakeCircle),
         tool(unthemed_icon!("create_text.svg"), tr!(literal = "Create Text"), ActiveTool::MakeText),
-        tool(themed_icon!(ui, "move_element.svg"), tr!(literal = "Move"), ActiveTool::Move),
+        tool(themed_icon!(ui, "move_element.svg"), tr!(literal = "Move Design"), ActiveTool::Move),
         tool(themed_icon!(ui, "offset_element.svg"), tr!(literal = "Offset"), ActiveTool::OffsetElement),
         tool(themed_icon!(ui, "drape_element.svg"), tr!(literal = "Drape to Topology"), ActiveTool::DrapeToTopology),
         tool(unthemed_icon!("auto_bench.svg"), tr!(literal = "Auto-Bench"), ActiveTool::BatterBermOffset),
@@ -93,8 +93,9 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
 /// nudge its holes, then say where it starts.
 ///
-/// Placeholders: the cells, their icons and their enablement are here, but
-/// nothing is wired behind them yet.
+/// Move Collar is the one with something behind it; the other two are
+/// placeholders - the cells, their icons and their enablement are here, but
+/// nothing is wired to them yet.
 fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     // Setting the initiation point acts on the pattern the viewport bar's
     // centre run names, and reads it the same way that run does: a dataset
@@ -112,9 +113,11 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             enabled: project_active,
         },
         LeftTool {
-            icon: egui::Image::new(unthemed_icon!("move_drillhole.svg")),
-            tooltip: tr!(literal = "Move Drill Hole [PLACEHOLDER]"),
-            action: LeftToolAction::Placeholder,
+            // The same mark production's Move Design carries: one translate
+            // gesture, drawn the same way whichever discipline is running it.
+            icon: egui::Image::new(themed_icon!(ui, "move_element.svg")),
+            tooltip: tr!(literal = "Move Collar"),
+            action: LeftToolAction::Tool(ActiveTool::MoveCollar),
             enabled: has_active_dataset,
         },
         LeftTool {

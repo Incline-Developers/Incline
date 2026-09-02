@@ -87,7 +87,39 @@ pub(crate) struct DrillHole {
     pub(crate) intervals: Vec<DrillInterval>,
 }
 
+/// Everything a move rewrites in a hole: its collar and its trace. Nothing
+/// else is touched - the intervals above all, whose per-interval value maps
+/// are what makes a whole [`DrillHole`] expensive to copy - so a live preview
+/// captures and rewrites only this.
+#[derive(Clone, Debug)]
+pub(crate) struct HolePlacement {
+    pub(crate) collar: DVec3,
+    pub(crate) trace: Vec<TraceStation>,
+}
+
 impl DrillHole {
+    /// Capture where the hole stands, for a preview to rewrite it from.
+    pub(crate) fn placement(&self) -> HolePlacement {
+        HolePlacement {
+            collar: self.collar,
+            trace: self.trace.clone(),
+        }
+    }
+
+    /// Put the hole back at `placement` translated by `delta` - a zero delta
+    /// therefore restores it exactly. The trace is copied into the existing
+    /// allocation rather than replacing it. Interval geometry is measured down
+    /// the trace rather than in world space, so it needs no adjustment.
+    pub(crate) fn set_placement(&mut self, placement: &HolePlacement, delta: DVec3) {
+        self.collar = placement.collar + delta;
+        self.trace.clone_from(&placement.trace);
+        if delta != DVec3::ZERO {
+            for station in &mut self.trace {
+                station.position += delta;
+            }
+        }
+    }
+
     pub(crate) fn position_at_depth(&self, depth: f64) -> Option<DVec3> {
         let first = *self.trace.first()?;
         if depth <= first.depth {
@@ -135,6 +167,12 @@ impl DrillHoleDataset {
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {
         self.fields.iter().find(|field| field.key == key)
+    }
+
+    /// Recompute the dataset's extent after its holes have moved. Fields are
+    /// interval values rather than geometry, so only the bounds go stale.
+    pub(crate) fn refresh_bounds(&mut self) {
+        self.bounds = drill_bounds(&self.holes);
     }
 }
 

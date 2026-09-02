@@ -222,6 +222,7 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn close_drill_hole(&mut self, id: DrillHoleId) {
+        self.cancel_collar_move_touching(id);
         if let Some(dataset) = self.drill_holes.iter_mut().find(|dataset| dataset.id == id) {
             dataset.state.loaded = false;
         }
@@ -243,6 +244,7 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn remove_drill_hole(&mut self, id: DrillHoleId) {
+        self.cancel_collar_move_touching(id);
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
         let entity = SceneEntityId::DrillHole(id);
         self.editor.selected_handles.remove(&entity);

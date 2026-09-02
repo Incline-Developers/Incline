@@ -338,7 +338,8 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
     }
 
     match editor.active_tool {
-        ActiveTool::Move if editor.selected_handles.is_empty() => Some(tr!(literal = "Select an item")),
+        ActiveTool::Move if !editor.move_tool_has_targets() => Some(tr!(literal = "Select an item")),
+        ActiveTool::MoveCollar if !editor.move_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some(tr!(literal = "Choose offset side")),
         ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some(tr!(literal = "Select a line or polyline")),
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some(tr!(literal = "Select designs")),
@@ -639,13 +640,10 @@ fn draw_ui(
         }
     }
 
-    // Move tool: Blender-style translate gizmo
-    if editor.active_tool == ActiveTool::Move && !editor.selected_handles.is_empty() {
+    // Either translate tool: the Blender-style gizmo and the numeric delta
+    // panel, over whichever selection the active one moves.
+    if editor.move_tool_has_targets() {
         draw_move_gizmo(root_ui, editor);
-    }
-
-    // Move tool: numeric delta panel
-    if editor.active_tool == ActiveTool::Move && !editor.selected_handles.is_empty() {
         dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
     }
 

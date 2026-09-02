@@ -1028,7 +1028,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ConfirmDeleteSelection => {
-                if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
+                if self.editor.active_tool.translates() {
                     self.cancel_move_delta();
                 }
                 self.delete_selection();

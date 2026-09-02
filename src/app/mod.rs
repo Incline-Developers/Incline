@@ -46,7 +46,7 @@ use crate::{
     model::{
         Document, LayerId, Object, ObjectId, SceneEntityId,
         block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
-        drill_hole::{DrillHoleSource, OpenDrillHoleDataset},
+        drill_hole::{DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
         spatial::ObjectSnapIndex,
@@ -117,6 +117,17 @@ pub(crate) struct GizmoDragState {
 pub(crate) struct MoveSession {
     pub(crate) project_runtime_id: u32,
     pub(crate) originals: Vec<Object>,
+}
+
+/// The same for a live Move Collar preview, which moves holes inside a loaded
+/// drillhole dataset rather than objects in the document. Where each hole
+/// stood is kept together with the [`DrillHoleRef`] naming it, so a preview is
+/// rewritten from the originals every frame instead of accumulating deltas.
+/// Only the placement is captured, never the hole: copying interval values a
+/// move cannot touch is what a drag would otherwise spend all its time on.
+pub(crate) struct CollarMoveSession {
+    pub(crate) project_runtime_id: u32,
+    pub(crate) originals: Vec<(DrillHoleRef, HolePlacement)>,
 }
 
 /// Stable identity for one background operation. Every pending receiver owns
@@ -304,6 +315,7 @@ pub(crate) struct App<'a> {
     slice_preview_middle_down: bool,
     pending_topology_click: Option<(SceneEntityId, DVec3)>,
     move_session_original: Option<MoveSession>,
+    collar_move_session: Option<CollarMoveSession>,
     background_tasks: BackgroundTaskState,
     pending_triangulation_loads: Vec<PendingLoad<PathBuf, crate::model::triangulation::LoadedTriangulation>>,
     pending_block_model_loads: Vec<PendingLoad<BlockModelSource, crate::model::block_model::LoadedBlockModel>>,
@@ -404,6 +416,7 @@ impl<'a> Default for App<'a> {
             slice_preview_middle_down: false,
             pending_topology_click: None,
             move_session_original: None,
+            collar_move_session: None,
             background_tasks: BackgroundTaskState::default(),
             pending_triangulation_loads: Vec::new(),
             pending_block_model_loads: Vec::new(),
@@ -868,6 +881,7 @@ impl<'a> App<'a> {
         self.pending_topology_click = None;
         // Clear any in-progress move session so it cannot bleed into the new project.
         self.move_session_original = None;
+        self.collar_move_session = None;
         self.drag = None;
         self.gizmo_drag = None;
         self.editor.gizmo_drag_axis_index = None;

@@ -1,13 +1,26 @@
 use glam::DVec3;
 
 use crate::{
-    app::{App, GizmoDragConstraint, GizmoDragState, MoveSession},
+    app::{App, CollarMoveSession, GizmoDragConstraint, GizmoDragState, MoveSession},
     logging::CommandReportSpec,
-    model::{Command, Object, ObjectId, ObjectPoint, SceneEntityId, geometry::compact_circle_center},
+    model::{
+        Command, Object, ObjectId, ObjectPoint, SceneEntityId,
+        drill_hole::{DrillHoleRef, HolePlacement},
+        geometry::compact_circle_center,
+    },
+    ui::state::ActiveTool,
 };
 
 impl<'a> App<'a> {
     pub(crate) fn apply_move_delta(&mut self, delta: DVec3) {
+        // Which of the two translate tools this is cannot be read off the
+        // active tool alone: the panel's Apply button clears the tool before
+        // the command it pushed is handled. The live session says it instead,
+        // and the tool answers only for the case where nothing was previewed.
+        if self.collar_move_session.is_some() || self.editor.active_tool == ActiveTool::MoveCollar {
+            self.apply_collar_move_delta(delta);
+            return;
+        }
         self.ensure_move_session_original();
         self.preview_move_delta(delta);
         let Some(session) = self.move_session_original.take() else {
@@ -49,6 +62,7 @@ impl<'a> App<'a> {
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
         self.restore_move_session_original();
+        self.restore_collar_move_session();
         self.reset_move_editor_state();
         self.invalidate_geometry();
         self.invalidate_overlay();
@@ -64,6 +78,17 @@ impl<'a> App<'a> {
         self.gizmo_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
+        // A collar preview is already written into the dataset it belongs to,
+        // and holes are not part of the undo history, so keeping it is only a
+        // matter of dropping the originals it would otherwise be rolled back
+        // to.
+        if self.collar_move_session.take().is_some() {
+            self.touch_active_project_content();
+            self.reset_move_editor_state();
+            self.invalidate_geometry();
+            self.invalidate_overlay();
+            return;
+        }
 
         let Some(session) = self.move_session_original.take() else {
             self.reset_move_editor_state();
@@ -95,15 +120,14 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn has_pending_move_delta(&self) -> bool {
-        self.move_session_original.is_some() || self.editor.move_vertex_target.is_some() || self.gizmo_drag.is_some()
+        self.move_session_original.is_some() || self.collar_move_session.is_some() || self.editor.move_vertex_target.is_some() || self.gizmo_drag.is_some()
     }
 
     pub(crate) fn begin_gizmo_drag(&mut self, axis_idx: u8, axis: DVec3, cursor_px: (f32, f32)) {
         if !self.editing_ready() {
             return;
         }
-        let selected_ids = self.selected_object_ids();
-        if selected_ids.is_empty() {
+        if !self.has_move_targets() {
             return;
         }
         self.ensure_move_session_original();
@@ -124,7 +148,7 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn begin_gizmo_plane_drag(&mut self, plane_idx: u8, axes: [DVec3; 2], cursor_px: (f32, f32)) {
-        if !self.editing_ready() || self.selected_object_ids().is_empty() {
+        if !self.editing_ready() || !self.has_move_targets() {
             return;
         }
         let Some(screen_basis) = self.gizmo_plane_screen_basis(plane_idx) else {
@@ -185,6 +209,13 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn ensure_move_session_original(&mut self) {
+        if self.editor.active_tool == ActiveTool::MoveCollar {
+            self.ensure_collar_move_session();
+            return;
+        }
+        // The two tools never preview at once: whichever is being started
+        // rolls the other one back before it captures anything of its own.
+        self.restore_collar_move_session();
         let selected_ids = self.move_target_object_ids();
         if selected_ids.is_empty() {
             self.move_session_original = None;
@@ -216,6 +247,10 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn preview_move_delta(&mut self, delta: DVec3) {
+        if self.collar_move_session.is_some() {
+            self.preview_collar_move_delta(delta);
+            return;
+        }
         let Some(session) = self.move_session_original.as_ref() else {
             return;
         };
@@ -273,6 +308,171 @@ impl<'a> App<'a> {
         } else {
             self.selected_object_ids()
         }
+    }
+
+    /// Whether the active translate tool has anything under it to move. Both
+    /// gizmo drags ask this before they capture a session, so neither tool
+    /// starts a drag against an empty selection.
+    fn has_move_targets(&self) -> bool {
+        if self.editor.active_tool == ActiveTool::MoveCollar {
+            !self.collar_move_targets().is_empty()
+        } else {
+            !self.move_target_object_ids().is_empty()
+        }
+    }
+
+    /// The holes Move Collar is holding, in a fixed order so a session can be
+    /// compared against the selection without regard to hash order. Holes in
+    /// datasets that are no longer loaded are dropped: a closed dataset has no
+    /// geometry left to move.
+    fn collar_move_targets(&self) -> Vec<DrillHoleRef> {
+        let mut targets: Vec<DrillHoleRef> = self
+            .editor
+            .selected_drill_holes
+            .iter()
+            .copied()
+            .filter(|target| {
+                self.drill_holes
+                    .iter()
+                    .any(|dataset| dataset.id == target.dataset && dataset.state.loaded && target.hole < dataset.dataset.holes.len())
+            })
+            .collect();
+        targets.sort_by_key(|target| (target.dataset.0, target.hole));
+        targets
+    }
+
+    /// Capture the selected holes as they stand, so every preview can be
+    /// written from the originals rather than from the last preview. Mirrors
+    /// `ensure_move_session_original`, down to re-capturing when the selection
+    /// changes under a live preview.
+    fn ensure_collar_move_session(&mut self) {
+        // Starting a collar move ends any design move that was still previewing.
+        self.restore_move_session_original();
+        let targets = self.collar_move_targets();
+        if targets.is_empty() {
+            // Nothing left to move - the holes were deselected, or the dataset
+            // holding them was closed - so a preview standing over them is put
+            // back rather than abandoned where it was dragged to.
+            self.restore_collar_move_session();
+            return;
+        }
+        let should_refresh = self
+            .collar_move_session
+            .as_ref()
+            .map(|session| {
+                self.workspace.active_project().map(|project| project.runtime_id) != Some(session.project_runtime_id)
+                    || session.originals.len() != targets.len()
+                    || session.originals.iter().zip(&targets).any(|((captured, _), target)| captured != target)
+            })
+            .unwrap_or(true);
+        if !should_refresh {
+            return;
+        }
+        // A changed target set must never use already-previewed geometry as
+        // its new baseline. Restore first, then capture the new selection.
+        self.restore_collar_move_session();
+        let Some(project_runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
+            return;
+        };
+        let originals = targets
+            .into_iter()
+            .filter_map(|target| {
+                let dataset = self.drill_holes.iter().find(|dataset| dataset.id == target.dataset)?;
+                Some((target, dataset.dataset.holes.get(target.hole)?.placement()))
+            })
+            .collect();
+        self.collar_move_session = Some(CollarMoveSession { project_runtime_id, originals });
+    }
+
+    /// Roll back a live Move Collar preview if it is holding holes in the
+    /// dataset that is about to be closed or removed. The holes go back where
+    /// they were rather than the preview being left standing over a dataset
+    /// that is no longer the one it was captured from.
+    pub(crate) fn cancel_collar_move_touching(&mut self, dataset: crate::model::drill_hole::DrillHoleId) {
+        if self
+            .collar_move_session
+            .as_ref()
+            .is_some_and(|session| session.originals.iter().any(|(target, _)| target.dataset == dataset))
+        {
+            self.cancel_move_delta();
+        }
+    }
+
+    fn preview_collar_move_delta(&mut self, delta: DVec3) {
+        // The session is taken rather than borrowed so the originals can be
+        // read while the datasets holding them are written, without cloning
+        // every hole again on each frame of a drag.
+        let Some(session) = self.collar_move_session.take() else {
+            return;
+        };
+        self.write_collar_holes(&session.originals, delta);
+        self.collar_move_session = Some(session);
+    }
+
+    /// Put the captured holes back exactly as they were, ending the preview.
+    fn restore_collar_move_session(&mut self) {
+        let Some(session) = self.collar_move_session.take() else {
+            return;
+        };
+        self.write_collar_holes(&session.originals, DVec3::ZERO);
+        self.invalidate_topology_bounds_and_redraw();
+    }
+
+    /// Settle a collar move at `delta`, leaving the datasets holding it.
+    ///
+    /// Drillhole geometry is not part of the document, so - unlike the design
+    /// move this mirrors - there is no `Command` to push: the datasets are
+    /// marked dirty and the move stands until it is saved.
+    fn apply_collar_move_delta(&mut self, delta: DVec3) {
+        self.ensure_collar_move_session();
+        let Some(session) = self.collar_move_session.take() else {
+            return;
+        };
+        // A project switch under a live preview leaves the holes where they
+        // were rather than committing them against whatever is open now.
+        if self.workspace.active_project().map(|project| project.runtime_id) != Some(session.project_runtime_id) {
+            self.write_collar_holes(&session.originals, DVec3::ZERO);
+            self.reset_move_editor_state();
+            return;
+        }
+        self.write_collar_holes(&session.originals, delta);
+        let moved = session.originals.len();
+        if moved > 0 && delta != DVec3::ZERO {
+            self.touch_active_project_content();
+            crate::logging::report_completed_action(
+                CommandReportSpec::new("Move Collar", format!("{moved} hole(s)")),
+                format!("Applied move delta ({delta}) to {moved} drillhole collar(s)"),
+            );
+        }
+        self.reset_move_editor_state();
+        self.invalidate_topology_bounds_and_redraw();
+        self.invalidate_geometry();
+        self.invalidate_overlay();
+    }
+
+    /// Rewrite every captured hole as its original translated by `delta` - a
+    /// zero delta therefore restores. Each dataset is unshared once and its
+    /// extent recomputed, and its revision carries the change through to the
+    /// instance cache: see `rendering::scene::drill_hole_cache`.
+    fn write_collar_holes(&mut self, originals: &[(DrillHoleRef, HolePlacement)], delta: DVec3) {
+        for dataset in &mut self.drill_holes {
+            if !originals.iter().any(|(target, _)| target.dataset == dataset.id) {
+                continue;
+            }
+            let data = std::sync::Arc::make_mut(&mut dataset.dataset);
+            for (target, original) in originals.iter().filter(|(target, _)| target.dataset == dataset.id) {
+                let Some(hole) = data.holes.get_mut(target.hole) else {
+                    continue;
+                };
+                hole.set_placement(original, delta);
+            }
+            data.refresh_bounds();
+            dataset.state.touch();
+        }
+        // A redraw only: the cached scene bounds are dropped once the move
+        // settles rather than on every frame of a drag, which would throw away
+        // the design AABBs cached alongside them each time the pointer moves.
+        self.request_topology_redraw();
     }
 
     fn gizmo_axis_screen_basis(&self, axis_idx: u8, cursor_px: (f32, f32)) -> ((f32, f32), f64) {

@@ -123,7 +123,7 @@ codegen-units = 1
 inherits = "release"
 debug = true
 strip = "none"
-rustflags = ["-C", "force-frame-pointers=yes"]
+rustflags = ["-C", "force-frame-pointers=yes", "-C", "link-arg=-fuse-ld=mold"]
 
 [profile.dev]
 opt-level = 1

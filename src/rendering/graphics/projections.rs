@@ -182,7 +182,7 @@ impl<'a> Graphics<'a> {
         )
     }
 
-    pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document) {
+    pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
         // Where the snap landed, for the drawn cursor to mark. The snapped
         // point is the one the tool will use, and it is not the pointer: it
         // can sit anywhere inside the snap threshold of it.
@@ -232,7 +232,26 @@ impl<'a> Graphics<'a> {
         }
 
         use crate::ui::state::ActiveTool;
-        if editor.active_tool == ActiveTool::Move && (!editor.selected_handles.is_empty() || editor.move_vertex_target.is_some()) {
+        if editor.active_tool == ActiveTool::MoveCollar {
+            // Move Collar's gizmo stands at the middle of the collars it is
+            // holding, read from the datasets themselves so it follows a live
+            // preview the way the design gizmo follows the moved objects.
+            let mut sum = DVec3::ZERO;
+            let mut count = 0usize;
+            for hole in &editor.selected_drill_holes {
+                if let Some(dataset) = drill_holes.iter().find(|dataset| dataset.id == hole.dataset && dataset.state.loaded)
+                    && let Some(hole) = dataset.dataset.holes.get(hole.hole)
+                {
+                    sum += hole.collar;
+                    count += 1;
+                }
+            }
+            editor.move_gizmo = if count > 0 {
+                self.project_move_gizmo(sum / count as f64)
+            } else {
+                MoveGizmoScreen::default()
+            };
+        } else if editor.active_tool == ActiveTool::Move && (!editor.selected_handles.is_empty() || editor.move_vertex_target.is_some()) {
             let mut sum = DVec3::ZERO;
             let mut count = 0usize;
             if let Some((target_id, point)) = editor.move_vertex_target {

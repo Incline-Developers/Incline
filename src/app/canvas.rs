@@ -86,7 +86,7 @@ impl<'a> App<'a> {
         if !self.workspace.has_active_project() && self.triangulations.is_empty() {
             return;
         }
-        if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
+        if self.editor.active_tool.translates() {
             self.cancel_move_delta();
             self.editor.move_vertex_target = None;
         }
@@ -101,6 +101,7 @@ impl<'a> App<'a> {
                     frozen,
                     self.editor.xray_enabled,
                 )
+                .filter(|pick| self.tool_accepts_pick(pick))
                 .map(|pick| (Some(pick), pick.world))
                 .or_else(|| graphics.cursor_world(self.editor.z_level).map(|world| (None, world)))
         });
@@ -154,7 +155,7 @@ impl<'a> App<'a> {
             }
             Some((None, world)) => {
                 self.active_triangulation = None;
-                if matches!(self.editor.active_tool, crate::ui::state::ActiveTool::None | crate::ui::state::ActiveTool::Move) {
+                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else if self.workspace.has_active_project() {
@@ -169,7 +170,7 @@ impl<'a> App<'a> {
                 // still begin a selection gesture so a short click can clear
                 // the current selection.
                 self.active_triangulation = None;
-                if matches!(self.editor.active_tool, crate::ui::state::ActiveTool::None | crate::ui::state::ActiveTool::Move) {
+                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else {
@@ -462,12 +463,15 @@ impl<'a> App<'a> {
             })
             .unwrap_or_default();
         let active_object_ids = self.active_project_object_ids();
+        // Move Design marquees only what it can move, the same as its clicks
+        // do - see `tool_accepts_pick`.
+        let objects_only = self.editor.active_tool == ActiveTool::Move;
         enclosed.retain(|handle| match handle {
             SceneEntityId::Object(object_id) => active_object_ids.contains(object_id),
-            SceneEntityId::Triangulation(_) => true,
-            SceneEntityId::BlockModel(_) => true,
-            SceneEntityId::DrillHole(_) => true,
-            SceneEntityId::PointCloud(_) => true,
+            SceneEntityId::Triangulation(_) => !objects_only,
+            SceneEntityId::BlockModel(_) => !objects_only,
+            SceneEntityId::DrillHole(_) => !objects_only,
+            SceneEntityId::PointCloud(_) => !objects_only,
         });
         if self.modifiers.shift_key() {
             for handle in enclosed {
@@ -657,6 +661,21 @@ impl<'a> App<'a> {
             .and_then(|id| self.drill_holes.iter().find(|dataset| dataset.id == id))
             .map(std::slice::from_ref)
             .unwrap_or_default()
+    }
+
+    /// Whether the active tool will take what the cursor landed on.
+    ///
+    /// The translate tools take only what they can translate - Move Design the
+    /// document's own objects, Move Collar the holes of a drillhole dataset -
+    /// so a pick they have no use for is treated as a click on nothing rather
+    /// than selecting something the gizmo would then stand uselessly over. A
+    /// tool that selects for its own reasons, and plain picking, take anything.
+    fn tool_accepts_pick(&self, pick: &crate::rendering::graphics::camera::ScenePick) -> bool {
+        match self.editor.active_tool {
+            ActiveTool::Move => matches!(pick.entity, SceneEntityId::Object(_)),
+            ActiveTool::MoveCollar => pick.hole.is_some(),
+            _ => true,
+        }
     }
 
     pub(crate) fn active_project_object_ids(&self) -> std::collections::HashSet<crate::model::ObjectId> {
