@@ -99,7 +99,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
                     });
                     let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        draw_view_tools(ui, editor, commands, side);
+                        draw_view_tools(ui, editor, project, commands, side);
                     });
 
                     if !editor.active_workspace.has_centre_settings() {
@@ -340,10 +340,14 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 ///
 /// What is here is what any workspace asks of the camera; the switches over
 /// how the scene itself is drawn belong to production and are added ahead of
-/// it only there - see [`draw_production_view_tools`].
-fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+/// it only there - see [`draw_production_view_tools`]. Drill & Blast fills the
+/// same slot with the blast reviews - see [`draw_blast_view_tools`].
+fn draw_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>, side: f32) {
     if editor.active_workspace.has_production_tools() {
         draw_production_view_tools(ui, editor, commands, side);
+    }
+    if editor.active_workspace == Workspace::DrillAndBlast {
+        draw_blast_view_tools(ui, editor, project, side);
     }
 
     let exaggeration = ui.add(
@@ -459,4 +463,45 @@ fn draw_production_view_tools(ui: &mut egui::Ui, editor: &mut EditorState, comma
     if xray.clicked() {
         editor.xray_enabled = !editor.xray_enabled;
     }
+}
+
+/// The blast reviews, which Drill & Blast carries in the slot production fills
+/// with its scene switches.
+///
+/// Each of these reads the fired pattern back - how much burden each hole is
+/// left to move, when the ground around it lifts, the shot played through -
+/// so all three act on the dataset the centre run names, and none of them has
+/// anything to work on until one is picked there.
+///
+/// Placeholders: the buttons, their icons and their enablement are here, but
+/// nothing is wired behind them yet.
+fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, side: f32) {
+    // The centre run shows "None" for a dataset that is no longer loaded, and
+    // these follow it: a stale id is not something to review.
+    let has_active_dataset = editor
+        .active_drill_hole
+        .is_some_and(|id| project.drill_holes.iter().any(|dataset| dataset.id == id && dataset.is_loaded));
+
+    // A right-to-left layout adds each button to the left of the last, so the
+    // run is added in reverse to read left to right on screen.
+    ui.add_enabled(
+        has_active_dataset,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), "Blast Timeline")
+            .id_salt("blast_timeline")
+            .button_side(side),
+    );
+
+    ui.add_enabled(
+        has_active_dataset,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), "Contours of Equal Time")
+            .id_salt("contours_of_equal_time")
+            .button_side(side),
+    );
+
+    ui.add_enabled(
+        has_active_dataset,
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), "Burden Relief Heatmap")
+            .id_salt("burden_relief_heatmap")
+            .button_side(side),
+    );
 }

@@ -545,7 +545,7 @@ fn draw_ui(
     // scene, so they are claimed before the scene's rect is worked out: what
     // they leave is where it starts. The column is one region the full height
     // of the workspace, like the explorer beside it.
-    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, editing_enabled, project_active, commands);
+    let left_toolbar_rect = elements::toolbars::draw_left_toolbar(root_ui, editor, project, editing_enabled, project_active, commands);
 
     // --- Compute canvas rect (area not occupied by panels) ---
     let canvas_bottom = console_rect.map_or_else(

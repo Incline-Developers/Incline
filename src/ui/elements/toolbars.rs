@@ -7,7 +7,7 @@
 //! [`crate::ui::elements::viewport_bar`].
 
 use crate::ui::{
-    EditorState,
+    EditorState, UiProjectView,
     state::{ActiveTool, BlastCursor, CursorMode, UiCommand, Workspace},
     themed_icon, unthemed_icon,
     widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
@@ -27,6 +27,8 @@ enum LeftToolAction {
     NewLayer,
     /// Make this the active tool.
     Tool(ActiveTool),
+    /// A tool whose button is drawn but has nothing behind it yet.
+    Placeholder,
 }
 
 /// One button in the drawing toolbar's run.
@@ -77,6 +79,36 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
     ]
 }
 
+/// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
+/// then say where it starts.
+///
+/// Placeholders: the cells, their icons and their enablement are here, but
+/// nothing is wired behind them yet.
+fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
+    // Setting the initiation point acts on the pattern the viewport bar's
+    // centre run names, and reads it the same way that run does: a dataset
+    // that is no longer loaded shows as "None" there and is nothing to act on
+    // here. Laying a new pattern out is what fills that combo, so it asks only
+    // for somewhere to put one.
+    let has_active_dataset = editor
+        .active_drill_hole
+        .is_some_and(|id| project.drill_holes.iter().any(|dataset| dataset.id == id && dataset.is_loaded));
+    vec![
+        LeftTool {
+            icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
+            tooltip: "Create Drill Pattern",
+            action: LeftToolAction::Placeholder,
+            enabled: project_active,
+        },
+        LeftTool {
+            icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
+            tooltip: "Set Initiation Point",
+            action: LeftToolAction::Placeholder,
+            enabled: has_active_dataset,
+        },
+    ]
+}
+
 /// Draw one cell of the drawing toolbar's run.
 ///
 /// A tool greys out on its own rather than the run being wrapped in a single
@@ -86,6 +118,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     let selected = match tool.action {
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
+        LeftToolAction::Placeholder => false,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip).id_salt(("left_tool", tool.tooltip)).selected(selected);
     if !ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner.clicked() {
@@ -100,6 +133,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
             }
         }
         LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
+        LeftToolAction::Placeholder => {}
     }
 }
 
@@ -111,17 +145,23 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
 /// panel: the column is one region, running the full height the panels around
 /// it leave, with its run of cells at the top.
 ///
-/// The tools in it are the production workspace's - see
-/// [`crate::ui::state::Workspace::has_production_tools`] - so another
-/// workspace leaves the column standing and empty, one cell wide, rather than
-/// taking it off the window: it is where that discipline's own tools will go,
-/// and the workspace tabs are not a reason for the window to change shape
-/// under the pointer.
-pub(crate) fn draw_left_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, editing_enabled: bool, project_active: bool, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    let tools = if editor.active_workspace.has_production_tools() {
-        left_tools(ui, editing_enabled, project_active)
-    } else {
-        Vec::new()
+/// Each workspace fills the column with its own run - production's drawing
+/// tools, Drill & Blast's pattern tools - and a workspace with none leaves it
+/// standing and empty, one cell wide, rather than taking it off the window:
+/// it is where that discipline's own tools will go, and the workspace tabs are
+/// not a reason for the window to change shape under the pointer.
+pub(crate) fn draw_left_toolbar(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    project: &UiProjectView,
+    editing_enabled: bool,
+    project_active: bool,
+    commands: &mut Vec<UiCommand>,
+) -> egui::Rect {
+    let tools = match editor.active_workspace {
+        workspace if workspace.has_production_tools() => left_tools(ui, editing_enabled, project_active),
+        Workspace::DrillAndBlast => blast_tools(ui, project, editor, project_active),
+        _ => Vec::new(),
     };
     // The run wraps into further columns rather than off the bottom of a short
     // window, and a panel claims its width before anything is drawn in it - so
