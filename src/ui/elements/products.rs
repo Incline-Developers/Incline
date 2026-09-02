@@ -67,16 +67,23 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::same(6)))
         .show(ui, |ui| {
-            // A panel is as tall as its contents report, and that height is
-            // what its own resize handle stores. Claim the whole column, or
-            // the region's fill stops under the last card.
-            ui.set_min_height(ui.available_height());
-            CollapsibleSection::new("delay_palette", tr!(literal = "Delay Palette"))
-                .default_open(true)
-                .show(ui, |ui| draw_delay_palette(ui, editor, commands));
-            CollapsibleSection::new("initiation", tr!(literal = "Initiation"))
-                .default_open(true)
-                .show(ui, |ui| draw_initiation(ui, editor));
+            // Initiation rows can outgrow a short viewport. Keep that content
+            // inside the height the surrounding bottom panels left us; if it
+            // overflows, scroll it rather than allowing the side panel's frame
+            // and chrome rect to expand across those panels.
+            egui::ScrollArea::vertical()
+                .id_salt("products_panel_scroll")
+                .auto_shrink([false; 2])
+                .min_scrolled_height(0.0)
+                .max_height(ui.available_height())
+                .show(ui, |ui| {
+                    CollapsibleSection::new("delay_palette", tr!(literal = "Delay Palette"))
+                        .default_open(true)
+                        .show(ui, |ui| draw_delay_palette(ui, editor, commands));
+                    CollapsibleSection::new("initiation", tr!(literal = "Initiation"))
+                        .default_open(true)
+                        .show(ui, |ui| draw_initiation(ui, editor));
+                });
         })
         .response
         .rect
