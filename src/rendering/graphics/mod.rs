@@ -731,16 +731,21 @@ impl<'a> Graphics<'a> {
         }
     }
 
+    /// Pin the pointer to the window while a fly-mode look is in progress.
+    ///
+    /// Only the grab is set here. Hiding the pointer is left to the UI, which
+    /// asks for [`egui::CursorIcon::None`] while the camera is being flown:
+    /// `Window::set_cursor_visible` from this side would leave egui-winit's
+    /// icon cache believing something else is on screen, and the next thing
+    /// egui hid or showed would be skipped as a no-op.
     fn sync_cursor_grab(&self) {
         let fly_active = self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right);
         if fly_active {
             if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
                 let _ = self.window.set_cursor_grab(CursorGrabMode::Confined);
             }
-            self.window.set_cursor_visible(false);
         } else {
             let _ = self.window.set_cursor_grab(CursorGrabMode::None);
-            self.window.set_cursor_visible(true);
         }
     }
 }

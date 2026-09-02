@@ -147,6 +147,168 @@ pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: 
     painter.line_segment([pos - egui::vec2(0.0, r + 4.0), pos + egui::vec2(0.0, r + 4.0)], stroke);
 }
 
+/// Half-width of the cursor's crosshair arms, in points.
+const CURSOR_ARM: f32 = 11.0;
+/// Half-width of the glyph a snap cursor carries inside its crosshair. Smaller
+/// than the arms in the same proportion the toolbar icons use, so the cursor
+/// and the button that arms it read as the same mark.
+const CURSOR_GLYPH: f32 = 7.0;
+/// Width of the dark halo drawn under every cursor stroke. The scene behind it
+/// is arbitrary - a bright raster, a dark background - so the mark carries its
+/// own contrast rather than relying on what it lands on.
+const CURSOR_HALO_WIDTH: f32 = 3.2;
+/// Width of the light core drawn over the halo, matching the 1.46-in-24 stroke
+/// the cursor icons in `res/ui/` are drawn with.
+const CURSOR_CORE_WIDTH: f32 = 1.45;
+
+/// The mark drawn in place of the pointer, chosen by the active workspace's
+/// cursor rather than by the active tool: what a pick *does* is the question
+/// the cursor answers.
+#[derive(Clone, Copy)]
+enum CursorGlyph {
+    /// Crosshair alone - a plain pick.
+    None,
+    Circle,
+    Square,
+    Triangle,
+}
+
+/// The mark for the cursor the active workspace is holding, and whether the
+/// crosshair rules are drawn through it as they are in the toolbar icons.
+///
+/// Tie Holes is the one cursor without them: it is a pick box that selects a
+/// hole, not a crosshair that places a point.
+fn cursor_glyph(editor: &crate::ui::state::EditorState) -> (CursorGlyph, bool) {
+    use crate::ui::state::{BlastCursor, CursorMode, Workspace};
+
+    match editor.active_workspace {
+        Workspace::Production => match editor.cursors.production {
+            CursorMode::Select => (CursorGlyph::None, true),
+            CursorMode::SnapToPoint => (CursorGlyph::Circle, true),
+            CursorMode::SnapToLine => (CursorGlyph::Square, true),
+            CursorMode::SnapToSurface => (CursorGlyph::Triangle, true),
+        },
+        Workspace::DrillAndBlast => match editor.cursors.blast {
+            BlastCursor::Select => (CursorGlyph::None, true),
+            BlastCursor::TieHoles => (CursorGlyph::Square, false),
+        },
+        Workspace::Geology => (CursorGlyph::None, true),
+    }
+}
+
+/// Give the system pointer back after a frame in which the scene had it.
+///
+/// [`egui::PlatformOutput`]'s cursor icon is sticky between frames: a request
+/// stands until something asks for a different one, so hiding the pointer once
+/// would hide it over the whole application for good. Only a request this
+/// module makes is withdrawn - `None` and `Progress` are asked for nowhere
+/// else - which leaves an icon a widget set earlier in the frame, a text
+/// field's or a panel seam's, exactly as that widget wanted it.
+fn release_pointer(ctx: &egui::Context) {
+    if matches!(ctx.output(|output| output.cursor_icon), egui::CursorIcon::None | egui::CursorIcon::Progress) {
+        ctx.set_cursor_icon(egui::CursorIcon::Default);
+    }
+}
+
+/// Hide the system pointer over the open scene and draw the active cursor in
+/// its place; hand the pointer back everywhere else.
+///
+/// The scene is the only place the drawn cursor belongs, so the pointer is
+/// only taken when it is inside `canvas_rect` *and* over nothing egui owns.
+/// [`egui::Context::layer_id_at`] answers the second half, but note what it
+/// reports over open scene: the background layer, not nothing. Panels and the
+/// root ui all paint there, so the background layer means "no floating thing
+/// here" rather than "no egui here", and `canvas_rect` is what keeps the
+/// explorer, the toolbars and the bars out.
+///
+/// Everything that floats over the scene and takes input (the orientation
+/// gizmo, the slice minimap, the tool panels, every menu and dialog) has an
+/// area of its own and gets the ordinary pointer back; the two overlays that
+/// are decoration only opt out with `Area::interactable(false)`.
+///
+/// Painting happens on its own foreground layer with no `Sense`, so the mark
+/// sits above the scene without consuming a single click.
+pub(crate) fn draw_tool_cursor(ctx: &egui::Context, editor: &crate::ui::state::EditorState, canvas_rect: egui::Rect, camera_active: bool) {
+    // A running task owns the pointer everywhere, scene included.
+    if editor.background_busy {
+        ctx.set_cursor_icon(egui::CursorIcon::Progress);
+        return;
+    }
+
+    // Flying grabs the pointer to the window, so there is no position to draw
+    // at - just hide it, which is what the grab used to do for itself.
+    if camera_active && editor.fly_mode_enabled {
+        ctx.set_cursor_icon(egui::CursorIcon::None);
+        return;
+    }
+
+    // `pointer_hover_pos` is already in points and goes `None` once the
+    // pointer leaves the window, so the mark cannot be stranded at the edge.
+    let Some(pos) = ctx.pointer_hover_pos() else {
+        release_pointer(ctx);
+        return;
+    };
+    // Open scene reports as the background layer rather than as nothing, so
+    // that is the one layer the cursor is allowed to cover.
+    let over_scene_only = ctx.layer_id_at(pos).is_none_or(|layer| layer == egui::LayerId::background());
+    // A widget drag that started elsewhere - a minimap pan, a slider - keeps
+    // the pointer for as long as it runs, however far over the scene it
+    // travels. Scene drags never trip this: the viewport is painted, not a
+    // widget, so egui has no id to be holding.
+    if !canvas_rect.contains(pos) || !over_scene_only || ctx.egui_is_using_pointer() {
+        release_pointer(ctx);
+        return;
+    }
+    ctx.set_cursor_icon(egui::CursorIcon::None);
+
+    let mut painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tool_cursor")));
+    painter.set_clip_rect(canvas_rect);
+
+    // A snapped cursor is sitting on real geometry rather than on the Z plane,
+    // which is worth saying at the pointer instead of only in the status bar.
+    let core = if editor.cursor_snapped {
+        egui::Color32::from_rgb(255, 220, 50)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(238, 242, 246, 235)
+    };
+    let halo = egui::Color32::from_rgba_unmultiplied(12, 16, 20, 190);
+    let (glyph, crosshair) = cursor_glyph(editor);
+
+    // Halo first, then core, so the dark outline never lands on top of the
+    // mark it is there to separate from the scene.
+    for (color, width) in [(halo, CURSOR_HALO_WIDTH), (core, CURSOR_CORE_WIDTH)] {
+        let stroke = egui::Stroke::new(width, color);
+        if crosshair {
+            painter.line_segment([pos - egui::vec2(CURSOR_ARM, 0.0), pos + egui::vec2(CURSOR_ARM, 0.0)], stroke);
+            painter.line_segment([pos - egui::vec2(0.0, CURSOR_ARM), pos + egui::vec2(0.0, CURSOR_ARM)], stroke);
+        }
+        match glyph {
+            CursorGlyph::None => {}
+            CursorGlyph::Circle => {
+                painter.circle_stroke(pos, CURSOR_GLYPH, stroke);
+            }
+            CursorGlyph::Square => {
+                painter.rect_stroke(
+                    egui::Rect::from_center_size(pos, egui::Vec2::splat(CURSOR_GLYPH * 2.0)),
+                    0.0,
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
+            }
+            CursorGlyph::Triangle => {
+                // The same upright triangle the snap-to-surface icon carries,
+                // sitting on a base through the crosshair's lower arm.
+                let apex = pos - egui::vec2(0.0, CURSOR_GLYPH);
+                let left = pos + egui::vec2(-CURSOR_GLYPH, CURSOR_GLYPH * 0.82);
+                let right = pos + egui::vec2(CURSOR_GLYPH, CURSOR_GLYPH * 0.82);
+                painter.line_segment([apex, left], stroke);
+                painter.line_segment([left, right], stroke);
+                painter.line_segment([right, apex], stroke);
+            }
+        }
+    }
+}
+
 fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }

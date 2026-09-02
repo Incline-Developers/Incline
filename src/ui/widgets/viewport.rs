@@ -1099,6 +1099,9 @@ impl ViewportScaleBar {
 
         egui::Area::new(self.id)
             .order(egui::Order::Background)
+            // Read-only, like the tool label: kept out of `layer_id_at` so the
+            // drawn cursor survives crossing it.
+            .interactable(false)
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .fixed_pos(anchor)
             .show(ctx, |ui| {
@@ -1268,6 +1271,10 @@ impl ViewportLabel {
         let pos = egui::pos2(self.viewport_rect.center().x, self.viewport_rect.top() + self.margin);
         egui::Area::new(self.id)
             .order(egui::Order::Foreground)
+            // A banner, not a control: staying out of `layer_id_at` keeps the
+            // viewport's drawn cursor from flicking back to the pointer every
+            // time it passes underneath.
+            .interactable(false)
             .pivot(egui::Align2::CENTER_TOP)
             .fixed_pos(pos)
             .show(ctx, |ui| {

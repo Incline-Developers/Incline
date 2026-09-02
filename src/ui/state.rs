@@ -871,6 +871,12 @@ pub(crate) struct EditorState {
     pub(crate) fly_invert_horizontal_look: bool,
     pub(crate) fly_near_clip_limit: f64,
     pub(crate) fly_max_clip_span: f64,
+    /// Whether a background task is running, mirrored from `App` so the UI can
+    /// ask egui for the busy cursor. The window's cursor is egui's to set: a
+    /// `winit::Window::set_cursor` call from App-side would desync
+    /// egui-winit's icon cache and strand whatever the pointer is showing -
+    /// including the hidden cursor the viewport draws its own crosshair over.
+    pub(crate) background_busy: bool,
     /// Transient status-bar message from a background task (e.g. "Saving to …").
     /// `None` means idle; the field is updated from `poll_saves` / `poll_jobs`
     /// each frame. Set it through [`EditorState::set_status_message`] so the
@@ -1767,6 +1773,7 @@ impl EditorState {
             fly_invert_horizontal_look: false,
             fly_near_clip_limit: crate::app::io::default_fly_near_clip_limit(),
             fly_max_clip_span: crate::app::io::default_fly_max_clip_span(),
+            background_busy: false,
             status_message: None,
             last_finished_task: None,
             active_tool: ActiveTool::None,

@@ -4,7 +4,6 @@ use web_time::Instant;
 use winit::{
     event::*,
     keyboard::{KeyCode, PhysicalKey},
-    window::CursorIcon,
 };
 
 use crate::{app::App, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error};
@@ -211,11 +210,6 @@ impl<'a> App<'a> {
                                 }
                                 if completing_topology_load && !self.graphics.as_ref().is_some_and(|graphics| graphics.point_cloud_uploads_pending()) {
                                     self.finish_topology_load();
-                                }
-                                if self.background_tasks_pending()
-                                    && let Some(window) = &self.window
-                                {
-                                    window.set_cursor(CursorIcon::Progress);
                                 }
                                 self.handle_ui_commands(ui_output.commands);
                                 self.sync_slice_preview_window(event_loop);

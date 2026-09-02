@@ -36,7 +36,7 @@ use winit::{
     event::{DeviceEvent, *},
     event_loop::ControlFlow,
     keyboard::ModifiersState,
-    window::{CursorIcon, Icon, Window},
+    window::{Icon, Window},
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -1026,14 +1026,12 @@ impl<'a> App<'a> {
         self.background_tasks.has_gpu_uploads()
     }
 
-    pub(crate) fn background_tasks_pending(&self) -> bool {
-        self.background_tasks.is_busy()
-    }
-
-    fn update_background_task_cursor(&self) {
-        if let Some(window) = &self.window {
-            window.set_cursor(if self.background_tasks.is_busy() { CursorIcon::Progress } else { CursorIcon::Default });
-        }
+    /// Mirror the busy state into the editor, where `draw_ui` turns it into a
+    /// cursor request. It goes through egui rather than `Window::set_cursor`
+    /// so egui-winit's icon cache stays in step - see
+    /// [`EditorState::background_busy`].
+    fn update_background_task_cursor(&mut self) {
+        self.editor.background_busy = self.background_tasks.is_busy();
     }
 
     fn fit_view_to_extents(&mut self) {

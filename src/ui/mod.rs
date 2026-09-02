@@ -128,6 +128,7 @@ impl Gui {
         drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
         screen_size: [u32; 2],
         orbit_marker: Option<(f32, f32)>,
+        camera_active: bool,
         camera_forward: [f32; 3],
         camera_up: [f32; 3],
         world_per_physical_pixel: Option<f64>,
@@ -157,6 +158,7 @@ impl Gui {
         let console_snapshot = crate::logging::console_snapshot();
         let frame_context = UiFrameContext {
             orbit_marker,
+            camera_active,
             camera_forward,
             camera_up,
             world_per_physical_pixel,
@@ -272,6 +274,10 @@ fn mirror_copy_text_to_browser_clipboard(platform_output: &egui::PlatformOutput)
 #[derive(Clone, Copy)]
 struct UiFrameContext<'a> {
     orbit_marker: Option<(f32, f32)>,
+    /// Whether the camera is being driven by the pointer right now (a
+    /// right-button drag). The drawn cursor stands down for a fly-mode look,
+    /// where the pointer is grabbed to the window and has no position to sit at.
+    camera_active: bool,
     camera_forward: [f32; 3],
     camera_up: [f32; 3],
     world_per_physical_pixel: Option<f64>,
@@ -1006,6 +1012,12 @@ fn draw_ui(
     if editor.show_world_axis_gizmo {
         elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands);
     }
+
+    // The drawn cursor, and with it the decision to hide the system pointer.
+    // It goes after everything that floats over the scene, because the areas
+    // it asks about have to have registered themselves first, and because the
+    // cursor egui reports for the frame is whoever asked last.
+    elements::cursors::draw_tool_cursor(root_ui.ctx(), editor, canvas_rect, frame_context.camera_active);
 
     let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
     if editor.show_scale_bar {
