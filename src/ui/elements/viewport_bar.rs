@@ -537,21 +537,21 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &EditorState, project: &UiPr
     // run is added in reverse to read left to right on screen.
     ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), "Blast Timeline")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), "Blast Timeline [PLACEHOLDER]")
             .id_salt("blast_timeline")
             .button_side(side),
     );
 
     ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), "Contours of Equal Time")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), "Contours of Equal Time [PLACEHOLDER]")
             .id_salt("contours_of_equal_time")
             .button_side(side),
     );
 
     ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), "Burden Relief Heatmap")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), "Burden Relief Heatmap [PLACEHOLDER]")
             .id_salt("burden_relief_heatmap")
             .button_side(side),
     );

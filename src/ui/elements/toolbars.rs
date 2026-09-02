@@ -96,19 +96,19 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
     vec![
         LeftTool {
             icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
-            tooltip: "Create Drill Pattern",
+            tooltip: "Create Drill Pattern [PLACEHOLDER]",
             action: LeftToolAction::Placeholder,
             enabled: project_active,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("move_drillhole.svg")),
-            tooltip: "Move Drill Hole",
+            tooltip: "Move Drill Hole [PLACEHOLDER]",
             action: LeftToolAction::Placeholder,
             enabled: has_active_dataset,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
-            tooltip: "Set Initiation Point",
+            tooltip: "Set Initiation Point [PLACEHOLDER]",
             action: LeftToolAction::Placeholder,
             enabled: has_active_dataset,
         },
