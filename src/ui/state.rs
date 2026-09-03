@@ -923,10 +923,9 @@ pub(crate) struct EditorState {
     /// is hidden entirely until then.
     pub(crate) last_finished_task: Option<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
-    /// The cursor each workspace is holding - see [`WorkspaceCursors`]. There
-    /// is no cursor mode over the application as a whole: what a pick does is
-    /// a question about the workspace it is made in.
-    pub(crate) cursors: WorkspaceCursors,
+    /// Shared cursor mode, selected from the Production workspace's toolbar
+    /// and used in every workspace.
+    pub(crate) cursor_mode: CursorMode,
     pub(crate) tool_line_color: [f32; 4],
     pub(crate) tool_line_weight: f32,
     pub(crate) tool_hatch: ToolHatch,
@@ -1487,36 +1486,6 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
-    /// What a pick snaps to in the workspace that is up.
-    ///
-    /// Only production draws, and only its cursor run offers snapping, so
-    /// every other workspace picks plainly - the same thing
-    /// [`CursorMode::Select`] means there.
-    pub(crate) fn snap_cursor_mode(&self) -> CursorMode {
-        match self.active_workspace {
-            Workspace::Production => self.cursors.production,
-            Workspace::DrillAndBlast | Workspace::Geology => CursorMode::Select,
-        }
-    }
-
-    /// Step the active workspace's cursor one along its own run - what the
-    /// mouse's forward and back buttons do - and report whether it moved.
-    ///
-    /// A workspace with no cursor run of its own has nowhere to step, so the
-    /// buttons do nothing there rather than quietly changing another
-    /// workspace's cursor behind its back.
-    pub(crate) fn cycle_workspace_cursor(&mut self, forward: bool) -> bool {
-        match self.active_workspace {
-            Workspace::Production => {
-                let mode = &mut self.cursors.production;
-                *mode = if forward { mode.next() } else { mode.previous() };
-                true
-            }
-            Workspace::DrillAndBlast => false,
-            Workspace::Geology => false,
-        }
-    }
-
     /// Dialogs that take Enter as their confirm shortcut.
     ///
     /// The GUI only reports a key press as consumed when a text field holds
@@ -1857,7 +1826,7 @@ impl EditorState {
             status_message: None,
             last_finished_task: None,
             active_tool: ActiveTool::None,
-            cursors: WorkspaceCursors::default(),
+            cursor_mode: CursorMode::Select,
             tool_line_color: [1.0, 1.0, 1.0, 1.0],
             tool_line_weight: 1.0,
             tool_hatch: ToolHatch::Clear,
@@ -2329,35 +2298,6 @@ pub(crate) enum CursorMode {
     SnapToSurface,
     SnapToLine,
     SnapToPoint,
-}
-
-/// What a plain scene click does while Drill & Blast is up. Tie-in creation is
-/// intentionally an [`ActiveTool`] rather than another cursor mode.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum BlastCursor {
-    Select,
-}
-
-/// The cursor every workspace keeps, one field each.
-///
-/// A cursor mode belongs to the discipline whose tools read it. Production
-/// owns snapping modes; Drill & Blast currently owns only plain selection.
-/// Geology has no cursor of its own yet.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct WorkspaceCursors {
-    /// What a production pick snaps to.
-    pub(crate) production: CursorMode,
-    /// What a Drill & Blast pick is for.
-    pub(crate) blast: BlastCursor,
-}
-
-impl Default for WorkspaceCursors {
-    fn default() -> Self {
-        Self {
-            production: CursorMode::Select,
-            blast: BlastCursor::Select,
-        }
-    }
 }
 
 impl CursorMode {

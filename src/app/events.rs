@@ -353,7 +353,7 @@ impl<'a> App<'a> {
                     );
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
                     let snap_mode_enabled = matches!(
-                        self.editor.snap_cursor_mode(),
+                        self.editor.cursor_mode,
                         crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
                     );
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
@@ -373,7 +373,7 @@ impl<'a> App<'a> {
                                 &self.triangulations,
                                 &self.editor.hidden_handles,
                                 &self.editor.frozen_handles,
-                                &self.editor.snap_cursor_mode(),
+                                &self.editor.cursor_mode,
                                 self.editor.xray_enabled,
                             )
                         })
@@ -757,20 +757,13 @@ impl<'a> App<'a> {
             return false;
         };
 
-        // The cursor belongs to the workspace that is up, so these buttons
-        // step that workspace's own run - see
-        // [`crate::ui::state::WorkspaceCursors`]. A workspace with no run of
-        // its own is left where it was, and the press is still the cursor
-        // button's rather than falling through to the scene.
-        let cycled = match button {
-            MouseButton::Forward => self.editor.cycle_workspace_cursor(true),
-            MouseButton::Back => self.editor.cycle_workspace_cursor(false),
+        self.editor.cursor_mode = match button {
+            MouseButton::Forward => self.editor.cursor_mode.next(),
+            MouseButton::Back => self.editor.cursor_mode.previous(),
             _ => return false,
         };
-        if cycled {
-            self.editor.cursor_snapped = false;
-            self.redraw_requested = true;
-        }
+        self.editor.cursor_snapped = false;
+        self.redraw_requested = true;
         true
     }
 

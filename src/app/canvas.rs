@@ -446,10 +446,11 @@ impl<'a> App<'a> {
         // Box selection: left-to-right (end.x > start.x) = cross select (any vertex
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
-        // Drill & Blast marquees drill holes, one hole at a time, where
-        // production's takes the design geometry over the same ground.
+        // Drill & Blast gives connectors first refusal on the marquee. If no
+        // tie-in is taken, it falls back to holes one at a time; production's
+        // marquee takes the design geometry over the same ground.
         if self.editor.active_workspace == Workspace::DrillAndBlast {
-            self.finish_drill_hole_box_selection(start, end, cross_select);
+            self.finish_blast_box_selection(start, end, cross_select);
             return;
         }
         let mut enclosed = self
@@ -492,9 +493,43 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
-    /// The Drill & Blast marquee: every hole the box takes, held one hole at a
-    /// time rather than as the datasets they came from.
-    fn finish_drill_hole_box_selection(&mut self, start: (f32, f32), end: (f32, f32), cross_select: bool) {
+    /// The Drill & Blast marquee: select tie-ins exclusively when the box
+    /// takes any; otherwise select its holes one at a time rather than as the
+    /// datasets they came from.
+    fn finish_blast_box_selection(&mut self, start: (f32, f32), end: (f32, f32), cross_select: bool) {
+        let tie_ins = self
+            .graphics
+            .as_ref()
+            .map(|graphics| {
+                graphics.tie_ins_in_screen_rect(
+                    self.selectable_drill_holes(),
+                    start,
+                    end,
+                    cross_select,
+                    &self.editor.hidden_handles,
+                    &self.editor.frozen_handles,
+                )
+            })
+            .unwrap_or_default();
+        if !tie_ins.is_empty() {
+            if self.modifiers.shift_key() {
+                for tie in tie_ins {
+                    if !self.editor.selected_tie_ins.remove(&tie) {
+                        self.editor.selected_tie_ins.insert(tie);
+                    }
+                }
+            } else {
+                if !self.modifiers.control_key() {
+                    self.editor.selected_handles.clear();
+                    self.editor.selected_drill_holes.clear();
+                    self.editor.selected_tie_ins.clear();
+                }
+                self.editor.selected_tie_ins.extend(tie_ins);
+            }
+            self.invalidate_geometry();
+            return;
+        }
+
         let enclosed = self
             .graphics
             .as_ref()

@@ -43,7 +43,7 @@ impl<'a> App<'a> {
 
     fn place_text_at_cursor(&mut self) {
         if matches!(
-            self.editor.snap_cursor_mode(),
+            self.editor.cursor_mode,
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
