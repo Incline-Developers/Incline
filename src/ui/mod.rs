@@ -1076,9 +1076,27 @@ fn draw_ui(
     geometry_dirty
 }
 
+/// How tall an initiation delay card stands in world units, measured at the
+/// collar it labels. Sized against blast pattern spacing, so a card reads as a
+/// tag on the pattern rather than as a fixture of the window.
+const INITIATION_CARD_WORLD_HEIGHT: f32 = 2.0;
+/// The card height the proportions in `draw_initiation_cards` are written at:
+/// scale 1.0 reproduces the fixed-size card exactly.
+const INITIATION_CARD_BASE_HEIGHT_POINTS: f32 = 22.0;
+/// Below this the delay is unreadable, so the card is dropped rather than
+/// drawn as a smear.
+const INITIATION_CARD_MIN_HEIGHT_POINTS: f32 = 7.0;
+/// The box keeps growing past this, but the glyphs stop, to bound how much
+/// font atlas a deep zoom can ask for.
+const INITIATION_CARD_MAX_FONT_POINTS: f32 = 96.0;
+
 /// Paint each initiation as a compact red delay card above its collar. This is
 /// egui geometry rather than scene geometry, so triangulations can never hide
 /// the number the user needs to read.
+///
+/// The card belongs to the pattern rather than to the screen, so it is sized
+/// in world units - [`INITIATION_CARD_WORLD_HEIGHT`] tall at the collar it labels - and
+/// grows and shrinks with the collars around it as the view zooms.
 fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
     if editor.active_workspace != state::Workspace::DrillAndBlast {
         return;
@@ -1086,21 +1104,32 @@ fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui:
     let pixels_per_point = ui.ctx().pixels_per_point();
     let painter = ui.painter().with_clip_rect(canvas_rect);
     let fill = egui::Color32::from_rgb(205, 43, 52);
-    let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(112, 18, 25));
-    let font = egui::FontId::proportional(12.0);
+    let stroke_color = egui::Color32::from_rgb(112, 18, 25);
     for card in &editor.initiation_cards {
+        // How much the card is stretched from the proportions below, which are
+        // written at the size it used to be pinned to.
+        let scale = card.px_per_world / pixels_per_point * INITIATION_CARD_WORLD_HEIGHT / INITIATION_CARD_BASE_HEIGHT_POINTS;
+        if scale * INITIATION_CARD_BASE_HEIGHT_POINTS < INITIATION_CARD_MIN_HEIGHT_POINTS {
+            // Zoomed out far enough that the number could not be read anyway,
+            // and a pattern's worth of them would only be clutter.
+            continue;
+        }
         let collar = egui::pos2(card.screen_px.0 / pixels_per_point, card.screen_px.1 / pixels_per_point);
         let label = format!("{} ms", card.delay_ms);
-        let galley = painter.layout_no_wrap(label, font.clone(), egui::Color32::WHITE);
-        let size = egui::vec2((galley.size().x + 14.0).max(38.0), 22.0);
-        let rect = egui::Rect::from_center_size(collar - egui::vec2(0.0, 20.0), size);
+        // Quantised: egui builds a font atlas entry per distinct size, so a
+        // size that varied continuously would rebuild it throughout a zoom.
+        let font = egui::FontId::proportional((12.0 * scale).round().clamp(INITIATION_CARD_MIN_HEIGHT_POINTS, INITIATION_CARD_MAX_FONT_POINTS));
+        let galley = painter.layout_no_wrap(label, font, egui::Color32::WHITE);
+        let size = egui::vec2((galley.size().x + 14.0 * scale).max(38.0 * scale), INITIATION_CARD_BASE_HEIGHT_POINTS * scale);
+        let rect = egui::Rect::from_center_size(collar - egui::vec2(0.0, 20.0 * scale), size);
+        let stroke = egui::Stroke::new(scale.max(1.0), stroke_color);
         let pointer = vec![
-            egui::pos2(collar.x - 4.0, rect.bottom() - 1.0),
-            egui::pos2(collar.x + 4.0, rect.bottom() - 1.0),
-            egui::pos2(collar.x, collar.y - 6.0),
+            egui::pos2(collar.x - 4.0 * scale, rect.bottom() - stroke.width),
+            egui::pos2(collar.x + 4.0 * scale, rect.bottom() - stroke.width),
+            egui::pos2(collar.x, collar.y - 6.0 * scale),
         ];
         painter.add(egui::Shape::convex_polygon(pointer, fill, stroke));
-        painter.rect(rect, 3.0, fill, stroke, egui::StrokeKind::Inside);
+        painter.rect(rect, 3.0 * scale, fill, stroke, egui::StrokeKind::Inside);
         painter.galley(rect.center() - galley.size() * 0.5, galley, egui::Color32::WHITE);
     }
 }

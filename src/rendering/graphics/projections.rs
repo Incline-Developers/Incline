@@ -60,6 +60,11 @@ const GIZMO_AXIS_FADE_FULL: f32 = 0.44;
 const GIZMO_PLANE_FADE_MIN: f32 = 0.175;
 const GIZMO_PLANE_FADE_FULL: f32 = 0.25;
 
+/// How far across the view the initiation card's scale probe reaches, in world
+/// units. Long enough to measure cleanly, short enough that a perspective
+/// view's scale is still the collar's own.
+const CARD_SCALE_PROBE_WORLD: f64 = 1.0;
+
 fn fade_ramp(value: f32, min: f32, max: f32) -> f32 {
     if value <= min {
         0.0
@@ -247,19 +252,30 @@ impl<'a> Graphics<'a> {
 
         if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
             let view_proj = self.view_proj();
+            // The delay card is drawn at a world size, so each one carries the
+            // screen scale measured at its own collar: project a probe one
+            // world unit across the view and take the pixels it covers. Under
+            // perspective that scale falls off with depth, so it cannot be one
+            // constant for the whole view.
+            let forward = self.camera.forward();
+            let probe_offset = forward.cross(self.camera.up()).normalize_or_zero() * CARD_SCALE_PROBE_WORLD;
             editor.initiation_cards = drill_holes
                 .iter()
                 .filter(|dataset| dataset.state.loaded && dataset.visible && !editor.hidden_handles.contains(&dataset.entity_id()))
                 .flat_map(|dataset| {
                     dataset.dataset.initiations.iter().filter_map(|initiation| {
                         let hole = dataset.dataset.holes.get(initiation.hole)?;
+                        let collar = hole.collar_position();
+                        let screen_px = self.world_to_window_px(&view_proj, collar)?;
+                        let probe_px = self.world_to_window_px_unclipped_depth(&view_proj, collar + probe_offset)?;
                         Some(crate::ui::state::InitiationCard {
                             target: crate::model::drill_hole::DrillHoleRef {
                                 dataset: dataset.id,
                                 hole: initiation.hole,
                             },
                             delay_ms: initiation.delay_ms,
-                            screen_px: self.world_to_window_px(&view_proj, hole.collar_position())?,
+                            screen_px,
+                            px_per_world: (probe_px.0 - screen_px.0).hypot(probe_px.1 - screen_px.1) / CARD_SCALE_PROBE_WORLD as f32,
                         })
                     })
                 })

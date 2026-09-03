@@ -3482,6 +3482,10 @@ pub(crate) struct InitiationCard {
     pub(crate) target: DrillHoleRef,
     pub(crate) delay_ms: u32,
     pub(crate) screen_px: (f32, f32),
+    /// Physical window pixels one world unit spans at this collar, so the card
+    /// can be drawn at a world size instead of a fixed screen size. Measured
+    /// per card because under perspective the scale falls off with depth.
+    pub(crate) px_per_world: f32,
 }
 
 /// One leg of the tie-in a click would confirm: the two holes it joins, where
