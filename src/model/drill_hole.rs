@@ -21,9 +21,10 @@ pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
 /// unit/spacing entry from building millions of preview primitives on the UI
 /// thread while remaining comfortably above ordinary production rounds.
 pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
-/// Screen width a tie-in connector is drawn at. Wider than a hole's own
-/// minimum so the surface run reads over the collars it joins.
-pub(crate) const TIE_PIXEL_DIAMETER: f32 = 3.0;
+/// How thick a tie-in connector is drawn, as a multiple of the radius of the
+/// holes it joins. A tie has no physical thickness of its own, so it takes
+/// its weight from the pattern it belongs to rather than from the screen.
+pub(crate) const TIE_RADIUS_SCALE: f64 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
@@ -157,8 +158,9 @@ pub(crate) struct StoredInitiation {
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
     pub(crate) collar: DVec3,
-    /// Source diameter. `None` deliberately remains distinct and renders with
-    /// [`MIN_RENDER_PIXEL_DIAMETER`] instead of a world-space fallback.
+    /// Source diameter. `None` deliberately remains distinct: the trace keeps
+    /// its [`MIN_RENDER_PIXEL_DIAMETER`] screen floor, while everything sized
+    /// in world units falls back to [`DrillHole::render_radius`].
     pub(crate) diameter: Option<f64>,
     pub(crate) trace: Vec<TraceStation>,
     /// Explicit geometry coverage. Empty means the complete measured-depth
@@ -349,6 +351,13 @@ impl DrillHole {
                 station.position += delta;
             }
         }
+    }
+
+    /// The world radius the hole is drawn at. A dataset that arrived without
+    /// physical diameters falls back to a nominal production hole, so the
+    /// collar markers and ties that scale off it stay a sensible size.
+    pub(crate) fn render_radius(&self) -> f64 {
+        self.diameter.map_or(COLLAR_MARKER_FALLBACK_RADIUS / COLLAR_MARKER_RADIUS_SCALE, |diameter| diameter * 0.5)
     }
 
     /// Where the collar stands. The trace's first station is it; `collar`
@@ -825,7 +834,7 @@ fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
         // Conservatively cover both the trace and the world-sized collar. A
         // dataset without physical diameters uses the same fallback radius as
         // the collar instance builder.
-        let radius = hole.diameter.map_or(COLLAR_MARKER_FALLBACK_RADIUS, |diameter| diameter * 0.5 * COLLAR_MARKER_RADIUS_SCALE);
+        let radius = hole.render_radius() * COLLAR_MARKER_RADIUS_SCALE;
         for station in &hole.trace {
             min = min.min(station.position - DVec3::splat(radius));
             max = max.max(station.position + DVec3::splat(radius));
