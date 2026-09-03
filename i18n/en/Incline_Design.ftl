@@ -14,6 +14,7 @@ common-clear = Clear
 common-close = Close
 common-color = Color
 common-fill = Fill
+common-set = Set
 
 ## Preferences — Interface
 
@@ -50,7 +51,6 @@ ws-geology = Geology
 
 ## Menubars
 
-
 ws-menubar-design = Design
 ws-menubar-triangulation = Triangulation
 ws-menubar-raster = Raster
@@ -58,6 +58,15 @@ ws-menubar-point-cloud = Point Cloud
 ws-menubar-block-model = Block Model
 ws-menubar-drillholes = Drillholes
 ws-menubar-active-layer = Layer:
+
+## Menubars functions
+
+ws-menubar-design-insert-point = Insert Point
+ws-menubar-design-insert-point-at-intersection = At intersection
+ws-menubar-design-insert-point-at-elevation = At elevation
+ws-menubar-design-move-to = Move to
+ws-menubar-design-create-triangulation = Create Triangulation
+
 
 ## Rename / delete item dialogs
 

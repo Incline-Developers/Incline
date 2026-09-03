@@ -11,6 +11,7 @@ common-clear = Очистить
 common-close = Закрыть
 common-color = Цвет
 common-fill = Заливка
+common-set = Настроить
 
 ## Настройки — Интерфейс
 
@@ -56,6 +57,14 @@ ws-menubar-point-cloud = Облака точек
 ws-menubar-block-model = Блочная модель
 ws-menubar-drillholes = Скважины
 ws-menubar-active-layer = Слой:
+
+## Menubars functions
+
+ws-menubar-design-insert-point = Вставить точку
+ws-menubar-design-insert-point-at-intersection = На пересечении
+ws-menubar-design-insert-point-at-elevation = На высотной отметке
+ws-menubar-design-move-to = Перейти к
+ws-menubar-design-create-triangulation = Создать триангуляцию
 
 ## Диалоги переименования и удаления
 
