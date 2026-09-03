@@ -464,7 +464,18 @@ impl<'a> Graphics<'a> {
         let view_proj = self.view_proj();
         let screen = self.screen_size();
         let (ray_origin, ray_direction) = self.cursor_model_ray();
-        let drill_hole = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, ray_direction, &view_proj, screen, threshold_px).map(|(hole, world)| ScenePick {
+        let drill_hole = SceneQuery::nearest_drill_hole(
+            drill_holes,
+            hidden,
+            frozen,
+            ray_origin,
+            ray_direction,
+            self.camera.forward(),
+            &view_proj,
+            screen,
+            threshold_px,
+        )
+        .map(|(hole, world)| ScenePick {
             entity: SceneEntityId::DrillHole(hole.dataset),
             world,
             hole: Some(hole),
@@ -754,7 +765,8 @@ impl<'a> Graphics<'a> {
         } else {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
-            let drill_hole_hit = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, &view_proj, screen, 0.0).map(|(_, world)| world);
+            let drill_hole_hit =
+                SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, self.camera.forward(), &view_proj, screen, 0.0).map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected
