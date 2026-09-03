@@ -8,13 +8,20 @@ use crate::{
     Size,
     model::{
         Document, SceneEntityId,
-        drill_hole::{DrillHoleRef, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset},
+        drill_hole::{DrillHoleRef, OpenDrillHoleDataset},
         spatial::ObjectSnapIndex,
         triangulation::OpenTriangulation,
     },
     rendering::snap,
     ui::state::CursorMode,
 };
+
+/// Holes are drawn at their physical width and nothing floors it on screen, so
+/// a narrow or distant one can cover less than a pixel. Picking keeps a
+/// corridor of its own: under the pointer a hole is never treated as thinner
+/// than this, or it would stop being clickable long before it stopped being
+/// visible.
+const PICK_MIN_PIXEL_DIAMETER: f64 = 2.0;
 
 pub(crate) struct SceneQuery;
 
@@ -163,7 +170,7 @@ fn drill_segment_radius(start: DVec3, end: DVec3, source_radius: f64, view_proje
                 .fold(0.0_f64, f64::max)
         })
         .fold(f64::INFINITY, f64::min);
-    let minimum_radius = (f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
+    let minimum_radius = (PICK_MIN_PIXEL_DIAMETER * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
     source_radius.max(minimum_radius)
 }
 

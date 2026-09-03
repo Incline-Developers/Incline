@@ -7,8 +7,8 @@ use glam::DVec3;
 use wgpu::util::DeviceExt;
 
 use crate::model::drill_hole::{
-    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue, MIN_RENDER_PIXEL_DIAMETER,
-    OpenDrillHoleDataset, TIE_RADIUS_SCALE,
+    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue, OpenDrillHoleDataset,
+    TIE_RADIUS_SCALE,
 };
 
 #[repr(C)]
@@ -17,7 +17,7 @@ pub(crate) struct DrillSegmentInstance {
     pub(crate) start: [f32; 3],
     pub(crate) radius: f32,
     pub(crate) end: [f32; 3],
-    pub(crate) pixel_diameter: f32,
+    pub(crate) _pad0: f32,
     pub(crate) color: [f32; 3],
     pub(crate) _pad1: f32,
 }
@@ -141,7 +141,7 @@ impl DrillHoleGpuCache {
                 start: (collar - scene_origin).as_vec3().to_array(),
                 radius: (editor.drill_pattern_preview_diameter * 0.5) as f32,
                 end: (collar - DVec3::Z * editor.drill_pattern_preview_depth - scene_origin).as_vec3().to_array(),
-                pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
+                _pad0: 0.0,
                 color: [1.0; 3],
                 _pad1: 0.0,
             })
@@ -318,12 +318,11 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
                     .and_then(|field| value.map(|value| evaluate_color(field.kind.clone(), value, &dataset.color)))
                     .unwrap_or([1.0; 3])
             };
-            let radius = hole.diameter.map_or(0.0, |diameter| (diameter * 0.5) as f32);
             instances.push(DrillSegmentInstance {
                 start: (start - scene_origin).as_vec3().to_array(),
-                radius,
+                radius: hole.render_radius() as f32,
                 end: (end - scene_origin).as_vec3().to_array(),
-                pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
+                _pad0: 0.0,
                 color,
                 _pad1: 0.0,
             });
@@ -352,9 +351,7 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, sele
                 // it reads the same whichever end it was tied from.
                 radius: ((from.render_radius() + to.render_radius()) * 0.5 * TIE_RADIUS_SCALE) as f32,
                 end: (end - scene_origin).as_vec3().to_array(),
-                // World geometry, so no screen-width floor: a zero here is
-                // what turns the segment shader's minimum off.
-                pixel_diameter: 0.0,
+                _pad0: 0.0,
                 color: if selection.contains_tie(tie.from, tie.to) {
                     let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
                     [red, green, blue]

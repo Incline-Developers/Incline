@@ -8,7 +8,6 @@ use crate::{
     model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState},
 };
 
-pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
 /// How much wider than the hole itself the collar marker is drawn.
 pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 5.0;
 /// World-space collar radius for datasets that do not provide a physical hole
@@ -158,9 +157,9 @@ pub(crate) struct StoredInitiation {
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
     pub(crate) collar: DVec3,
-    /// Source diameter. `None` deliberately remains distinct: the trace keeps
-    /// its [`MIN_RENDER_PIXEL_DIAMETER`] screen floor, while everything sized
-    /// in world units falls back to [`DrillHole::render_radius`].
+    /// Source diameter, kept distinct from a dataset that simply reports a
+    /// nominal one. Everything drawn from it goes through
+    /// [`DrillHole::render_radius`], which supplies the fallback.
     pub(crate) diameter: Option<f64>,
     pub(crate) trace: Vec<TraceStation>,
     /// Explicit geometry coverage. Empty means the complete measured-depth
