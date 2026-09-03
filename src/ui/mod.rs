@@ -295,6 +295,9 @@ struct UiFrameContext<'a> {
 }
 
 fn viewport_label_text(editor: &EditorState) -> Option<String> {
+    if editor.drill_pattern_awaiting_shape_pick {
+        return Some("Click a closed polyline to use as the blast shape · Esc cancels".to_owned());
+    }
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(
             if editor.slice_pending_start.is_none() {
@@ -1116,6 +1119,7 @@ fn draw_global_dialogs(
 ) -> bool {
     let mut geometry_dirty = false;
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
+    geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
 
     // Exit confirmation
     if editor.exit_confirm_open {

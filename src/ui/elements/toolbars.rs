@@ -30,8 +30,8 @@ enum LeftToolAction {
     NewLayer,
     /// Make this the active tool.
     Tool(ActiveTool),
-    /// A tool whose button is drawn but has nothing behind it yet.
-    Placeholder,
+    /// Open or close the Drill & Blast pattern builder.
+    DrillPattern,
 }
 
 /// One button in the drawing toolbar's run.
@@ -92,9 +92,6 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
 /// nudge its holes, tie them together, then say where it starts.
-///
-/// Creating a pattern is still a placeholder - its cell, icon and enablement
-/// are here, but nothing is wired to it yet.
 fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     // Setting the initiation point acts on the pattern the viewport bar's
     // centre run names, and reads it the same way that run does: a dataset
@@ -107,8 +104,8 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
     vec![
         LeftTool {
             icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
-            tooltip: tr!(literal = "Create Drill Pattern [PLACEHOLDER]"),
-            action: LeftToolAction::Placeholder,
+            tooltip: tr!(literal = "Create Drill Pattern"),
+            action: LeftToolAction::DrillPattern,
             enabled: project_active,
         },
         LeftTool {
@@ -143,7 +140,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     let selected = match tool.action {
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
-        LeftToolAction::Placeholder => false,
+        LeftToolAction::DrillPattern => editor.drill_pattern_open,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -160,7 +157,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
             }
         }
         LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
-        LeftToolAction::Placeholder => {}
+        LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
     }
 }
 

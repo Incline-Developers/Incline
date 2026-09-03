@@ -184,6 +184,7 @@ fn document_primitive_order(primitive: DocumentPrimitive) -> u8 {
 }
 
 impl<'a> Graphics<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn draw_drill_holes<'pass>(
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
@@ -192,6 +193,7 @@ impl<'a> Graphics<'a> {
         xray_enabled: bool,
         draw_traces: bool,
         draw_surface_marks: bool,
+        draw_preview: bool,
     ) {
         if self.drill_hole_gpu.is_empty() {
             return;
@@ -213,6 +215,13 @@ impl<'a> Graphics<'a> {
                 let Some(buffer) = cached.buffer.as_ref() else {
                     continue;
                 };
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.draw(0..144, 0..cached.count);
+            }
+            if draw_preview
+                && let Some(cached) = self.drill_hole_gpu.preview()
+                && let Some(buffer) = cached.buffer.as_ref()
+            {
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..144, 0..cached.count);
             }
@@ -258,6 +267,13 @@ impl<'a> Graphics<'a> {
             let Some(buffer) = cached.collar_buffer.as_ref() else {
                 continue;
             };
+            render_pass.set_vertex_buffer(0, buffer.slice(..));
+            render_pass.draw(0..6, 0..cached.collar_count);
+        }
+        if draw_preview
+            && let Some(cached) = self.drill_hole_gpu.preview()
+            && let Some(buffer) = cached.collar_buffer.as_ref()
+        {
             render_pass.set_vertex_buffer(0, buffer.slice(..));
             render_pass.draw(0..6, 0..cached.collar_count);
         }
@@ -609,6 +625,7 @@ impl<'a> Graphics<'a> {
                 false,
                 true,
                 editor.active_workspace != crate::ui::state::Workspace::DrillAndBlast,
+                include_editor_overlays,
             );
         }
 
@@ -828,13 +845,13 @@ impl<'a> Graphics<'a> {
             // X-ray deliberately bypasses scene depth and stays above all
             // composited transparency. Drillholes draw first so design strings
             // and their outlines remain the topmost x-ray content.
-            self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, true, true, true);
+            self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, true, true, true, include_editor_overlays);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Fill));
             self.draw_static_document_strokes(&mut render_pass, true);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Stroke));
         } else {
             if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
-                self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, true, false, true);
+                self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, true, false, true, include_editor_overlays);
             }
             // Alpha document primitives test the complete opaque depth buffer
             // but never update it, so farther translucent fills still blend.

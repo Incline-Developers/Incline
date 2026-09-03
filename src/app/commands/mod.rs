@@ -22,7 +22,7 @@ use crate::{
     app::{App, canvas::is_triangulation_polyline},
     i18n::{tr, tr_format},
     model::{Command, Object, ObjectId, SceneEntityId},
-    ui::state::{TriCreatePhase, UiCommand},
+    ui::state::{ActiveTool, TriCreatePhase, UiCommand},
     userspace_error, userspace_warn,
 };
 
@@ -100,6 +100,9 @@ impl<'a> App<'a> {
                 | UiCommand::ChooseImportSourceFiles(_)
                 | UiCommand::ImportCsvBlockModel { .. }
                 | UiCommand::ImportDrillHole(_)
+                | UiCommand::ToggleCreateDrillPattern
+                | UiCommand::BeginDrillPatternShapePick
+                | UiCommand::CreateDrillPattern { .. }
                 | UiCommand::CreateLayer { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel(_)
@@ -113,6 +116,24 @@ impl<'a> App<'a> {
                 self.set_active_tool_from_toolbar(tool);
                 Ok(())
             }
+            UiCommand::ToggleCreateDrillPattern => {
+                if self.editor.drill_pattern_open {
+                    self.editor.close_drill_pattern();
+                } else {
+                    self.set_active_tool_from_toolbar(ActiveTool::None);
+                    self.editor.begin_drill_pattern();
+                }
+                self.invalidate_geometry();
+                Ok(())
+            }
+            UiCommand::BeginDrillPatternShapePick => {
+                self.editor.drill_pattern_awaiting_shape_pick = true;
+                self.editor.viewport_pick_hover_label = None;
+                self.editor.tool_highlight_id = None;
+                self.invalidate_geometry();
+                Ok(())
+            }
+            UiCommand::CreateDrillPattern { name, collars, depth } => self.create_drill_pattern(name, collars, depth),
             UiCommand::ClearSelection => {
                 self.editor.clear_scene_selection();
                 self.active_triangulation = None;

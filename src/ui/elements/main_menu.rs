@@ -174,6 +174,9 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
         return;
     }
     editor.active_workspace = workspace;
+    if workspace != Workspace::DrillAndBlast && editor.drill_pattern_open {
+        editor.close_drill_pattern();
+    }
     // A tie-in is Drill & Blast's own run; it does not wait on the other side
     // of a trip through production.
     editor.end_tie_chain();

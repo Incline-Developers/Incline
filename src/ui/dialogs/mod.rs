@@ -8,6 +8,7 @@ use crate::model::{Axis, ObjectId};
 pub(crate) mod about;
 pub(crate) mod confirmations;
 pub(crate) mod drill_hole;
+pub(crate) mod drill_pattern;
 pub(crate) mod editing;
 pub(crate) mod files;
 pub(crate) mod import_export;

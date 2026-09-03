@@ -19,7 +19,7 @@ use crate::{
     model::{
         Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
-        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource},
+        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnMapping, CsvPreview},
@@ -935,6 +935,21 @@ pub(crate) struct EditorState {
     /// editing, tie-in and simulation tools act against. `None` until one is
     /// picked, and dropped again when that dataset is closed or removed.
     pub(crate) active_drill_hole: Option<DrillHoleId>,
+    /// Draggable blast-pattern builder and its document-backed boundary.
+    pub(crate) drill_pattern_open: bool,
+    pub(crate) drill_pattern_awaiting_shape_pick: bool,
+    pub(crate) drill_pattern_boundary_id: Option<ObjectId>,
+    pub(crate) drill_pattern_boundary_name: String,
+    pub(crate) drill_pattern_burden: f64,
+    pub(crate) drill_pattern_spacing: f64,
+    pub(crate) drill_pattern_depth: f64,
+    pub(crate) drill_pattern_layout: DrillPatternLayout,
+    pub(crate) drill_pattern_name: String,
+    /// Exact collar positions used both by the world-space preview and by the
+    /// eventual create command, so committing cannot differ from the preview.
+    pub(crate) drill_pattern_preview_collars: Vec<DVec3>,
+    pub(crate) drill_pattern_preview_depth: f64,
+    pub(crate) drill_pattern_preview_error: Option<String>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
     /// Browser-only viewport prompt shown before creating a named project.
@@ -1512,7 +1527,11 @@ impl EditorState {
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
     /// to the pick (it returns to the dialog), and Enter means nothing.
     fn viewport_pick_in_progress(&self) -> bool {
-        self.triangulation_pick_target.is_some() || self.tri_cut_poly_awaiting_pick || self.canvas_context_menu_open || self.text_editing_enabled
+        self.triangulation_pick_target.is_some()
+            || self.tri_cut_poly_awaiting_pick
+            || self.drill_pattern_awaiting_shape_pick
+            || self.canvas_context_menu_open
+            || self.text_editing_enabled
     }
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
@@ -1530,6 +1549,7 @@ impl EditorState {
             || self.show_import
             || self.show_export
             || self.drill_hole_color_dialog.is_some()
+            || self.drill_pattern_open
             || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
             || self.move_to_axis_dialog.is_some()
@@ -1573,6 +1593,33 @@ impl EditorState {
         self.new_delay_product_open = true;
     }
 
+    /// Open a fresh pattern session while retaining the user's useful numeric
+    /// defaults from the previous run.
+    pub(crate) fn begin_drill_pattern(&mut self) {
+        self.drill_pattern_boundary_id = None;
+        self.drill_pattern_boundary_name.clear();
+        self.drill_pattern_preview_collars.clear();
+        self.drill_pattern_preview_depth = self.drill_pattern_depth;
+        self.drill_pattern_preview_error = None;
+        self.drill_pattern_awaiting_shape_pick = false;
+        if self.drill_pattern_name.trim().is_empty() {
+            self.drill_pattern_name = "Drill Pattern".to_owned();
+        }
+        self.drill_pattern_open = true;
+    }
+
+    pub(crate) fn close_drill_pattern(&mut self) {
+        self.drill_pattern_open = false;
+        self.drill_pattern_awaiting_shape_pick = false;
+        self.drill_pattern_boundary_id = None;
+        self.drill_pattern_boundary_name.clear();
+        self.drill_pattern_preview_collars.clear();
+        self.drill_pattern_preview_depth = self.drill_pattern_depth;
+        self.drill_pattern_preview_error = None;
+        self.viewport_pick_hover_label = None;
+        self.tool_highlight_id = None;
+    }
+
     pub(crate) fn update_contour_layer_name_from_surface(&mut self, surface_name: &str) {
         if !self.tri_contour_layer_name_auto {
             return;
@@ -1603,6 +1650,7 @@ impl EditorState {
         self.translucent_handles.clear();
         self.active_layer = None;
         self.active_drill_hole = None;
+        self.close_drill_pattern();
         self.end_tie_chain();
         self.initiation_dialog = None;
         self.initiation_cards.clear();
@@ -1832,6 +1880,18 @@ impl EditorState {
             tool_hatch: ToolHatch::Clear,
             active_layer: None,
             active_drill_hole: None,
+            drill_pattern_open: false,
+            drill_pattern_awaiting_shape_pick: false,
+            drill_pattern_boundary_id: None,
+            drill_pattern_boundary_name: String::new(),
+            drill_pattern_burden: 3.0,
+            drill_pattern_spacing: 3.5,
+            drill_pattern_depth: 10.0,
+            drill_pattern_layout: DrillPatternLayout::Square,
+            drill_pattern_name: "Drill Pattern".to_owned(),
+            drill_pattern_preview_collars: Vec::new(),
+            drill_pattern_preview_depth: 10.0,
+            drill_pattern_preview_error: None,
             cursor_world: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
@@ -2386,6 +2446,16 @@ impl ViewToggle {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
     SetActiveTool(ActiveTool),
+    /// Open/close the Drill & Blast pattern builder from its toolbar cell.
+    ToggleCreateDrillPattern,
+    /// Give the next viewport click to the pattern boundary picker.
+    BeginDrillPatternShapePick,
+    /// Materialise the exact live preview as a new loaded drillhole dataset.
+    CreateDrillPattern {
+        name: String,
+        collars: Vec<DVec3>,
+        depth: f64,
+    },
     /// Drop everything selected, and rebuild the geometry that was drawing it
     /// as selected. Switching workspaces sends this: a selection belongs to
     /// the discipline it was made in, and the tabs are not a way of carrying
@@ -2786,6 +2856,8 @@ impl UiCommand {
         }
         match self {
             Self::SetActiveTool(_)
+            | Self::ToggleCreateDrillPattern
+            | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
             | Self::CloseStartupDialog
             | Self::CancelCloseProject
@@ -2973,6 +3045,10 @@ impl UiCommand {
             Self::ToggleBlockModelVisible(id) => report(tr!(literal = "Set Block Model Visibility"), format!("{id:?}")),
             Self::SetBlockModelColorVariable { variable, .. } => report(tr!(literal = "Set Block Model Variable"), variable.clone()),
             Self::ImportDrillHole(source) => report(tr!(literal = "Import Drillholes"), source.display_name()),
+            Self::CreateDrillPattern { name, collars, .. } => report(
+                tr!(literal = "Create Drill Pattern"),
+                tr_format!(literal = "%name% · %count% holes", name = name, count = collars.len()),
+            ),
             Self::LoadDrillHole(id) => report(tr!(literal = "Load Drillholes"), format!("{id:?}")),
             Self::CloseDrillHole(id) => report(tr!(literal = "Close Drillholes"), format!("{id:?}")),
             Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),

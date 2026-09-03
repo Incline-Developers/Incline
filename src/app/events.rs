@@ -82,7 +82,8 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick;
+            let canvas_pick_mode_active =
+                self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick;
             let measurement_tool_active = matches!(self.editor.active_tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
             let suppress_view_mode_canvas_click = (self.editor.fly_mode_enabled || (self.editor.slice_mode_enabled && !measurement_tool_active))
                 && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
@@ -459,7 +460,8 @@ impl<'a> App<'a> {
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
-                            || self.editor.tri_cut_poly_awaiting_pick);
+                            || self.editor.tri_cut_poly_awaiting_pick
+                            || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
@@ -558,7 +560,9 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick) && hover_pick_due {
+                    if (self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick)
+                        && hover_pick_due
+                    {
                         self.update_viewport_field_pick_hover();
                     }
                     if !self.editor.pending_stroke.is_empty()
@@ -774,7 +778,7 @@ impl<'a> App<'a> {
             ..
         } = event
         {
-            if self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick {
+            if self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
                 return;
@@ -1193,6 +1197,11 @@ impl<'a> App<'a> {
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
                     self.invalidate_geometry();
+                } else if self.editor.drill_pattern_awaiting_shape_pick {
+                    self.editor.drill_pattern_awaiting_shape_pick = false;
+                    self.editor.viewport_pick_hover_label = None;
+                    self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
+                    self.invalidate_geometry();
                 } else if self.editor.slice_mode_enabled {
                     self.set_slice_mode_enabled(false);
                 } else if self.editor.active_tool == ActiveTool::VerticalSlice {
@@ -1313,6 +1322,11 @@ impl<'a> App<'a> {
             self.editor.viewport_pick_hover_label = None;
             self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
             self.invalidate_geometry();
+        } else if self.editor.drill_pattern_awaiting_shape_pick {
+            self.editor.drill_pattern_awaiting_shape_pick = false;
+            self.editor.viewport_pick_hover_label = None;
+            self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
+            self.invalidate_geometry();
         } else if self.editor.active_tool == ActiveTool::DrapeToTopology {
             self.cancel_drape();
         } else if self.editor.offset_awaiting_side_pick || self.editor.offset_dialog_open {
@@ -1362,6 +1376,10 @@ impl<'a> App<'a> {
     pub(crate) fn set_active_tool_from_toolbar(&mut self, tool: ActiveTool) {
         if self.editor.text_editing_enabled {
             return;
+        }
+        if self.editor.drill_pattern_open {
+            self.editor.close_drill_pattern();
+            self.invalidate_geometry();
         }
         let allowed_in_slice = matches!(tool, ActiveTool::None | ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
         if (self.editor.fly_mode_enabled && tool != ActiveTool::None) || (self.editor.slice_mode_enabled && !allowed_in_slice) {

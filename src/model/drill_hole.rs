@@ -17,6 +17,10 @@ pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 2.5;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
+/// Upper bound for an interactively generated blast pattern. It keeps a bad
+/// unit/spacing entry from building millions of preview primitives on the UI
+/// thread while remaining comfortably above ordinary production rounds.
+pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
 /// Screen width a tie-in connector is drawn at. Wider than a hole's own
 /// minimum so the surface run reads over the collars it joins.
 pub(crate) const TIE_PIXEL_DIAMETER: f32 = 3.0;
@@ -161,6 +165,127 @@ pub(crate) struct DrillHole {
     /// trace is continuous.
     pub(crate) render_ranges: Vec<(f64, f64)>,
     pub(crate) intervals: Vec<DrillInterval>,
+}
+
+/// Row arrangement used when filling a blast boundary with collars.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DrillPatternLayout {
+    #[default]
+    Square,
+    Staggered,
+}
+
+impl DrillPatternLayout {
+    pub(crate) const ALL: [Self; 2] = [Self::Square, Self::Staggered];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Square => "Square",
+            Self::Staggered => "Staggered",
+        }
+    }
+}
+
+/// Fill an XY polygon with a globally aligned drill grid. `spacing` runs in X
+/// within a row and `burden` separates rows in Y; staggered rows move half a
+/// spacing. Collars sit half a cell inside the polygon bounds and take their Z
+/// from the boundary's polygon plane.
+pub(crate) fn generate_pattern_collars(boundary: &[DVec3], burden: f64, spacing: f64, layout: DrillPatternLayout) -> Result<Vec<DVec3>, String> {
+    if boundary.len() < 3 || boundary.iter().any(|point| !point.is_finite()) {
+        return Err("Choose a valid closed polyline".to_owned());
+    }
+    if !burden.is_finite() || !spacing.is_finite() || burden <= 0.0 || spacing <= 0.0 {
+        return Err("Burden and spacing must be greater than zero".to_owned());
+    }
+
+    let min_x = boundary.iter().map(|point| point.x).fold(f64::INFINITY, f64::min);
+    let max_x = boundary.iter().map(|point| point.x).fold(f64::NEG_INFINITY, f64::max);
+    let min_y = boundary.iter().map(|point| point.y).fold(f64::INFINITY, f64::min);
+    let max_y = boundary.iter().map(|point| point.y).fold(f64::NEG_INFINITY, f64::max);
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+    let columns = ((width / spacing).ceil() as usize).max(1);
+    let rows = ((height / burden).ceil() as usize).max(1);
+    let cells = columns.saturating_mul(rows);
+    if cells > MAX_PATTERN_HOLES.saturating_mul(20) {
+        return Err(format!(
+            "This spacing would scan too many grid cells; increase burden or spacing (maximum {MAX_PATTERN_HOLES} holes)"
+        ));
+    }
+
+    let centroid = boundary.iter().copied().sum::<DVec3>() / boundary.len() as f64;
+    // Newell's method gives a stable normal for either winding and polygons
+    // with more than three vertices. A near-vertical/degenerate ring falls
+    // back to the mean boundary elevation below.
+    let mut normal = DVec3::ZERO;
+    for index in 0..boundary.len() {
+        let current = boundary[index];
+        let next = boundary[(index + 1) % boundary.len()];
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
+    }
+    if normal.z.abs() <= (width * height).abs().max(1.0) * 1.0e-12 {
+        return Err("The selected polyline has no usable XY area".to_owned());
+    }
+    let elevation = |x: f64, y: f64| {
+        if normal.z.abs() > 1.0e-12 {
+            centroid.z - (normal.x * (x - centroid.x) + normal.y * (y - centroid.y)) / normal.z
+        } else {
+            centroid.z
+        }
+    };
+
+    let mut collars = Vec::with_capacity(cells.min(MAX_PATTERN_HOLES));
+    let first_x = if width < spacing { (min_x + max_x) * 0.5 } else { min_x + spacing * 0.5 };
+    let first_y = if height < burden { (min_y + max_y) * 0.5 } else { min_y + burden * 0.5 };
+    for row in 0..rows {
+        let y = first_y + row as f64 * burden;
+        if y >= max_y {
+            break;
+        }
+        let stagger = if layout == DrillPatternLayout::Staggered && row % 2 == 1 { spacing * 0.5 } else { 0.0 };
+        for column in 0..columns {
+            let x = first_x + column as f64 * spacing + stagger;
+            if x >= max_x {
+                break;
+            }
+            if point_in_polygon_xy(x, y, boundary) {
+                collars.push(DVec3::new(x, y, elevation(x, y)));
+                if collars.len() > MAX_PATTERN_HOLES {
+                    return Err(format!("Pattern exceeds the maximum of {MAX_PATTERN_HOLES} holes; increase burden or spacing"));
+                }
+            }
+        }
+    }
+    if collars.is_empty() {
+        return Err("No holes fit inside this boundary at the current burden and spacing".to_owned());
+    }
+    Ok(collars)
+}
+
+fn point_in_polygon_xy(x: f64, y: f64, boundary: &[DVec3]) -> bool {
+    let point = glam::DVec2::new(x, y);
+    let mut inside = false;
+    for index in 0..boundary.len() {
+        let a = boundary[index].truncate();
+        let b = boundary[(index + 1) % boundary.len()].truncate();
+        let edge = b - a;
+        let length_squared = edge.length_squared();
+        if length_squared > 0.0 {
+            let t = ((point - a).dot(edge) / length_squared).clamp(0.0, 1.0);
+            if point.distance_squared(a + edge * t) <= 1.0e-16 {
+                return true;
+            }
+        }
+        if (a.y > y) != (b.y > y) {
+            let crossing_x = (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x;
+            if x < crossing_x {
+                inside = !inside;
+            }
+        }
+    }
+    inside
 }
 
 /// Everything a move rewrites in a hole: its collar and its trace. Nothing

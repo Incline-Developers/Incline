@@ -26,6 +26,31 @@ impl<'a> App<'a> {
             return;
         }
 
+        // Blast-pattern boundary picker: accept only a valid closed design
+        // polyline and return immediately so the ordinary selection tools do
+        // not also act on the same click.
+        if self.editor.drill_pattern_awaiting_shape_pick {
+            let frozen = &self.editor.frozen_handles;
+            let active_object_ids = self.active_project_object_ids();
+            if let Some((SceneEntityId::Object(id), _)) = self
+                .graphics
+                .as_ref()
+                .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
+                && active_object_ids.contains(&id)
+                && let Some(object) = self.scene_document.get_object(id)
+                && is_drill_pattern_boundary(object)
+            {
+                let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
+                self.editor.drill_pattern_boundary_id = Some(id);
+                self.editor.drill_pattern_boundary_name = format!("Polyline on '{layer}'");
+                self.editor.drill_pattern_awaiting_shape_pick = false;
+                self.editor.viewport_pick_hover_label = None;
+                self.editor.tool_highlight_id = Some(id);
+                self.invalidate_geometry();
+            }
+            return;
+        }
+
         // Drape owns a two-stage selection session. Defer both click and box
         // picks until release so each stage can strictly filter entity types.
         if self.editor.active_tool == ActiveTool::DrapeToTopology {
@@ -42,9 +67,9 @@ impl<'a> App<'a> {
                 .as_ref()
                 .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
             {
-                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(|o| {
+                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(|object| {
                     matches!(
-                        o,
+                        object,
                         Object::Polyline {
                             closed: true,
                             verts,
@@ -212,7 +237,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        if !self.editor.tri_cut_poly_awaiting_pick {
+        if !self.editor.tri_cut_poly_awaiting_pick && !self.editor.drill_pattern_awaiting_shape_pick {
             return;
         }
 
@@ -221,9 +246,17 @@ impl<'a> App<'a> {
                 .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
                 .map(|(entity, _)| entity)
         });
+        let active_object_ids = self.active_project_object_ids();
+        let pattern_picker = self.editor.drill_pattern_awaiting_shape_pick;
         let (next_highlight, next_label) = match raw_hover {
-            Some(SceneEntityId::Object(id)) => match self.scene_document.get_object(id) {
-                Some(object @ Object::Polyline { closed: true, verts, .. }) if verts.len() >= 3 => {
+            Some(SceneEntityId::Object(id)) if !pattern_picker || active_object_ids.contains(&id) => match self.scene_document.get_object(id) {
+                Some(object @ Object::Polyline { verts, closed, .. })
+                    if if pattern_picker {
+                        is_drill_pattern_boundary(object)
+                    } else {
+                        *closed && verts.len() >= 3
+                    } =>
+                {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
                     (
                         Some(id),
@@ -745,5 +778,13 @@ pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
             closed,
             ..
         } if verts.len() >= if *closed { 3 } else { 2 }
+    )
+}
+
+fn is_drill_pattern_boundary(object: &Object) -> bool {
+    matches!(
+        object,
+        Object::Polyline { verts, closed: true, .. }
+            if verts.len() >= 3 || (verts.len() == 2 && verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON))
     )
 }

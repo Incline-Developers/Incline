@@ -6,7 +6,8 @@ use crate::{
     model::{
         ItemRef, ItemStyle, SceneEntityId,
         drill_hole::{
-            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset, OpenDrillHoleDataset, default_category_colors,
+            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset,
+            OpenDrillHoleDataset, TraceStation, default_category_colors,
         },
         formats::csv_drill_hole,
     },
@@ -38,6 +39,63 @@ fn parse_browser_bundle<'bytes>(source: &DrillHoleSource, bytes: impl IntoIterat
 }
 
 impl<'a> App<'a> {
+    /// Turn the pattern menu's exact preview into a normal project-owned
+    /// drillhole dataset. Generated patterns need no reload source: project
+    /// saves already embed every collar and trace in OMF.
+    pub(crate) fn create_drill_pattern(&mut self, name: String, collars: Vec<glam::DVec3>, depth: f64) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("Enter a name for the drill pattern");
+        }
+        if !depth.is_finite() || depth <= 0.0 {
+            anyhow::bail!("Hole depth must be greater than zero");
+        }
+        if collars.is_empty() {
+            anyhow::bail!("The pattern contains no holes");
+        }
+        if collars.len() > crate::model::drill_hole::MAX_PATTERN_HOLES || collars.iter().any(|collar| !collar.is_finite()) {
+            anyhow::bail!("The drill pattern is too large or contains invalid collar coordinates");
+        }
+
+        let width = collars.len().to_string().len().max(3);
+        let holes = collars
+            .into_iter()
+            .enumerate()
+            .map(|(index, collar)| DrillHole {
+                dhid: format!("H{:0width$}", index + 1, width = width),
+                collar,
+                diameter: None,
+                trace: vec![
+                    TraceStation { depth: 0.0, position: collar },
+                    TraceStation {
+                        depth,
+                        position: collar - glam::DVec3::Z * depth,
+                    },
+                ],
+                render_ranges: Vec::new(),
+                intervals: Vec::new(),
+            })
+            .collect();
+        let dataset = std::sync::Arc::new(DrillHoleDataset::new(holes));
+        let id = DrillHoleId(self.next_drill_hole_id);
+        self.next_drill_hole_id += 1;
+        let name = crate::model::project::unique_item_name(name.to_owned(), self.drill_holes.iter().map(|item| item.name.as_str()));
+        self.drill_holes.push(OpenDrillHoleDataset {
+            id,
+            state: crate::model::project::ProjectItemState::dirty(None),
+            name,
+            dataset,
+            visible: true,
+            color: DrillColorState::default(),
+        });
+        self.editor.active_drill_hole = Some(id);
+        self.editor.close_drill_pattern();
+        self.touch_active_project_content();
+        self.persist_session();
+        self.invalidate_topology_bounds_and_redraw();
+        Ok(())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn import_web_drill_hole_source(&mut self, mut source: DrillHoleSource) -> Result<()> {
         let (_, inputs) = self.web_import_files.take().context("Choose the drillhole source files again")?;
