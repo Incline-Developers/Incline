@@ -3,8 +3,8 @@
 //!
 //! # How it fits together
 //!
-//! - Strings live in `i18n/<lang>/Incline.ftl` — the file is named after the
-//!   cargo package (`CARGO_PKG_NAME`), so renaming the package means renaming
+//! - Strings live in `i18n/<lang>/Incline_Design.ftl` — the file is named after
+//!   the cargo package (`CARGO_PKG_NAME`), so renaming the package means renaming
 //!   these files. **English (`i18n/en`) is canonical** — every message id and
 //!   every argument the code uses is checked against it at compile time by
 //!   [`i18n_embed_fl::fl!`]. Other languages may be incomplete; a missing
@@ -12,14 +12,20 @@
 //! - The `.ftl` files are embedded in the binary at build time (`rust-embed`), so
 //!   nothing is read from disk and the wasm build needs no extra bundling step —
 //!   same model as the fonts in [`crate::ui::fonts`].
-//! - The active language is resolved **once**, in [`init`], from the persisted
-//!   [`LanguageChoice`] (see [`crate::app::io::Config`]). Changing the language in
-//!   Preferences rewrites the config but does **not** take effect until the next
-//!   launch — there is deliberately no runtime re-selection or font reload here.
+//! - The active language is a [`LanguageChoice`] persisted in the config (see
+//!   [`crate::app::io::Config`]) and installed on [`LOADER`] by
+//!   [`select_language`]. There is no "follow the system" state: the OS locale
+//!   is consulted once, by [`LanguageChoice::default`], to seed the config on
+//!   first launch, and from then on the stored choice is what runs.
+//! - Switching is **live**. egui rebuilds the interface from scratch every
+//!   frame, so re-selecting the language and asking for a redraw is all it takes
+//!   — nothing caches a translated string across frames, and no restart is
+//!   needed. The picker lives in the status bar
+//!   ([`crate::ui::elements::status_bar`]).
 //!
 //! # Adding a string
 //!
-//! Add `my-message = English text` to `i18n/en/Incline.ftl` (and ideally
+//! Add `my-message = English text` to `i18n/en/Incline_Design.ftl` (and ideally
 //! the other languages), then call `tr!("my-message")` where the literal was.
 //! For interpolated values: `greeting = Hello, { $name }` → `tr!("greeting", name = who)`.
 //!
@@ -36,13 +42,13 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use unic_langid::{LanguageIdentifier, langid};
 
-/// The embedded `i18n/` tree (`<lang>/Incline.ftl`).
+/// The embedded `i18n/` tree (`<lang>/Incline_Design.ftl`).
 #[derive(RustEmbed)]
 #[folder = "i18n/"]
 struct Localizations;
 
 /// Process-wide Fluent loader. Loads the English fallback bundle on first use;
-/// [`init`] then negotiates the user's language onto it.
+/// [`select_language`] then installs the language the user is running.
 pub(crate) static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
     let loader: FluentLanguageLoader = fluent_language_loader!();
     loader.load_fallback_language(&Localizations).expect("i18n: the English fallback bundle must load");
@@ -55,53 +61,69 @@ pub(crate) static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
 /// UI language, as stored in `config.toml`.
 ///
 /// `Copy` so it can live in `PreferencesDraft`. Serialises to a short tag
-/// (`"system"`, `"en"`, `"ru"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// (`"en"`, `"ru"`). Every value names a bundle in `i18n/`; there is
+/// deliberately no "system" value — see [`Self::default`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum LanguageChoice {
-    /// Follow the operating-system locale, falling back to English.
-    #[default]
-    System,
     #[serde(rename = "en")]
     English,
     #[serde(rename = "ru")]
     Russian,
 }
 
-impl LanguageChoice {
-    /// Every value, in the order the Preferences combo lists them.
-    pub(crate) const ALL: [Self; 3] = [Self::System, Self::English, Self::Russian];
-
-    /// Label for the Preferences combo. Each language names itself in its own
-    /// script (an endonym); `System` is translated like any other string.
-    pub(crate) fn combo_label(self) -> String {
-        match self {
-            Self::System => tr!("settings-language-system"),
-            Self::English => "English".to_owned(),
-            Self::Russian => "Русский".to_owned(),
-        }
-    }
-
-    /// The language id this choice pins, or `None` when it defers to the OS.
-    fn explicit_lang_id(self) -> Option<LanguageIdentifier> {
-        match self {
-            Self::System => None,
-            Self::English => Some(langid!("en")),
-            Self::Russian => Some(langid!("ru")),
-        }
+impl Default for LanguageChoice {
+    /// The OS locale, or English when it names no language we bundle.
+    ///
+    /// This is what a missing `language` key in the config resolves to, so the
+    /// system locale decides the language on the first launch and the stored
+    /// choice decides it on every launch after that.
+    fn default() -> Self {
+        Self::from_system_locale()
     }
 }
 
-/// Resolve the active language and install it on [`LOADER`].
+impl LanguageChoice {
+    /// Every value, in the order the status bar's picker lists them.
+    pub(crate) const ALL: [Self; 2] = [Self::English, Self::Russian];
+
+    /// How this language names itself, in its own script. Never translated:
+    /// someone who cannot read the running language has to be able to find
+    /// their own in the list.
+    pub(crate) fn endonym(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Russian => "Русский",
+        }
+    }
+
+    /// The bundle this choice selects.
+    fn lang_id(self) -> LanguageIdentifier {
+        match self {
+            Self::English => langid!("en"),
+            Self::Russian => langid!("ru"),
+        }
+    }
+
+    /// The first bundled language the OS asks for, ignoring region and script:
+    /// `ru-RU` and `ru` both pick Russian.
+    fn from_system_locale() -> Self {
+        for requested in system_languages() {
+            if let Some(choice) = Self::ALL.into_iter().find(|choice| choice.lang_id().language == requested.language) {
+                return choice;
+            }
+        }
+        Self::English
+    }
+}
+
+/// Install `choice` on [`LOADER`].
 ///
-/// Call once at startup, after the config is loaded and before the first frame
-/// (the UI reads [`LOADER`] on every draw).
-pub(crate) fn init(choice: LanguageChoice) {
-    let requested: Vec<LanguageIdentifier> = match choice.explicit_lang_id() {
-        Some(id) => vec![id],
-        None => system_languages(),
-    };
-    if let Err(error) = i18n_embed::select(&*LOADER, &Localizations, &requested) {
+/// Called at startup with the config's language and again on every switch from
+/// the status bar's picker. Safe to call mid-session: the caller only has to
+/// ask for a redraw, since the next frame rebuilds every string.
+pub(crate) fn select_language(choice: LanguageChoice) {
+    if let Err(error) = i18n_embed::select(&*LOADER, &Localizations, &[choice.lang_id()]) {
         // Not fatal: the English fallback bundle is already loaded.
         log::warn!("i18n: could not select a language: {error}");
     }
@@ -121,8 +143,8 @@ fn system_languages() -> Vec<LanguageIdentifier> {
 
 #[cfg(target_arch = "wasm32")]
 fn system_languages() -> Vec<LanguageIdentifier> {
-    // Phase 1 does not negotiate the browser locale; an empty list makes
-    // `i18n_embed::select` keep the English fallback.
+    // The browser locale is not negotiated yet, so the web build's first launch
+    // lands on English; the picker still switches it from there.
     Vec::new()
 }
 
@@ -134,7 +156,7 @@ fn system_languages() -> Vec<LanguageIdentifier> {
 /// ```
 ///
 /// Thin wrapper over [`i18n_embed_fl::fl!`], which checks the id and arguments
-/// against `i18n/en/Incline.ftl` at compile time — a typo will not build.
+/// against `i18n/en/Incline_Design.ftl` at compile time — a typo will not build.
 macro_rules! tr {
     ($($tail:tt)*) => {
         i18n_embed_fl::fl!($crate::i18n::LOADER, $($tail)*)

@@ -164,7 +164,6 @@ impl ContextMenuAction {
     /// Mark this row as a switch rather than a command, drawing a tick at its
     /// head while the setting is on. Rows in the same menu that are not
     /// switches keep their own left edge; only checkable ones are indented.
-    #[cfg(not(target_os = "macos"))]
     pub(crate) fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self
@@ -286,26 +285,40 @@ impl<'a> MenuBarMenu<'a> {
     }
 
     pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
-        use egui::containers::menu::MenuConfig;
-
         let Self { label, enabled } = self;
-        // Mirrors `menu::MenuButton::ui` with a default (non-bar) menu config,
-        // so rows and nested submenus behave as they do in egui's own menus -
-        // only the frame, width and row metrics are this module's.
-        let config = MenuConfig::new();
         let response = ui.add_enabled(enabled, egui::Button::new(label));
         if !enabled {
             return None;
         }
-        let title: egui::WidgetText = label.into();
-        egui::Popup::menu(&response)
-            .close_behavior(config.close_behavior)
-            .style(config.style.clone())
-            .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
-            .width(MENU_WIDTH)
-            .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
-            .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+        dropdown_menu(&response, label, MENU_WIDTH, add_contents)
     }
+}
+
+/// Show this module's menu under a widget the caller drew and sensed itself,
+/// so a picker that is not a bar label - the status bar's language button -
+/// still opens the same frame, header and rows.
+///
+/// Mirrors `menu::MenuButton::ui` with a default (non-bar) menu config, so rows
+/// and nested submenus behave as they do in egui's own menus; only the frame,
+/// width and row metrics are this module's. The popup flips above the button
+/// when there is no room below it, which is how the status bar's picker opens.
+pub(crate) fn dropdown_menu<R>(
+    response: &egui::Response,
+    title: impl Into<egui::WidgetText>,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
+    use egui::containers::menu::MenuConfig;
+
+    let config = MenuConfig::new();
+    let title = title.into();
+    egui::Popup::menu(response)
+        .close_behavior(config.close_behavior)
+        .style(config.style.clone())
+        .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
+        .width(width)
+        .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+        .show(|ui| draw_body(ui, &title, width, add_contents))
 }
 
 /// A submenu row inside a [`MenuBarMenu`] or [`context_menu_popup`], opening a

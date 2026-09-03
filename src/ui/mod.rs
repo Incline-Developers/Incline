@@ -496,7 +496,7 @@ fn draw_ui(
 
     // --- Draw all toolbar panels ---
     // The status bar spans the window, so it is claimed first.
-    let status_bar_rect = elements::status_bar::draw_status_bar(root_ui, editor);
+    let status_bar_rect = elements::status_bar::draw_status_bar(root_ui, editor, commands);
 
     // Everything between those two bars is a rounded region with a gap of
     // window background around it. The left and right window edges get half a

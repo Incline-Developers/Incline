@@ -633,6 +633,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
+            UiCommand::SetLanguage(choice) => self.set_language(choice),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
             UiCommand::SelectBlockModel(id) => {
                 self.select_block_model(id);

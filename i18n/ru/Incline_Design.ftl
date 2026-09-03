@@ -13,11 +13,9 @@ common-color = Цвет
 common-fill = Заливка
 common-set = Настроить
 
-## Настройки — Интерфейс
+## Строка состояния
 
-settings-language = Язык
-settings-language-system = Системный
-settings-language-restart-hint = Смена языка вступит в силу при следующем запуске Incline.
+status-language = Язык
 
 ## Меню — Файл
 

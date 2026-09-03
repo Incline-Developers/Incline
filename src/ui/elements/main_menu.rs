@@ -442,7 +442,11 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
             context_submenu(ui, &tr!("ws-menubar-design-insert-point"), has_selection, |ui| {
                 // Needs two or more crossing polylines to insert anything.
-                if ContextMenuAction::new(&tr!("ws-menubar-design-insert-point-at-intersection")).enabled(editor.selection_has_intersections).show(ui).clicked() {
+                if ContextMenuAction::new(&tr!("ws-menubar-design-insert-point-at-intersection"))
+                    .enabled(editor.selection_has_intersections)
+                    .show(ui)
+                    .clicked()
+                {
                     commands.push(UiCommand::InsertPointsAtIntersections);
                     ui.close();
                 }

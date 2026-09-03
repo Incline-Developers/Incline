@@ -12,6 +12,8 @@ pub(crate) fn default_renderer_background_color() -> [f32; 4] {
     crate::rendering::color::hex_to_linear_rgba(0x232c36)
 }
 
+/// The OS locale on a config with no `language` key - so, in practice, on the
+/// first launch. See [`LanguageChoice::default`].
 pub(crate) fn default_language() -> LanguageChoice {
     LanguageChoice::default()
 }
@@ -136,8 +138,9 @@ pub(crate) struct Session {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Config {
-    /// UI language. `System` follows the OS locale, falling back to English.
-    /// Applied at startup only - see [`crate::i18n`].
+    /// UI language, switched live from the status bar's picker. Absent from a
+    /// config written before there were languages, and from the config of a
+    /// first launch, where it resolves to the OS locale - see [`crate::i18n`].
     #[serde(default = "default_language")]
     pub(crate) language: LanguageChoice,
     /// Use egui's dark visuals and the dark UI icon set.

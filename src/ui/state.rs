@@ -38,7 +38,9 @@ type OptionalScreenPointPx = Option<(f32, f32)>;
 /// When the user clicks "Save Changes" these values are applied to `EditorState`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PreferencesDraft {
-    /// UI language. Applied on the next launch, not live - see [`crate::i18n`].
+    /// UI language. Not edited in the Preferences panel: the status bar's
+    /// picker sends [`UiCommand::SetLanguage`], which comes through here so the
+    /// language is saved with everything else - see [`crate::i18n`].
     pub(crate) language: crate::i18n::LanguageChoice,
     pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
@@ -823,10 +825,9 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
-    /// The UI language in force this session (from `config.toml`, resolved at
-    /// startup). The Preferences combo edits the persisted choice; this field
-    /// stays put until the next launch, so the panel can tell when a restart is
-    /// pending. `System` is stored as-is, not resolved to the negotiated locale.
+    /// The UI language in force, which the status bar's picker changes live.
+    /// Read only to tick the running language in that picker - what the strings
+    /// themselves come from is the loader in [`crate::i18n`].
     pub(crate) language: crate::i18n::LanguageChoice,
     /// Use dark UI visuals and icons (the default) instead of the light theme.
     pub(crate) dark_mode: bool,
@@ -2440,6 +2441,9 @@ pub(crate) enum UiCommand {
     SetShowPoints(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
+    /// Switch the UI language from the status bar's picker. Applied live and
+    /// saved into the config, exactly as any other preference is.
+    SetLanguage(crate::i18n::LanguageChoice),
     /// Flip one view preference from the View menu. The application reads the
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
@@ -2791,6 +2795,7 @@ impl UiCommand {
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestDiscardLayerChanges(_) => None,
 
+            Self::SetLanguage(choice) => report("Language", choice.endonym().to_owned()),
             Self::SetFlyModeEnabled(enabled) => report("Fly Mode", if *enabled { "Enabled" } else { "Disabled" }.to_owned()),
             Self::SetSliceModeEnabled(enabled) => report("Slice Mode", if *enabled { "Enabled" } else { "Disabled" }.to_owned()),
             #[cfg(not(target_arch = "wasm32"))]

@@ -7,8 +7,10 @@
 
 use crate::{
     i18n::tr,
-    ui::state::EditorState,
-    ui::widgets::menu::{self, DragableMenu, MenuButton},
+    ui::{
+        state::EditorState,
+        widgets::menu::{self, DragableMenu, MenuButton},
+    },
 };
 
 /// Copyright line, kept in step with the one on the startup splash.

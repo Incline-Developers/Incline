@@ -16,11 +16,11 @@ common-color = Color
 common-fill = Fill
 common-set = Set
 
-## Preferences — Interface
+## Status bar
 
-settings-language = Language
-settings-language-system = System
-settings-language-restart-hint = Language changes take effect the next time Incline starts.
+# Title of the status bar's language menu. The languages themselves are never
+# translated: each names itself in its own script, from `LanguageChoice`.
+status-language = Language
 
 ## Menu bar — File
 
