@@ -1,6 +1,7 @@
 //! Object editing and viewport tool dialogs.
 
 use crate::{
+    i18n::tr,
     model::{Axis, Document, ObjectId},
     ui::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
@@ -661,18 +662,18 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
     let mut close = false;
     let mut rename_to: Option<String> = None;
     let mut open = true;
-    DragableMenu::new(format!("Rename {}", target.kind_label())).open(&mut open).show(ui.ctx(), |ui| {
+    DragableMenu::new(tr!("dialog-rename-title", kind = target.kind_label())).open(&mut open).show(ui.ctx(), |ui| {
         // `menu_field_row` gives the entry its requested width and leaves the
         // rest of the row to the label, so the extra width here is the label's.
         ui.set_max_width(380.);
-        MenuFieldText::new("New name", &mut name_buf).width(260.0).hint_text("Required").show(ui);
+        MenuFieldText::new(tr!("dialog-rename-field"), &mut name_buf).width(260.0).hint_text(tr!("dialog-rename-field-hint")).show(ui);
         menu::menu_actions(ui, |ui| {
             let can_rename = !name_buf.trim().is_empty();
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            if (submitted || ui.add(MenuButton::new("Rename").primary().enabled(can_rename)).clicked()) && can_rename {
+            if (submitted || ui.add(MenuButton::new(tr!("dialog-rename-submit")).primary().enabled(can_rename)).clicked()) && can_rename {
                 rename_to = Some(name_buf.trim().to_string());
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });

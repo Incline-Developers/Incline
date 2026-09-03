@@ -80,6 +80,12 @@ impl<'a> App<'a> {
         self.editor.fly_invert_horizontal_look = preferences.fly_invert_horizontal_look;
         self.editor.fly_near_clip_limit = preferences.fly_near_clip_limit;
         self.editor.fly_max_clip_span = preferences.fly_max_clip_span;
+        // Language is not applied live: `editor.language` stays the session's
+        // language and only the saved config changes, so the panel keeps showing
+        // its "restart to apply" hint until the next launch.
+        if preferences.language != self.editor.language {
+            userspace_log!("Language will change to {:?} the next time Incline starts.", preferences.language);
+        }
         self.configure_graphics_camera_preferences();
         self.editor.preferences_draft = Some(preferences);
         // Preferences apply live from the explorer's properties panel, so this
@@ -157,6 +163,7 @@ impl<'a> App<'a> {
 /// palette owns them, and both callers hand over the same list.
 pub(crate) fn config_from(preferences: &crate::ui::state::PreferencesDraft, delay_products: Vec<crate::app::io::StoredDelayProduct>) -> crate::app::io::Config {
     crate::app::io::Config {
+        language: preferences.language,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
         panel_chrome: preferences.panel_chrome,

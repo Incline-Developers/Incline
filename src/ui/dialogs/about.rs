@@ -5,9 +5,10 @@
 //! notice. The bundled MIT and Apache-2.0 components are attributed in the
 //! third-party licence file shipped alongside the binary, not here.
 
-use crate::ui::{
-    state::EditorState,
-    widgets::menu::{self, DragableMenu, MenuButton},
+use crate::{
+    i18n::tr,
+    ui::state::EditorState,
+    ui::widgets::menu::{self, DragableMenu, MenuButton},
 };
 
 /// Copyright line, kept in step with the one on the startup splash.
@@ -49,7 +50,7 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
 
             ui.label(egui::RichText::new(LICENSE_NOTICE).small());
             ui.add_space(4.0);
-            ui.hyperlink_to("Read the full licence ↗", "https://www.gnu.org/licenses/gpl-3.0.html");
+            ui.hyperlink_to(tr!("about-read-full-licence"), "https://www.gnu.org/licenses/gpl-3.0.html");
 
             ui.add_space(10.0);
             ui.separator();
@@ -58,13 +59,13 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
                 // Nothing here is confirmed or cancelled, so both keys dismiss.
                 let confirm = menu::dialog_confirm_pressed(ui.ctx());
                 let cancel = menu::dialog_cancel_pressed(ui.ctx());
-                if ui.add(MenuButton::new("Close").primary()).clicked() || confirm || cancel {
+                if ui.add(MenuButton::new(tr!("common-close")).primary()).clicked() || confirm || cancel {
                     editor.show_about = false;
                 }
-                if ui.add(MenuButton::new("Source Code")).clicked() {
+                if ui.add(MenuButton::new(tr!("about-source-code"))).clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/Incline-Developers/Incline"));
                 }
-                if ui.add(MenuButton::new("Website")).clicked() {
+                if ui.add(MenuButton::new(tr!("about-website"))).clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
                 }
             });

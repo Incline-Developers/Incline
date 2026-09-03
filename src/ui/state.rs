@@ -14,6 +14,7 @@ use glam::DVec3;
 use strum::{Display, EnumIter};
 
 use crate::{
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
@@ -37,6 +38,8 @@ type OptionalScreenPointPx = Option<(f32, f32)>;
 /// When the user clicks "Save Changes" these values are applied to `EditorState`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PreferencesDraft {
+    /// UI language. Applied on the next launch, not live - see [`crate::i18n`].
+    pub(crate) language: crate::i18n::LanguageChoice,
     pub(crate) renderer_background_color: [f32; 4],
     pub(crate) dark_mode: bool,
     pub(crate) show_console: bool,
@@ -76,6 +79,7 @@ pub(crate) struct MoveToLayerDialog {
 impl Default for PreferencesDraft {
     fn default() -> Self {
         Self {
+            language: crate::app::io::default_language(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
@@ -756,7 +760,6 @@ pub(crate) enum RenameTarget {
 }
 
 impl RenameTarget {
-    /// Human-readable kind, used for the dialog title and console reports.
     pub(crate) fn kind_label(self) -> &'static str {
         match self {
             Self::Layer(_) => "Layer",
@@ -820,6 +823,11 @@ pub(crate) struct EditorState {
     /// Show every vertex of all visible design objects. These are kept in a
     /// persistent GPU instance cache rather than a decimated UI overlay.
     pub(crate) show_points: bool,
+    /// The UI language in force this session (from `config.toml`, resolved at
+    /// startup). The Preferences combo edits the persisted choice; this field
+    /// stays put until the next launch, so the panel can tell when a restart is
+    /// pending. `System` is stored as-is, not resolved to the negotiated locale.
+    pub(crate) language: crate::i18n::LanguageChoice,
     /// Use dark UI visuals and icons (the default) instead of the light theme.
     pub(crate) dark_mode: bool,
     /// Show the console underneath the bottom toolbar.
@@ -1708,6 +1716,7 @@ impl EditorState {
 
     pub(crate) fn current_preferences(&self) -> PreferencesDraft {
         PreferencesDraft {
+            language: self.language,
             renderer_background_color: self.renderer_background_color,
             dark_mode: self.dark_mode,
             show_console: self.show_console,
@@ -1756,6 +1765,7 @@ impl EditorState {
             translucent_handles: HashSet::new(),
             topology_wireframes_enabled: false,
             show_points: false,
+            language: crate::app::io::default_language(),
             dark_mode: crate::app::io::default_dark_mode(),
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
@@ -3176,11 +3186,11 @@ impl Workspace {
     /// Every workspace, in the order the tabs are drawn.
     pub(crate) const ALL: [Self; 3] = [Self::Production, Self::DrillAndBlast, Self::Geology];
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> String {
         match self {
-            Self::Production => "Production",
-            Self::DrillAndBlast => "Drill & Blast",
-            Self::Geology => "Geology",
+            Self::Production => tr!("ws-production"),
+            Self::DrillAndBlast => tr!("ws-drill-and-blast"),
+            Self::Geology => tr!("ws-geology"),
         }
     }
 

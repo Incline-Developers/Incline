@@ -1,8 +1,11 @@
 //! Destructive-action and unsaved-work confirmation dialogs.
 
-use crate::ui::{
-    state::{EditorState, UiCommand, UiProjectView},
-    widgets::menu::{self, DragableMenu, MenuButton},
+use crate::{
+    i18n::tr,
+    ui::{
+        state::{EditorState, UiCommand, UiProjectView},
+        widgets::menu::{self, DragableMenu, MenuButton},
+    },
 };
 
 /// Draw the "Save before quit?" confirmation dialog.
@@ -142,16 +145,18 @@ pub(crate) fn draw_delete_item_confirm_dialog(ui: &mut egui::Ui, commands: &mut 
     let Some((target, name)) = editor.pending_delete_item.clone() else {
         return;
     };
-    let kind = target.kind_label();
+    // One Fluent message carries the whole "Delete <kind>" phrase so each
+    // language owns the word order; the confirm button repeats that title.
+    let title = tr!("dialog-delete-title", kind = target.kind_label());
     let mut open = true;
-    DragableMenu::new(format!("Delete {kind}")).open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
-        ui.label(format!("Delete '{name}' from the project?\nThis cannot be undone."));
+    DragableMenu::new(title.clone()).open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
+        ui.label(tr!("dialog-delete-confirm", name = name.clone()));
         menu::menu_actions(ui, |ui| {
-            if ui.add(MenuButton::new(format!("Delete {kind}")).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
                 commands.push(target.remove_command());
                 editor.pending_delete_item = None;
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 editor.pending_delete_item = None;
             }
         });

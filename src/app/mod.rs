@@ -520,6 +520,10 @@ impl<'a> App<'a> {
     }
 
     fn apply_config(&mut self, config: io::Config) {
+        // Language is resolved once, here at startup; the Preferences combo only
+        // rewrites the config, so `editor.language` holds what this session runs.
+        self.editor.language = config.language;
+        crate::i18n::init(config.language);
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
         self.editor.panel_chrome = config.panel_chrome;

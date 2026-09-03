@@ -1,6 +1,7 @@
 //! Triangulation creation and processing dialogs.
 
 use crate::{
+    i18n::tr,
     model::{Document, Object, ObjectId, SceneEntityId, point_cloud::PointCloudId, triangulation::TriangulationId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
@@ -32,8 +33,11 @@ fn tri_close_dialog(editor: &mut EditorState) {
 
 /// Compact summary of a viewport selection, grouped by object kind
 /// ("5 polylines, 2 strings"). Preferred over per-item chip lists.
+///
+/// Each noun is pluralised by its own count through Fluent, so a language with
+/// more than the two English plural forms (Russian's one/few/many) reads right.
 fn selection_summary(object_ids: &[ObjectId], document: &Document) -> String {
-    let (mut points, mut polylines, mut strings, mut texts) = (0usize, 0usize, 0usize, 0usize);
+    let (mut points, mut polylines, mut strings, mut texts) = (0i64, 0i64, 0i64, 0i64);
     for &oid in object_ids {
         match document.get_object(oid) {
             Some(Object::Point { .. }) => points += 1,
@@ -43,18 +47,31 @@ fn selection_summary(object_ids: &[ObjectId], document: &Document) -> String {
             None => {}
         }
     }
-    let parts: Vec<String> = [(polylines, "polyline"), (strings, "string"), (points, "point"), (texts, "text object")]
-        .into_iter()
-        .filter(|(count, _)| *count > 0)
-        .map(|(count, noun)| format!("{count} {noun}{}", if count == 1 { "" } else { "s" }))
-        .collect();
-    if parts.is_empty() { format!("{} objects", object_ids.len()) } else { parts.join(", ") }
+    let mut parts: Vec<String> = Vec::new();
+    if polylines > 0 {
+        parts.push(tr!("tri-count-polylines", count = polylines));
+    }
+    if strings > 0 {
+        parts.push(tr!("tri-count-strings", count = strings));
+    }
+    if points > 0 {
+        parts.push(tr!("tri-count-points", count = points));
+    }
+    if texts > 0 {
+        parts.push(tr!("tri-count-texts", count = texts));
+    }
+    if parts.is_empty() {
+        let total = object_ids.len() as i64;
+        tr!("tri-count-objects", count = total)
+    } else {
+        parts.join(", ")
+    }
 }
 
-fn tri_surface_type_label(surface_type: TriSurfaceType) -> &'static str {
+fn tri_surface_type_label(surface_type: TriSurfaceType) -> String {
     match surface_type {
-        TriSurfaceType::Surface => "Open surface",
-        TriSurfaceType::SolidClosed => "Solid – fully closed",
+        TriSurfaceType::Surface => tr!("tri-type-open-surface"),
+        TriSurfaceType::SolidClosed => tr!("tri-type-solid-closed"),
     }
 }
 
@@ -221,8 +238,8 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
     }
 
     let mut open = true;
-    DragableMenu::new("Create Triangulation").open(&mut open).min_width(370.0).show(ui.ctx(), |ui| {
-        tool_help_panel(ui, "Click objects in the viewport to select/deselect. Drag to box-select.");
+    DragableMenu::new(tr!("tri-create-title")).open(&mut open).min_width(370.0).show(ui.ctx(), |ui| {
+        tool_help_panel(ui, tr!("tri-create-help"));
         ui.add_space(4.0);
 
         // --- Selection summary ---
@@ -231,17 +248,17 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
         let mut hover_selection = false;
 
         if has_selection {
-            let summary = format!("{} selected", selection_summary(&editor.tri_selected_object_ids, document));
+            let summary = tr!("tri-selection-selected", summary = selection_summary(&editor.tri_selected_object_ids, document));
             ui.horizontal(|ui| {
                 hover_selection = ui.label(summary).hovered();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(MenuButton::new("Clear")).clicked() {
+                    if ui.add(MenuButton::new(tr!("common-clear"))).clicked() {
                         clear_selection = true;
                     }
                 });
             });
         } else {
-            ui.colored_label(egui::Color32::GRAY, "No objects selected yet.");
+            ui.colored_label(egui::Color32::GRAY, tr!("tri-selection-none"));
         }
 
         // Hovering the summary highlights the whole selection in the viewport.
@@ -266,15 +283,12 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
             let surface_type_label = tri_surface_type_label(editor.tri_surface_type);
             MenuFieldCombo::new(
                 "tri_surface_type",
-                "Triangulation type",
+                tr!("tri-create-type-label"),
                 &mut editor.tri_surface_type,
                 surface_type_label,
                 [TriSurfaceType::Surface, TriSurfaceType::SolidClosed].map(|surface_type| (surface_type, tri_surface_type_label(surface_type).into())),
             )
-            .help_text(
-                "Open surface creates a terrain-style sheet. Solid creates a fully enclosed \
-                     mesh and requires input that can form a watertight boundary.",
-            )
+            .help_text(tr!("tri-create-type-help"))
             .width(210.0)
             .show(ui);
         }
@@ -282,16 +296,16 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
         ui.separator();
 
         // --- Name + Triangulate ---
-        MenuFieldText::new("Output name", &mut editor.tri_name_input)
-            .help_text("Name assigned to the generated triangulation.")
+        MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_name_input)
+            .help_text(tr!("tri-create-output-name-help"))
             .width(PICK_SELECTOR_WIDTH)
-            .hint_text("triangulation name")
+            .hint_text(tr!("tri-create-output-name-hint"))
             .show(ui);
         menu::menu_actions(ui, |ui| {
             let ready = has_selection && !editor.tri_name_input.trim().is_empty();
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
             let cancel = menu::dialog_cancel_pressed(ui.ctx());
-            if ui.add(MenuButton::new("Triangulate").primary().enabled(ready)).clicked() || (confirm && ready) {
+            if ui.add(MenuButton::new(tr!("tri-create-run")).primary().enabled(ready)).clicked() || (confirm && ready) {
                 let object_ids: Vec<ObjectId> = editor.tri_selected_object_ids.clone();
                 let name = editor.tri_name_input.trim().to_owned();
                 let surface_type = editor.tri_surface_type;
@@ -299,7 +313,7 @@ pub(crate) fn draw_tri_create_main_dialog(ui: &mut egui::Ui, editor: &mut Editor
                 tri_reset_state(editor);
                 commands.push(command);
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || cancel {
+            if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || cancel {
                 tri_close_dialog(editor);
             }
         });

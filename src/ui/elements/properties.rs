@@ -12,6 +12,7 @@
 use thousands::Separable;
 
 use crate::{
+    i18n::{LanguageChoice, tr},
     model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, triangulation::TriangulationId},
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
@@ -407,15 +408,35 @@ fn reset_performance_defaults(draft: &mut PreferencesDraft) {
 }
 
 fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // Captured by copy so the closure can compare against the running language
+    // without holding a second borrow of `editor` (which `settings_section` has).
+    let active_language = editor.language;
     settings_section(
         ui,
         editor,
         commands,
         "Interface",
         |ui, draft| {
+            let mut changed = false;
+
+            // Language applies on the next launch, not live - see `crate::i18n`.
+            let selected_language_label = draft.language.combo_label();
+            changed |= committed(
+                &MenuFieldCombo::new(
+                    "settings_language",
+                    tr!("settings-language"),
+                    &mut draft.language,
+                    selected_language_label,
+                    LanguageChoice::ALL.into_iter().map(|choice| (choice, choice.combo_label().into())),
+                )
+                .show(ui),
+            );
+            if draft.language != active_language {
+                menu::menu_note(ui, tr!("settings-language-restart-hint"));
+            }
+
             let [r, g, b, _] = draft.renderer_background_color;
             let mut background = egui::Color32::from_rgb(linear_to_srgb_byte(r), linear_to_srgb_byte(g), linear_to_srgb_byte(b));
-            let mut changed = false;
             let response = MenuFieldColor32::new("Background", &mut background).show(ui);
             if response.changed() {
                 draft.renderer_background_color = [

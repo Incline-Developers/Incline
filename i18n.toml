@@ -1,0 +1,9 @@
+# Configuration for `i18n-embed` / `i18n-embed-fl` and the `cargo-i18n` tool.
+# The `fl!` macro reads this at compile time to locate the fallback bundle and
+# validate every message id and argument against it.
+
+fallback_language = "en"
+
+[fluent]
+# Message catalogs live in `i18n/<lang>/*.ftl`; English is canonical.
+assets_dir = "i18n"
