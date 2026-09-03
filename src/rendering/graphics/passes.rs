@@ -624,7 +624,7 @@ impl<'a> Graphics<'a> {
                 &editor.hidden_handles,
                 false,
                 true,
-                editor.active_workspace != crate::ui::state::Workspace::DrillAndBlast,
+                !editor.tying_holes(),
                 include_editor_overlays,
             );
         }
@@ -850,7 +850,7 @@ impl<'a> Graphics<'a> {
             self.draw_static_document_strokes(&mut render_pass, true);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Stroke));
         } else {
-            if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
+            if editor.tying_holes() {
                 self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, true, false, true, include_editor_overlays);
             }
             // Alpha document primitives test the complete opaque depth buffer

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -9,11 +9,11 @@ use crate::{
 };
 
 pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
-/// Screen diameter of the marker drawn at every collar. It is the floor, not
-/// the size: a hole wide enough on screen grows its marker past it.
-pub(crate) const COLLAR_MARKER_PIXEL_DIAMETER: f32 = 11.0;
 /// How much wider than the hole itself the collar marker is drawn.
-pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 2.5;
+pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 5.0;
+/// World-space collar radius for datasets that do not provide a physical hole
+/// diameter. Roughly matches a 240 mm production hole after the marker scale.
+pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
@@ -186,22 +186,46 @@ impl DrillPatternLayout {
     }
 }
 
-/// Fill an XY polygon with a globally aligned drill grid. `spacing` runs in X
-/// within a row and `burden` separates rows in Y; staggered rows move half a
-/// spacing. Collars sit half a cell inside the polygon bounds and take their Z
-/// from the boundary's polygon plane.
-pub(crate) fn generate_pattern_collars(boundary: &[DVec3], burden: f64, spacing: f64, layout: DrillPatternLayout) -> Result<Vec<DVec3>, String> {
+/// Fill an XY polygon with a drill grid rotated counter-clockwise from global
+/// X. `spacing` runs within a row and `burden` separates rows; staggered rows
+/// move half a spacing. Collars sit half a cell inside the rotated polygon
+/// bounds and take their Z from the boundary's polygon plane.
+pub(crate) fn generate_pattern_collars(
+    boundary: &[DVec3],
+    burden: f64,
+    spacing: f64,
+    rotation_degrees: f64,
+    offset: DVec2,
+    layout: DrillPatternLayout,
+) -> Result<Vec<DVec3>, String> {
     if boundary.len() < 3 || boundary.iter().any(|point| !point.is_finite()) {
         return Err("Choose a valid closed polyline".to_owned());
     }
     if !burden.is_finite() || !spacing.is_finite() || burden <= 0.0 || spacing <= 0.0 {
         return Err("Burden and spacing must be greater than zero".to_owned());
     }
+    if !rotation_degrees.is_finite() || !offset.is_finite() {
+        return Err("Rotation and offsets must contain valid numbers".to_owned());
+    }
 
-    let min_x = boundary.iter().map(|point| point.x).fold(f64::INFINITY, f64::min);
-    let max_x = boundary.iter().map(|point| point.x).fold(f64::NEG_INFINITY, f64::max);
-    let min_y = boundary.iter().map(|point| point.y).fold(f64::INFINITY, f64::min);
-    let max_y = boundary.iter().map(|point| point.y).fold(f64::NEG_INFINITY, f64::max);
+    let centroid = boundary.iter().copied().sum::<DVec3>() / boundary.len() as f64;
+    let (sin_rotation, cos_rotation) = rotation_degrees.to_radians().sin_cos();
+    let grid_offset = DVec2::new(offset.x * cos_rotation + offset.y * sin_rotation, -offset.x * sin_rotation + offset.y * cos_rotation);
+    let grid_boundary = boundary
+        .iter()
+        .map(|point| {
+            let offset = point.truncate() - centroid.truncate();
+            DVec3::new(
+                offset.x * cos_rotation + offset.y * sin_rotation,
+                -offset.x * sin_rotation + offset.y * cos_rotation,
+                point.z,
+            )
+        })
+        .collect::<Vec<_>>();
+    let min_x = grid_boundary.iter().map(|point| point.x).fold(f64::INFINITY, f64::min);
+    let max_x = grid_boundary.iter().map(|point| point.x).fold(f64::NEG_INFINITY, f64::max);
+    let min_y = grid_boundary.iter().map(|point| point.y).fold(f64::INFINITY, f64::min);
+    let max_y = grid_boundary.iter().map(|point| point.y).fold(f64::NEG_INFINITY, f64::max);
     let width = max_x - min_x;
     let height = max_y - min_y;
     let columns = ((width / spacing).ceil() as usize).max(1);
@@ -213,7 +237,6 @@ pub(crate) fn generate_pattern_collars(boundary: &[DVec3], burden: f64, spacing:
         ));
     }
 
-    let centroid = boundary.iter().copied().sum::<DVec3>() / boundary.len() as f64;
     // Newell's method gives a stable normal for either winding and polygons
     // with more than three vertices. A near-vertical/degenerate ring falls
     // back to the mean boundary elevation below.
@@ -237,8 +260,13 @@ pub(crate) fn generate_pattern_collars(boundary: &[DVec3], burden: f64, spacing:
     };
 
     let mut collars = Vec::with_capacity(cells.min(MAX_PATTERN_HOLES));
-    let first_x = if width < spacing { (min_x + max_x) * 0.5 } else { min_x + spacing * 0.5 };
-    let first_y = if height < burden { (min_y + max_y) * 0.5 } else { min_y + burden * 0.5 };
+    let base_x = if width < spacing { (min_x + max_x) * 0.5 } else { min_x + spacing * 0.5 };
+    let base_y = if height < burden { (min_y + max_y) * 0.5 } else { min_y + burden * 0.5 };
+    // Reduce arbitrary offsets to one lattice period and start at the first
+    // candidate inside the rotated bounds. This keeps large coordinate entry
+    // values cheap while preserving their exact pattern phase.
+    let first_x = base_x + grid_offset.x + ((min_x - base_x - grid_offset.x) / spacing).ceil() * spacing;
+    let first_y = base_y + grid_offset.y + ((min_y - base_y - grid_offset.y) / burden).ceil() * burden;
     for row in 0..rows {
         let y = first_y + row as f64 * burden;
         if y >= max_y {
@@ -250,8 +278,10 @@ pub(crate) fn generate_pattern_collars(boundary: &[DVec3], burden: f64, spacing:
             if x >= max_x {
                 break;
             }
-            if point_in_polygon_xy(x, y, boundary) {
-                collars.push(DVec3::new(x, y, elevation(x, y)));
+            if point_in_polygon_xy(x, y, &grid_boundary) {
+                let world_x = centroid.x + x * cos_rotation - y * sin_rotation;
+                let world_y = centroid.y + x * sin_rotation + y * cos_rotation;
+                collars.push(DVec3::new(world_x, world_y, elevation(world_x, world_y)));
                 if collars.len() > MAX_PATTERN_HOLES {
                     return Err(format!("Pattern exceeds the maximum of {MAX_PATTERN_HOLES} holes; increase burden or spacing"));
                 }
@@ -792,10 +822,10 @@ fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
         if hole.trace.len() < 2 {
             continue;
         }
-        // Pixel-sized fallback holes have no stable world radius to add here;
-        // their projected width is applied by the shader. Explicit diameters
-        // still expand fitting/slice bounds in dataset world units.
-        let radius = hole.diameter.unwrap_or(0.0) * 0.5;
+        // Conservatively cover both the trace and the world-sized collar. A
+        // dataset without physical diameters uses the same fallback radius as
+        // the collar instance builder.
+        let radius = hole.diameter.map_or(COLLAR_MARKER_FALLBACK_RADIUS, |diameter| diameter * 0.5 * COLLAR_MARKER_RADIUS_SCALE);
         for station in &hole.trace {
             min = min.min(station.position - DVec3::splat(radius));
             max = max.max(station.position + DVec3::splat(radius));

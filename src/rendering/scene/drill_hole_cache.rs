@@ -7,7 +7,7 @@ use glam::DVec3;
 use wgpu::util::DeviceExt;
 
 use crate::model::drill_hole::{
-    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
+    COLLAR_MARKER_FALLBACK_RADIUS, COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
     MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_PIXEL_DIAMETER,
 };
 
@@ -30,7 +30,7 @@ pub(crate) struct DrillCollarInstance {
     pub(crate) center: [f32; 3],
     pub(crate) marker_radius: f32,
     pub(crate) outline: [f32; 3],
-    pub(crate) pixel_diameter: f32,
+    pub(crate) _pad0: f32,
     pub(crate) fill: [f32; 3],
     pub(crate) hole_radius: f32,
 }
@@ -111,6 +111,8 @@ impl DrillHoleGpuCache {
             || editor.drill_pattern_preview_collars.is_empty()
             || !editor.drill_pattern_preview_depth.is_finite()
             || editor.drill_pattern_preview_depth <= 0.0
+            || !editor.drill_pattern_preview_diameter.is_finite()
+            || editor.drill_pattern_preview_diameter <= 0.0
         {
             self.preview = None;
             return;
@@ -118,6 +120,7 @@ impl DrillHoleGpuCache {
 
         let mut hash = DefaultHasher::new();
         editor.drill_pattern_preview_depth.to_bits().hash(&mut hash);
+        editor.drill_pattern_preview_diameter.to_bits().hash(&mut hash);
         for value in scene_origin.to_array() {
             value.to_bits().hash(&mut hash);
         }
@@ -136,7 +139,7 @@ impl DrillHoleGpuCache {
             .iter()
             .map(|&collar| DrillSegmentInstance {
                 start: (collar - scene_origin).as_vec3().to_array(),
-                radius: 0.0,
+                radius: (editor.drill_pattern_preview_diameter * 0.5) as f32,
                 end: (collar - DVec3::Z * editor.drill_pattern_preview_depth - scene_origin).as_vec3().to_array(),
                 pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color: [1.0; 3],
@@ -148,11 +151,11 @@ impl DrillHoleGpuCache {
             .iter()
             .map(|&collar| DrillCollarInstance {
                 center: (collar - scene_origin).as_vec3().to_array(),
-                marker_radius: 0.0,
+                marker_radius: (editor.drill_pattern_preview_diameter * 0.5 * COLLAR_MARKER_RADIUS_SCALE) as f32,
                 outline: COLLAR_MARKER_OUTLINE_COLOR,
-                pixel_diameter: COLLAR_MARKER_PIXEL_DIAMETER,
+                _pad0: 0.0,
                 fill: COLLAR_MARKER_FILL_COLOR,
-                hole_radius: 0.0,
+                hole_radius: (editor.drill_pattern_preview_diameter * 0.5) as f32,
             })
             .collect();
         let buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -377,12 +380,12 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
                 _ => (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR),
             };
             let center = hole.collar_position();
-            let hole_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5);
+            let hole_radius = hole.diameter.map_or(COLLAR_MARKER_FALLBACK_RADIUS / COLLAR_MARKER_RADIUS_SCALE, |diameter| diameter * 0.5);
             DrillCollarInstance {
                 center: (center - scene_origin).as_vec3().to_array(),
-                marker_radius: (hole_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
+                marker_radius: hole.diameter.map_or(COLLAR_MARKER_FALLBACK_RADIUS, |diameter| diameter * 0.5 * COLLAR_MARKER_RADIUS_SCALE) as f32,
                 outline,
-                pixel_diameter: COLLAR_MARKER_PIXEL_DIAMETER,
+                _pad0: 0.0,
                 fill,
                 hole_radius: hole_radius as f32,
             }

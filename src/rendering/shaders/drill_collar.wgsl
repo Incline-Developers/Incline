@@ -8,12 +8,11 @@ struct CameraUniform {
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
 struct CollarInstance {
-    // xyz: collar position, relative to the scene origin. w: the marker's
-    // world radius, which the pixel floor below overrides while the hole is
-    // small on screen.
+    // xyz: collar position, relative to the scene origin. w: marker radius in
+    // world units.
     @location(0) center_radius: vec4<f32>,
-    // xyz: outline colour. w: the marker's minimum screen diameter in pixels.
-    @location(1) outline_pixels: vec4<f32>,
+    // xyz: outline colour. w: unused alignment padding.
+    @location(1) outline_pad: vec4<f32>,
     // xyz: fill colour. w: the hole's own rendered radius, used to lift the
     // marker clear of the cylinder it caps.
     @location(2) fill_hole_radius: vec4<f32>,
@@ -59,24 +58,26 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
         1.0e-6,
     );
 
-    let radius_pixels = max(instance.center_radius.w * pixels_per_world, instance.outline_pixels.w * 0.5);
+    // The marker is physical world geometry, with no screen-space floor: it
+    // shrinks with distance like everything else in the scene. The projected
+    // scale is still needed, because the fragment shader measures its ring
+    // and edge widths in pixels.
+    let radius_world = max(instance.center_radius.w, 1.0e-6);
+    let radius_pixels = radius_world * pixels_per_world;
     // The cylinder starts at the collar and bulges toward the camera by its
     // own rendered radius, so a marker left in the collar plane would be
     // sliced open by it in any side-on view. Lifting the marker clear along
     // the view direction moves it nearer the camera by the same amount under
-    // either projection. The floor mirrors the cylinder's own minimum screen
-    // width, which inflates its world radius as the hole shrinks on screen.
-    let hole_radius = max(instance.fill_hole_radius.w, 1.0 / pixels_per_world);
+    // either projection.
+    let hole_radius = max(instance.fill_hole_radius.w, 0.0);
     let lifted = center - view_direction * hole_radius * 1.5;
 
-    var clip = camera.view_proj * vec4<f32>(lifted, 1.0);
-    let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);
-    clip = vec4<f32>(clip.xy + corner * radius_pixels * pixel_to_ndc * clip.w, clip.zw);
+    let world = lifted + right * corner.x * radius_world + up * corner.y * radius_world;
 
     var out: VertexOutput;
-    out.position = clip;
+    out.position = camera.view_proj * vec4<f32>(world, 1.0);
     out.offset = corner;
-    out.outline = instance.outline_pixels.xyz;
+    out.outline = instance.outline_pad.xyz;
     out.fill = instance.fill_hole_radius.xyz;
     out.radius_pixels = radius_pixels;
     return out;
@@ -85,13 +86,16 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let distance_pixels = length(input.offset) * input.radius_pixels;
-    let alpha = 1.0 - smoothstep(input.radius_pixels - EDGE_PIXELS, input.radius_pixels, distance_pixels);
-    if alpha <= 0.0 {
+    // Not opacity: the pipeline turns this into a sample-coverage mask, so
+    // the rim antialiases against the scene behind it without writing the
+    // marker's depth over the samples it does not cover.
+    let coverage = 1.0 - smoothstep(input.radius_pixels - EDGE_PIXELS, input.radius_pixels, distance_pixels);
+    if coverage <= 0.0 {
         discard;
     }
     // A large marker keeps a proportional ring rather than a hairline one.
     let outline_width = max(OUTLINE_PIXELS, input.radius_pixels * 0.22);
     let inner_radius = max(input.radius_pixels - outline_width, 0.0);
     let ring = smoothstep(inner_radius - EDGE_PIXELS, inner_radius, distance_pixels);
-    return vec4<f32>(mix(input.fill, input.outline, ring), alpha);
+    return vec4<f32>(mix(input.fill, input.outline, ring), coverage);
 }

@@ -4,7 +4,7 @@ use crate::{
     app::App,
     i18n::tr_format,
     model::{
-        ItemRef, ItemStyle, SceneEntityId,
+        Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
         drill_hole::{
             DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset,
             OpenDrillHoleDataset, TraceStation, default_category_colors,
@@ -42,13 +42,16 @@ impl<'a> App<'a> {
     /// Turn the pattern menu's exact preview into a normal project-owned
     /// drillhole dataset. Generated patterns need no reload source: project
     /// saves already embed every collar and trace in OMF.
-    pub(crate) fn create_drill_pattern(&mut self, name: String, collars: Vec<glam::DVec3>, depth: f64) -> Result<()> {
+    pub(crate) fn create_drill_pattern(&mut self, name: String, collars: Vec<glam::DVec3>, depth: f64, diameter: f64) -> Result<()> {
         let name = name.trim();
         if name.is_empty() {
             anyhow::bail!("Enter a name for the drill pattern");
         }
         if !depth.is_finite() || depth <= 0.0 {
             anyhow::bail!("Hole depth must be greater than zero");
+        }
+        if !diameter.is_finite() || diameter <= 0.0 {
+            anyhow::bail!("Hole diameter must be greater than zero");
         }
         if collars.is_empty() {
             anyhow::bail!("The pattern contains no holes");
@@ -64,7 +67,7 @@ impl<'a> App<'a> {
             .map(|(index, collar)| DrillHole {
                 dhid: format!("H{:0width$}", index + 1, width = width),
                 collar,
-                diameter: None,
+                diameter: Some(diameter),
                 trace: vec![
                     TraceStation { depth: 0.0, position: collar },
                     TraceStation {
@@ -80,19 +83,21 @@ impl<'a> App<'a> {
         let id = DrillHoleId(self.next_drill_hole_id);
         self.next_drill_hole_id += 1;
         let name = crate::model::project::unique_item_name(name.to_owned(), self.drill_holes.iter().map(|item| item.name.as_str()));
-        self.drill_holes.push(OpenDrillHoleDataset {
+        let item = OpenDrillHoleDataset {
             id,
             state: crate::model::project::ProjectItemState::dirty(None),
             name,
             dataset,
             visible: true,
             color: DrillColorState::default(),
+        };
+        self.execute_edit(Command::AddItem {
+            item: ItemRef::DrillHole(id),
+            index: self.drill_holes.len(),
+            added: Some(OpenItem::DrillHole(Box::new(item))),
         });
         self.editor.active_drill_hole = Some(id);
         self.editor.close_drill_pattern();
-        self.touch_active_project_content();
-        self.persist_session();
-        self.invalidate_topology_bounds_and_redraw();
         Ok(())
     }
 

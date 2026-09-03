@@ -1621,6 +1621,14 @@ pub(crate) enum Command {
         before: Option<drill_hole::Initiation>,
         after: Option<drill_hole::Initiation>,
     },
+    /// Add a complete project item. While the item is present, `added` is
+    /// `None`; undo lifts it back into the command so redo can restore the
+    /// exact same data and explorer position without cloning it.
+    AddItem {
+        item: ItemRef,
+        index: usize,
+        added: Option<OpenItem>,
+    },
     /// Delete a project item. The item itself is moved into the command when
     /// it is applied and moved back out when it is reverted, so a deletion
     /// sitting in the undo stack never holds a second copy of a mesh.
@@ -1674,6 +1682,9 @@ impl Command {
                     .iter()
                     .map(|(_, placement)| size_of::<drill_hole::HolePlacement>() + placement.trace.len() * size_of::<drill_hole::TraceStation>())
                     .fold(0usize, usize::saturating_add),
+                // Counted while the addition is undone and the item is held
+                // in the redo command rather than by the project.
+                Command::AddItem { added, .. } => added.as_ref().map_or(0, OpenItem::estimated_bytes),
                 // Counted while the deletion stands. Reverting hands the item
                 // back to the project, and the entry - now only a redo - is
                 // over-counted until it is dropped, which is the safe way to
@@ -1721,7 +1732,7 @@ impl Command {
     /// restore their content epochs around an apply or a revert.
     fn touched_items(&self, into: &mut Vec<ItemRef>) {
         match self {
-            Command::SetItemStyle { item, .. } | Command::RenameItem { item, .. } | Command::DeleteItem { item, .. } => {
+            Command::SetItemStyle { item, .. } | Command::RenameItem { item, .. } | Command::AddItem { item, .. } | Command::DeleteItem { item, .. } => {
                 if !into.contains(item) {
                     into.push(*item);
                 }
@@ -1812,6 +1823,12 @@ impl Command {
             Command::MoveCollars { dataset, originals, delta } => target.move_collars(*dataset, originals, *delta),
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
+            Command::AddItem { item, index, added } => {
+                if let Some(added_item) = added.take() {
+                    debug_assert_eq!(added_item.item_ref(), *item);
+                    target.insert_item(*index, added_item);
+                }
+            }
             Command::DeleteItem { item, index, removed } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {
                     *index = taken_index;
@@ -1887,6 +1904,12 @@ impl Command {
             // the edit touched are named by both of them.
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
+            Command::AddItem { item, index, added } => {
+                if let Some((taken_index, taken)) = target.take_item(*item) {
+                    *index = taken_index;
+                    *added = Some(taken);
+                }
+            }
             Command::DeleteItem { index, removed, .. } => {
                 if let Some(item) = removed.take() {
                     target.insert_item(*index, item);

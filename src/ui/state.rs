@@ -942,6 +942,12 @@ pub(crate) struct EditorState {
     pub(crate) drill_pattern_boundary_name: String,
     pub(crate) drill_pattern_burden: f64,
     pub(crate) drill_pattern_spacing: f64,
+    pub(crate) drill_pattern_rotation_deg: f64,
+    pub(crate) drill_pattern_offset_x: f64,
+    pub(crate) drill_pattern_offset_y: f64,
+    /// User-facing hole diameter in millimetres. Drillhole model geometry is
+    /// stored in metres, so this is converted when previewing and creating.
+    pub(crate) drill_pattern_diameter_mm: f64,
     pub(crate) drill_pattern_depth: f64,
     pub(crate) drill_pattern_layout: DrillPatternLayout,
     pub(crate) drill_pattern_name: String,
@@ -949,6 +955,7 @@ pub(crate) struct EditorState {
     /// eventual create command, so committing cannot differ from the preview.
     pub(crate) drill_pattern_preview_collars: Vec<DVec3>,
     pub(crate) drill_pattern_preview_depth: f64,
+    pub(crate) drill_pattern_preview_diameter: f64,
     pub(crate) drill_pattern_preview_error: Option<String>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
@@ -1600,6 +1607,7 @@ impl EditorState {
         self.drill_pattern_boundary_name.clear();
         self.drill_pattern_preview_collars.clear();
         self.drill_pattern_preview_depth = self.drill_pattern_depth;
+        self.drill_pattern_preview_diameter = self.drill_pattern_diameter_mm / 1_000.0;
         self.drill_pattern_preview_error = None;
         self.drill_pattern_awaiting_shape_pick = false;
         if self.drill_pattern_name.trim().is_empty() {
@@ -1615,6 +1623,7 @@ impl EditorState {
         self.drill_pattern_boundary_name.clear();
         self.drill_pattern_preview_collars.clear();
         self.drill_pattern_preview_depth = self.drill_pattern_depth;
+        self.drill_pattern_preview_diameter = self.drill_pattern_diameter_mm / 1_000.0;
         self.drill_pattern_preview_error = None;
         self.viewport_pick_hover_label = None;
         self.tool_highlight_id = None;
@@ -1886,11 +1895,16 @@ impl EditorState {
             drill_pattern_boundary_name: String::new(),
             drill_pattern_burden: 3.0,
             drill_pattern_spacing: 3.5,
+            drill_pattern_rotation_deg: 0.0,
+            drill_pattern_offset_x: 0.0,
+            drill_pattern_offset_y: 0.0,
+            drill_pattern_diameter_mm: 165.0,
             drill_pattern_depth: 10.0,
             drill_pattern_layout: DrillPatternLayout::Square,
             drill_pattern_name: "Drill Pattern".to_owned(),
             drill_pattern_preview_collars: Vec::new(),
             drill_pattern_preview_depth: 10.0,
+            drill_pattern_preview_diameter: 0.165,
             drill_pattern_preview_error: None,
             cursor_world: None,
             #[cfg(target_arch = "wasm32")]
@@ -2455,6 +2469,7 @@ pub(crate) enum UiCommand {
         name: String,
         collars: Vec<DVec3>,
         depth: f64,
+        diameter: f64,
     },
     /// Drop everything selected, and rebuild the geometry that was drawing it
     /// as selected. Switching workspaces sends this: a selection belongs to

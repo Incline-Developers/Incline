@@ -133,7 +133,7 @@ impl<'a> App<'a> {
                 self.invalidate_geometry();
                 Ok(())
             }
-            UiCommand::CreateDrillPattern { name, collars, depth } => self.create_drill_pattern(name, collars, depth),
+            UiCommand::CreateDrillPattern { name, collars, depth, diameter } => self.create_drill_pattern(name, collars, depth, diameter),
             UiCommand::ClearSelection => {
                 self.editor.clear_scene_selection();
                 self.active_triangulation = None;
