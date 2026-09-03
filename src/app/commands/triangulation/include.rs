@@ -89,11 +89,14 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<IncludeJobOutput>| match result {
             Ok(output) => {
                 userspace_log!(
-                    "Included solid '{}' in topology '{}' (retained {} topology faces, skipped {} closure-cap faces)",
-                    output.shape_name,
-                    output.topology_name,
-                    output.retained,
-                    output.skipped
+                    "{}",
+                    tr_format!(
+                        literal = "Included solid '%shape_name%' in topology '%topology_name%' (retained %retained% topology faces, skipped %skipped% closure-cap faces)",
+                        shape_name = output.shape_name,
+                        topology_name = output.topology_name,
+                        retained = output.retained,
+                        skipped = output.skipped
+                    )
                 );
                 for generated in output.generated {
                     app.insert_generated_triangulation(generated);
@@ -107,14 +110,14 @@ impl<'a> App<'a> {
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                userspace_warn!("Include failed: {message}");
+                userspace_warn!("{}", tr_format!(literal = "Include failed: %message%", message = message));
             }
         };
 
         // Both source triangulations are dependencies: closing or replacing
         // either one must cancel the include, not just the topology.
         self.spawn_job_reporting_progress(
-            "Including pit/stockpile solid…",
+            crate::i18n::tr!(literal = "Including pit/stockpile solid…"),
             vec![crate::app::jobs::JobKey::Triangulation(topology_id), crate::app::jobs::JobKey::Triangulation(shape_id)],
             compute,
             apply,

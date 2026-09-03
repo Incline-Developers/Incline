@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     app::App,
+    i18n::tr_format,
     model::{Command, Document, Layer, LayerId, Object, SceneEntityId},
     userspace_log,
 };
@@ -54,7 +55,7 @@ impl<'a> App<'a> {
         project.loaded_layers.insert(layer_id);
         self.editor.selected_handles.clear();
         self.editor.active_layer = Some(layer_id);
-        userspace_log!("Created layer '{name}'");
+        userspace_log!("{}", tr_format!(literal = "Created layer '%name%'", name = name));
         self.invalidate_geometry();
         Ok(())
     }
@@ -88,7 +89,10 @@ impl<'a> App<'a> {
             self.editor.active_layer = None;
         }
         self.editor.selected_handles.clear();
-        userspace_log!("Deleted layer {:?} (and all objects on it)", layer_id);
+        userspace_log!(
+            "{}",
+            tr_format!(literal = "Deleted layer %layer_id% (and all objects on it)", layer_id = format!("{layer_id:?}"))
+        );
         self.invalidate_geometry();
         Ok(())
     }
@@ -101,7 +105,7 @@ impl<'a> App<'a> {
             return;
         };
         let source_objects = objects_on_layer(&project.project.document, layer_id);
-        let duplicate_name = unique_layer_name(&project.project.document, &format!("{} copy", source_layer.name));
+        let duplicate_name = unique_layer_name(&project.project.document, &tr_format!(literal = "%name% copy", name = &source_layer.name));
 
         let doc = &mut project.project.document;
         let new_layer_id = doc.allocate_layer_id();
@@ -130,7 +134,7 @@ impl<'a> App<'a> {
         );
         project.loaded_layers.insert(new_layer_id);
         self.editor.selected_handles.clear();
-        userspace_log!("Duplicated layer '{duplicate_name}'");
+        userspace_log!("{}", tr_format!(literal = "Duplicated layer '%duplicate_name%'", duplicate_name = duplicate_name));
         self.invalidate_geometry();
     }
 
@@ -147,7 +151,7 @@ impl<'a> App<'a> {
         };
         project.loaded_layers.insert(layer_id);
         self.editor.selected_handles.clear();
-        userspace_log!("Loaded layer '{name}'");
+        userspace_log!("{}", tr_format!(literal = "Loaded layer '%name%'", name = name));
         self.invalidate_geometry();
         if scene_was_empty {
             self.fit_view_to_extents();
@@ -176,7 +180,14 @@ impl<'a> App<'a> {
         self.editor.tri_selected_layer_ids.clear();
         self.editor.canvas_context_menu_open = false;
         let count = self.editor.selected_handles.len();
-        userspace_log!("Selected {count} object(s) in layer {:?}", layer_id);
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Selected %count% object(s) in layer %layer_id%",
+                count = count,
+                layer_id = format!("{layer_id:?}")
+            )
+        );
         self.invalidate_geometry();
         self.invalidate_overlay();
     }
@@ -212,7 +223,7 @@ impl<'a> App<'a> {
         if self.editor.active_layer == Some(layer_id) {
             self.editor.active_layer = None;
         }
-        userspace_log!("Unloaded layer {:?}", layer_id);
+        userspace_log!("{}", tr_format!(literal = "Unloaded layer %layer_id%", layer_id = format!("{layer_id:?}")));
         self.invalidate_geometry();
     }
 
@@ -230,7 +241,8 @@ impl<'a> App<'a> {
         };
         let (name, visible) = (layer.name.clone(), !layer.visible);
         document.set_layer_visible(layer_id, visible);
-        userspace_log!("{} layer '{}'", if visible { "Shown" } else { "Hidden" }, name);
+        let state = if visible { "Shown" } else { "Hidden" };
+        userspace_log!("{}", tr_format!(literal = "%state% layer '%name%'", state = state, name = name));
         self.invalidate_geometry();
     }
 
@@ -257,7 +269,8 @@ impl<'a> App<'a> {
                 self.editor.active_layer = None;
             }
         }
-        userspace_log!("{} layer '{}'", if locked { "Locked" } else { "Unlocked" }, name);
+        let state = if locked { "Locked" } else { "Unlocked" };
+        userspace_log!("{}", tr_format!(literal = "%state% layer '%name%'", state = state, name = name));
         self.invalidate_geometry();
     }
 }

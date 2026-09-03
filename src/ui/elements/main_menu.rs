@@ -417,7 +417,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |_| {});
 
             MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
-                if ContextMenuAction::new("Create Ore Triangulation...")
+                if ContextMenuAction::new(tr!(literal = "Create Ore Triangulation..."))
                     .enabled(!project.block_models.is_empty())
                     .show(ui)
                     .clicked()
@@ -429,7 +429,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
 
             MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |ui| {
                 let has_loaded_holes = project.drill_holes.iter().any(|dataset| dataset.is_loaded);
-                if ContextMenuAction::new("Create Block Model...").enabled(has_loaded_holes).show(ui).clicked() {
+                if ContextMenuAction::new(tr!(literal = "Create Block Model...")).enabled(has_loaded_holes).show(ui).clicked() {
                     commands.push(UiCommand::OpenCreateBlockModel(None));
                     ui.close();
                 }
@@ -475,29 +475,29 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         });
 
         MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
-            if ContextMenuAction::new("Clip Surface by Polyline...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Clip Surface by Polyline...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationByPolyline);
                 ui.close();
             }
-            if ContextMenuAction::new("Slice Triangulation by Z Range...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Slice Triangulation by Z Range...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationByZ);
                 ui.close();
             }
-            if ContextMenuAction::new("Trim to Topology...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Trim to Topology...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTriangulationBySurface);
                 ui.close();
             }
             context_menu_separator(ui);
-            if ContextMenuAction::new("Cut Topology with Pit Shell...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Cut Topology with Pit Shell...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCutTopologyByPitShell);
                 ui.close();
             }
-            if ContextMenuAction::new("Merge Shell into Topology...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Merge Shell into Topology...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenIncludeSolidInTopology);
                 ui.close();
             }
             context_menu_separator(ui);
-            if ContextMenuAction::new("Generate Contour Lines...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Generate Contour Lines...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenContourTriangulation);
                 ui.close();
             }
@@ -505,7 +505,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
 
         MenuBarMenu::new(&tr!("ws-menubar-raster")).show(ui, |ui| {
             let any_draped = project.raster_textures.iter().any(|raster| raster.is_draped);
-            if ContextMenuAction::new("Undrape All").enabled(any_draped).show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Undrape All")).enabled(any_draped).show(ui).clicked() {
                 commands.push(UiCommand::UndrapeAllRasters);
                 ui.close();
             }
@@ -513,7 +513,11 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
 
         MenuBarMenu::new(&tr!("ws-menubar-point-cloud")).show(ui, |ui| {
             let has_loaded_cloud = project.point_clouds.iter().any(|cloud| cloud.is_loaded);
-            if ContextMenuAction::new("Create Triangulation...").enabled(has_loaded_cloud).show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Create Triangulation..."))
+                .enabled(has_loaded_cloud)
+                .show(ui)
+                .clicked()
+            {
                 commands.push(UiCommand::OpenPointCloudTin);
                 ui.close();
             }

@@ -1,4 +1,9 @@
-use crate::{app::App, ui::state::DelayProduct, userspace_log};
+use crate::{
+    app::App,
+    i18n::{tr, tr_format},
+    ui::state::DelayProduct,
+    userspace_log,
+};
 
 impl<'a> App<'a> {
     pub(crate) fn set_topology_wireframes(&mut self, enabled: bool) -> anyhow::Result<()> {
@@ -7,7 +12,7 @@ impl<'a> App<'a> {
         // The topology GPU cache detects the style change during the next
         // render; document geometry does not need rebuilding.
         self.redraw_requested = true;
-        userspace_log!("Set topology wireframes = {}", enabled);
+        userspace_log!("{}", tr_format!(literal = "Set topology wireframes = %enabled%", enabled = enabled));
         Ok(())
     }
 
@@ -15,7 +20,7 @@ impl<'a> App<'a> {
         self.editor.show_points = enabled;
         // Deliberately not persisted: this is a per-session view toggle.
         self.redraw_requested = true;
-        userspace_log!("Set view points = {}", enabled);
+        userspace_log!("{}", tr_format!(literal = "Set view points = %enabled%", enabled = enabled));
         Ok(())
     }
 
@@ -97,6 +102,11 @@ impl<'a> App<'a> {
         if preferences.language != self.editor.language {
             self.editor.language = preferences.language;
             crate::i18n::select_language(preferences.language);
+            // AppKit owns the menu bar's items outright, so unlike the egui
+            // side nothing here re-reads translated strings each frame - the
+            // whole native menu has to be rebuilt to pick up the new language.
+            #[cfg(target_os = "macos")]
+            crate::mac::install_menu_bar();
         }
         self.configure_graphics_camera_preferences();
         self.editor.preferences_draft = Some(preferences);
@@ -145,7 +155,7 @@ impl<'a> App<'a> {
             );
             self.redraw_requested = true;
         }
-        userspace_log!("Reset view (fit to extents)");
+        userspace_log!("{}", tr!(literal = "Reset view (fit to extents)"));
     }
 
     /// Fit all visible content while preserving the current orbit angle.
@@ -161,7 +171,7 @@ impl<'a> App<'a> {
             );
             self.redraw_requested = true;
         }
-        userspace_log!("Zoom to extents (preserving angle)");
+        userspace_log!("{}", tr!(literal = "Zoom to extents (preserving angle)"));
     }
 }
 

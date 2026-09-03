@@ -13,22 +13,13 @@ use crate::{
     },
 };
 
-/// Copyright line, kept in step with the one on the startup splash.
-const COPYRIGHT: &str = "Licensed under the GNU General Public License v3.0";
-
-const LICENSE_NOTICE: &str = "Incline Design is free software: you can redistribute it and/or modify it under the terms of \
-    the GNU General Public License version 3 as published by the Free Software Foundation.\n\n\
-    Incline Design is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without \
-    even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU \
-    General Public License for more details.";
-
 /// Draw the About dialog when `editor.show_about` is set.
 pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
     if !editor.show_about {
         return;
     }
     let mut open = true;
-    DragableMenu::new(format!("About {}", crate::APP_NAME))
+    DragableMenu::new(tr!("about-title", app = crate::APP_NAME))
         .open(&mut open)
         .min_width(420.0)
         .max_width(460.0)
@@ -41,8 +32,8 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
                 ui.add_space(4.0);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE)).heading());
-                    ui.label(env!("CARGO_PKG_DESCRIPTION"));
-                    ui.label(egui::RichText::new(COPYRIGHT).weak());
+                    ui.label(tr!(literal = "Free Open Source Mine Design"));
+                    ui.label(egui::RichText::new(tr!(literal = "Licensed under the GNU General Public License v3.0")).weak());
                 });
             });
 
@@ -50,7 +41,12 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
             ui.separator();
             ui.add_space(6.0);
 
-            ui.label(egui::RichText::new(LICENSE_NOTICE).small());
+            ui.label(
+                egui::RichText::new(tr!(
+                    literal = "Incline Design is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License version 3 as published by the Free Software Foundation.\n\nIncline Design is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details."
+                ))
+                .small(),
+            );
             ui.add_space(4.0);
             ui.hyperlink_to(tr!("about-read-full-licence"), "https://www.gnu.org/licenses/gpl-3.0.html");
 

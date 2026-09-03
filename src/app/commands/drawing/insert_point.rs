@@ -8,6 +8,7 @@ use glam::{DVec2, DVec3};
 
 use crate::{
     app::App,
+    i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{
         Command, Object, ObjectId, PolyVertex, SceneEntityId,
@@ -93,7 +94,7 @@ impl<'a> App<'a> {
     pub(crate) fn insert_points_at_selected_intersections(&mut self) {
         let selected = self.selected_polylines();
         if selected.len() < 2 {
-            userspace_warn!("Select at least two polylines before inserting intersection points");
+            userspace_warn!("{}", tr!(literal = "Select at least two polylines before inserting intersection points"));
             return;
         }
 
@@ -106,7 +107,7 @@ impl<'a> App<'a> {
             .collect();
         let shapes: Vec<(Vec<PolyVertex>, bool)> = source.iter().map(|(_, verts, closed)| (verts.clone(), *closed)).collect();
         let updated = insert_at_intersections(&shapes);
-        self.commit_inserted_vertices(&source, updated, "intersection");
+        self.commit_inserted_vertices(&source, updated, &tr!(literal = "Intersection"));
     }
 
     /// Refresh the menu hint for Insert Point > At intersection.
@@ -152,7 +153,7 @@ impl<'a> App<'a> {
     pub(crate) fn open_insert_point_at_elevation_dialog(&mut self) {
         let object_ids = self.selected_polylines();
         if object_ids.is_empty() {
-            userspace_warn!("Select one or more polylines before inserting a point at elevation");
+            userspace_warn!("{}", tr!(literal = "Select one or more polylines before inserting a point at elevation"));
             return;
         }
         // Only elevations the selection actually spans can produce a point, so
@@ -180,7 +181,7 @@ impl<'a> App<'a> {
 
     pub(crate) fn insert_points_at_elevation(&mut self, object_ids: Vec<ObjectId>, elevation: f64) {
         if !elevation.is_finite() {
-            userspace_warn!("Insert Point at Elevation requires a finite elevation");
+            userspace_warn!("{}", tr!(literal = "Insert Point at Elevation requires a finite elevation"));
             return;
         }
         let source: Vec<(ObjectId, Vec<PolyVertex>, bool)> = object_ids
@@ -191,7 +192,7 @@ impl<'a> App<'a> {
             })
             .collect();
         let updated = source.iter().map(|(_, verts, closed)| insert_at_elevation(verts, *closed, elevation)).collect();
-        self.commit_inserted_vertices(&source, updated, "elevation");
+        self.commit_inserted_vertices(&source, updated, &tr!(literal = "Elevation"));
     }
 
     fn selected_polylines(&self) -> Vec<ObjectId> {
@@ -230,13 +231,16 @@ impl<'a> App<'a> {
             .collect();
 
         if commands.is_empty() {
-            userspace_warn!("No new {operation} points were found");
+            userspace_warn!("{}", tr_format!(literal = "No new %operation% points were found", operation = operation));
             return;
         }
         self.history.execute(doc, Command::Batch(commands));
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Insert Points", format!("{inserted} {operation} point(s)")),
-            format!("Inserted {inserted} {operation} point(s)"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Insert Points"),
+                crate::i18n::tr_format!(literal = "%count% %operation% point(s)", count = inserted, operation = operation),
+            ),
+            crate::i18n::tr_format!(literal = "Inserted %count% %operation% point(s)", count = inserted, operation = operation),
         );
         self.invalidate_geometry();
     }

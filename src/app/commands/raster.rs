@@ -11,6 +11,7 @@ use crate::model::raster::decode_raster_bytes;
 use crate::model::raster::{decode_raster, is_supported_raster_path};
 use crate::{
     app::App,
+    i18n::tr_format,
     model::raster::{OpenRasterTexture, RasterTextureId},
     userspace_log,
 };
@@ -30,7 +31,7 @@ impl<'a> App<'a> {
         let hardware_limit = self.graphics.as_ref().map(|graphics| graphics.max_raster_texture_dimension()).unwrap_or(u32::MAX);
         let preview_limit = raster_preview_dimension_limit(self.editor.downscale_raster_previews, hardware_limit);
         self.spawn_job(
-            format!("Loading {name}…"),
+            crate::i18n::tr_format!(literal = "Loading %name%…", name = &name),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel| {
                 if cancel.is_cancelled() {
@@ -43,7 +44,10 @@ impl<'a> App<'a> {
                     loaded.path = display_path;
                     app.add_loaded_raster(loaded);
                 }
-                Err(error) => userspace_log!("Failed to load raster {name}: {error:#}"),
+                Err(error) => userspace_log!(
+                    "{}",
+                    tr_format!(literal = "Failed to load raster %name%: %error%", name = name, error = format!("{error:#}"))
+                ),
             },
         );
     }
@@ -68,7 +72,7 @@ impl<'a> App<'a> {
 
         // Decoding an image is one call into the image crate, so there is
         // nothing to count: the bar reports the file by name and marquees.
-        let (ticket, _progress) = self.begin_reported_task(format!("Loading {}", crate::app::file_name(&path)));
+        let (ticket, _progress) = self.begin_reported_task(crate::i18n::tr_format!(literal = "Loading %name%", name = crate::app::file_name(&path)));
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
         let worker_console_report = console_report.as_ref().map(crate::logging::ConsoleReportHandle::child);
@@ -105,12 +109,15 @@ impl<'a> App<'a> {
                     self.add_loaded_raster(loaded);
                 }
                 Ok(Err(error)) => {
-                    crate::userspace_warn!("Failed to load raster {}: {error:#}", path.display());
+                    crate::userspace_warn!(
+                        "{}",
+                        tr_format!(literal = "Failed to load raster %path%: %error%", path = path.display(), error = format!("{error:#}"))
+                    );
                     self.finish_background_task(ticket, false);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    crate::userspace_warn!("Raster loader disconnected for {}", path.display());
+                    crate::userspace_warn!("{}", tr_format!(literal = "Raster loader disconnected for %path%", path = path.display()));
                     self.finish_background_task(ticket, false);
                 }
             };
@@ -129,13 +136,16 @@ impl<'a> App<'a> {
         self.next_raster_texture_id += 1;
         let name = crate::model::project::unique_item_name(loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
         userspace_log!(
-            "Loaded raster {} via {} ({}x{}, preview {}x{})",
-            name,
-            loaded.driver_name,
-            loaded.source_size[0],
-            loaded.source_size[1],
-            loaded.preview_size[0],
-            loaded.preview_size[1]
+            "{}",
+            tr_format!(
+                literal = "Loaded raster %name% via %driver% (%srcx%x%srcy%, preview %prevx%x%prevy%)",
+                name = name.clone(),
+                driver = loaded.driver_name.clone(),
+                srcx = loaded.source_size[0],
+                srcy = loaded.source_size[1],
+                prevx = loaded.preview_size[0],
+                prevy = loaded.preview_size[1]
+            )
         );
         self.raster_textures.push(OpenRasterTexture {
             id,
@@ -225,7 +235,14 @@ impl<'a> App<'a> {
             if triangulation.raster_texture != Some(raster_id) {
                 triangulation.raster_texture = Some(raster_id);
                 triangulation.state.touch();
-                userspace_log!("Draped raster {} over triangulation {} (overlapping extents)", raster_name, triangulation.name);
+                userspace_log!(
+                    "{}",
+                    tr_format!(
+                        literal = "Draped raster %raster% over triangulation %triangulation% (overlapping extents)",
+                        raster = raster_name.clone(),
+                        triangulation = triangulation.name.clone()
+                    )
+                );
                 changed = true;
             }
         }
@@ -250,7 +267,7 @@ impl<'a> App<'a> {
             }
         }
         if count > 0 {
-            userspace_log!("Undraped rasters from {count} triangulation(s)");
+            userspace_log!("{}", tr_format!(literal = "Undraped rasters from %count% triangulation(s)", count = count));
             self.touch_active_project_content();
             self.redraw_requested = true;
         }

@@ -65,11 +65,17 @@ impl<'a> App<'a> {
                 self.pending_release_check = None;
             }
             Ok(Err(error)) => {
-                log::warn!("Could not check for a newer Incline Design release: {error:#}");
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_format!(literal = "Could not check for a newer Incline Design release: %error%", error = format!("{error:#}"))
+                );
                 self.pending_release_check = None;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                log::warn!("Could not check for a newer Incline Design release: the background task ended unexpectedly");
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr!(literal = "Could not check for a newer Incline Design release: the background task ended unexpectedly")
+                );
                 self.pending_release_check = None;
             }
             Err(mpsc::TryRecvError::Empty) => {}

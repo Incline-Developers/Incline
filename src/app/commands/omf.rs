@@ -8,6 +8,7 @@ use anyhow::Result;
 
 use crate::{
     app::App,
+    i18n::{tr, tr_format},
     model::{
         formats::omf::{self, ImportBundle, ProjectSnapshot},
         project,
@@ -41,7 +42,7 @@ impl<'a> App<'a> {
             .active_project()
             .map(|project| project.project.metadata.name.trim_end_matches(".omf").to_owned())
             .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| "Incline Design project".to_owned());
+            .unwrap_or_else(|| tr!(literal = "Incline Design project"));
         let snapshot = ProjectSnapshot {
             name,
             designs: self.workspace.active_project().map(|project| project.project.clone()),
@@ -52,7 +53,7 @@ impl<'a> App<'a> {
             rasters: self.raster_textures.clone(),
         };
         if snapshot.is_empty() {
-            anyhow::bail!("There is no open Incline Design data to export");
+            anyhow::bail!(tr!(literal = "There is no open Incline Design data to export"));
         }
         Ok(snapshot)
     }
@@ -68,7 +69,10 @@ impl<'a> App<'a> {
         let should_fit = view == ViewOnOpen::Fit || !self.scene_has_renderables();
         let lossy_save_warnings = bundle.warnings.clone();
         for warning in &lossy_save_warnings {
-            userspace_warn!("{source_name}: {warning}");
+            userspace_warn!(
+                "{}",
+                tr_format!(literal = "%source_name%: %warning%", source_name = source_name.clone(), warning = warning.clone())
+            );
         }
         let ImportBundle {
             project_name,
@@ -103,7 +107,14 @@ impl<'a> App<'a> {
         let opened = match opened {
             Ok(opened) => opened,
             Err(error) => {
-                userspace_warn!("Could not open project {source_name}: {error:#}");
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Could not open project %source_name%: %error%",
+                        source_name = source_name.clone(),
+                        error = format!("{error:#}")
+                    )
+                );
                 return;
             }
         };
@@ -202,7 +213,14 @@ impl<'a> App<'a> {
 
         self.mark_all_project_content_saved();
 
-        userspace_log!("Opened project '{project_name}' from {source_name}");
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Opened project '%project_name%' from %source_name%",
+                project_name = project_name,
+                source_name = source_name
+            )
+        );
         self.invalidate_geometry();
         if should_fit {
             self.fit_view_to_extents();
@@ -216,7 +234,7 @@ impl<'a> App<'a> {
             return;
         }
         self.spawn_job_reporting_progress(
-            "Importing project…",
+            tr!(literal = "Importing project…"),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 let total = paths.len().max(1) as f32;
@@ -226,7 +244,11 @@ impl<'a> App<'a> {
                         anyhow::bail!("Cancelled");
                     }
                     let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-                    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("project.omf").to_owned();
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| format!("{}.omf", tr!(literal = "Untitled")));
                     let phase = progress.phase(index as f32 / total, (index + 1) as f32 / total);
                     decoded.push((name.clone(), omf::from_bytes(&name, bytes, &phase)?));
                 }
@@ -234,7 +256,7 @@ impl<'a> App<'a> {
             },
             |app, result| match result {
                 Ok(decoded) => app.apply_omf_bundles(decoded),
-                Err(error) => userspace_warn!("OMF import failed: {error:#}"),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF import failed: %error%", error = format!("{error:#}"))),
             },
         );
     }
@@ -243,7 +265,7 @@ impl<'a> App<'a> {
     pub(crate) fn import_web_omf_sources(&mut self) -> Result<()> {
         let files = self.take_web_import_files(crate::ui::state::DataMenu::Omf)?;
         self.spawn_job_reporting_progress(
-            "Importing project…",
+            tr!(literal = "Importing project…"),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 let total = files.len().max(1) as f32;
@@ -260,7 +282,7 @@ impl<'a> App<'a> {
             },
             |app, result| match result {
                 Ok(decoded) => app.apply_omf_bundles(decoded),
-                Err(error) => userspace_warn!("OMF import failed: {error:#}"),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF import failed: %error%", error = format!("{error:#}"))),
             },
         );
         Ok(())
@@ -268,7 +290,7 @@ impl<'a> App<'a> {
 
     fn apply_omf_bundles(&mut self, bundles: Vec<(String, ImportBundle)>) {
         if self.workspace.active_project().is_none() {
-            userspace_warn!("Create or open a project before merging data");
+            userspace_warn!("{}", tr!(literal = "Create or open a project before merging data"));
             return;
         }
         let should_fit = !self.scene_has_renderables();
@@ -285,10 +307,16 @@ impl<'a> App<'a> {
                 && self.raster_textures.is_empty();
             let count = bundle.item_count();
             if count == 0 {
-                userspace_warn!("Project '{source_name}' contains no supported data elements");
+                userspace_warn!(
+                    "{}",
+                    tr_format!(literal = "Project '%source_name%' contains no supported data elements", source_name = source_name.clone())
+                );
             }
             for warning in &bundle.warnings {
-                userspace_warn!("{source_name}: {warning}");
+                userspace_warn!(
+                    "{}",
+                    tr_format!(literal = "%source_name%: %warning%", source_name = source_name.clone(), warning = warning.clone())
+                );
             }
             let ImportBundle {
                 project_name,
@@ -311,7 +339,14 @@ impl<'a> App<'a> {
                     project.project.metadata.coordinate_reference_system = coordinate_reference_system.clone();
                 } else if !target_crs.is_empty() && !source_crs.is_empty() && target_crs != source_crs {
                     userspace_warn!(
-                        "{source_name}: coordinate reference system '{source_crs}' differs from project CRS '{target_crs}'; coordinates were merged without reprojection"
+                        "{}",
+                        tr_format!(
+                            literal =
+                                "%source_name%: coordinate reference system '%source_crs%' differs from project CRS '%target_crs%'; coordinates were merged without reprojection",
+                            source_name = source_name.clone(),
+                            source_crs = source_crs,
+                            target_crs = target_crs
+                        )
                     );
                 }
                 let target_units = project.project.metadata.units.trim();
@@ -319,11 +354,26 @@ impl<'a> App<'a> {
                 if target_is_empty && target_units.is_empty() {
                     project.project.metadata.units = units.clone();
                 } else if !target_units.is_empty() && !source_units.is_empty() && !target_units.eq_ignore_ascii_case(source_units) {
-                    userspace_warn!("{source_name}: units '{source_units}' differ from project units '{target_units}'; coordinates were merged without conversion");
+                    userspace_warn!(
+                        "{}",
+                        tr_format!(
+                            literal = "%source_name%: units '%source_units%' differ from project units '%target_units%'; coordinates were merged without conversion",
+                            source_name = source_name.clone(),
+                            source_units = source_units,
+                            target_units = target_units
+                        )
+                    );
                 }
             }
             if origin.iter().any(|value| *value != 0.0) {
-                userspace_log!("{source_name}: applied project origin {:?} before merge", origin);
+                userspace_log!(
+                    "{}",
+                    tr_format!(
+                        literal = "%source_name%: applied project origin %origin% before merge",
+                        source_name = source_name.clone(),
+                        origin = format!("{origin:?}")
+                    )
+                );
             }
 
             for design in designs {
@@ -416,7 +466,15 @@ impl<'a> App<'a> {
                 }
             }
             imported_items += count;
-            userspace_log!("Imported project '{project_name}' from {source_name}: {count} top-level dataset(s)");
+            userspace_log!(
+                "{}",
+                tr_format!(
+                    literal = "Imported project '%project_name%' from %source_name%: %count% top-level dataset(s)",
+                    project_name = project_name,
+                    source_name = source_name,
+                    count = count
+                )
+            );
         }
 
         if imported_items > 0 {
@@ -434,7 +492,7 @@ impl<'a> App<'a> {
         #[cfg(target_arch = "wasm32")]
         {
             self.spawn_job_reporting_progress(
-                "Encoding project…",
+                tr!(literal = "Encoding project…"),
                 vec![crate::app::jobs::JobKey::Anonymous],
                 move |cancel, progress| {
                     if cancel.is_cancelled() {
@@ -444,7 +502,7 @@ impl<'a> App<'a> {
                 },
                 move |_app, result| match result {
                     Ok(bytes) => Self::trigger_browser_download(default_name, bytes, "application/octet-stream", "project"),
-                    Err(error) => userspace_warn!("OMF export failed: {error:#}"),
+                    Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF export failed: %error%", error = format!("{error:#}"))),
                 },
             );
         }
@@ -472,7 +530,14 @@ impl<'a> App<'a> {
         }
         let display_path = path.clone();
         self.spawn_job_reporting_progress(
-            format!("Exporting {}…", display_path.file_name().and_then(|name| name.to_str()).unwrap_or("project.omf")),
+            tr_format!(
+                literal = "Exporting %name%…",
+                name = display_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| format!("{}.omf", tr!(literal = "Untitled")))
+            ),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
@@ -481,8 +546,8 @@ impl<'a> App<'a> {
                 omf::write_path(snapshot, &path, &progress.phase(0.0, 1.0))
             },
             move |_app, result| match result {
-                Ok(()) => userspace_log!("Exported project to {}", display_path.display()),
-                Err(error) => userspace_warn!("OMF export failed: {error:#}"),
+                Ok(()) => userspace_log!("{}", tr_format!(literal = "Exported project to %path%", path = display_path.display().to_string())),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "OMF export failed: %error%", error = format!("{error:#}"))),
             },
         );
     }

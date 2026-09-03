@@ -4,6 +4,7 @@ use glam::DVec3;
 
 use crate::{
     app::App,
+    i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{
         Command, Object, SceneEntityId,
@@ -34,7 +35,7 @@ impl<'a> App<'a> {
                     })
                     .collect();
                 if object_ids.is_empty() {
-                    userspace_warn!("Select one or more design objects to drape");
+                    userspace_warn!("{}", tr!(literal = "Select one or more design objects to drape"));
                     return;
                 }
 
@@ -55,7 +56,7 @@ impl<'a> App<'a> {
                     })
                     .collect();
                 if topology_ids.is_empty() {
-                    userspace_warn!("Select one or more topologies to drape onto");
+                    userspace_warn!("{}", tr!(literal = "Select one or more topologies to drape onto"));
                     return;
                 }
                 self.apply_drape_to_topologies(&topology_ids);
@@ -77,7 +78,7 @@ impl<'a> App<'a> {
         let selected_ids: HashSet<_> = topology_ids.iter().copied().collect();
         let surfaces: Vec<_> = self.triangulations.iter().filter(|topology| selected_ids.contains(&topology.id)).collect();
         if surfaces.is_empty() {
-            userspace_warn!("The selected topologies are no longer loaded");
+            userspace_warn!("{}", tr!(literal = "The selected topologies are no longer loaded"));
             return;
         }
 
@@ -112,14 +113,23 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
 
         if intersected_vertices == 0 {
-            userspace_warn!("None of the selected design vertices intersect the selected topologies");
+            userspace_warn!("{}", tr!(literal = "None of the selected design vertices intersect the selected topologies"));
         } else {
             crate::logging::report_completed_action(
                 CommandReportSpec::new(
-                    "Drape to Topology",
-                    format!("{changed_objects} changed object(s) · {changed_vertices} of {intersected_vertices} intersecting vertices moved"),
+                    tr!(literal = "Drape to Topology"),
+                    tr_format!(
+                        literal = "%objects% changed object(s) · %changed% of %intersected% intersecting vertices moved",
+                        objects = changed_objects,
+                        changed = changed_vertices,
+                        intersected = intersected_vertices
+                    ),
                 ),
-                format!("Draped {intersected_vertices} vertices; {changed_vertices} changed elevation"),
+                tr_format!(
+                    literal = "Draped %intersected% vertices; %changed% changed elevation",
+                    intersected = intersected_vertices,
+                    changed = changed_vertices
+                ),
             );
         }
     }

@@ -471,7 +471,10 @@ impl TriangleBvh {
                 // index must resolve; substituting a degenerate triangle keeps
                 // ray tests safe but must not pass silently.
                 debug_assert!(false, "BVH face index {index} out of range");
-                log::error!("BVH face index {index} out of range for mesh; substituting degenerate triangle");
+                log::error!(
+                    "{}",
+                    crate::i18n::tr_format!(literal = "BVH face index %index% out of range for mesh; substituting degenerate triangle", index = index)
+                );
                 [0, 0, 0]
             })
             .map(|v| {

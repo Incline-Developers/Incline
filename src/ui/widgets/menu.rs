@@ -1,6 +1,7 @@
 use std::{fmt::Debug, hash::Hash, path::PathBuf};
 
 use super::shifted;
+use crate::i18n::{tr, tr_format};
 
 /// Height of a floating menu's drag bar, and of a docked panel's heading.
 pub(crate) const TITLE_BAR_HEIGHT: f32 = 30.0;
@@ -673,8 +674,8 @@ impl<'paths> MenuFieldFilePicker<'paths> {
             label: label.into(),
             help_text: None,
             paths,
-            empty_text: "No file chosen".into(),
-            button_text: "Choose...".into(),
+            empty_text: tr!(literal = "No file chosen").into(),
+            button_text: tr!(literal = "Choose...").into(),
             width: None,
         }
     }
@@ -734,7 +735,7 @@ fn selected_file_label(paths: &[PathBuf], empty_text: egui::WidgetText) -> egui:
             .map(str::to_owned)
             .unwrap_or_else(|| path.to_string_lossy().into_owned())
             .into(),
-        paths => format!("{} files selected", paths.len()).into(),
+        paths => tr_format!(literal = "%count% files selected", count = paths.len()).into(),
     }
 }
 

@@ -1,10 +1,10 @@
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::{tr, tr_format},
     model::{Command, Object, ObjectColor, ObjectId, SceneEntityId},
     userspace_log,
 };
 
-const DEFAULT_TEXT: &str = "Text";
 const DEFAULT_TEXT_HEIGHT: f64 = 15.0;
 /// Fraction of the viewport half-height used as the default text height when placing new text.
 const ZOOM_TEXT_SCALE: f64 = 0.04;
@@ -66,7 +66,7 @@ impl<'a> App<'a> {
             id,
             layer,
             pos: world,
-            content: DEFAULT_TEXT.to_owned(),
+            content: tr!(literal = "Text"),
             height,
             rotation: 0.0,
             color,
@@ -145,9 +145,12 @@ impl<'a> App<'a> {
         }
         self.finish_text_edit_state();
         if created || changed {
-            userspace_log!("Updated text on object {:?}", object_id);
+            userspace_log!("{}", tr_format!(literal = "Updated text on object %object_id%", object_id = format!("{object_id:?}")));
         }
-        userspace_log!("Finished text edit for object {:?}", object_id);
+        userspace_log!(
+            "{}",
+            tr_format!(literal = "Finished text edit for object %object_id%", object_id = format!("{object_id:?}"))
+        );
         self.invalidate_geometry();
     }
 

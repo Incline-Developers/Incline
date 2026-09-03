@@ -1,9 +1,12 @@
 //! The Drill & Blast palette's New Product dialog.
 
-use crate::ui::{
-    EditorState,
-    state::UiCommand,
-    widgets::menu::{self, DragableMenu, MenuButton, MenuFieldColor32, MenuFieldText, MenuFieldU32},
+use crate::{
+    i18n::tr,
+    ui::{
+        EditorState,
+        state::UiCommand,
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldColor32, MenuFieldText, MenuFieldU32},
+    },
 };
 
 /// Longest delay the entry accepts. Nothing in a bench pattern fires minutes
@@ -21,19 +24,21 @@ pub(crate) fn draw_new_product_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
     }
     let mut open = true;
     let mut close = false;
-    DragableMenu::new("New Product").open(&mut open).min_width(300.0).show(ui.ctx(), |ui| {
-        MenuFieldU32::new("Delay", &mut editor.new_delay_product_delay_ms, 0..=MAX_DELAY_MS)
-            .suffix(" ms")
-            .help_text("Milliseconds between one hole firing and the next.")
+    DragableMenu::new(tr!(literal = "New Product")).open(&mut open).min_width(300.0).show(ui.ctx(), |ui| {
+        MenuFieldU32::new(tr!(literal = "Delay"), &mut editor.new_delay_product_delay_ms, 0..=MAX_DELAY_MS)
+            .suffix(tr!(literal = " ms"))
+            .help_text(tr!(literal = "Milliseconds between one hole firing and the next."))
             .show(ui);
-        MenuFieldText::new("Name", &mut editor.new_delay_product_name).hint_text("Required").show(ui);
-        MenuFieldColor32::new("Colour", &mut editor.new_delay_product_color).show(ui);
+        MenuFieldText::new(tr!(literal = "Name"), &mut editor.new_delay_product_name)
+            .hint_text(tr!(literal = "Required"))
+            .show(ui);
+        MenuFieldColor32::new(tr!(literal = "Colour"), &mut editor.new_delay_product_color).show(ui);
         menu::menu_actions(ui, |ui| {
             // A product with no delay is not one, and the palette shows the
             // name under every card, so neither field is optional.
             let can_add = editor.new_delay_product_delay_ms > 0 && !editor.new_delay_product_name.trim().is_empty();
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
-            if (submitted || ui.add(MenuButton::new("Add Product").primary().enabled(can_add)).clicked()) && can_add {
+            if (submitted || ui.add(MenuButton::new(tr!(literal = "Add Product")).primary().enabled(can_add)).clicked()) && can_add {
                 commands.push(UiCommand::AddDelayProduct {
                     delay_ms: editor.new_delay_product_delay_ms,
                     name: editor.new_delay_product_name.trim().to_owned(),
@@ -41,7 +46,7 @@ pub(crate) fn draw_new_product_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 });
                 close = true;
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });

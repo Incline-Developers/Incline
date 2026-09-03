@@ -7,6 +7,7 @@
 
 use crate::{
     app::{App, commands::view::config_from},
+    i18n::{tr, tr_format},
     ui::state::{DelayProduct, DelayProductId},
     userspace_log, userspace_warn,
 };
@@ -16,7 +17,7 @@ impl App<'_> {
     pub(crate) fn add_delay_product(&mut self, delay_ms: u32, name: String, color: egui::Color32) {
         let id = DelayProductId(self.editor.next_delay_product_id);
         self.editor.next_delay_product_id += 1;
-        userspace_log!("Added product {delay_ms} ms {name}");
+        userspace_log!("{}", tr_format!(literal = "Added product %delay_ms% ms %name%", delay_ms = delay_ms, name = name.clone()));
         self.editor.delay_products.push(DelayProduct { id, delay_ms, name, color });
         // The palette reads as a scale from the shortest delay to the longest,
         // so a new product takes its place in that run rather than landing at
@@ -29,11 +30,14 @@ impl App<'_> {
     /// Drop one stored product from the palette.
     pub(crate) fn delete_delay_product(&mut self, id: DelayProductId) {
         let Some(index) = self.editor.delay_products.iter().position(|product| product.id == id) else {
-            userspace_warn!("That product is no longer in the palette");
+            userspace_warn!("{}", tr!(literal = "That product is no longer in the palette"));
             return;
         };
         let product = self.editor.delay_products.remove(index);
-        userspace_log!("Deleted product {} ms {}", product.delay_ms, product.name);
+        userspace_log!(
+            "{}",
+            tr_format!(literal = "Deleted product %delay_ms% ms %name%", delay_ms = product.delay_ms, name = product.name.clone())
+        );
         self.persist_delay_products();
     }
 
@@ -46,7 +50,7 @@ impl App<'_> {
         let preferences = self.editor.current_preferences();
         let products = self.editor.delay_products.iter().map(DelayProduct::to_stored).collect();
         if let Err(error) = crate::app::io::save_config(&config_from(&preferences, products)) {
-            userspace_warn!("Failed to save products: {error}");
+            userspace_warn!("{}", tr_format!(literal = "Failed to save products: %error%", error = error));
         }
     }
 }

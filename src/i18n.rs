@@ -28,11 +28,14 @@
 //! Add `my-message = English text` to `i18n/en/Incline_Design.ftl` (and ideally
 //! the other languages), then call `tr!("my-message")` where the literal was.
 //! For interpolated values: `greeting = Hello, { $name }` → `tr!("greeting", name = who)`.
+//! For a short UI literal that has not yet received a hand-written id, use
+//! `tr!(literal = "Apply")`; its stable `literal-*` id can be translated in
+//! each catalog without changing the call site.
 //!
 //! See `.claude/skills/incline-i18n/SKILL.md` for the full recipe and the
 //! migration checklist.
 
-use std::sync::LazyLock;
+use std::{fmt::Write as _, sync::LazyLock};
 
 use i18n_embed::{
     LanguageLoader,
@@ -61,15 +64,31 @@ pub(crate) static LOADER: LazyLock<FluentLanguageLoader> = LazyLock::new(|| {
 /// UI language, as stored in `config.toml`.
 ///
 /// `Copy` so it can live in `PreferencesDraft`. Serialises to a short tag
-/// (`"en"`, `"ru"`). Every value names a bundle in `i18n/`; there is
+/// (`"en"`, `"es"`, and so on). Every value names a bundle in `i18n/`; there is
 /// deliberately no "system" value — see [`Self::default`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum LanguageChoice {
     #[serde(rename = "en")]
     English,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "pt")]
+    Portuguese,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "zh")]
+    ChineseSimplified,
+    #[serde(rename = "id")]
+    Indonesian,
     #[serde(rename = "ru")]
     Russian,
+    #[serde(rename = "ar")]
+    Arabic,
+    #[serde(rename = "fa")]
+    Farsi,
+    #[serde(rename = "hi")]
+    Hindi,
 }
 
 impl Default for LanguageChoice {
@@ -85,7 +104,18 @@ impl Default for LanguageChoice {
 
 impl LanguageChoice {
     /// Every value, in the order the status bar's picker lists them.
-    pub(crate) const ALL: [Self; 2] = [Self::English, Self::Russian];
+    pub(crate) const ALL: [Self; 10] = [
+        Self::English,
+        Self::Spanish,
+        Self::Portuguese,
+        Self::French,
+        Self::ChineseSimplified,
+        Self::Indonesian,
+        Self::Russian,
+        Self::Arabic,
+        Self::Farsi,
+        Self::Hindi,
+    ];
 
     /// How this language names itself, in its own script. Never translated:
     /// someone who cannot read the running language has to be able to find
@@ -93,7 +123,15 @@ impl LanguageChoice {
     pub(crate) fn endonym(self) -> &'static str {
         match self {
             Self::English => "English",
+            Self::Spanish => "Español",
+            Self::Portuguese => "Português",
+            Self::French => "Français",
+            Self::ChineseSimplified => "简体中文",
+            Self::Indonesian => "Bahasa Indonesia",
             Self::Russian => "Русский",
+            Self::Arabic => "العربية",
+            Self::Farsi => "فارسی",
+            Self::Hindi => "हिन्दी",
         }
     }
 
@@ -101,7 +139,15 @@ impl LanguageChoice {
     fn lang_id(self) -> LanguageIdentifier {
         match self {
             Self::English => langid!("en"),
+            Self::Spanish => langid!("es"),
+            Self::Portuguese => langid!("pt"),
+            Self::French => langid!("fr"),
+            Self::ChineseSimplified => langid!("zh"),
+            Self::Indonesian => langid!("id"),
             Self::Russian => langid!("ru"),
+            Self::Arabic => langid!("ar"),
+            Self::Farsi => langid!("fa"),
+            Self::Hindi => langid!("hi"),
         }
     }
 
@@ -125,9 +171,16 @@ impl LanguageChoice {
 pub(crate) fn select_language(choice: LanguageChoice) {
     if let Err(error) = i18n_embed::select(&*LOADER, &Localizations, &[choice.lang_id()]) {
         // Not fatal: the English fallback bundle is already loaded.
-        log::warn!("i18n: could not select a language: {error}");
+        log::warn!("{}", crate::i18n::tr_format!(literal = "Could not select a language: %error%", error = error));
     }
-    log::info!("i18n: active language is {} (bundled: {:?})", LOADER.current_language(), available_languages());
+    log::info!(
+        "{}",
+        crate::i18n::tr_format!(
+            literal = "Active language is %language% (bundled: %bundled%)",
+            language = LOADER.current_language(),
+            bundled = format!("{:?}", available_languages())
+        )
+    );
 }
 
 /// Available `<lang>` bundles, for logging / diagnostics.
@@ -155,11 +208,92 @@ fn system_languages() -> Vec<LanguageIdentifier> {
 /// tr!("tri-count-polylines", count = n);
 /// ```
 ///
-/// Thin wrapper over [`i18n_embed_fl::fl!`], which checks the id and arguments
-/// against `i18n/en/Incline_Design.ftl` at compile time — a typo will not build.
+/// Translate a source literal that has not yet been assigned a hand-written
+/// message id. The generated id is readable and includes a stable hash, so
+/// punctuation and whitespace remain significant (`"Layer"` and `"Layer:"`
+/// cannot accidentally share a translation). Missing entries intentionally
+/// fall back to the source text while a locale is being filled.
+pub(crate) fn tr_literal(source: &str) -> String {
+    let id = literal_id(source);
+    let translated = LOADER.get(&id);
+    if !translated.starts_with("No localization for id:") {
+        // Fluent trims padding around message values. A few compact labels are
+        // deliberately fragments (" FPS", "Major "), so restore their source
+        // padding after translation.
+        let leading = source.len() - source.trim_start().len();
+        let trailing = source.len() - source.trim_end().len();
+        let content_end = source.len().saturating_sub(trailing);
+        format!("{}{}{}", &source[..leading], translated.trim(), &source[content_end..])
+    } else {
+        source.to_owned()
+    }
+}
+
+fn literal_id(source: &str) -> String {
+    let mut id = String::from("literal-");
+    let mut separator = false;
+    for character in source.chars() {
+        if character.is_ascii_alphanumeric() {
+            if separator && id.len() > "literal-".len() {
+                id.push('-');
+            }
+            for lower in character.to_lowercase() {
+                id.push(lower);
+            }
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    if id.ends_with('-') {
+        id.pop();
+    }
+    if id == "literal-" {
+        id.push_str("value");
+    }
+
+    // FNV-1a is intentionally fixed rather than DefaultHasher, whose output is
+    // not a persistence contract. The catalog generator uses the same bytes.
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in source.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    write!(&mut id, "-{hash:016x}").expect("writing to a String cannot fail");
+    id
+}
+
+/// Thin wrapper over [`i18n_embed_fl::fl!`], which checks hand-written ids and
+/// their arguments against `i18n/en/Incline_Design.ftl` at compile time.
 macro_rules! tr {
+    (literal = $source:literal) => {
+        $crate::i18n::tr_literal($source)
+    };
     ($($tail:tt)*) => {
         i18n_embed_fl::fl!($crate::i18n::LOADER, $($tail)*)
     };
 }
 pub(crate) use tr;
+
+/// Translate a source literal and substitute named values written as
+/// `%name%` placeholders.
+///
+/// This is the literal counterpart of Fluent's normal named arguments. It is
+/// intentionally limited to simple textual replacement so ad-hoc activity
+/// messages can be catalogued without making their source strings invalid
+/// Fluent syntax. Values are inserted after lookup, so translators may move
+/// each placeholder to suit their language.
+///
+/// ```ignore
+/// tr_format!(literal = "Loading %name%…", name = filename)
+/// ```
+macro_rules! tr_format {
+    (literal = $source:literal, $($name:ident = $value:expr),+ $(,)?) => {{
+        let mut translated = $crate::i18n::tr_literal($source);
+        $(
+            translated = translated.replace(concat!("%", stringify!($name), "%"), &::std::string::ToString::to_string(&($value)));
+        )+
+        translated
+    }};
+}
+pub(crate) use tr_format;

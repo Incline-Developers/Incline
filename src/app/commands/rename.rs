@@ -7,6 +7,7 @@
 
 use crate::{
     app::App,
+    i18n::{tr, tr_format},
     model::{Command, LayerId, project::unique_item_name},
     ui::state::RenameTarget,
     userspace_log, userspace_warn,
@@ -93,7 +94,7 @@ impl<'a> App<'a> {
             return;
         }
         let Some(before) = self.rename_target_name(target) else {
-            userspace_warn!("That item no longer belongs to the active project");
+            userspace_warn!("{}", tr!(literal = "That item no longer belongs to the active project"));
             return;
         };
         if before == requested {
@@ -117,9 +118,17 @@ impl<'a> App<'a> {
             RenameTarget::DrillHole(id) => rename_item!(self.drill_holes, id, name.clone()),
         }
         if name == requested {
-            userspace_log!("Renamed '{before}' to '{name}'");
+            userspace_log!("{}", tr_format!(literal = "Renamed '%before%' to '%name%'", before = before, name = name));
         } else {
-            userspace_log!("Renamed '{before}' to '{name}' ('{requested}' is already taken)");
+            userspace_log!(
+                "{}",
+                tr_format!(
+                    literal = "Renamed '%before%' to '%name%' ('%requested%' is already taken)",
+                    before = before,
+                    name = name,
+                    requested = requested
+                )
+            );
         }
         self.touch_active_project_content();
         self.redraw_requested = true;

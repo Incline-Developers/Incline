@@ -315,7 +315,14 @@ impl ImportCtx<'_> {
         if requested > limit {
             if !*warned {
                 *warned = true;
-                userspace_warn!("DXF import exceeds the {what} budget ({limit}); remaining geometry is skipped");
+                userspace_warn!(
+                    "{}",
+                    crate::i18n::tr_format!(
+                        literal = "DXF import exceeds the %what% budget (%limit%); remaining geometry is skipped",
+                        what = what,
+                        limit = limit
+                    )
+                );
             }
             return false;
         }
@@ -357,7 +364,14 @@ impl ImportCtx<'_> {
         };
         let id = self.doc.add_layer(fallback_name.clone(), None, [1.0, 1.0, 1.0, 1.0], true, 0.0);
         self.unknown_layer_ids.insert(name.to_owned(), id);
-        userspace_warn!("DXF entity referenced undefined layer '{name}', imported as '{fallback_name}'");
+        userspace_warn!(
+            "{}",
+            crate::i18n::tr_format!(
+                literal = "DXF entity referenced undefined layer '%name%', imported as '%fallback%'",
+                name = name,
+                fallback = fallback_name
+            )
+        );
         id
     }
 }
@@ -558,15 +572,25 @@ fn import_entities<'e>(entities: impl IntoIterator<Item = &'e Entity>, ctx: &mut
 
 fn import_insert(entity: &Entity, insert: &dxf::entities::Insert, ctx: &mut ImportCtx<'_>, transform: &Transform, scope: BlockScope<'_>) {
     let Some(block) = ctx.blocks.get(insert.name.as_str()).copied() else {
-        userspace_warn!("DXF INSERT references unknown block '{}'", insert.name);
+        userspace_warn!("{}", crate::i18n::tr_format!(literal = "DXF INSERT references unknown block '%name%'", name = &insert.name));
         return;
     };
     if ctx.stack.len() >= MAX_BLOCK_DEPTH {
-        userspace_warn!("DXF block nesting exceeds maximum depth ({}), skipping '{}'", MAX_BLOCK_DEPTH, insert.name);
+        userspace_warn!(
+            "{}",
+            crate::i18n::tr_format!(
+                literal = "DXF block nesting exceeds maximum depth (%depth%), skipping '%name%'",
+                depth = MAX_BLOCK_DEPTH,
+                name = &insert.name
+            )
+        );
         return;
     }
     if ctx.stack.iter().any(|n| n == &block.name) {
-        userspace_warn!("DXF circular block reference detected: '{}'", insert.name);
+        userspace_warn!(
+            "{}",
+            crate::i18n::tr_format!(literal = "DXF circular block reference detected: '%name%'", name = &insert.name)
+        );
         return;
     }
 

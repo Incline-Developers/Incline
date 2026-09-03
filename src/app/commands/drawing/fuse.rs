@@ -2,6 +2,7 @@ use glam::DVec3;
 
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId, geometry::points_coincident},
     rendering::pick,
@@ -23,7 +24,7 @@ impl<'a> App<'a> {
             };
             match self.pick_fuse_endpoint(awaiting_id, cursor_px) {
                 Some(marker_index) => self.select_fuse_endpoint(awaiting_id, marker_index),
-                None => userspace_warn!("Fuse: click was not close enough to either endpoint of the selected line"),
+                None => userspace_warn!("{}", tr!(literal = "Fuse: click was not close enough to either endpoint of the selected line")),
             }
             return;
         }
@@ -42,13 +43,19 @@ impl<'a> App<'a> {
             .as_ref()
             .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
         let Some((SceneEntityId::Object(object_id), _)) = picked else {
-            userspace_warn!("Fuse: click did not hit any object (nothing under cursor)");
+            userspace_warn!("{}", tr!(literal = "Fuse: click did not hit any object (nothing under cursor)"));
             return;
         };
         // Near a shared endpoint the pick can land back on a line already in
         // the chain; fusing a line onto itself would double its vertices.
         if self.editor.fuse_segments.iter().any(|segment| segment.object_id == object_id) {
-            userspace_warn!("Fuse: object {object_id:?} is already part of the fuse chain, click a different line");
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "Fuse: object %object_id% is already part of the fuse chain, click a different line",
+                    object_id = format!("{object_id:?}")
+                )
+            );
             return;
         }
         // Must be an open polyline. Fusing modifies/deletes existing objects, so
@@ -59,19 +66,42 @@ impl<'a> App<'a> {
                 vec![(0, verts[0].pos), (verts.len() - 1, verts[verts.len() - 1].pos)]
             }
             Some(Object::Polyline { closed: true, .. }) => {
-                userspace_warn!("Fuse: clicked object {object_id:?} is a closed polyline, fuse only works on open polylines");
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Fuse: clicked object %object_id% is a closed polyline, fuse only works on open polylines",
+                        object_id = format!("{object_id:?}")
+                    )
+                );
                 return;
             }
             Some(Object::Polyline { verts, .. }) => {
-                userspace_warn!("Fuse: clicked polyline {object_id:?} has only {} vertex/vertices, need at least 2", verts.len());
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Fuse: clicked polyline %object_id% has only %count% vertex/vertices, need at least 2",
+                        object_id = format!("{object_id:?}"),
+                        count = verts.len()
+                    )
+                );
                 return;
             }
             Some(other) => {
-                userspace_warn!("Fuse: clicked object {object_id:?} is not an open polyline (it's a {})", other.kind_name());
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Fuse: clicked object %object_id% is not an open polyline (it's a %kind%)",
+                        object_id = format!("{object_id:?}"),
+                        kind = other.kind_name()
+                    )
+                );
                 return;
             }
             None => {
-                userspace_warn!("Fuse: clicked object {object_id:?} no longer exists");
+                userspace_warn!(
+                    "{}",
+                    tr_format!(literal = "Fuse: clicked object %object_id% no longer exists", object_id = format!("{object_id:?}"))
+                );
                 return;
             }
         };
@@ -102,13 +132,22 @@ impl<'a> App<'a> {
     /// once two segments are collected.
     fn select_fuse_endpoint(&mut self, awaiting_id: ObjectId, marker_index: usize) {
         let Some(&(vertex_index, join_point)) = self.editor.fuse_endpoint_markers.get(marker_index) else {
-            userspace_warn!("Fuse: endpoint marker {marker_index} no longer exists");
+            userspace_warn!(
+                "{}",
+                tr_format!(literal = "Fuse: endpoint marker %marker_index% no longer exists", marker_index = marker_index)
+            );
             return;
         };
         let (vertex_count, closed) = match self.active_document().get_object(awaiting_id) {
             Some(Object::Polyline { verts, closed, .. }) => (verts.len(), *closed),
             _ => {
-                userspace_warn!("Fuse: object {awaiting_id:?} is no longer a valid polyline");
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Fuse: object %awaiting_id% is no longer a valid polyline",
+                        awaiting_id = format!("{awaiting_id:?}")
+                    )
+                );
                 return;
             }
         };
@@ -229,15 +268,24 @@ impl<'a> App<'a> {
 
     fn close_single_fuse_source(&mut self) {
         let Some(segment) = self.editor.fuse_segments.first() else {
-            userspace_warn!("Fuse: no source line to close into a polyline");
+            userspace_warn!("{}", tr!(literal = "Fuse: no source line to close into a polyline"));
             return;
         };
         let Some(before) = self.active_document().get_object(segment.object_id).cloned() else {
-            userspace_warn!("Fuse: source object {:?} no longer exists", segment.object_id);
+            userspace_warn!(
+                "{}",
+                tr_format!(literal = "Fuse: source object %object_id% no longer exists", object_id = format!("{:?}", segment.object_id))
+            );
             return;
         };
         let Object::Polyline { closed: false, .. } = &before else {
-            userspace_warn!("Fuse: source object {:?} is no longer a valid open polyline", segment.object_id);
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "Fuse: source object %object_id% is no longer a valid open polyline",
+                    object_id = format!("{:?}", segment.object_id)
+                )
+            );
             return;
         };
         let mut after = before.clone();
@@ -253,7 +301,13 @@ impl<'a> App<'a> {
                 verts.pop();
             }
             if verts.len() < 3 {
-                userspace_warn!("Fuse: line needs at least 3 distinct vertices to close into a polyline (has {})", verts.len());
+                userspace_warn!(
+                    "{}",
+                    tr_format!(
+                        literal = "Fuse: line needs at least 3 distinct vertices to close into a polyline (has %count%)",
+                        count = verts.len()
+                    )
+                );
                 return;
             }
             *closed = true;
@@ -266,11 +320,14 @@ impl<'a> App<'a> {
 
     fn commit_fuse(&mut self, closed: bool) {
         if self.editor.fuse_segments.len() < 2 {
-            userspace_warn!("Fuse: need at least 2 segments to commit (have {})", self.editor.fuse_segments.len());
+            userspace_warn!(
+                "{}",
+                tr_format!(literal = "Fuse: need at least 2 segments to commit (have %count%)", count = self.editor.fuse_segments.len())
+            );
             return;
         }
         if !self.editing_ready() {
-            userspace_warn!("Fuse: no active project, cannot commit");
+            userspace_warn!("{}", tr!(literal = "Fuse: no active project, cannot commit"));
             return;
         }
 
@@ -283,7 +340,13 @@ impl<'a> App<'a> {
             let verts = match doc.get_object(seg.object_id) {
                 Some(Object::Polyline { verts, .. }) => verts.clone(),
                 _ => {
-                    userspace_warn!("Fuse: segment object {:?} is no longer a valid polyline, aborting", seg.object_id);
+                    userspace_warn!(
+                        "{}",
+                        tr_format!(
+                            literal = "Fuse: segment object %object_id% is no longer a valid polyline, aborting",
+                            object_id = format!("{:?}", seg.object_id)
+                        )
+                    );
                     return;
                 }
             };
@@ -305,12 +368,12 @@ impl<'a> App<'a> {
         };
 
         if all_verts.len() < 2 || (closed && all_verts.len() < 3) {
-            userspace_warn!("Fuse: result has too few vertices ({}), aborting", all_verts.len());
+            userspace_warn!("{}", tr_format!(literal = "Fuse: result has too few vertices (%count%), aborting", count = all_verts.len()));
             return;
         }
 
         let Some(layer) = self.active_layer() else {
-            userspace_warn!("Fuse: no active layer to place the fused line on");
+            userspace_warn!("{}", tr!(literal = "Fuse: no active layer to place the fused line on"));
             return;
         };
         let color = crate::model::ObjectColor::Fixed(self.editor.tool_line_color);
@@ -343,11 +406,24 @@ impl<'a> App<'a> {
                 }
             }
             self.history.execute(doc, Command::Batch(commands));
-            let shape = if closed { "closed polyline" } else { "open polyline" };
+            let shape = if closed {
+                crate::i18n::tr!(literal = "Closed polyline")
+            } else {
+                crate::i18n::tr!(literal = "Open polyline")
+            };
             let source_count = self.editor.fuse_segments.len();
             crate::logging::report_completed_action(
-                CommandReportSpec::new("Fuse Lines", format!("{source_count} source line(s)")),
-                format!("Created {shape} {id:?} with {vertex_count} vertices from {source_count} source line(s)"),
+                CommandReportSpec::new(
+                    crate::i18n::tr!(literal = "Fuse Lines"),
+                    crate::i18n::tr_format!(literal = "%count% source line(s)", count = source_count),
+                ),
+                crate::i18n::tr_format!(
+                    literal = "Created %shape% %object_id% with %vertices% vertices from %sources% source line(s)",
+                    shape = shape,
+                    object_id = format!("{id:?}"),
+                    vertices = vertex_count,
+                    sources = source_count
+                ),
             );
         }
 

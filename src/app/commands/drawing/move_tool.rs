@@ -32,8 +32,11 @@ impl<'a> App<'a> {
         if moved > 0 {
             self.history.push_applied(Command::Batch(commands));
             crate::logging::report_completed_action(
-                CommandReportSpec::new("Move Selection", format!("{moved} object(s)")),
-                format!("Applied move delta ({delta}) to {moved} object(s)"),
+                CommandReportSpec::new(
+                    crate::i18n::tr!(literal = "Move Selection"),
+                    crate::i18n::tr_format!(literal = "%count% object(s)", count = moved),
+                ),
+                crate::i18n::tr_format!(literal = "Applied move delta (%delta%) to %count% object(s)", delta = delta, count = moved),
             );
         }
         self.reset_move_editor_state();

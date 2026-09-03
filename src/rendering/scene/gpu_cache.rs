@@ -313,7 +313,10 @@ impl BlockModelGpuCache {
                     self.prepared_surface_chunks.insert(id, PreparedSurfaceChunks { key: build.key, chunks });
                 }
                 Ok(Err(error)) => {
-                    log::warn!("Block-model surface build failed: {error:#}");
+                    log::warn!(
+                        "{}",
+                        crate::i18n::tr_format!(literal = "Block-model surface build failed: %error%", error = format!("{error:#}"))
+                    );
                     // Store an empty result under the key so the model draws
                     // nothing rather than rescheduling the failing build
                     // every frame.
@@ -329,7 +332,7 @@ impl BlockModelGpuCache {
                     self.pending_surface_builds.insert(id, build);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::warn!("Block-model surface build worker disconnected");
+                    log::warn!("{}", crate::i18n::tr!(literal = "Block-model surface build worker disconnected"));
                 }
             }
         }
@@ -343,14 +346,20 @@ impl BlockModelGpuCache {
                     self.prepared_volumes.insert(id, PreparedVolume { key: build.key, asset });
                 }
                 Ok(Err(error)) => {
-                    crate::userspace_warn!("Translucent volume could not be built ({error:#}); showing this block model as cubes instead.");
+                    crate::userspace_warn!(
+                        "{}",
+                        crate::i18n::tr_format!(
+                            literal = "Translucent volume could not be built (%error%); showing this block model as cubes instead.",
+                            error = format!("{error:#}")
+                        )
+                    );
                     self.prepared_volumes.insert(id, PreparedVolume { key: build.key, asset: None });
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.pending_volume_builds.insert(id, build);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::warn!("Block-volume preparation worker disconnected");
+                    log::warn!("{}", crate::i18n::tr!(literal = "Block-volume preparation worker disconnected"));
                 }
             }
         }
@@ -1362,7 +1371,14 @@ fn build_surface_chunks(
     let face_count = mesh.face_count();
     if source.is_empty() || face_count == 0 || source.len() > u32::MAX as usize {
         if source.len() > u32::MAX as usize {
-            log::error!("Triangulation '{}' has {} vertices (> u32::MAX); cannot chunk for GPU", triangulation.name, source.len());
+            log::error!(
+                "{}",
+                crate::i18n::tr_format!(
+                    literal = "Triangulation '%name%' has %count% vertices (> u32::MAX); cannot chunk for GPU",
+                    name = &triangulation.name,
+                    count = source.len()
+                )
+            );
         }
         return Vec::new();
     }
@@ -1482,7 +1498,15 @@ fn build_surface_chunks(
         dirty.clear();
     }
     if chunks.len() > 1 {
-        log::info!("Triangulation '{}' uploaded in {} spatial chunks ({} faces)", triangulation.name, chunks.len(), face_count);
+        log::info!(
+            "{}",
+            crate::i18n::tr_format!(
+                literal = "Triangulation '%name%' uploaded in %chunks% spatial chunks (%faces% faces)",
+                name = &triangulation.name,
+                chunks = chunks.len(),
+                faces = face_count
+            )
+        );
     }
     chunks
 }
@@ -1537,7 +1561,15 @@ fn upload_surface_chunk(
     let vertex_bytes = size_of_val(vertices) as u64;
     let index_bytes = size_of_val(indices) as u64;
     if vertex_bytes > limit || index_bytes > limit {
-        log::error!("Triangulation GPU chunk rejected before allocation: vertices={vertex_bytes} bytes, indices={index_bytes} bytes, limit={limit} bytes");
+        log::error!(
+            "{}",
+            crate::i18n::tr_format!(
+                literal = "Triangulation GPU chunk rejected before allocation: vertices=%vertices% bytes, indices=%indices% bytes, limit=%limit% bytes",
+                vertices = vertex_bytes,
+                indices = index_bytes,
+                limit = limit
+            )
+        );
         return None;
     }
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1628,7 +1660,14 @@ fn upload_edge_chunk(device: &wgpu::Device, instances: &[EdgeInstance]) -> Optio
     let limit = device.limits().max_buffer_size;
     let instance_bytes = size_of_val(instances) as u64;
     if instance_bytes > limit {
-        log::error!("Triangulation edge chunk rejected before GPU allocation: instances={instance_bytes} bytes, limit={limit} bytes");
+        log::error!(
+            "{}",
+            crate::i18n::tr_format!(
+                literal = "Triangulation edge chunk rejected before GPU allocation: instances=%instances% bytes, limit=%limit% bytes",
+                instances = instance_bytes,
+                limit = limit
+            )
+        );
         return None;
     }
     let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -2024,7 +2063,14 @@ fn upload_block_model_surface_chunk(device: &wgpu::Device, instances: &[BlockIns
     let limit = device.limits().max_buffer_size;
     let instance_bytes = size_of_val(instances) as u64;
     if instance_bytes > limit {
-        log::error!("Block model surface chunk rejected before GPU allocation: instances={instance_bytes} bytes, limit={limit} bytes");
+        log::error!(
+            "{}",
+            crate::i18n::tr_format!(
+                literal = "Block model surface chunk rejected before GPU allocation: instances=%instances% bytes, limit=%limit% bytes",
+                instances = instance_bytes,
+                limit = limit
+            )
+        );
         return None;
     }
     let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

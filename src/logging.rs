@@ -21,6 +21,8 @@ use tracing_subscriber::{
     util::SubscriberInitExt as _,
 };
 
+use crate::i18n::{tr, tr_format};
+
 /// Length of the rolling log buffer.
 const MAX_BUFFER_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SUMMARY_CHARS: usize = 180;
@@ -187,13 +189,13 @@ fn concise(text: &str) -> String {
 fn standalone_title(target: Option<&str>, severity: ConsoleSeverity) -> String {
     let target = target.unwrap_or_default();
     if target.contains("render") || target.contains("wgpu") {
-        "Renderer".to_owned()
+        tr!(literal = "Renderer")
     } else if target.contains("job") || target.contains("load") {
-        "Background".to_owned()
+        tr!(literal = "Background")
     } else if severity == ConsoleSeverity::Error {
-        "System Error".to_owned()
+        tr!(literal = "System Error")
     } else {
-        "System".to_owned()
+        tr!(literal = "System")
     }
 }
 
@@ -224,7 +226,7 @@ fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str
                         entry.details.push(entry.summary.clone());
                     }
                     entry.details.push(message);
-                    entry.summary = format!("{} messages", entry.details.len());
+                    entry.summary = tr_format!(literal = "%count% messages", count = entry.details.len());
                 });
                 return;
             }
@@ -254,10 +256,21 @@ pub(crate) struct LoggingGuard {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn diagnostic_filter() -> EnvFilter {
+    let explicitly_configured = std::env::var_os("INCLINE_DESIGN_LOG").is_some();
     let mut filter = EnvFilter::builder()
         .with_env_var("INCLINE_DESIGN_LOG")
-        .with_default_directive(tracing::Level::INFO.into())
+        // Dependency INFO messages are authored upstream and cannot use our
+        // active locale. Keep the normal terminal focused on Incline's own
+        // localized activity while still surfacing all warnings and errors.
+        .with_default_directive(tracing::Level::WARN.into())
         .from_env_lossy();
+    if !explicitly_configured {
+        // Most module targets use the crate identifier; explicit activity
+        // targets use the product-style lowercase spelling.
+        filter = filter
+            .add_directive("Incline_Design=info".parse().expect("static diagnostic filter must be valid"))
+            .add_directive("incline_design=info".parse().expect("static diagnostic filter must be valid"));
+    }
     if std::env::var_os("PI_INCLUDE_DIAG").is_some() {
         filter = filter.add_directive("incline_design::include=debug".parse().expect("static diagnostic filter must be valid"));
     }
@@ -393,8 +406,8 @@ fn complete_if_settled(entry: &mut ConsoleEntry) -> bool {
     entry.state = ConsoleEntryState::Complete;
     if !entry.cancelled && entry.severity == ConsoleSeverity::Info {
         entry.severity = ConsoleSeverity::Success;
-        if entry.summary.is_empty() || entry.summary == "Working…" {
-            entry.summary = "Completed".to_owned();
+        if entry.summary.is_empty() || entry.summary == tr!(literal = "Working…") {
+            entry.summary = tr!(literal = "Completed");
         }
     }
     true
@@ -402,6 +415,7 @@ fn complete_if_settled(entry: &mut ConsoleEntry) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn trace_activity_started(id: ConsoleEntryId, title: &str, summary: &str) {
+    let message = tr!(literal = "Activity started");
     tracing::info!(
         target: "incline_design::activity",
         activity_id = id.0,
@@ -409,7 +423,7 @@ fn trace_activity_started(id: ConsoleEntryId, title: &str, summary: &str) {
         user_visible = true,
         title,
         summary,
-        "Activity started"
+        message = %message
     );
 }
 
@@ -453,6 +467,7 @@ impl CompletedActivity {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn trace_activity_completed(activity: &CompletedActivity) {
+    let message = tr!(literal = "Activity completed");
     match activity.severity {
         ConsoleSeverity::Error => tracing::error!(
             target: "incline_design::activity",
@@ -463,7 +478,7 @@ fn trace_activity_completed(activity: &CompletedActivity) {
             user_visible = true,
             title = %activity.title,
             summary = %activity.summary,
-            "Activity completed"
+            message = %message
         ),
         ConsoleSeverity::Warn => tracing::warn!(
             target: "incline_design::activity",
@@ -474,7 +489,7 @@ fn trace_activity_completed(activity: &CompletedActivity) {
             user_visible = true,
             title = %activity.title,
             summary = %activity.summary,
-            "Activity completed"
+            message = %message
         ),
         ConsoleSeverity::Info | ConsoleSeverity::Success => tracing::info!(
             target: "incline_design::activity",
@@ -485,7 +500,7 @@ fn trace_activity_completed(activity: &CompletedActivity) {
             user_visible = true,
             title = %activity.title,
             summary = %activity.summary,
-            "Activity completed"
+            message = %message
         ),
     }
 }
@@ -575,7 +590,7 @@ impl Drop for ConsoleReportHandle {
                 entry.pending_children = entry.pending_children.saturating_sub(1);
                 if self.cancelled {
                     entry.cancelled = true;
-                    entry.summary = "Cancelled".to_owned();
+                    entry.summary = tr!(literal = "Cancelled");
                     entry.severity = ConsoleSeverity::Info;
                 }
                 settled = complete_if_settled(entry);
@@ -662,48 +677,77 @@ macro_rules! userspace_error {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn startup_log() {
-    let id = begin_command_report(CommandReportSpec::new("Application Startup", "Initialising Incline Design"));
+    let id = begin_command_report(CommandReportSpec::new(tr!(literal = "Application Startup"), tr!(literal = "Initialising Incline Design")));
     with_report_scope(id, || {
-        userspace_log!("APPLICATION NAME: {}", crate::APP_NAME);
-        userspace_log!("Application ID: {}", crate::APP_ID);
-        userspace_log!("Release Version: {}", crate::APP_RELEASE);
-        userspace_log!("Build Target: {}-{}", std::env::consts::OS, std::env::consts::ARCH);
-        userspace_log!("Pointer Width: {}-bit", usize::BITS);
-        userspace_log!("Rustc Host: {}", std::env::var("HOST").unwrap_or_else(|_| "unknown".to_string()));
-        userspace_log!("Process ID: {}", std::process::id());
+        userspace_log!("{}", tr_format!(literal = "Application name: %name%", name = crate::APP_NAME));
+        userspace_log!("{}", tr_format!(literal = "Application ID: %id%", id = crate::APP_ID));
+        userspace_log!("{}", tr_format!(literal = "Release version: %version%", version = crate::APP_RELEASE));
         userspace_log!(
-            "Locale Env: LANG={:?}, LC_ALL={:?}, TZ={:?}",
-            std::env::var_os("LANG"),
-            std::env::var_os("LC_ALL"),
-            std::env::var_os("TZ")
+            "{}",
+            tr_format!(
+                literal = "Build target: %os%-%architecture%",
+                os = std::env::consts::OS,
+                architecture = std::env::consts::ARCH
+            )
+        );
+        userspace_log!("{}", tr_format!(literal = "Pointer width: %width%-bit", width = usize::BITS));
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Rust compiler host: %host%",
+                host = std::env::var("HOST").unwrap_or_else(|_| tr!(literal = "unknown"))
+            )
+        );
+        userspace_log!("{}", tr_format!(literal = "Process ID: %id%", id = std::process::id()));
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Locale environment: LANG=%lang%, LC_ALL=%locale%, TZ=%timezone%",
+                lang = format!("{:?}", std::env::var_os("LANG")),
+                locale = format!("{:?}", std::env::var_os("LC_ALL")),
+                timezone = format!("{:?}", std::env::var_os("TZ")),
+            )
         );
 
         #[cfg(target_os = "linux")]
         {
-            userspace_log!("Operating System: GNU / Linux");
+            userspace_log!("{}", tr!(literal = "Operating system: GNU / Linux"));
             userspace_log!(
-                "Desktop Session: XDG_SESSION_TYPE={:?}, XDG_CURRENT_DESKTOP={:?}, WAYLAND_DISPLAY={:?}, DISPLAY={:?}",
-                std::env::var_os("XDG_SESSION_TYPE"),
-                std::env::var_os("XDG_CURRENT_DESKTOP"),
-                std::env::var_os("WAYLAND_DISPLAY"),
-                std::env::var_os("DISPLAY")
+                "{}",
+                tr_format!(
+                    literal = "Desktop session: XDG_SESSION_TYPE=%type%, XDG_CURRENT_DESKTOP=%desktop%, WAYLAND_DISPLAY=%wayland%, DISPLAY=%display%",
+                    type = format!("{:?}", std::env::var_os("XDG_SESSION_TYPE")),
+                    desktop = format!("{:?}", std::env::var_os("XDG_CURRENT_DESKTOP")),
+                    wayland = format!("{:?}", std::env::var_os("WAYLAND_DISPLAY")),
+                    display = format!("{:?}", std::env::var_os("DISPLAY")),
+                )
             );
         }
 
         #[cfg(target_os = "windows")]
         {
-            userspace_log!("Operating System: Microsoft Windows");
+            userspace_log!("{}", tr!(literal = "Operating system: Microsoft Windows"));
             userspace_log!(
-                "Windows Session: SESSIONNAME={:?}, USERNAME={:?}",
-                std::env::var_os("SESSIONNAME"),
-                std::env::var_os("USERNAME")
+                "{}",
+                tr_format!(
+                    literal = "Windows session: SESSIONNAME=%session%, USERNAME=%user%",
+                    session = format!("{:?}", std::env::var_os("SESSIONNAME")),
+                    user = format!("{:?}", std::env::var_os("USERNAME")),
+                )
             );
         }
 
         #[cfg(target_os = "macos")]
         {
-            userspace_log!("Operating System: MacOS");
-            userspace_log!("macOS Session: USER={:?}, SHELL={:?}", std::env::var_os("USER"), std::env::var_os("SHELL"));
+            userspace_log!("{}", tr!(literal = "Operating system: macOS"));
+            userspace_log!(
+                "{}",
+                tr_format!(
+                    literal = "macOS session: USER=%user%, SHELL=%shell%",
+                    user = format!("{:?}", std::env::var_os("USER")),
+                    shell = format!("{:?}", std::env::var_os("SHELL")),
+                )
+            );
         }
     });
     finish_command_report(id, None);

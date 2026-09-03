@@ -163,8 +163,16 @@ impl<'a> App<'a> {
         if before != after {
             self.history.execute(doc, Command::Replace { before, after });
             crate::logging::report_completed_action(
-                CommandReportSpec::new("Create Bezier Curve", format!("Vertices {vi} to {vj}")),
-                format!("Replaced polyline span {vi}→{vj} with {} sampled intermediate points", segments - 1),
+                CommandReportSpec::new(
+                    crate::i18n::tr!(literal = "Create Bezier Curve"),
+                    crate::i18n::tr_format!(literal = "Vertices %first% to %last%", first = vi, last = vj),
+                ),
+                crate::i18n::tr_format!(
+                    literal = "Replaced polyline span %first%→%last% with %count% sampled intermediate points",
+                    first = vi,
+                    last = vj,
+                    count = segments - 1
+                ),
             );
         }
 

@@ -3,7 +3,7 @@ use std::hash::Hash;
 use egui::{Color32, Response, Sense, Stroke, Ui, Vec2};
 use strum::IntoEnumIterator;
 
-use crate::ui::state::ToolHatch;
+use crate::{i18n::tr, ui::state::ToolHatch};
 
 /// A consistently styled icon button for application toolbars.
 ///
@@ -116,7 +116,7 @@ impl<'a> HatchPicker<'a> {
                 }
             })
             .response
-            .on_hover_text(format!("Fill type: {}", self.selected_hatch));
+            .on_hover_text(format!("{}: {}", tr!(literal = "Fill type"), hatch_label(*self.selected_hatch)));
 
         let swatch_rect = egui::Rect::from_center_size(response.rect.center(), self.button_size);
 
@@ -150,12 +150,21 @@ fn hatch_picker_row(ui: &mut Ui, hatch: ToolHatch, selected_hatch: ToolHatch, co
     ui.painter().text(
         egui::pos2(swatch_rect.right() + 8.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        hatch.to_string(),
+        hatch_label(hatch),
         egui::TextStyle::Button.resolve(ui.style()),
         visuals.text_color(),
     );
 
     response
+}
+
+fn hatch_label(hatch: ToolHatch) -> String {
+    match hatch {
+        ToolHatch::Clear => tr!(literal = "Clear"),
+        ToolHatch::Crosses => tr!(literal = "Crosses"),
+        ToolHatch::Slashes => tr!(literal = "Slashes"),
+        ToolHatch::Solid => tr!(literal = "Solid"),
+    }
 }
 
 fn draw_hatch_swatch(ui: &Ui, rect: egui::Rect, hatch: ToolHatch, _color: Color32) {

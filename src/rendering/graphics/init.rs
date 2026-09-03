@@ -1,5 +1,8 @@
 use super::*;
-use crate::userspace_log;
+use crate::{
+    i18n::{tr, tr_format},
+    userspace_log,
+};
 
 impl<'a> Graphics<'a> {
     pub(crate) async fn new(window: Arc<Window>) -> Result<Graphics<'a>> {
@@ -46,13 +49,23 @@ impl<'a> Graphics<'a> {
 
         let adapter_info = adapter.get_info();
         userspace_log!(
-            "GPU Adapter: {} / {} / {:?} / {:?}",
-            adapter_info.vendor,
-            adapter_info.name,
-            adapter_info.backend,
-            adapter_info.device_type
+            "{}",
+            tr_format!(
+                literal = "GPU adapter: %vendor% / %name% / %backend% / %device_type%",
+                vendor = adapter_info.vendor,
+                name = &adapter_info.name,
+                backend = format!("{:?}", adapter_info.backend),
+                device_type = format!("{:?}", adapter_info.device_type)
+            )
         );
-        userspace_log!("GPU Driver: {} {}", adapter_info.driver, adapter_info.driver_info);
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "GPU driver: %driver% %driver_info%",
+                driver = &adapter_info.driver,
+                driver_info = &adapter_info.driver_info
+            )
+        );
 
         let adapter_limits = adapter.limits();
         // Take everything the adapter offers for buffer size: large surfaces
@@ -73,16 +86,22 @@ impl<'a> Graphics<'a> {
             ..wgpu::Limits::default()
         };
         userspace_log!(
-            "GPU Limits: max_buffer_size={} MiB, max_storage_buffer_binding_size={} MiB, max_texture_dimension_2d={}, max_bind_groups={}",
-            required_limits.max_buffer_size / (1024 * 1024),
-            required_limits.max_storage_buffer_binding_size / (1024 * 1024),
-            adapter_limits.max_texture_dimension_2d,
-            adapter_limits.max_bind_groups
+            "{}",
+            tr_format!(
+                literal = "GPU limits: max_buffer_size=%max_buffer_size% MiB, max_storage_buffer_binding_size=%max_storage_buffer_binding_size% MiB, max_texture_dimension_2d=%max_texture_dimension_2d%, max_bind_groups=%max_bind_groups%",
+                max_buffer_size = required_limits.max_buffer_size / (1024 * 1024),
+                max_storage_buffer_binding_size = required_limits.max_storage_buffer_binding_size / (1024 * 1024),
+                max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d,
+                max_bind_groups = adapter_limits.max_bind_groups
+            )
         );
         if required_limits.max_buffer_size < COMFORTABLE_MAX_BUFFER_SIZE {
             crate::userspace_warn!(
-                "GPU supports a maximum buffer size of {} MiB; large scenes may not display fully",
-                required_limits.max_buffer_size / (1024 * 1024)
+                "{}",
+                tr_format!(
+                    literal = "GPU supports a maximum buffer size of %size% MiB; large scenes may not display fully",
+                    size = required_limits.max_buffer_size / (1024 * 1024)
+                )
             );
         }
 
@@ -101,7 +120,7 @@ impl<'a> Graphics<'a> {
         // validation failure (e.g. an oversized allocation) should degrade to
         // missing geometry, not lose the user's session.
         device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
-            crate::userspace_error!("wgpu error (continuing): {error}");
+            crate::userspace_error!("{}", tr_format!(literal = "wgpu error (continuing): %error%", error = error));
         }));
 
         let surface_caps = surface.get_capabilities(&adapter);
@@ -129,7 +148,7 @@ impl<'a> Graphics<'a> {
             .find(|m| *m == wgpu::PresentMode::Fifo)
             .or_else(|| surface_caps.present_modes.first().copied())
             .ok_or_else(|| anyhow!("Surface reports no supported present modes"))?;
-        userspace_log!("Surface present mode: {present_mode:?}");
+        userspace_log!("{}", tr_format!(literal = "Surface presentation mode: %mode%", mode = format!("{present_mode:?}")));
         let alpha_mode = surface_caps
             .alpha_modes
             .first()
@@ -143,7 +162,7 @@ impl<'a> Graphics<'a> {
         let view_formats = vec![if surface_format.is_srgb() { gui_format } else { scene_format }];
         let supports_scene_cache = surface_caps.usages.contains(wgpu::TextureUsages::COPY_DST);
         if !supports_scene_cache {
-            log::warn!("Surface does not support COPY_DST; main-scene caching is disabled on this adapter");
+            log::warn!("{}", tr!(literal = "Surface does not support COPY_DST; main-scene caching is disabled on this adapter"));
         }
         let surface_usage = if supports_scene_cache {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST

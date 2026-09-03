@@ -7,7 +7,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Document, LayerId};
+use crate::{
+    i18n::tr,
+    model::{Document, LayerId},
+};
 
 /// Persistence state shared by every project-owned dataset. The source name
 /// is informational provenance only; it is never used to reload content.
@@ -475,7 +478,7 @@ pub(crate) fn new_empty(path: Option<PathBuf>) -> ProjectFile {
         format_version: PROJECT_FORMAT_VERSION,
         document,
         metadata: ProjectMetadata {
-            name: project_name(path.as_deref(), "Untitled.omf"),
+            name: project_name(path.as_deref(), &tr!(literal = "Untitled")),
             ..Default::default()
         },
     }
@@ -581,7 +584,13 @@ pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Docu
 }
 
 fn unique_layer_name(document: &Document, requested: &str) -> String {
-    let base = if requested.trim().is_empty() { "Layer" } else { requested.trim() };
+    let fallback;
+    let base = if requested.trim().is_empty() {
+        fallback = tr!(literal = "Layer");
+        fallback.as_str()
+    } else {
+        requested.trim()
+    };
     if document.layer_id_by_name(base).is_none() {
         return base.to_owned();
     }
@@ -598,7 +607,11 @@ fn unique_layer_name(document: &Document, requested: &str) -> String {
 /// identity. Imports and generated data share this rule across all dataset
 /// families.
 pub(crate) fn unique_item_name<'a>(requested: String, existing: impl Iterator<Item = &'a str>) -> String {
-    let base = if requested.trim().is_empty() { "Item".to_owned() } else { requested.trim().to_owned() };
+    let base = if requested.trim().is_empty() {
+        tr!(literal = "Item")
+    } else {
+        requested.trim().to_owned()
+    };
     let existing = existing.collect::<HashSet<_>>();
     if !existing.contains(base.as_str()) {
         return base;
@@ -627,7 +640,7 @@ fn project_name(path: Option<&Path>, fallback: &str) -> String {
     path.and_then(Path::file_stem)
         .and_then(|name| name.to_str())
         .or_else(|| Path::new(fallback).file_stem().and_then(|name| name.to_str()))
-        .unwrap_or("Untitled")
+        .unwrap_or(fallback)
         .to_owned()
 }
 

@@ -19,15 +19,18 @@
 //! scrolls under the wheel, the way a Blender header does - see
 //! [`crate::ui::elements::bar_strip`].
 
-use crate::ui::{
-    EditorState, UiProjectView, color32_to_rgba,
-    elements::main_menu,
-    rgba_to_color32,
-    state::{ActiveTool, UiCommand, UiProjectEntry, Workspace},
-    themed_icon, unthemed_icon,
-    widgets::{
-        menu::MenuFieldF64,
-        toolbar::{ColorSquarePicker, HatchPicker, TOOL_CELL_SIZE, ToolbarButton},
+use crate::{
+    i18n::tr,
+    ui::{
+        EditorState, UiProjectView, color32_to_rgba,
+        elements::main_menu,
+        rgba_to_color32,
+        state::{ActiveTool, UiCommand, UiProjectEntry, Workspace},
+        themed_icon, unthemed_icon,
+        widgets::{
+            menu::MenuFieldF64,
+            toolbar::{ColorSquarePicker, HatchPicker, TOOL_CELL_SIZE, ToolbarButton},
+        },
     },
 };
 
@@ -176,9 +179,12 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     let has_unsaved = project.projects.iter().any(UiProjectEntry::needs_save);
     let save = ui.add_enabled(
         has_unsaved,
-        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "save_project.svg")), format!("Save Project ({PRIMARY_MODIFIER}S)"))
-            .id_salt("save_project")
-            .button_side(side),
+        ToolbarButton::new(
+            egui::Image::new(themed_icon!(ui, "save_project.svg")),
+            format!("{} ({PRIMARY_MODIFIER}S)", tr!(literal = "Save Project")),
+        )
+        .id_salt("save_project")
+        .button_side(side),
     );
     if save.clicked() {
         commands.push(UiCommand::SaveProject);
@@ -189,7 +195,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     let has_project = project.projects.iter().any(|entry| entry.is_active);
     let import = ui.add_enabled(
         has_project,
-        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "import_data.svg")), "Import...")
+        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "import_data.svg")), tr!(literal = "Import..."))
             .id_salt("import")
             .button_side(side),
     );
@@ -199,7 +205,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     }
     let export = ui.add_enabled(
         has_project,
-        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "export_data.svg")), "Export...")
+        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "export_data.svg")), tr!(literal = "Export..."))
             .id_salt("export")
             .button_side(side),
     );
@@ -210,7 +216,7 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 
     let undo = ui.add_enabled(
         editor.can_undo,
-        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), format!("Undo ({PRIMARY_MODIFIER}Z)"))
+        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "undo.svg")), format!("{} ({PRIMARY_MODIFIER}Z)", tr!(literal = "Undo")))
             .id_salt("undo")
             .button_side(side),
     );
@@ -219,9 +225,12 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     }
     let redo = ui.add_enabled(
         editor.can_redo,
-        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "redo.svg")), format!("Redo ({PRIMARY_MODIFIER}{SHIFT_MODIFIER}Z)"))
-            .id_salt("redo")
-            .button_side(side),
+        ToolbarButton::new(
+            egui::Image::new(themed_icon!(ui, "redo.svg")),
+            format!("{} ({PRIMARY_MODIFIER}{SHIFT_MODIFIER}Z)", tr!(literal = "Redo")),
+        )
+        .id_salt("redo")
+        .button_side(side),
     );
     if redo.clicked() {
         commands.push(UiCommand::Redo);
@@ -288,17 +297,18 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
     let previous = editor.active_drill_hole;
 
-    ui.label("Drill Holes:");
+    ui.label(tr!(literal = "Drill Holes:"));
+    let none = tr!(literal = "None");
     let selected = editor
         .active_drill_hole
         .and_then(|id| project.drill_holes.iter().find(|dataset| dataset.id == id && dataset.is_loaded))
         .map(|dataset| dataset.name.as_str())
-        .unwrap_or("None");
+        .unwrap_or_else(|| none.as_str());
     egui::ComboBox::from_id_salt("drill_hole_combo_box")
         .selected_text(elide(ui, selected))
         .width(SELECTOR_COMBO_WIDTH)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut editor.active_drill_hole, None, "None");
+            ui.selectable_value(&mut editor.active_drill_hole, None, tr!(literal = "None"));
             for dataset in project.drill_holes.iter().filter(|dataset| dataset.is_loaded) {
                 ui.selectable_value(&mut editor.active_drill_hole, Some(dataset.id), &dataset.name);
             }
@@ -318,23 +328,24 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
     let part = |ui: &mut egui::Ui| ui.add_space(CENTRE_ITEM_GAP - CENTRE_LABEL_GAP);
 
-    ui.label("Layer:");
+    ui.label(tr!(literal = "Layer:"));
     let active_layers = project
         .projects
         .iter()
         .find(|entry| entry.is_active)
         .map(|entry| entry.layers.as_slice())
         .unwrap_or_default();
+    let none = tr!(literal = "None");
     let selected_layer = editor
         .active_layer
         .and_then(|id| active_layers.iter().find(|layer| layer.id == id && layer.is_loaded))
         .map(|layer| layer.name.as_str())
-        .unwrap_or("None");
+        .unwrap_or_else(|| none.as_str());
     egui::ComboBox::from_id_salt("layer_combo_box")
         .selected_text(elide(ui, selected_layer))
         .width(SELECTOR_COMBO_WIDTH)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut editor.active_layer, None, "None");
+            ui.selectable_value(&mut editor.active_layer, None, tr!(literal = "None"));
             for layer in active_layers.iter().filter(|layer| layer.is_loaded) {
                 ui.selectable_value(&mut editor.active_layer, Some(layer.id), &layer.name);
             }
@@ -342,20 +353,23 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
 
     part(ui);
 
-    let z_resp = MenuFieldF64::new("Z:", &mut editor.z_input, f64::MIN..=f64::MAX).width(80.0).suffix("m").show_inline(ui);
+    let z_resp = MenuFieldF64::new(tr!(literal = "Z:"), &mut editor.z_input, f64::MIN..=f64::MAX)
+        .width(80.0)
+        .suffix(tr!(literal = "m"))
+        .show_inline(ui);
     if z_resp.changed() && editor.z_input.is_finite() {
         editor.z_level = editor.z_input;
     }
 
     part(ui);
-    ui.label("Color:");
+    ui.label(tr!(literal = "Color:"));
     let mut line_c32 = rgba_to_color32(editor.tool_line_color);
     if ColorSquarePicker::new(&mut line_c32).show(ui).changed() {
         editor.tool_line_color = color32_to_rgba(line_c32);
     }
 
     part(ui);
-    ui.label("Fill:");
+    ui.label(tr!(literal = "Fill:"));
     HatchPicker::new(&mut editor.tool_hatch, rgba_to_color32(editor.tool_line_color)).show(ui);
 }
 
@@ -403,7 +417,7 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     let exaggeration = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("vertical_exaggeration.svg")),
-            format!("Vertical Exaggeration ({:.2}×)", editor.vertical_exaggeration),
+            format!("{} ({:.2}×)", tr!(literal = "Vertical Exaggeration"), editor.vertical_exaggeration),
         )
         .id_salt("vertical_exaggeration")
         .button_side(side)
@@ -415,7 +429,7 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 
     let zoom = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), "Zoom to Extents")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), tr!(literal = "Zoom to Extents"))
             .id_salt("zoom_to_extents")
             .button_side(side),
     );
@@ -424,7 +438,7 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 
     let reset = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), "Reset View")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!(literal = "Reset View"))
             .id_salt("reset_view")
             .button_side(side),
     );
@@ -446,7 +460,11 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
     let fly = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("fly_mode.svg")),
-            if editor.fly_mode_enabled { "Disable Flying Mode" } else { "Enable Flying Mode" },
+            if editor.fly_mode_enabled {
+                tr!(literal = "Disable Flying Mode")
+            } else {
+                tr!(literal = "Enable Flying Mode")
+            },
         )
         .id_salt("fly_mode")
         .button_side(side)
@@ -462,7 +480,11 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
     let slice = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("slice_view.svg")),
-            if editor.slice_mode_enabled { "Exit Slice View" } else { "Vertical Slice View" },
+            if editor.slice_mode_enabled {
+                tr!(literal = "Exit Slice View")
+            } else {
+                tr!(literal = "Vertical Slice View")
+            },
         )
         .id_salt("vertical_slice")
         .button_side(side)
@@ -479,7 +501,11 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
     let wireframes = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
-            if editor.topology_wireframes_enabled { "Hide Wireframes" } else { "Show Wireframes" },
+            if editor.topology_wireframes_enabled {
+                tr!(literal = "Hide Wireframes")
+            } else {
+                tr!(literal = "Show Wireframes")
+            },
         )
         .id_salt("wireframes")
         .button_side(side)
@@ -492,7 +518,11 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
     let points = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("toggle_points.svg")),
-            if editor.show_points { "Hide Points" } else { "Show Points" },
+            if editor.show_points {
+                tr!(literal = "Hide Points")
+            } else {
+                tr!(literal = "Show Points")
+            },
         )
         .id_salt("show_points")
         .button_side(side)
@@ -505,7 +535,11 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
     let xray = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("toggle_xray.svg")),
-            if editor.xray_enabled { "Disable X-Ray Vision" } else { "Enable X-Ray Vision" },
+            if editor.xray_enabled {
+                tr!(literal = "Disable X-Ray Vision")
+            } else {
+                tr!(literal = "Enable X-Ray Vision")
+            },
         )
         .id_salt("xray")
         .button_side(side)
@@ -537,22 +571,28 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &EditorState, project: &UiPr
     // run is added in reverse to read left to right on screen.
     ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), "Blast Timeline [PLACEHOLDER]")
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("blast_timeline.svg")), tr!(literal = "Blast Timeline [PLACEHOLDER]"))
             .id_salt("blast_timeline")
             .button_side(side),
     );
 
     ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")), "Contours of Equal Time [PLACEHOLDER]")
-            .id_salt("contours_of_equal_time")
-            .button_side(side),
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("contours_of_equal_time.svg")),
+            tr!(literal = "Contours of Equal Time [PLACEHOLDER]"),
+        )
+        .id_salt("contours_of_equal_time")
+        .button_side(side),
     );
 
     ui.add_enabled(
         has_active_dataset,
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")), "Burden Relief Heatmap [PLACEHOLDER]")
-            .id_salt("burden_relief_heatmap")
-            .button_side(side),
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("burden_relief_heatmap.svg")),
+            tr!(literal = "Burden Relief Heatmap [PLACEHOLDER]"),
+        )
+        .id_salt("burden_relief_heatmap")
+        .button_side(side),
     );
 }

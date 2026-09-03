@@ -1,5 +1,6 @@
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
     ui::state::ActiveTool,
@@ -70,7 +71,7 @@ impl<'a> App<'a> {
             return;
         }
         if project_to_rl.is_none() && horiz_dist.abs() < 1e-9 && z_delta.abs() < 1e-9 {
-            userspace_warn!("Offset distance must be greater than zero");
+            userspace_warn!("{}", tr!(literal = "Offset distance must be greater than zero"));
             return;
         }
         let target_ids: Vec<ObjectId> = object_ids
@@ -274,8 +275,11 @@ impl<'a> App<'a> {
 
         self.cancel_offset();
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Create Offset", format!("{offset_count} object(s)")),
-            format!("Created offset of {offset_count} object(s)"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Create Offset"),
+                crate::i18n::tr_format!(literal = "%count% object(s)", count = offset_count),
+            ),
+            crate::i18n::tr_format!(literal = "Created offset of %count% object(s)", count = offset_count),
         );
         self.invalidate_geometry();
     }

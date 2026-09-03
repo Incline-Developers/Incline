@@ -12,6 +12,7 @@
 use thousands::Separable;
 
 use crate::{
+    i18n::{tr, tr_format},
     model::{Document, FillStyle, ObjectColor, ObjectId, SceneEntityId, block_model::OpenBlockModel, triangulation::TriangulationId},
     rendering::color::{byte_to_linear_rgba, color32_to_rgba, linear_to_srgb_byte, rgba_to_color32},
     ui::{
@@ -347,8 +348,8 @@ fn settings_section(
         let restore_clicked = ui
             .scope(|ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                ui.add_enabled(draft != restored, egui::Button::new("Restore Defaults"))
-                    .on_hover_text(format!("Reset the {heading} settings to their defaults"))
+                ui.add_enabled(draft != restored, egui::Button::new(tr!(literal = "Restore Defaults")))
+                    .on_hover_text(tr!("properties-restore-defaults", heading = heading))
                     .clicked()
             })
             .inner;
@@ -413,13 +414,13 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         ui,
         editor,
         commands,
-        "Interface",
+        &tr!(literal = "Interface"),
         |ui, draft| {
             let mut changed = false;
 
             let [r, g, b, _] = draft.renderer_background_color;
             let mut background = egui::Color32::from_rgb(linear_to_srgb_byte(r), linear_to_srgb_byte(g), linear_to_srgb_byte(b));
-            let response = MenuFieldColor32::new("Background", &mut background).show(ui);
+            let response = MenuFieldColor32::new(tr!(literal = "Background"), &mut background).show(ui);
             if response.changed() {
                 draft.renderer_background_color = [
                     byte_to_linear_rgba(background.r()),
@@ -429,12 +430,12 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
                 ];
             }
             changed |= committed(&response);
-            changed |= committed(&MenuFieldBool::new("Dark mode", &mut draft.dark_mode).show(ui));
-            changed |= committed(&MenuFieldBool::new("Show console", &mut draft.show_console).show(ui));
-            changed |= committed(&MenuFieldBool::new("Panel chrome", &mut draft.panel_chrome).show(ui));
-            changed |= committed(&MenuFieldBool::new("World axis gizmo", &mut draft.show_world_axis_gizmo).show(ui));
-            changed |= committed(&MenuFieldBool::new("XY grid", &mut draft.show_xy_grid).show(ui));
-            changed |= committed(&MenuFieldBool::new("Scale bar", &mut draft.show_scale_bar).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "Dark mode"), &mut draft.dark_mode).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "Show console"), &mut draft.show_console).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "Panel chrome"), &mut draft.panel_chrome).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "World axis gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "XY grid"), &mut draft.show_xy_grid).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "Scale bar"), &mut draft.show_scale_bar).show(ui));
             changed
         },
         Some(reset_interface_defaults),
@@ -446,48 +447,52 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
         ui,
         editor,
         commands,
-        "Camera",
+        &tr!(literal = "Camera"),
         |ui, draft| {
             let mut changed = false;
-            CollapsibleSection::new("camera_plan_mode", "Plan Mode").default_open(true).show(ui, |ui| {
+            CollapsibleSection::new("camera_plan_mode", tr!(literal = "Plan Mode")).default_open(true).show(ui, |ui| {
                 changed |= committed(
-                    &MenuFieldF64::new("Orbit sensitivity", &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
+                    &MenuFieldF64::new(tr!(literal = "Orbit sensitivity"), &mut draft.plan_orbit_sensitivity, 0.0001..=0.02)
                         .speed(0.0001)
                         .max_decimals(4)
                         .show(ui),
                 );
                 changed |= committed(
-                    &MenuFieldF64::new("Zoom sensitivity", &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
+                    &MenuFieldF64::new(tr!(literal = "Zoom sensitivity"), &mut draft.plan_zoom_sensitivity, 0.0001..=0.05)
                         .speed(0.0001)
                         .max_decimals(4)
                         .show(ui),
                 );
-                changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.plan_invert_vertical_look).show(ui));
-                changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.plan_invert_horizontal_look).show(ui));
-                changed |= committed(&MenuFieldBool::new("Zoom to cursor", &mut draft.plan_zoom_towards_cursor).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert vertical"), &mut draft.plan_invert_vertical_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert horizontal"), &mut draft.plan_invert_horizontal_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!(literal = "Zoom to cursor"), &mut draft.plan_zoom_towards_cursor).show(ui));
             });
 
             ui.add_space(4.0);
-            CollapsibleSection::new("camera_fly_mode", "Fly Mode").show(ui, |ui| {
-                changed |= committed(&MenuFieldF64::new("Field of view", &mut draft.fly_field_of_view_degrees, 20.0..=120.0).suffix("°").show(ui));
+            CollapsibleSection::new("camera_fly_mode", tr!(literal = "Fly Mode")).show(ui, |ui| {
                 changed |= committed(
-                    &MenuFieldF64::new("Look sensitivity", &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
+                    &MenuFieldF64::new(tr!(literal = "Field of view"), &mut draft.fly_field_of_view_degrees, 20.0..=120.0)
+                        .suffix(tr!(literal = "°"))
+                        .show(ui),
+                );
+                changed |= committed(
+                    &MenuFieldF64::new(tr!(literal = "Look sensitivity"), &mut draft.fly_mouse_look_sensitivity, 0.0001..=0.02)
                         .speed(0.0001)
                         .max_decimals(4)
                         .show(ui),
                 );
-                changed |= committed(&MenuFieldBool::new("Invert vertical", &mut draft.fly_invert_vertical_look).show(ui));
-                changed |= committed(&MenuFieldBool::new("Invert horizontal", &mut draft.fly_invert_horizontal_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert vertical"), &mut draft.fly_invert_vertical_look).show(ui));
+                changed |= committed(&MenuFieldBool::new(tr!(literal = "Invert horizontal"), &mut draft.fly_invert_horizontal_look).show(ui));
                 changed |= committed(
-                    &MenuFieldF64::new("Near clip limit", &mut draft.fly_near_clip_limit, 0.01..=100.0)
+                    &MenuFieldF64::new(tr!(literal = "Near clip limit"), &mut draft.fly_near_clip_limit, 0.01..=100.0)
                         .speed(0.01)
-                        .suffix("m")
+                        .suffix(tr!(literal = "m"))
                         .show(ui),
                 );
                 changed |= committed(
-                    &MenuFieldF64::new("Max clip span", &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
+                    &MenuFieldF64::new(tr!(literal = "Max clip span"), &mut draft.fly_max_clip_span, 100.0..=1_000_000.0)
                         .speed(100.0)
-                        .suffix("m")
+                        .suffix(tr!(literal = "m"))
                         .show(ui),
                 );
             });
@@ -502,27 +507,41 @@ fn draw_performance_settings(ui: &mut egui::Ui, editor: &mut EditorState, comman
         ui,
         editor,
         commands,
-        "Performance",
+        &tr!(literal = "Performance"),
         |ui, draft| {
             let mut changed = false;
-            changed |= committed(&MenuFieldU32::new("Snap polling", &mut draft.snap_poll_rate, 5..=1000).suffix(" Hz").show(ui));
-            changed |= committed(&MenuFieldU32::new("Frame rate cap", &mut draft.frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
-            changed |= committed(&MenuFieldU32::new("Cap while resizing", &mut draft.resize_frame_rate_cap, 20..=1000).suffix(" FPS").show(ui));
             changed |= committed(
-                &MenuFieldU32::new("Block model downscale", &mut draft.block_model_interaction_resolution_divisor, 1..=64)
-                    .suffix("x")
+                &MenuFieldU32::new(tr!(literal = "Snap polling"), &mut draft.snap_poll_rate, 5..=1000)
+                    .suffix(tr!(literal = " Hz"))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldBool::new("Reflective block edges", &mut draft.show_block_model_boundary_highlights)
-                    .help_text("Adds a view-dependent rim highlight at block and material boundaries. Leaving this off slightly reduces volume-rendering work.")
+                &MenuFieldU32::new(tr!(literal = "Frame rate cap"), &mut draft.frame_rate_cap, 20..=1000)
+                    .suffix(tr!(literal = " FPS"))
                     .show(ui),
             );
             changed |= committed(
-            &MenuFieldBool::new("Downscale rasters", &mut draft.downscale_raster_previews)
-                .help_text(
-                    "Limits newly loaded GeoTIFF previews to 4096 pixels on their longest side. Disable to use full resolution up to the GPU's texture limit, which uses more memory.",
-                )
+                &MenuFieldU32::new(tr!(literal = "Cap while resizing"), &mut draft.resize_frame_rate_cap, 20..=1000)
+                    .suffix(tr!(literal = " FPS"))
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldU32::new(tr!(literal = "Block model downscale"), &mut draft.block_model_interaction_resolution_divisor, 1..=64)
+                    .suffix(tr!(literal = "x"))
+                    .show(ui),
+            );
+            changed |= committed(
+                &MenuFieldBool::new(tr!(literal = "Reflective block edges"), &mut draft.show_block_model_boundary_highlights)
+                    .help_text(tr!(
+                        literal = "Adds a view-dependent rim highlight at block and material boundaries. Leaving this off slightly reduces volume-rendering work."
+                    ))
+                    .show(ui),
+            );
+            changed |= committed(
+            &MenuFieldBool::new(tr!(literal = "Downscale rasters"), &mut draft.downscale_raster_previews)
+                .help_text(tr!(
+                    literal = "Limits newly loaded GeoTIFF previews to 4096 pixels on their longest side. Disable to use full resolution up to the GPU's texture limit, which uses more memory."
+                ))
                 .show(ui),
         );
             changed
@@ -536,18 +555,18 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
         ui,
         editor,
         commands,
-        "Developer",
+        &tr!(literal = "Developer"),
         |ui, draft| {
             let mut changed = false;
-            changed |= committed(&MenuFieldBool::new("Frame counter", &mut draft.frame_counter_enabled).show(ui));
+            changed |= committed(&MenuFieldBool::new(tr!(literal = "Frame counter"), &mut draft.frame_counter_enabled).show(ui));
             changed |= committed(
-                &MenuFieldBool::new("Colour GPU chunks", &mut draft.debug_chunk_coloring)
-                    .help_text("Visualises the Morton spatial chunking used for frustum culling.")
+                &MenuFieldBool::new(tr!(literal = "Colour GPU chunks"), &mut draft.debug_chunk_coloring)
+                    .help_text(tr!(literal = "Visualises the Morton spatial chunking used for frustum culling."))
                     .show(ui),
             );
             changed |= committed(
-                &MenuFieldBool::new("Camera clip planes", &mut draft.debug_clip_planes)
-                    .help_text("Shows the live near and far projection distances in the status bar.")
+                &MenuFieldBool::new(tr!(literal = "Camera clip planes"), &mut draft.debug_clip_planes)
+                    .help_text(tr!(literal = "Shows the live near and far projection distances in the status bar."))
                     .show(ui),
             );
             changed
@@ -558,7 +577,7 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
 
 struct EntityDetails {
     name: String,
-    kind: &'static str,
+    kind: String,
     id: String,
     layer: Option<String>,
     source: Option<String>,
@@ -575,7 +594,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
             let layer = document.layer(object.layer());
             Some(EntityDetails {
                 name: object.kind_name().to_owned(),
-                kind: "Design Object",
+                kind: tr!(literal = "Design Object"),
                 id: format!("object:{}", id.0),
                 layer: layer.map(|layer| layer.name.clone()),
                 source: None,
@@ -588,7 +607,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
             let item = project.triangulations.iter().find(|item| item.id == id && item.is_loaded)?;
             Some(EntityDetails {
                 name: item.name.clone(),
-                kind: "Triangulation",
+                kind: tr!(literal = "Triangulation"),
                 id: format!("triangulation:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
@@ -603,7 +622,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
             let source = item.and_then(|item| item.source_name.clone());
             Some(EntityDetails {
                 name: model.name.clone(),
-                kind: "Block Model",
+                kind: tr!(literal = "Block Model"),
                 id: format!("block-model:{}", id.0),
                 layer: None,
                 source,
@@ -616,7 +635,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
             let item = project.point_clouds.iter().find(|item| item.id == id && item.is_loaded)?;
             Some(EntityDetails {
                 name: item.name.clone(),
-                kind: "Point Cloud",
+                kind: tr!(literal = "Point Cloud"),
                 id: format!("point-cloud:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
@@ -629,7 +648,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
             let item = project.drill_holes.iter().find(|item| item.id == id && item.is_loaded)?;
             Some(EntityDetails {
                 name: item.name.clone(),
-                kind: "Drill Holes",
+                kind: tr!(literal = "Drill Holes"),
                 id: format!("drill-hole:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
@@ -641,21 +660,21 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
     }
 }
 
-fn common_text<'a>(mut values: impl Iterator<Item = &'a str>) -> &'a str {
+fn common_text<'a>(mut values: impl Iterator<Item = &'a str>) -> String {
     let Some(first) = values.next() else {
-        return "";
+        return String::new();
     };
-    if values.all(|value| value == first) { first } else { "Mixed" }
+    if values.all(|value| value == first) { first.to_owned() } else { tr!(literal = "Mixed") }
 }
 
-fn common_state(details: &[EntityDetails], value: impl Fn(&EntityDetails) -> bool, on: &'static str, off: &'static str) -> &'static str {
+fn common_state(details: &[EntityDetails], value: impl Fn(&EntityDetails) -> bool, on: &str, off: &str) -> String {
     let Some(first) = details.first().map(&value) else {
-        return off;
+        return off.to_owned();
     };
     if details.iter().skip(1).all(|detail| value(detail) == first) {
-        if first { on } else { off }
+        if first { on.to_owned() } else { off.to_owned() }
     } else {
-        "Mixed"
+        tr!(literal = "Mixed")
     }
 }
 
@@ -683,14 +702,14 @@ fn spatial_vector_rows(ui: &mut egui::Ui, label: &str, value: glam::DVec3) {
 /// Generic information shared by every selectable scene entity. Type-specific
 /// appearance and geometry controls remain in the neighbouring tabs.
 fn draw_object_tab(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, block_models: &[OpenBlockModel], document: &Document, context: &PropertyContext) {
-    menu::menu_section(ui, "Object");
+    menu::menu_section(ui, tr!(literal = "Object"));
     let details = context
         .entities
         .iter()
         .filter_map(|&entity| entity_details(entity, editor, project, block_models, document))
         .collect::<Vec<_>>();
     if details.is_empty() {
-        ui.label(egui::RichText::new("No object selected").color(ui.visuals().weak_text_color()));
+        ui.label(egui::RichText::new(tr!(literal = "No object selected")).color(ui.visuals().weak_text_color()));
         ui.add_space(6.0);
         return;
     }
@@ -698,47 +717,55 @@ fn draw_object_tab(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectV
     let heading = if details.len() == 1 {
         details[0].name.clone()
     } else {
-        format!("{} objects", details.len())
+        tr_format!(literal = "%count% objects", count = details.len())
     };
     ui.label(egui::RichText::new(heading).strong());
     ui.add_space(4.0);
 
-    CollapsibleSection::new("object_general", "General").default_open(true).show(ui, |ui| {
+    CollapsibleSection::new("object_general", tr!(literal = "General")).default_open(true).show(ui, |ui| {
         if let [detail] = details.as_slice() {
-            read_only_row(ui, "Name", &detail.name);
-            read_only_row(ui, "Type", detail.kind);
-            read_only_row(ui, "ID", &detail.id);
+            read_only_row(ui, &tr!(literal = "Name"), &detail.name);
+            read_only_row(ui, &tr!(literal = "Type"), &detail.kind);
+            read_only_row(ui, &tr!(literal = "ID"), &detail.id);
             if let Some(layer) = &detail.layer {
-                read_only_row(ui, "Layer", layer);
+                read_only_row(ui, &tr!(literal = "Layer"), layer);
             }
             if let Some(source) = &detail.source {
-                read_only_row(ui, "Source", source);
+                read_only_row(ui, &tr!(literal = "Source"), source);
             }
         } else {
-            read_only_row(ui, "Selected", &details.len().separate_with_commas());
-            read_only_row(ui, "Type", common_text(details.iter().map(|detail| detail.kind)));
+            read_only_row(ui, &tr!(literal = "Selected"), &details.len().separate_with_commas());
+            read_only_row(ui, &tr!(literal = "Type"), &common_text(details.iter().map(|detail| detail.kind.as_str())));
             if let Some(layer) = details.first().and_then(|detail| detail.layer.as_deref())
                 && details.iter().all(|detail| detail.layer.as_deref() == Some(layer))
             {
-                read_only_row(ui, "Layer", layer);
+                read_only_row(ui, &tr!(literal = "Layer"), layer);
             }
             if let Some(source) = details.first().and_then(|detail| detail.source.as_deref())
                 && details.iter().all(|detail| detail.source.as_deref() == Some(source))
             {
-                read_only_row(ui, "Source", source);
+                read_only_row(ui, &tr!(literal = "Source"), source);
             }
         }
-        read_only_row(ui, "Visibility", common_state(&details, |detail| detail.visible, "Visible", "Hidden"));
-        read_only_row(ui, "Editing", common_state(&details, |detail| detail.locked, "Locked", "Unlocked"));
+        read_only_row(
+            ui,
+            &tr!(literal = "Visibility"),
+            &common_state(&details, |detail| detail.visible, &tr!(literal = "Visible"), &tr!(literal = "Hidden")),
+        );
+        read_only_row(
+            ui,
+            &tr!(literal = "Editing"),
+            &common_state(&details, |detail| detail.locked, &tr!(literal = "Locked"), &tr!(literal = "Unlocked")),
+        );
     });
 
     ui.add_space(4.0);
-    CollapsibleSection::new("object_transform", "Transform").default_open(true).show(ui, |ui| {
+    CollapsibleSection::new("object_transform", tr!(literal = "Transform")).default_open(true).show(ui, |ui| {
         if let Some((min, max)) = selection_bounds(&details) {
-            spatial_vector_rows(ui, "Centre", (min + max) * 0.5);
-            spatial_vector_rows(ui, "Size", (max - min).max(glam::DVec3::ZERO));
+            spatial_vector_rows(ui, &tr!(literal = "Centre"), (min + max) * 0.5);
+            spatial_vector_rows(ui, &tr!(literal = "Size"), (max - min).max(glam::DVec3::ZERO));
         } else {
-            ui.label(egui::RichText::new("No spatial extent available").color(ui.visuals().weak_text_color()));
+            ui.label(egui::RichText::new(tr!(literal = "No spatial extent available")).color(ui.visuals().weak_text_color()));
         }
     });
     ui.add_space(6.0);
@@ -766,17 +793,19 @@ fn draw_triangulation_tab(ui: &mut egui::Ui, project: &UiProjectView, context: &
     ui.add_space(4.0);
 
     let mut color32 = rgba_to_color32(triangulation.color);
-    let response = MenuFieldColor32::new("Face colour", &mut color32).show(ui);
+    let response = MenuFieldColor32::new(tr!(literal = "Face colour"), &mut color32).show(ui);
     if committed(&response) {
         commands.push(UiCommand::SetTriangulationColor(triangulation.id, color32_to_rgba(color32)));
         *geometry_dirty = true;
     }
 
     ui.add_space(6.0);
-    CollapsibleSection::new("triangulation_geometry", "Geometry").default_open(true).show(ui, |ui| {
-        read_only_row(ui, "Vertices", &triangulation.vertex_count.separate_with_commas());
-        read_only_row(ui, "Triangles", &triangulation.triangle_count.separate_with_commas());
-    });
+    CollapsibleSection::new("triangulation_geometry", tr!(literal = "Geometry"))
+        .default_open(true)
+        .show(ui, |ui| {
+            read_only_row(ui, &tr!(literal = "Vertices"), &triangulation.vertex_count.separate_with_commas());
+            read_only_row(ui, &tr!(literal = "Triangles"), &triangulation.triangle_count.separate_with_commas());
+        });
     ui.add_space(6.0);
 }
 
@@ -799,20 +828,23 @@ fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
     });
 }
 
-fn fill_style_label(style: FillStyle) -> &'static str {
+fn fill_style_label(style: FillStyle) -> String {
     match style {
-        FillStyle::Clear => "Clear",
-        FillStyle::Crosses => "Crosses",
-        FillStyle::Slashes => "Slashes",
-        FillStyle::Solid => "Solid",
+        FillStyle::Clear => tr!(literal = "Clear"),
+        FillStyle::Crosses => tr!(literal = "Crosses"),
+        FillStyle::Slashes => tr!(literal = "Slashes"),
+        FillStyle::Solid => tr!(literal = "Solid"),
     }
 }
 
 fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document, context: &PropertyContext, commands: &mut Vec<UiCommand>, geometry_dirty: &mut bool) {
     ui.add_space(4.0);
     let heading = match context.objects.as_slice() {
-        [id] => document.get_object(*id).map_or("Object", crate::model::Object::kind_name).to_owned(),
-        objects => format!("{} objects", objects.len()),
+        [id] => document
+            .get_object(*id)
+            .map(|object| object.kind_name().to_owned())
+            .unwrap_or_else(|| tr!(literal = "Object")),
+        objects => tr_format!(literal = "%count% objects", count = objects.len()),
     };
     ui.label(egui::RichText::new(heading).strong());
     ui.add_space(4.0);
@@ -826,7 +858,7 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         .map(|object| document.object_rgba(object))
         .unwrap_or([0.0; 4]);
     let mut color32 = rgba_to_color32(first_color);
-    let response = MenuFieldColor32::new("Line colour", &mut color32).show(ui);
+    let response = MenuFieldColor32::new(tr!(literal = "Line colour"), &mut color32).show(ui);
     if committed(&response) {
         commands.push(UiCommand::BatchSetObjectColor(context.objects.clone(), ObjectColor::Fixed(color32_to_rgba(color32))));
         *geometry_dirty = true;
@@ -841,13 +873,15 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         _ => (false, FillStyle::Clear, 1.0),
     };
 
+    let closed_label = tr!(literal = "Closed");
+    let open_label = tr!(literal = "Open");
     let mut closed = first_closed;
     MenuFieldCombo::new(
         "design_shape",
-        "Shape",
+        tr!(literal = "Shape"),
         &mut closed,
-        if first_closed { "Closed" } else { "Open" },
-        [(true, "Closed".into()), (false, "Open".into())],
+        if first_closed { closed_label.clone() } else { open_label.clone() },
+        [(true, closed_label.into()), (false, open_label.into())],
     )
     .show(ui);
     if closed != first_closed {
@@ -858,7 +892,7 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
     let mut fill = first_fill;
     MenuFieldCombo::new(
         "design_fill",
-        "Fill",
+        tr!(literal = "Fill"),
         &mut fill,
         fill_style_label(first_fill),
         [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
@@ -875,8 +909,8 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         editor.design_line_weight_input = Some((context.polylines.clone(), first_line_weight));
     }
     if let Some((_, line_weight)) = editor.design_line_weight_input.as_mut() {
-        let response = MenuFieldF32::new("Line weight", line_weight, 0.1..=20.0)
-            .help_text("Stroke width used to draw the selected polylines.")
+        let response = MenuFieldF32::new(tr!(literal = "Line weight"), line_weight, 0.1..=20.0)
+            .help_text(tr!(literal = "Stroke width used to draw the selected polylines."))
             .speed(0.1)
             .show(ui);
         let line_weight = *line_weight;

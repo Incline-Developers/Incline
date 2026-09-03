@@ -109,38 +109,43 @@ pub(crate) fn draw_status_bar(ui: &mut egui::Ui, editor: &EditorState, commands:
             ui.horizontal(|ui| {
                 ui.label(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE));
                 ui.separator();
-                ui.label(format!("Selected: {}", editor.selected_handles.len()));
+                ui.label(tr!("status-selected", count = editor.selected_handles.len()));
                 ui.separator();
                 if editor.frame_counter_enabled {
                     match editor.measured_fps {
-                        Some(fps) => ui.label(format!("FPS: {fps:.1}")),
-                        None => ui.label("FPS: --"),
+                        Some(fps) => ui.label(format!("{}: {fps:.1}", tr!(literal = "Frame rate"))),
+                        None => ui.label(format!("{}: --", tr!(literal = "Frame rate"))),
                     };
                     ui.separator();
                 }
                 if editor.debug_chunk_coloring {
                     match editor.debug_chunk_stats {
-                        Some((rendered, total)) => ui.label(format!("Chunks: {rendered}/{total} ({} culled)", total.saturating_sub(rendered))),
-                        None => ui.label("Chunks: --"),
+                        Some((rendered, total)) => ui.label(tr!("status-chunks", rendered = rendered, total = total, culled = total.saturating_sub(rendered))),
+                        None => ui.label(tr!(literal = "Chunks: --")),
                     };
                     ui.separator();
                 }
                 if editor.debug_clip_planes {
                     match editor.debug_clip_plane_distances {
-                        Some((near, far)) => ui.label(format!("Clip near/far/Δ: {near:.3} / {far:.3} / {:.3} m", far - near)),
-                        None => ui.label("Clip near/far/Δ: -- / -- / --"),
+                        Some((near, far)) => ui.label(tr!(
+                            "status-clip",
+                            near = format!("{near:.3}"),
+                            far = format!("{far:.3}"),
+                            delta = format!("{:.3}", far - near)
+                        )),
+                        None => ui.label(tr!(literal = "Clip near/far/Δ: -- / -- / --")),
                     };
                     ui.separator();
                 }
                 let coord_width = coord_field_width(ui);
                 match editor.cursor_world {
                     Some(p) => {
-                        for (axis, value) in [("X", p.x), ("Y", p.y), ("Z", p.z)] {
+                        for (axis, value) in [(tr!(literal = "X"), p.x), (tr!(literal = "Y"), p.y), (tr!(literal = "Z"), p.z)] {
                             coord_field(ui, coord_width, format!("{axis}: {}", format!("{value:.2}").separate_with_commas()));
                         }
                     }
                     None => {
-                        for axis in ["X", "Y", "Z"] {
+                        for axis in [tr!(literal = "X"), tr!(literal = "Y"), tr!(literal = "Z")] {
                             coord_field(ui, coord_width, format!("{axis}: --"));
                         }
                     }

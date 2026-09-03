@@ -3,6 +3,7 @@
 use std::{borrow::Cow, collections::HashSet, ops::Range, sync::Arc};
 
 use crate::{
+    i18n::{tr, tr_format},
     logging::{ConsoleEntry, ConsoleEntryId, ConsoleEntryState, ConsoleSeverity},
     ui::{
         themed_icon, unthemed_icon,
@@ -82,7 +83,7 @@ pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, 
                 if rows.is_empty() {
                     ui.add_sized(
                         [ui.available_width(), row_height],
-                        egui::Label::new(egui::RichText::new("No console activity yet").weak()).halign(egui::Align::Center),
+                        egui::Label::new(egui::RichText::new(tr!(literal = "No console activity yet")).weak()).halign(egui::Align::Center),
                     );
                 } else {
                     let visual_rows_id = ui.make_persistent_id("console_visual_rows");
@@ -228,7 +229,7 @@ fn draw_header_row(ui: &mut egui::Ui, rect: egui::Rect, row_id: egui::Id, entry_
     x += title_width + 8.0;
 
     let summary = if entry.state == ConsoleEntryState::Pending {
-        format!("In progress · {}", entry.summary)
+        tr_format!(literal = "In progress · %summary%", summary = &entry.summary)
     } else {
         entry.summary.clone()
     };
@@ -286,24 +287,24 @@ fn draw_detail_row(
 
 fn copy_context_menu(response: &egui::Response, entry: &ConsoleEntry, entries: &[ConsoleEntry]) {
     context_menu_popup(response, &entry.title, |ui| {
-        if ContextMenuAction::new("Copy message").show(ui).clicked() {
+        if ContextMenuAction::new(tr!(literal = "Copy message")).show(ui).clicked() {
             ui.ctx().copy_text(console_entry_text(entry));
             ui.close();
         }
-        if ContextMenuAction::new("Copy all").show(ui).clicked() {
+        if ContextMenuAction::new(tr!(literal = "Copy all")).show(ui).clicked() {
             ui.ctx().copy_text(console_text(entries));
             ui.close();
         }
     });
 }
 
-fn console_severity_label(entry: &ConsoleEntry) -> &'static str {
+fn console_severity_label(entry: &ConsoleEntry) -> String {
     match (entry.state, entry.severity) {
-        (ConsoleEntryState::Pending, _) => "PENDING",
-        (_, ConsoleSeverity::Info) => "INFO",
-        (_, ConsoleSeverity::Success) => "SUCCESS",
-        (_, ConsoleSeverity::Warn) => "WARN",
-        (_, ConsoleSeverity::Error) => "ERROR",
+        (ConsoleEntryState::Pending, _) => tr!(literal = "PENDING"),
+        (_, ConsoleSeverity::Info) => tr!(literal = "INFO"),
+        (_, ConsoleSeverity::Success) => tr!(literal = "SUCCESS"),
+        (_, ConsoleSeverity::Warn) => tr!(literal = "WARN"),
+        (_, ConsoleSeverity::Error) => tr!(literal = "ERROR"),
     }
 }
 

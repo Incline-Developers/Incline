@@ -77,8 +77,16 @@ impl<'a> App<'a> {
             return;
         }
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Create Point", format!("X {:.3} · Y {:.3} · Z {:.3}", world.x, world.y, world.z)),
-            format!("Placed point at {:.3}, {:.3}, {:.3}", world.x, world.y, world.z),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Create Point"),
+                format!("X {:.3} · Y {:.3} · Z {:.3}", world.x, world.y, world.z),
+            ),
+            crate::i18n::tr_format!(
+                literal = "Placed point at %x%, %y%, %z%",
+                x = format!("{:.3}", world.x),
+                y = format!("{:.3}", world.y),
+                z = format!("{:.3}", world.z)
+            ),
         );
         self.invalidate_geometry();
     }
@@ -109,7 +117,10 @@ impl<'a> App<'a> {
                 if !self.commit_polyline(verts, false, layer) {
                     return;
                 }
-                crate::logging::report_completed_action(CommandReportSpec::new("Create Line", "2 vertices"), "Created line segment with 2 vertices");
+                crate::logging::report_completed_action(
+                    CommandReportSpec::new(crate::i18n::tr!(literal = "Create Line"), crate::i18n::tr!(literal = "2 vertices")),
+                    crate::i18n::tr!(literal = "Created line segment with 2 vertices"),
+                );
                 // Chain: end of the last segment becomes start of next
                 self.editor.pending_stroke.clear();
                 self.editor.pending_stroke.push(chain_start);
@@ -193,8 +204,11 @@ impl<'a> App<'a> {
         self.editor.circle_draft = None;
         self.invalidate_geometry();
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Create Circle", format!("Radius {radius:.3} m")),
-            format!("Created circle with radius {radius:.3} m"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Create Circle"),
+                crate::i18n::tr_format!(literal = "Radius %radius% m", radius = format!("{radius:.3}")),
+            ),
+            crate::i18n::tr_format!(literal = "Created circle with radius %radius% m", radius = format!("{radius:.3}")),
         );
     }
 
@@ -236,8 +250,11 @@ impl<'a> App<'a> {
         self.editor.poly_finish_dialog_px = None;
         self.invalidate_geometry();
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Create Polyline", format!("{vertex_count} vertices")),
-            format!("Created closed polyline with {vertex_count} vertices"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Create Polyline"),
+                crate::i18n::tr_format!(literal = "%count% vertices", count = vertex_count),
+            ),
+            crate::i18n::tr_format!(literal = "Created closed polyline with %count% vertices", count = vertex_count),
         );
     }
 
@@ -264,8 +281,11 @@ impl<'a> App<'a> {
             let verts: Vec<PolyVertex> = self.editor.pending_stroke.iter().map(|&p| PolyVertex::straight(p)).collect();
             if self.commit_polyline(verts, false, layer) {
                 crate::logging::report_completed_action(
-                    CommandReportSpec::new("Create Line", format!("{vertex_count} vertices")),
-                    format!("Created open polyline with {vertex_count} vertices"),
+                    CommandReportSpec::new(
+                        crate::i18n::tr!(literal = "Create Line"),
+                        crate::i18n::tr_format!(literal = "%count% vertices", count = vertex_count),
+                    ),
+                    crate::i18n::tr_format!(literal = "Created open polyline with %count% vertices", count = vertex_count),
                 );
             }
         }

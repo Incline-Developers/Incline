@@ -72,7 +72,7 @@ impl<'a> App<'a> {
         let apply = move |app: &mut App, result: Result<crate::model::triangulation::GeneratedTriangulation>| match result {
             Ok(generated) => app.insert_generated_triangulation(generated),
             Err(error) => {
-                userspace_warn!("Point cloud TIN failed: {error:#}");
+                userspace_warn!("{}", tr_format!(literal = "Point cloud TIN failed: %error%", error = format!("{error:#}")));
             }
         };
         self.spawn_job_reporting_progress("Point cloud TIN...", vec![crate::app::jobs::JobKey::PointCloud(cloud_id)], compute, apply);
@@ -127,7 +127,14 @@ fn reconstruct_terrain_tin_from_point_cloud(
     let (sampled, occupancy) = subsample_terrain(points, max_points, params.sampler, params.candidate_multiplier, params.hole_fill_distance, cancel)?;
     progress.set_fraction(0.4);
     if sampled.len() < points.len() {
-        userspace_log!("Terrain TIN: spatially subsampled {} of {} points", sampled.len(), points.len());
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Terrain TIN: spatially subsampled %sampled% of %total% points",
+                sampled = sampled.len(),
+                total = points.len()
+            )
+        );
     }
     let generated = reconstruct_terrain_tin(sampled, occupancy.as_ref(), params.name.clone(), params.max_edge, cancel)?;
     progress.set_fraction(1.0);
@@ -179,15 +186,19 @@ fn reconstruct_terrain_tin(
         anyhow::bail!("Terrain TIN produced no faces - increase Max edge or use more input points");
     }
 
+    let max_edge_suffix = if max_edge > 0.0 {
+        tr_format!(literal = " (max edge %max_edge%)", max_edge = format!("{max_edge:.3}"))
+    } else {
+        tr!(literal = " (max edge disabled)")
+    };
     userspace_log!(
-        "Terrain TIN: triangulated {} unique XY points into {} faces{}",
-        vertices.len(),
-        faces.len(),
-        if max_edge > 0.0 {
-            format!(" (max edge {max_edge:.3})")
-        } else {
-            " (max edge disabled)".to_owned()
-        }
+        "{}",
+        tr_format!(
+            literal = "Terrain TIN: triangulated %vertex_count% unique XY points into %face_count% faces%suffix%",
+            vertex_count = vertices.len(),
+            face_count = faces.len(),
+            suffix = max_edge_suffix
+        )
     );
     session::build_generated_triangulation(name, vertices, faces, TriSurfaceType::Surface, crate::model::triangulation::unique_edges)
 }

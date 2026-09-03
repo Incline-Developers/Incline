@@ -1,7 +1,7 @@
 //! Object editing and viewport tool dialogs.
 
 use crate::{
-    i18n::tr,
+    i18n::{tr, tr_format},
     model::{Axis, Document, ObjectId},
     ui::{
         state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
@@ -33,12 +33,12 @@ pub(crate) fn draw_drape_selection_panel(ui: &mut egui::Ui, editor: &EditorState
             .count(),
     };
 
-    ViewportDockPanel::new("drape_to_topology_panel", "Drape to Topology", viewport_rect)
+    ViewportDockPanel::new("drape_to_topology_panel", tr!(literal = "Drape to Topology"), viewport_rect)
         .min_width(280.0)
         .show(ui.ctx(), |ui| {
-            ui.label(format!("{selected_count} selected"));
+            ui.label(tr!("ui-selected-count", count = selected_count));
             ui.add_space(6.0);
-            if ui.add(MenuButton::new("Confirm Selection").primary().enabled(selected_count > 0)).clicked() {
+            if ui.add(MenuButton::new(tr!(literal = "Confirm Selection")).primary().enabled(selected_count > 0)).clicked() {
                 commands.push(UiCommand::ConfirmDrapeSelection);
             }
         });
@@ -47,29 +47,41 @@ pub(crate) fn draw_drape_selection_panel(ui: &mut egui::Ui, editor: &EditorState
 /// Title for the canvas context menu, named after the kind of entity that is
 /// selected (e.g. "Triangulation Properties"). Selections spanning several
 /// kinds fall back to a generic label.
+fn object_kind_label(object: &crate::model::Object) -> String {
+    match object {
+        crate::model::Object::Point { .. } => tr!(literal = "Point"),
+        crate::model::Object::Polyline { verts, .. } if verts.len() == 2 => tr!(literal = "Line"),
+        crate::model::Object::Polyline { .. } => tr!(literal = "Polyline"),
+        crate::model::Object::Text { .. } => tr!(literal = "Text"),
+    }
+}
+
 fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> String {
     use crate::model::SceneEntityId;
 
     // (label, whether it came from a document object)
-    let mut kind: Option<(&'static str, bool)> = None;
+    let mut kind: Option<(String, bool)> = None;
     for &handle in &editor.selected_handles {
         let (label, is_object) = match handle {
-            SceneEntityId::Object(id) => (document.get_object(id).map_or("Object", crate::model::Object::kind_name), true),
-            SceneEntityId::Triangulation(_) => ("Triangulation", false),
-            SceneEntityId::BlockModel(_) => ("Block Model", false),
-            SceneEntityId::DrillHole(_) => ("Drill Hole", false),
-            SceneEntityId::PointCloud(_) => ("Point Cloud", false),
+            SceneEntityId::Object(id) => (document.get_object(id).map_or_else(|| tr!(literal = "Object"), object_kind_label), true),
+            SceneEntityId::Triangulation(_) => (tr!(literal = "Triangulation"), false),
+            SceneEntityId::BlockModel(_) => (tr!(literal = "Block Model"), false),
+            SceneEntityId::DrillHole(_) => (tr!(literal = "Drill Hole"), false),
+            SceneEntityId::PointCloud(_) => (tr!(literal = "Point Cloud"), false),
         };
-        match kind {
+        match kind.as_ref() {
             None => kind = Some((label, is_object)),
-            Some((existing, _)) if existing == label => {}
+            Some((existing, _)) if existing == &label => {}
             // Mixed object kinds (a line and a text object, say) still share a menu.
-            Some((_, true)) if is_object => kind = Some(("Object", true)),
-            Some(_) => return "Properties".to_string(),
+            Some((_, true)) if is_object => kind = Some((tr!(literal = "Object"), true)),
+            Some(_) => return tr!(literal = "Properties"),
         }
     }
 
-    kind.map_or_else(|| "Properties".to_string(), |(label, _)| format!("{label} Properties"))
+    kind.map_or_else(
+        || tr!(literal = "Properties"),
+        |(label, _)| tr_format!(literal = "%kind% %properties%", kind = label, properties = tr!(literal = "Properties")),
+    )
 }
 
 /// Draw the canvas right-click context menu for selected objects and triangulations.
@@ -111,7 +123,7 @@ pub(crate) fn draw_right_click_context(
 
         // --- Drill hole colouring ---
         if let Some(drill_hole_id) = selected_drill_hole {
-            if ContextMenuAction::new("Colour by...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenDrillHoleColorDialog(drill_hole_id));
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
@@ -120,7 +132,7 @@ pub(crate) fn draw_right_click_context(
         }
 
         if has_doc_objects {
-            if ContextMenuAction::new("Move to Layer...").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Move to Layer...")).show(ui).clicked() {
                 let target_layer = project
                     .projects
                     .iter()
@@ -139,18 +151,18 @@ pub(crate) fn draw_right_click_context(
         }
 
         if !editor.selected_handles.is_empty() {
-            if ContextMenuAction::new("Hide Selection").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Hide Selection")).show(ui).clicked() {
                 commands.push(UiCommand::HideSelection);
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
-            if ContextMenuAction::new("Lock Selection").show(ui).clicked() {
+            if ContextMenuAction::new(tr!(literal = "Lock Selection")).show(ui).clicked() {
                 *geometry_dirty |= editor.apply_action(crate::ui::state::EditorAction::FreezeSelection);
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
             context_menu_separator(ui);
         }
 
-        if ContextMenuAction::new("Close").show(ui).clicked() {
+        if ContextMenuAction::new(tr!(literal = "Close")).show(ui).clicked() {
             commands.push(UiCommand::CloseCanvasContextMenu);
         }
     });
@@ -172,8 +184,8 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     let selected_label = dialog
         .target_layer
         .and_then(|id| active_project.layers.iter().find(|layer| layer.id == id))
-        .map(|layer| layer.name.as_str())
-        .unwrap_or("Choose a layer");
+        .map(|layer| layer.name.clone())
+        .unwrap_or_else(|| tr!(literal = "Choose a layer"));
     let layer_options = active_project.layers.iter().map(|layer| (Some(layer.id), layer.name.clone().into()));
     let can_apply = dialog.target_layer.is_some() && !dialog.object_ids.is_empty();
     let object_count = dialog.object_ids.len();
@@ -181,34 +193,34 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     let mut apply = false;
     let mut open = true;
 
-    DragableMenu::new("Move to Layer").open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
+    DragableMenu::new(tr!(literal = "Move to Layer")).open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
         ui.set_max_width(280.0);
         // Added in reverse: a field row lays its control out from the right.
-        MenuField::new("Action").show(ui, |ui, _, _| {
+        MenuField::new(tr!(literal = "Action")).show(ui, |ui, _, _| {
             ui.horizontal(|ui| {
-                if ui.add(MenuButton::new("Copy").selected(dialog.copy).min_width(64.0)).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Copy")).selected(dialog.copy).min_width(64.0)).clicked() {
                     dialog.copy = true;
                 }
-                if ui.add(MenuButton::new("Move").selected(!dialog.copy).min_width(64.0)).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Move")).selected(!dialog.copy).min_width(64.0)).clicked() {
                     dialog.copy = false;
                 }
             })
             .response
         });
-        MenuFieldCombo::new("move_to_layer_target", "Layer", &mut dialog.target_layer, selected_label, layer_options)
+        MenuFieldCombo::new("move_to_layer_target", tr!(literal = "Layer"), &mut dialog.target_layer, selected_label, layer_options)
             .width(180.0)
             .show(ui);
         menu::menu_actions(ui, |ui| {
-            let action_label = if dialog.copy { "Copy" } else { "Move" };
+            let action_label = if dialog.copy { tr!(literal = "Copy") } else { tr!(literal = "Move") };
             let confirm = menu::dialog_confirm_pressed(ui.ctx());
             if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
                 apply = true;
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });
-        ui.label(format!("{object_count} object(s) selected"));
+        ui.label(tr!("ui-selected-objects", count = object_count));
     });
 
     if apply {
@@ -238,27 +250,30 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
     let mut apply = false;
     let mut open = true;
 
-    DragableMenu::new(format!("Set {axis_label}")).open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
-        ui.set_max_width(280.0);
-        MenuFieldF64::new(format!("{axis_label} value"), &mut dialog.value, f64::MIN..=f64::MAX)
-            .width(120.0)
-            .show(ui);
-        if !dialog.value.is_finite() {
-            ui.colored_label(egui::Color32::from_rgb(200, 70, 70), format!("Enter a valid {axis_label} value."));
-        }
-        ui.add_space(4.0);
-        let submitted = menu::dialog_confirm_pressed(ui.ctx());
-        let cancelled = menu::dialog_cancel_pressed(ui.ctx());
-        menu::menu_actions(ui, |ui| {
-            if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
-                apply = true;
+    DragableMenu::new(tr_format!(literal = "Set %axis%", axis = axis_label))
+        .open(&mut open)
+        .min_width(260.0)
+        .show(ui.ctx(), |ui| {
+            ui.set_max_width(280.0);
+            MenuFieldF64::new(tr_format!(literal = "%axis% value", axis = axis_label), &mut dialog.value, f64::MIN..=f64::MAX)
+                .width(120.0)
+                .show(ui);
+            if !dialog.value.is_finite() {
+                ui.colored_label(egui::Color32::from_rgb(200, 70, 70), tr!("ui-invalid-axis-value", axis = axis_label));
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
-                close = true;
-            }
+            ui.add_space(4.0);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(can_apply)).clicked()) && can_apply {
+                    apply = true;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancelled {
+                    close = true;
+                }
+            });
+            ui.label(tr!("ui-selected-objects", count = object_count));
         });
-        ui.label(format!("{object_count} object(s) selected"));
-    });
 
     if apply {
         let value = dialog.value;
@@ -284,31 +299,38 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
     let mut apply = false;
     let mut open = true;
 
-    DragableMenu::new("Insert Point at Elevation").open(&mut open).min_width(280.0).show(ui.ctx(), |ui| {
-        ui.set_max_width(300.0);
-        MenuFieldF64::new("Elevation", &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
-            .width(120.0)
-            .show(ui);
-        if !dialog.elevation.is_finite() {
-            ui.colored_label(egui::Color32::from_rgb(200, 70, 70), "Enter a valid elevation.");
-        }
-        if dialog.min_elevation > f64::MIN {
-            ui.label(format!("Selection spans {:.2} to {:.2}.", dialog.min_elevation, dialog.max_elevation));
-        }
-        ui.label("Segments lying at this elevation are ignored.");
-        ui.add_space(4.0);
-        let submitted = menu::dialog_confirm_pressed(ui.ctx());
-        let cancelled = menu::dialog_cancel_pressed(ui.ctx());
-        menu::menu_actions(ui, |ui| {
-            if (submitted || ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked()) && can_apply {
-                apply = true;
+    DragableMenu::new(tr!(literal = "Insert Point at Elevation"))
+        .open(&mut open)
+        .min_width(280.0)
+        .show(ui.ctx(), |ui| {
+            ui.set_max_width(300.0);
+            MenuFieldF64::new(tr!(literal = "Elevation"), &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
+                .width(120.0)
+                .show(ui);
+            if !dialog.elevation.is_finite() {
+                ui.colored_label(egui::Color32::from_rgb(200, 70, 70), tr!(literal = "Enter a valid elevation."));
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
-                close = true;
+            if dialog.min_elevation > f64::MIN {
+                ui.label(tr!(
+                    "ui-selection-spans",
+                    min = format!("{:.2}", dialog.min_elevation),
+                    max = format!("{:.2}", dialog.max_elevation)
+                ));
             }
+            ui.label(tr!(literal = "Segments lying at this elevation are ignored."));
+            ui.add_space(4.0);
+            let submitted = menu::dialog_confirm_pressed(ui.ctx());
+            let cancelled = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                if (submitted || ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(can_apply)).clicked()) && can_apply {
+                    apply = true;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancelled {
+                    close = true;
+                }
+            });
+            ui.label(tr!("ui-selected-polylines", count = object_count));
         });
-        ui.label(format!("{object_count} polyline(s) selected"));
-    });
 
     if apply {
         commands.push(UiCommand::InsertPointsAtElevation {
@@ -379,7 +401,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     // the frame. It still draws along the bottom edge.
                     egui::Panel::bottom("meta_splash").show_separator_line(false).show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
-                            ui.label(format!("{}: {}", crate::APP_NAME, crate::APP_RELEASE));
+                            ui.label(tr_format!(literal = "%app%: %release%", app = crate::APP_NAME, release = crate::APP_RELEASE));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label("GNU General Public License v3.0"));
                         });
                     });
@@ -388,26 +410,58 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
 
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                         ui.add_space(30.0);
-                        select_project_action_column(ui, "Project", COLUMN_WIDTH, |ui| {
+                        select_project_action_column(ui, tr!(literal = "Project"), COLUMN_WIDTH, |ui| {
                             // Startup is already sitting on an empty project,
                             // so this only has to get the splash out of the way.
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "create_project.svg")), "New Project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(
+                                ui,
+                                egui::Image::new(themed_icon!(ui, "create_project.svg")),
+                                tr!(literal = "New Project"),
+                                COLUMN_WIDTH,
+                                ROW_HEIGHT,
+                            )
+                            .clicked()
+                            {
                                 commands.push(UiCommand::CloseStartupDialog);
                             }
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_project.svg")), "Load Project", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(
+                                ui,
+                                egui::Image::new(themed_icon!(ui, "open_project.svg")),
+                                tr!(literal = "Load Project"),
+                                COLUMN_WIDTH,
+                                ROW_HEIGHT,
+                            )
+                            .clicked()
+                            {
                                 commands.push(UiCommand::OpenProject);
                             }
                         });
 
                         ui.add_space(PANEL_SIZE - (COLUMN_WIDTH * 2.0) - 60.0);
 
-                        select_project_action_column(ui, "Application", COLUMN_WIDTH, |ui| {
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "open_website.svg")), "Website", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                        select_project_action_column(ui, tr!(literal = "Application"), COLUMN_WIDTH, |ui| {
+                            if select_project_action_row(
+                                ui,
+                                egui::Image::new(themed_icon!(ui, "open_website.svg")),
+                                tr!(literal = "Website"),
+                                COLUMN_WIDTH,
+                                ROW_HEIGHT,
+                            )
+                            .clicked()
+                            {
                                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net"));
                             }
                             // Escape dismisses the splash rather than firing
                             // this row: leaving is a deliberate click only.
-                            if select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "close_project.svg")), "Exit Application", COLUMN_WIDTH, ROW_HEIGHT).clicked() {
+                            if select_project_action_row(
+                                ui,
+                                egui::Image::new(themed_icon!(ui, "close_project.svg")),
+                                tr!(literal = "Exit Application"),
+                                COLUMN_WIDTH,
+                                ROW_HEIGHT,
+                            )
+                            .clicked()
+                            {
                                 commands.push(UiCommand::RequestExit);
                             }
                         });
@@ -422,7 +476,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     if !recent.is_empty() {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                             ui.add_space(30.0);
-                            select_project_action_column(ui, "Recent", list_width, |ui| {
+                            select_project_action_column(ui, tr!(literal = "Recent"), list_width, |ui| {
                                 draw_recent_projects(ui, &recent, list_width, RECENT_HEIGHT, ROW_HEIGHT, commands);
                             });
                         });
@@ -446,11 +500,11 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     .show(ui, |ui| {
                         ui.set_width(PANEL_SIZE - 24.0);
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(egui::RichText::new(
-                                "Incline Design Web is not recommended for production use. Only use \
-                                     it as a demo.",
-                            ));
-                            ui.hyperlink_to("Download the free native version at our website ↗", "https://inclinedesign.net");
+                            ui.label(egui::RichText::new(tr_format!(
+                                literal = "%app% Web is not recommended for production use. Only use it as a demo.",
+                                app = crate::APP_NAME
+                            )));
+                            ui.hyperlink_to(tr!(literal = "Download the free native version at our website ↗"), "https://inclinedesign.net");
                         });
                     });
             }
@@ -474,11 +528,11 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(egui::RichText::new(format!("Incline Design {newest_release} is available")).strong());
-                                ui.label(egui::RichText::new(format!("Currently installed: {}", crate::APP_RELEASE)).color(ui.visuals().weak_text_color()));
+                                ui.label(egui::RichText::new(tr!("update-available", version = newest_release)).strong());
+                                ui.label(egui::RichText::new(tr!("update-current", version = crate::APP_RELEASE)).color(ui.visuals().weak_text_color()));
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(MenuButton::new("Download").primary().min_width(92.0)).clicked() {
+                                if ui.add(MenuButton::new(tr!(literal = "Download")).primary().min_width(92.0)).clicked() {
                                     ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net/downloads/"));
                                 }
                             });
@@ -518,7 +572,13 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for entry in recent.iter() {
                     let label = if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() };
-                    let row = select_project_action_row(ui, egui::Image::new(themed_icon!(ui, "recent_project.svg")), &label, ui.available_width(), row_height);
+                    let row = select_project_action_row(
+                        ui,
+                        egui::Image::new(themed_icon!(ui, "recent_project.svg")),
+                        label.clone(),
+                        ui.available_width(),
+                        row_height,
+                    );
                     #[cfg(not(target_arch = "wasm32"))]
                     let row = row.on_hover_text(format!("{}\n{}", entry.name, entry.path.display()));
                     #[cfg(target_arch = "wasm32")]
@@ -526,9 +586,9 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                         "{}\n{}",
                         entry.name,
                         if entry.stored_in_browser {
-                            "Saved in browser storage"
+                            tr!(literal = "Saved in browser storage")
                         } else {
-                            "Not saved in browser storage"
+                            tr!(literal = "Not saved in browser storage")
                         }
                     ));
                     if row.clicked() {
@@ -538,7 +598,7 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
                         commands.push(UiCommand::ActivateTrackedProject(entry.id));
                     }
                     context_menu_popup(&row, entry.name.as_str(), |ui| {
-                        if ContextMenuAction::new("Remove from List").show(ui).clicked() {
+                        if ContextMenuAction::new(tr!(literal = "Remove from List")).show(ui).clicked() {
                             #[cfg(not(target_arch = "wasm32"))]
                             commands.push(UiCommand::RemoveTrackedProject(entry.path.clone()));
                             #[cfg(target_arch = "wasm32")]
@@ -559,20 +619,21 @@ fn draw_recent_projects(ui: &mut egui::Ui, recent: &[&crate::ui::state::UiTracke
     });
 }
 
-fn select_project_action_column(ui: &mut egui::Ui, heading: &str, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
+fn select_project_action_column(ui: &mut egui::Ui, heading: impl Into<String>, width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.vertical(|ui| {
         ui.set_width(width);
-        ui.label(egui::RichText::new(heading).size(12.0).color(ui.visuals().weak_text_color()));
+        ui.label(egui::RichText::new(heading.into()).size(12.0).color(ui.visuals().weak_text_color()));
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
         add_contents(ui);
     });
 }
 
-fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, height: f32) -> egui::Response {
+fn select_project_action_row(ui: &mut egui::Ui, icon: egui::Image<'static>, label: impl Into<String>, width: f32, height: f32) -> egui::Response {
     select_project_action_row_with_fill(ui, icon, label, width, height, egui::Color32::TRANSPARENT)
 }
 
-fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, height: f32, fill: egui::Color32) -> egui::Response {
+fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'static>, label: impl Into<String>, width: f32, height: f32, fill: egui::Color32) -> egui::Response {
+    let label = label.into();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let hovered = response.hovered();
     if fill != egui::Color32::TRANSPARENT || hovered {
@@ -602,21 +663,23 @@ fn select_project_action_row_with_fill(ui: &mut egui::Ui, icon: egui::Image<'sta
 /// Draw the browser-only prompt used to name a new project before it is created.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn draw_create_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("create_project_panel", "Create a new project", viewport_rect)
+    ViewportDockPanel::new("create_project_panel", tr!(literal = "Create a new project"), viewport_rect)
         .min_width(240.0)
         .show(ui.ctx(), |ui| {
             let can_create = !editor.new_project_name.trim().is_empty();
-            MenuFieldText::new("Project name", &mut editor.new_project_name).hint_text("Required").show(ui);
+            MenuFieldText::new(tr!(literal = "Project name"), &mut editor.new_project_name)
+                .hint_text(tr!(literal = "Required"))
+                .show(ui);
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
             let cancelled = menu::dialog_cancel_pressed(ui.ctx());
             menu::menu_actions(ui, |ui| {
-                if (submitted || ui.add(MenuButton::new("Create project").primary().enabled(can_create)).clicked()) && can_create {
+                if (submitted || ui.add(MenuButton::new(tr!(literal = "Create project")).primary().enabled(can_create)).clicked()) && can_create {
                     commands.push(UiCommand::CreateBrowserProject {
                         name: editor.new_project_name.trim().to_owned(),
                     });
                     editor.new_project_dialog_open = false;
                 }
-                if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancelled {
                     editor.new_project_dialog_open = false;
                 }
             });
@@ -630,22 +693,24 @@ pub(crate) fn draw_create_layer_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiC
         return;
     }
 
-    ViewportDockPanel::new("create_layer_panel", "Create a new layer", viewport_rect)
+    ViewportDockPanel::new("create_layer_panel", tr!(literal = "Create a new layer"), viewport_rect)
         .min_width(220.0)
         .show(ui.ctx(), |ui| {
             let can_save = !editor.new_layer_name.trim().is_empty();
-            MenuFieldText::new("Layer name", &mut editor.new_layer_name).hint_text("Required").show(ui);
+            MenuFieldText::new(tr!(literal = "Layer name"), &mut editor.new_layer_name)
+                .hint_text(tr!(literal = "Required"))
+                .show(ui);
             let submitted = menu::dialog_confirm_pressed(ui.ctx());
             let cancelled = menu::dialog_cancel_pressed(ui.ctx());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let create_clicked = ui.add(MenuButton::new("Create Layer").primary().enabled(can_save)).clicked();
+                let create_clicked = ui.add(MenuButton::new(tr!(literal = "Create Layer")).primary().enabled(can_save)).clicked();
                 if (submitted || create_clicked) && can_save {
                     commands.push(UiCommand::CreateLayer {
                         name: editor.new_layer_name.trim().to_string(),
                     });
                     editor.new_layer_dialog_open = false;
                 }
-                if ui.add(MenuButton::new("Cancel")).clicked() || cancelled {
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancelled {
                     editor.new_layer_dialog_open = false;
                 }
             });
@@ -699,69 +764,77 @@ pub(crate) fn draw_text_edit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComm
     let Some(object_id) = editor.editing_labels_id else {
         return;
     };
-    ViewportDockPanel::new("text_edit_panel", "Edit Text", viewport_rect).min_width(260.0).show(ui.ctx(), |ui| {
-        let response = MenuFieldText::new("Text", &mut editor.pending_text).width(240.0).hint_text("Text").show(ui);
-        if response.changed() {
-            *geometry_dirty = true;
-        }
-        if editor.text_edit_focus_requested {
-            response.request_focus();
-            editor.text_edit_focus_requested = false;
-        }
-        *geometry_dirty |= MenuFieldF64::new("Height", &mut editor.pending_text_height, 0.001..=1.0e9)
-            .speed(0.25)
-            .max_decimals(3)
-            .suffix("m")
-            .show(ui)
-            .changed();
-        *geometry_dirty |= MenuFieldF64::new("Rotation", &mut editor.pending_text_rotation_degrees, f64::MIN..=f64::MAX)
-            .speed(1.0)
-            .suffix("°")
-            .show(ui)
-            .changed();
-        *geometry_dirty |= MenuFieldRgba::new("Colour", &mut editor.pending_text_color)
-            .help_text("Text colour and opacity.")
-            .show(ui)
-            .changed();
-
-        let apply_from_enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let cancel_from_escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let apply = ui.add(MenuButton::new("Apply").primary()).clicked() || apply_from_enter;
-            let cancel = ui.add(MenuButton::new(if editor.text_edit_created { "Discard" } else { "Cancel" })).clicked() || cancel_from_escape;
-            if apply {
-                commands.push(UiCommand::CommitTextEdit(
-                    object_id,
-                    editor.pending_text.clone(),
-                    editor.pending_text_height,
-                    editor.pending_text_rotation_degrees,
-                    editor.pending_text_color,
-                ));
-                editor.text_editing_enabled = false;
-            } else if cancel {
-                commands.push(UiCommand::CancelTextEdit);
-                editor.text_editing_enabled = false;
+    ViewportDockPanel::new("text_edit_panel", tr!(literal = "Edit Text"), viewport_rect)
+        .min_width(260.0)
+        .show(ui.ctx(), |ui| {
+            let response = MenuFieldText::new(tr!(literal = "Text"), &mut editor.pending_text)
+                .width(240.0)
+                .hint_text(tr!(literal = "Text"))
+                .show(ui);
+            if response.changed() {
+                *geometry_dirty = true;
             }
+            if editor.text_edit_focus_requested {
+                response.request_focus();
+                editor.text_edit_focus_requested = false;
+            }
+            *geometry_dirty |= MenuFieldF64::new(tr!(literal = "Height"), &mut editor.pending_text_height, 0.001..=1.0e9)
+                .speed(0.25)
+                .max_decimals(3)
+                .suffix(tr!(literal = "m"))
+                .show(ui)
+                .changed();
+            *geometry_dirty |= MenuFieldF64::new(tr!(literal = "Rotation"), &mut editor.pending_text_rotation_degrees, f64::MIN..=f64::MAX)
+                .speed(1.0)
+                .suffix(tr!(literal = "°"))
+                .show(ui)
+                .changed();
+            *geometry_dirty |= MenuFieldRgba::new(tr!(literal = "Colour"), &mut editor.pending_text_color)
+                .help_text(tr!(literal = "Text colour and opacity."))
+                .show(ui)
+                .changed();
+
+            let apply_from_enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let cancel_from_escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let apply = ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() || apply_from_enter;
+                let cancel = ui
+                    .add(MenuButton::new(if editor.text_edit_created { tr!(literal = "Discard") } else { tr!(literal = "Cancel") }))
+                    .clicked()
+                    || cancel_from_escape;
+                if apply {
+                    commands.push(UiCommand::CommitTextEdit(
+                        object_id,
+                        editor.pending_text.clone(),
+                        editor.pending_text_height,
+                        editor.pending_text_rotation_degrees,
+                        editor.pending_text_color,
+                    ));
+                    editor.text_editing_enabled = false;
+                } else if cancel {
+                    commands.push(UiCommand::CancelTextEdit);
+                    editor.text_editing_enabled = false;
+                }
+            });
         });
-    });
     editor.text_edit_position_frames = editor.text_edit_position_frames.saturating_sub(1);
 }
 
 /// Draw the polyline finish dialog (Close / Leave open / Cancel) near the cursor.
 pub(crate) fn draw_finish_polyline_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("finish_poly_dialog", "Finish Polyline", viewport_rect).show(ui, |ui| {
-        MenuField::new("Shape").show(ui, |ui, _, _| {
+    ViewportDockPanel::new("finish_poly_dialog", tr!(literal = "Finish Polyline"), viewport_rect).show(ui, |ui| {
+        MenuField::new(tr!(literal = "Shape")).show(ui, |ui, _, _| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Drain the key from egui's queue every frame so it never leaks
                 // elsewhere, but honour it only once the Enter that opened this
                 // dialog has been released - a key held down to finish the line
                 // would otherwise confirm "Open" the instant the dialog appears.
                 let confirm_key = menu::dialog_confirm_pressed(ui.ctx());
-                if ui.add(MenuButton::new("Open").primary()).clicked() || (confirm_key && editor.poly_finish_dialog_confirm_armed) {
+                if ui.add(MenuButton::new(tr!(literal = "Open")).primary()).clicked() || (confirm_key && editor.poly_finish_dialog_confirm_armed) {
                     commands.push(UiCommand::CommitStrokeOpen);
                     editor.poly_finish_dialog = false;
                 }
-                if ui.add(MenuButton::new("Closed")).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Closed"))).clicked() {
                     commands.push(UiCommand::FinishPolyClose);
                     editor.poly_finish_dialog = false;
                 }
@@ -777,17 +850,16 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         return;
     }
 
-    ViewportDockPanel::new("offset_element_panel", "Offset Element", viewport_rect)
+    ViewportDockPanel::new("offset_element_panel", tr!(literal = "Offset Element"), viewport_rect)
         .min_width(350.0)
         .show(ui.ctx(), |ui| {
-            let response = MenuFieldF64::new("Angle", &mut editor.offset_angle_degrees, -90.0..=90.0)
-                .help_text(
-                    "Slope angle of the offset. Positive and negative angles move the copy \
-                         above or below the source as it moves sideways.",
-                )
+            let response = MenuFieldF64::new(tr!(literal = "Angle"), &mut editor.offset_angle_degrees, -90.0..=90.0)
+                .help_text(tr!(
+                    literal = "Slope angle of the offset. Positive and negative angles move the copy above or below the source as it moves sideways."
+                ))
                 .width(70.0)
                 .speed(0.5)
-                .suffix("°")
+                .suffix(tr!(literal = "°"))
                 .show(ui);
             if response.changed() {
                 editor.offset_angle_degrees = editor.offset_angle_degrees.clamp(-90.0, 90.0);
@@ -795,32 +867,30 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
 
             ui.add_space(4.0);
 
-            MenuField::new("Measure")
-                .help_text(
-                    "Choose whether the entered value is distance along the slope, horizontal \
-                     width, or vertical height.",
-                )
+            MenuField::new(tr!(literal = "Measure"))
+                .help_text(tr!(
+                    literal = "Choose whether the entered value is distance along the slope, horizontal width, or vertical height."
+                ))
                 .show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
-                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, "Distance");
-                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, "Width");
+                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Distance, tr!(literal = "Distance"));
+                        ui.selectable_value(&mut editor.offset_measure, OffsetMeasure::Width, tr!(literal = "Width"));
                         let height_active = matches!(editor.offset_measure, OffsetMeasure::Height(_));
-                        if ui.add(egui::Button::selectable(height_active, "Height")).clicked() && !height_active {
+                        if ui.add(egui::Button::selectable(height_active, tr!(literal = "Height"))).clicked() && !height_active {
                             editor.offset_measure = OffsetMeasure::Height(HeightMode::Relative);
                         }
                     })
                     .response
                 });
             if let OffsetMeasure::Height(ref mut mode) = editor.offset_measure {
-                MenuField::new("Height mode")
-                    .help_text(
-                        "Relative applies a vertical change to every point. Absolute RL projects \
-                         every point onto one target elevation.",
-                    )
+                MenuField::new(tr!(literal = "Height mode"))
+                    .help_text(tr!(
+                        literal = "Relative applies a vertical change to every point. Absolute RL projects every point onto one target elevation."
+                    ))
                     .show(ui, |ui, _, _| {
                         ui.horizontal(|ui| {
-                            ui.selectable_value(mode, HeightMode::Relative, "Relative (+/-)");
-                            ui.selectable_value(mode, HeightMode::AbsoluteRL, "Absolute RL");
+                            ui.selectable_value(mode, HeightMode::Relative, tr!(literal = "Relative (+/-)"));
+                            ui.selectable_value(mode, HeightMode::AbsoluteRL, tr!(literal = "Absolute RL"));
                         })
                         .response
                     });
@@ -830,10 +900,10 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
 
             // Value label adapts to context
             let value_label = match editor.offset_measure {
-                OffsetMeasure::Distance => "Distance along slope",
-                OffsetMeasure::Width => "Horizontal distance",
-                OffsetMeasure::Height(HeightMode::Relative) => "Height change",
-                OffsetMeasure::Height(HeightMode::AbsoluteRL) => "Target RL",
+                OffsetMeasure::Distance => tr!(literal = "Distance along slope"),
+                OffsetMeasure::Width => tr!(literal = "Horizontal distance"),
+                OffsetMeasure::Height(HeightMode::Relative) => tr!(literal = "Height change"),
+                OffsetMeasure::Height(HeightMode::AbsoluteRL) => tr!(literal = "Target RL"),
             };
             let value_range = if matches!(editor.offset_measure, OffsetMeasure::Height(_)) {
                 f64::MIN..=f64::MAX
@@ -841,24 +911,24 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                 0.0..=f64::MAX
             };
             MenuFieldF64::new(value_label, &mut editor.offset_value_input, value_range)
-                .help_text("The value is interpreted using the selected Measure and Height mode.")
+                .help_text(tr!(literal = "The value is interpreted using the selected Measure and Height mode."))
                 .speed(0.1)
-                .suffix("m")
+                .suffix(tr!(literal = "m"))
                 .show(ui);
 
-            MenuFieldBool::new("Collide with Triangulation", &mut editor.offset_collide_with_triangulation)
-                .help_text("Stop the generated offset where its path first meets a visible triangulation.")
+            MenuFieldBool::new(tr!(literal = "Collide with Triangulation"), &mut editor.offset_collide_with_triangulation)
+                .help_text(tr!(literal = "Stop the generated offset where its path first meets a visible triangulation."))
                 .show(ui);
 
             ui.add_space(8.0);
             let can_pick_side = matches!(editor.offset_measure, OffsetMeasure::Height(HeightMode::AbsoluteRL)) || editor.offset_value_input.abs() > 1e-9;
             let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let pick_side_clicked = ui.add(MenuButton::new("Pick Side").enabled(can_pick_side)).clicked();
+                let pick_side_clicked = ui.add(MenuButton::new(tr!(literal = "Pick Side")).enabled(can_pick_side)).clicked();
                 if can_pick_side && (pick_side_clicked || enter_pressed) {
                     queue_begin_offset_pick(commands, editor);
                 }
-                if ui.add(MenuButton::new("Cancel")).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
                     commands.push(UiCommand::CancelOffset);
                 }
             });
@@ -906,28 +976,28 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
         return;
     }
 
-    ViewportDockPanel::new("batter_berm_panel", "Generate Batter-Berms", viewport_rect)
+    ViewportDockPanel::new("batter_berm_panel", tr!(literal = "Generate Batter-Berms"), viewport_rect)
         .min_width(310.0)
         .show(ui.ctx(), |ui| {
-            MenuFieldF64::new("Berm width", &mut editor.batter_berm_width, 0.1..=500.0)
-                .help_text("Horizontal width of each flat berm between successive batters.")
+            MenuFieldF64::new(tr!(literal = "Berm width"), &mut editor.batter_berm_width, 0.1..=500.0)
+                .help_text(tr!(literal = "Horizontal width of each flat berm between successive batters."))
                 .width(CONTROL_WIDTH)
                 .speed(0.1)
                 .max_decimals(2)
-                .suffix("m")
+                .suffix(tr!(literal = "m"))
                 .show(ui);
-            MenuFieldF64::new("Batter angle (\u{b0})", &mut editor.batter_berm_angle, 1.0..=89.0)
-                .help_text("Slope angle of each batter face, measured from horizontal.")
+            MenuFieldF64::new(tr!(literal = "Batter angle (\u{b0})"), &mut editor.batter_berm_angle, 1.0..=89.0)
+                .help_text(tr!(literal = "Slope angle of each batter face, measured from horizontal."))
                 .width(CONTROL_WIDTH)
                 .speed(0.5)
                 .max_decimals(1)
                 .show(ui);
-            MenuFieldF64::new("Bench height", &mut editor.batter_berm_bench_height, 0.1..=500.0)
-                .help_text("Vertical rise or fall of each bench before the next berm is created.")
+            MenuFieldF64::new(tr!(literal = "Bench height"), &mut editor.batter_berm_bench_height, 0.1..=500.0)
+                .help_text(tr!(literal = "Vertical rise or fall of each bench before the next berm is created."))
                 .width(CONTROL_WIDTH)
                 .speed(0.1)
                 .max_decimals(2)
-                .suffix("m")
+                .suffix(tr!(literal = "m"))
                 .show(ui);
             let max_benches = editor.batter_berm_max_benches;
             if max_benches == 0 {
@@ -936,31 +1006,40 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                 editor.batter_berm_benches = editor.batter_berm_benches.clamp(1, max_benches);
             }
             ui.add_enabled_ui(max_benches > 0, |ui| {
-                MenuFieldU32::new("Benches", &mut editor.batter_berm_benches, if max_benches == 0 { 0..=0 } else { 1..=max_benches })
-                    .help_text("Number of complete batter-and-berm levels. The maximum is limited to the deepest level that preserves the specified geometry.")
-                    .width(CONTROL_WIDTH)
-                    .speed(0.1)
-                    .show(ui);
+                MenuFieldU32::new(
+                    tr!(literal = "Benches"),
+                    &mut editor.batter_berm_benches,
+                    if max_benches == 0 { 0..=0 } else { 1..=max_benches },
+                )
+                .help_text(tr!(
+                    literal = "Number of complete batter-and-berm levels. The maximum is limited to the deepest level that preserves the specified geometry."
+                ))
+                .width(CONTROL_WIDTH)
+                .speed(0.1)
+                .show(ui);
             });
 
-            MenuField::new("Type")
-                .help_text(
-                    "Type and Direction together set the offset side. Pit + Up and Stockpile + Down \
-                     step outward; Pit + Down and Stockpile + Up step inward.",
-                )
+            MenuField::new(tr!(literal = "Type"))
+                .help_text(tr!(
+                    literal = "Type and Direction together set the offset side. Pit + Up and Stockpile + Down step outward; Pit + Down and Stockpile + Up step inward."
+                ))
                 .show(ui, |ui, row_height, _| {
                     let gap = ui.spacing().item_spacing.x;
                     let button_width = (CONTROL_WIDTH - gap) * 0.5;
                     ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         if ui
-                            .add(MenuButton::new("Pit").selected(editor.batter_berm_mode == BatterBermMode::Pit).min_width(button_width))
+                            .add(
+                                MenuButton::new(tr!(literal = "Pit"))
+                                    .selected(editor.batter_berm_mode == BatterBermMode::Pit)
+                                    .min_width(button_width),
+                            )
                             .clicked()
                         {
                             editor.batter_berm_mode = BatterBermMode::Pit;
                         }
                         if ui
                             .add(
-                                MenuButton::new("Stockpile")
+                                MenuButton::new(tr!(literal = "Stockpile"))
                                     .selected(editor.batter_berm_mode == BatterBermMode::Stockpile)
                                     .min_width(button_width),
                             )
@@ -972,16 +1051,24 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
                     .response
                 });
 
-            MenuField::new("Direction")
-                .help_text("Up raises each bench by the bench height; Down lowers it. This also flips the offset side - see Type.")
+            MenuField::new(tr!(literal = "Direction"))
+                .help_text(tr!(
+                    literal = "Up raises each bench by the bench height; Down lowers it. This also flips the offset side - see Type."
+                ))
                 .show(ui, |ui, row_height, _| {
                     let gap = ui.spacing().item_spacing.x;
                     let button_width = (CONTROL_WIDTH - gap) * 0.5;
                     ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        if ui.add(MenuButton::new("Up").selected(editor.batter_berm_direction_up).min_width(button_width)).clicked() {
+                        if ui
+                            .add(MenuButton::new(tr!(literal = "Up")).selected(editor.batter_berm_direction_up).min_width(button_width))
+                            .clicked()
+                        {
                             editor.batter_berm_direction_up = true;
                         }
-                        if ui.add(MenuButton::new("Down").selected(!editor.batter_berm_direction_up).min_width(button_width)).clicked() {
+                        if ui
+                            .add(MenuButton::new(tr!(literal = "Down")).selected(!editor.batter_berm_direction_up).min_width(button_width))
+                            .clicked()
+                        {
                             editor.batter_berm_direction_up = false;
                         }
                     })
@@ -991,10 +1078,13 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
             ui.add_space(8.0);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(MenuButton::new("Apply").primary().enabled(!editor.batter_berm_rings_world.is_empty())).clicked() {
+                if ui
+                    .add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(!editor.batter_berm_rings_world.is_empty()))
+                    .clicked()
+                {
                     commands.push(UiCommand::CommitBatterBerm);
                 }
-                if ui.add(MenuButton::new("Cancel")).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
                     commands.push(UiCommand::CancelBatterBerm);
                 }
             });
@@ -1003,7 +1093,7 @@ pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCo
 
 /// Draw the Relimit Line dialog (intersect, absolute length, or relative length modes).
 pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("relimit_line_panel", "Relimit Line", viewport_rect)
+    ViewportDockPanel::new("relimit_line_panel", tr!(literal = "Relimit Line"), viewport_rect)
         // The three mode labels need enough room to stay visually separate
         // from the field's info marker.
         .min_width(335.0)
@@ -1011,27 +1101,26 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
         .show(ui.ctx(), |ui| {
             // Mode tabs
             let previous_mode = editor.relimit_mode;
-            MenuField::new("Mode")
-                .help_text(
-                    "Intersect moves one endpoint to another line. Absolute sets the final line \
-                     length. Relative adds or subtracts length.",
-                )
+            MenuField::new(tr!(literal = "Mode"))
+                .help_text(tr!(
+                    literal = "Intersect moves one endpoint to another line. Absolute sets the final line length. Relative adds or subtracts length."
+                ))
                 .show(ui, |ui, _, _| {
                     ui.horizontal(|ui| {
                         ui.selectable_value(
                             &mut editor.relimit_mode,
                             RelimitMode::Intersect,
-                            "Intersect",
+                            tr!(literal = "Intersect"),
                         );
                         ui.selectable_value(
                             &mut editor.relimit_mode,
                             RelimitMode::AbsoluteLength,
-                            "Absolute length",
+                            tr!(literal = "Absolute length"),
                         );
                         ui.selectable_value(
                             &mut editor.relimit_mode,
                             RelimitMode::RelativeLength,
-                            "Relative (+/-)",
+                            tr!(literal = "Relative (+/-)"),
                         );
                     })
                     .response
@@ -1048,47 +1137,44 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
             match editor.relimit_mode {
                 RelimitMode::Intersect => {
                     if editor.relimit_waiting_for_pick {
-                        ui.label("Click the line to intersect with…");
+                        ui.label(tr!(literal = "Click the line to intersect with…"));
                     } else if editor.relimit_confirming_end {
-                        ui.label("Hover to choose which end to move, then click to confirm.");
+                        ui.label(tr!(literal = "Hover to choose which end to move, then click to confirm."));
                         ui.colored_label(
                             egui::Color32::from_rgb(220, 180, 0),
                             match editor.relimit_hover_end {
-                                TrimEnd::Start => "Moving: Start endpoint",
-                                TrimEnd::End => "Moving: End endpoint",
+                                TrimEnd::Start => tr!(literal = "Moving: Start endpoint"),
+                                TrimEnd::End => tr!(literal = "Moving: End endpoint"),
                             },
                         );
                     }
                 }
                 RelimitMode::AbsoluteLength | RelimitMode::RelativeLength => {
                     let label = if matches!(editor.relimit_mode, RelimitMode::AbsoluteLength) {
-                        "New length (m)"
+                        tr!(literal = "New length (m)")
                     } else {
-                        "Delta length (m, use + or -)"
+                        tr!(literal = "Delta length (m, use + or -)")
                     };
                     MenuFieldF64::new(label, &mut editor.relimit_value_input, f64::MIN..=f64::MAX)
-                        .help_text(
-                            "The selected start or end point moves along the line direction; the \
-                             opposite endpoint stays fixed.",
-                        )
+                        .help_text(tr!(
+                            literal = "The selected start or end point moves along the line direction; the opposite endpoint stays fixed."
+                        ))
                         .speed(0.1)
-                        .suffix("m")
+                        .suffix(tr!(literal = "m"))
                         .show(ui);
-                    MenuField::new("Move which end")
-                        .help_text(
-                            "Select the endpoint that changes; the other endpoint remains fixed.",
-                        )
+                    MenuField::new(tr!(literal = "Move which end"))
+                        .help_text(tr!(literal = "Select the endpoint that changes; the other endpoint remains fixed."))
                         .show(ui, |ui, _, _| {
                             ui.horizontal(|ui| {
                                 ui.selectable_value(
                                     &mut editor.relimit_resize_end,
                                     TrimEnd::Start,
-                                    "Start",
+                                    tr!(literal = "Start"),
                                 );
                                 ui.selectable_value(
                                     &mut editor.relimit_resize_end,
                                     TrimEnd::End,
-                                    "End",
+                                    tr!(literal = "End"),
                                 );
                             })
                             .response
@@ -1100,13 +1186,13 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 match editor.relimit_mode {
                     RelimitMode::Intersect => {
-                        if ui.add(MenuButton::new("Apply and Pick Target").primary()).clicked() {
+                        if ui.add(MenuButton::new(tr!(literal = "Apply and Pick Target")).primary()).clicked() {
                             editor.relimit_dialog_open = false;
                             editor.relimit_waiting_for_pick = true;
                         }
                     }
                     RelimitMode::AbsoluteLength | RelimitMode::RelativeLength => {
-                        if ui.add(MenuButton::new("Apply").primary()).clicked()
+                        if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked()
                             && editor.relimit_value_input.is_finite()
                             && let Some(source_id) = editor.relimit_source_id
                         {
@@ -1119,7 +1205,7 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
                         }
                     }
                 }
-                if ui.add(MenuButton::new("Cancel")).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
                     commands.push(UiCommand::CancelRelimit);
                 }
             });
@@ -1128,85 +1214,88 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
 
 /// Draw the floating Move tool panel with dX/dY/dZ inputs and an Apply button.
 pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("move_panel", "Move", viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
-        let dx_resp = MenuFieldF64::new("dX", &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-            .help_text("Translation distance along the world X axis.")
-            .speed(0.1)
-            .show(ui);
-        let dy_resp = MenuFieldF64::new("dY", &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-            .help_text("Translation distance along the world Y axis.")
-            .speed(0.1)
-            .show(ui);
-        let dz_resp = MenuFieldF64::new("dZ", &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-            .help_text("Translation distance along the world Z axis.")
-            .speed(0.1)
-            .show(ui);
-        if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
-            commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
-                editor.move_panel_delta[0],
-                editor.move_panel_delta[1],
-                editor.move_panel_delta[2],
-            )));
-        }
-
-        ui.add_space(4.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add(MenuButton::new("Apply").primary()).clicked() {
-                commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
+    ViewportDockPanel::new("move_panel", tr!(literal = "Move"), viewport_rect)
+        .min_width(210.0)
+        .show(ui.ctx(), |ui| {
+            let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
+                .help_text(tr!(literal = "Translation distance along the world X axis."))
+                .speed(0.1)
+                .show(ui);
+            let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
+                .help_text(tr!(literal = "Translation distance along the world Y axis."))
+                .speed(0.1)
+                .show(ui);
+            let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
+                .help_text(tr!(literal = "Translation distance along the world Z axis."))
+                .speed(0.1)
+                .show(ui);
+            if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
+                commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
                     editor.move_panel_delta[0],
                     editor.move_panel_delta[1],
                     editor.move_panel_delta[2],
                 )));
-                editor.active_tool = ActiveTool::None;
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() {
-                commands.push(UiCommand::CancelMoveDelta);
-                editor.active_tool = ActiveTool::None;
-            }
+
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
+                    commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
+                        editor.move_panel_delta[0],
+                        editor.move_panel_delta[1],
+                        editor.move_panel_delta[2],
+                    )));
+                    editor.active_tool = ActiveTool::None;
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
+                    commands.push(UiCommand::CancelMoveDelta);
+                    editor.active_tool = ActiveTool::None;
+                }
+            });
         });
-    });
 }
 
 /// Chamfer tool viewport dock: segments input + Apply / Cancel.
 pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     let corner_picked = editor.chamfer_poly_id.is_some() && editor.chamfer_corner_index.is_some();
 
-    ViewportDockPanel::new("chamfer_panel", "Chamfer", viewport_rect).min_width(200.0).show(ui.ctx(), |ui| {
-        if !corner_picked {
-            ui.label("Click a corner on a closed polyline.");
-        } else {
-            MenuFieldU32::new("Segments", &mut editor.chamfer_segments, 1..=64)
-                .help_text(
-                    "Number of straight segments used to approximate the rounded corner. Use \
-                         1 for a straight chamfer.",
-                )
-                .speed(0.1)
-                .show(ui);
+    ViewportDockPanel::new("chamfer_panel", tr!(literal = "Chamfer"), viewport_rect)
+        .min_width(200.0)
+        .show(ui.ctx(), |ui| {
+            if !corner_picked {
+                ui.label(tr!(literal = "Click a corner on a closed polyline."));
+            } else {
+                MenuFieldU32::new(tr!(literal = "Segments"), &mut editor.chamfer_segments, 1..=64)
+                    .help_text(tr!(
+                        literal = "Number of straight segments used to approximate the rounded corner. Use 1 for a straight chamfer."
+                    ))
+                    .speed(0.1)
+                    .show(ui);
 
-            let mut r = editor.chamfer_radius;
-            let max_r = if editor.chamfer_max_radius.is_finite() { editor.chamfer_max_radius } else { f64::MAX };
-            MenuFieldF64::new("Radius", &mut r, 0.0..=max_r)
-                .help_text("Corner radius, limited so the replacement cannot pass adjacent vertices.")
-                .speed(0.05)
-                .show(ui);
-            editor.chamfer_radius = r.clamp(0.0, max_r);
-        }
+                let mut r = editor.chamfer_radius;
+                let max_r = if editor.chamfer_max_radius.is_finite() { editor.chamfer_max_radius } else { f64::MAX };
+                MenuFieldF64::new(tr!(literal = "Radius"), &mut r, 0.0..=max_r)
+                    .help_text(tr!(literal = "Corner radius, limited so the replacement cannot pass adjacent vertices."))
+                    .speed(0.05)
+                    .show(ui);
+                editor.chamfer_radius = r.clamp(0.0, max_r);
+            }
 
-        ui.add_space(4.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Grey out when the displayed value is "0.00" (2 dp) - matches user perception.
-            let can_apply = corner_picked && (editor.chamfer_radius * 100.0).round() > 0.0;
-            if ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked() && can_apply {
-                commands.push(UiCommand::ApplyChamfer);
-            }
-            if ui.add(MenuButton::new("Cancel")).clicked() {
-                commands.push(UiCommand::CancelChamfer);
-            }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Grey out when the displayed value is "0.00" (2 dp) - matches user perception.
+                let can_apply = corner_picked && (editor.chamfer_radius * 100.0).round() > 0.0;
+                if ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(can_apply)).clicked() && can_apply {
+                    commands.push(UiCommand::ApplyChamfer);
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
+                    commands.push(UiCommand::CancelChamfer);
+                }
+            });
         });
-    });
 }
 
-fn draw_bezier_xyz(ui: &mut egui::Ui, label: &'static str, help_text: &'static str, point: &mut [f64; 3]) {
+fn draw_bezier_xyz(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, help_text: impl Into<egui::WidgetText>, point: &mut [f64; 3]) {
     const TOTAL_WIDTH: f32 = 270.0;
     MenuField::new(label).help_text(help_text).show(ui, |ui, row_height, _| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -1224,109 +1313,109 @@ fn draw_bezier_xyz(ui: &mut egui::Ui, label: &'static str, help_text: &'static s
 pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     let both_selected = editor.bezier_selected_verts[0].is_some() && editor.bezier_selected_verts[1].is_some();
 
-    ViewportDockPanel::new("bezier_panel", "Bezier Curve", viewport_rect).min_width(400.0).show(ui.ctx(), |ui| {
-        if editor.bezier_poly_id.is_none() {
-            ui.label("Click an open or closed polyline to begin.");
-        } else if !both_selected {
-            match editor.bezier_selected_verts[0] {
-                None => {
-                    ui.label("Click a vertex to start the replacement span.");
+    ViewportDockPanel::new("bezier_panel", tr!(literal = "Bezier Curve"), viewport_rect)
+        .min_width(400.0)
+        .show(ui.ctx(), |ui| {
+            if editor.bezier_poly_id.is_none() {
+                ui.label(tr!(literal = "Click an open or closed polyline to begin."));
+            } else if !both_selected {
+                match editor.bezier_selected_verts[0] {
+                    None => {
+                        ui.label(tr!(literal = "Click a vertex to start the replacement span."));
+                    }
+                    Some(_) => {
+                        ui.label(tr!(literal = "Click the second vertex of the replacement span."));
+                    }
                 }
-                Some(_) => {
-                    ui.label("Click the second vertex of the replacement span.");
+            } else {
+                MenuFieldU32::new(tr!(literal = "Segments"), &mut editor.bezier_segments, 2..=64)
+                    .help_text(tr!(literal = "Number of line segments used to approximate the curve between the two selected vertices."))
+                    .speed(0.1)
+                    .show(ui);
+
+                if editor.bezier_poly_closed {
+                    let previous = editor.bezier_replace_longer;
+                    MenuField::new(tr!(literal = "Replace path"))
+                        .help_text(tr!(
+                            literal = "Choose which of the two polyline paths between the selected vertices will be replaced. Length includes elevation and curved edges."
+                        ))
+                        .show(ui, |ui, row_height, _| {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_sized([82.0, row_height], egui::Button::selectable(!editor.bezier_replace_longer, tr!(literal = "Shortest")))
+                                    .clicked()
+                                {
+                                    editor.bezier_replace_longer = false;
+                                }
+                                if ui
+                                    .add_sized([82.0, row_height], egui::Button::selectable(editor.bezier_replace_longer, tr!(literal = "Longest")))
+                                    .clicked()
+                                {
+                                    editor.bezier_replace_longer = true;
+                                }
+                            })
+                            .response
+                        });
+                    if editor.bezier_replace_longer != previous {
+                        editor.bezier_selected_verts.swap(0, 1);
+                        std::mem::swap(&mut editor.bezier_cp1, &mut editor.bezier_cp2);
+                    }
                 }
-            }
-        } else {
-            MenuFieldU32::new("Segments", &mut editor.bezier_segments, 2..=64)
-                .help_text(
-                    "Number of line segments used to approximate the curve between the two \
-                         selected vertices.",
-                )
-                .speed(0.1)
-                .show(ui);
 
-            if editor.bezier_poly_closed {
-                let previous = editor.bezier_replace_longer;
-                MenuField::new("Replace path")
-                    .help_text(
-                        "Choose which of the two polyline paths between the selected vertices \
-                             will be replaced. Length includes elevation and curved edges.",
-                    )
-                    .show(ui, |ui, row_height, _| {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_sized([82.0, row_height], egui::Button::selectable(!editor.bezier_replace_longer, "Shortest"))
-                                .clicked()
-                            {
-                                editor.bezier_replace_longer = false;
-                            }
-                            if ui
-                                .add_sized([82.0, row_height], egui::Button::selectable(editor.bezier_replace_longer, "Longest"))
-                                .clicked()
-                            {
-                                editor.bezier_replace_longer = true;
-                            }
-                        })
-                        .response
-                    });
-                if editor.bezier_replace_longer != previous {
-                    editor.bezier_selected_verts.swap(0, 1);
-                    std::mem::swap(&mut editor.bezier_cp1, &mut editor.bezier_cp2);
+                draw_bezier_xyz(
+                    ui,
+                    tr!(literal = "Control point 1"),
+                    tr!(literal = "World X, Y and Z coordinates of the first Bezier control point."),
+                    &mut editor.bezier_cp1,
+                );
+                draw_bezier_xyz(
+                    ui,
+                    tr!(literal = "Control point 2"),
+                    tr!(literal = "World X, Y and Z coordinates of the second Bezier control point."),
+                    &mut editor.bezier_cp2,
+                );
+            }
+
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let can_apply = both_selected;
+                let apply_clicked = ui.add(MenuButton::new(tr!(literal = "Apply")).primary().enabled(can_apply)).clicked();
+                let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if can_apply && (apply_clicked || enter_pressed) {
+                    commands.push(UiCommand::ApplyBezier);
                 }
-            }
-
-            draw_bezier_xyz(
-                ui,
-                "Control point 1",
-                "World X, Y and Z coordinates of the first Bezier control point.",
-                &mut editor.bezier_cp1,
-            );
-            draw_bezier_xyz(
-                ui,
-                "Control point 2",
-                "World X, Y and Z coordinates of the second Bezier control point.",
-                &mut editor.bezier_cp2,
-            );
-        }
-
-        ui.add_space(4.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let can_apply = both_selected;
-            let apply_clicked = ui.add(MenuButton::new("Apply").primary().enabled(can_apply)).clicked();
-            let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if can_apply && (apply_clicked || enter_pressed) {
-                commands.push(UiCommand::ApplyBezier);
-            }
-            if ui.add(MenuButton::new("Cancel")).clicked() {
-                commands.push(UiCommand::CancelBezier);
-            }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
+                    commands.push(UiCommand::CancelBezier);
+                }
+            });
         });
-    });
 }
 
 /// Slice view dock: slab width, movement speed, Q/E rotate rate, and Exit.
 pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("slice_panel", "Slice View", viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
-        MenuFieldF64::new("Width", &mut editor.slice_width_input, 0.1..=1.0e6)
-            .help_text("Thickness of the visible slice slab centred on the overview indicator.")
-            .speed(0.5)
-            .suffix("m")
-            .show(ui);
-        MenuFieldF64::new("Speed", &mut editor.slice_speed_input, 0.0..=1.0e6)
-            .help_text("Movement speed of the slice when using the navigation keys.")
-            .speed(1.0)
-            .suffix("m/s")
-            .show(ui);
-        MenuFieldF64::new("Rotate", &mut editor.slice_rotate_input, 1.0..=720.0)
-            .help_text("Rotation speed of the slice when using Q and E.")
-            .speed(1.0)
-            .suffix("°/s")
-            .show(ui);
-        ui.add_space(4.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add(MenuButton::new("Exit slice")).clicked() {
-                commands.push(UiCommand::SetSliceModeEnabled(false));
-            }
+    ViewportDockPanel::new("slice_panel", tr!(literal = "Slice View"), viewport_rect)
+        .min_width(210.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!(literal = "Width"), &mut editor.slice_width_input, 0.1..=1.0e6)
+                .help_text(tr!(literal = "Thickness of the visible slice slab centred on the overview indicator."))
+                .speed(0.5)
+                .suffix(tr!(literal = "m"))
+                .show(ui);
+            MenuFieldF64::new(tr!(literal = "Speed"), &mut editor.slice_speed_input, 0.0..=1.0e6)
+                .help_text(tr!(literal = "Movement speed of the slice when using the navigation keys."))
+                .speed(1.0)
+                .suffix(tr!(literal = "m/s"))
+                .show(ui);
+            MenuFieldF64::new(tr!(literal = "Rotate"), &mut editor.slice_rotate_input, 1.0..=720.0)
+                .help_text(tr!(literal = "Rotation speed of the slice when using Q and E."))
+                .speed(1.0)
+                .suffix(tr!(literal = "°/s"))
+                .show(ui);
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new(tr!(literal = "Exit slice"))).clicked() {
+                    commands.push(UiCommand::SetSliceModeEnabled(false));
+                }
+            });
         });
-    });
 }

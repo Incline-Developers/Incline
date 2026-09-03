@@ -11,14 +11,17 @@
 //! product so far - see [`crate::ui::state::DelayProduct`] - so the palette is
 //! one section, and a new kind would be another beside it.
 
-use crate::ui::{
-    EditorState,
-    state::{BlastCursor, DelayProduct, UiCommand},
-    widgets::{
-        collapsible_section::CollapsibleSection,
-        context_menu::{ContextMenuAction, context_menu_popup},
-        shifted,
-        toolbar::GROUP_CORNER_RADIUS,
+use crate::{
+    i18n::tr,
+    ui::{
+        EditorState,
+        state::{BlastCursor, DelayProduct, UiCommand},
+        widgets::{
+            collapsible_section::CollapsibleSection,
+            context_menu::{ContextMenuAction, context_menu_popup},
+            shifted,
+            toolbar::GROUP_CORNER_RADIUS,
+        },
     },
 };
 
@@ -67,7 +70,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
             // what its own resize handle stores. Claim the whole column, or
             // the region's fill stops under the last card.
             ui.set_min_height(ui.available_height());
-            CollapsibleSection::new("delay_palette", "Delay Palette")
+            CollapsibleSection::new("delay_palette", tr!(literal = "Delay Palette"))
                 .default_open(true)
                 .show(ui, |ui| draw_delay_palette(ui, editor, commands));
         })
@@ -133,7 +136,7 @@ fn draw_product_card(ui: &mut egui::Ui, product: &DelayProduct, width: f32) -> b
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, CARD_HEIGHT), egui::Sense::click());
     let mut delete = false;
     context_menu_popup(&response, format!("{} ms {}", product.delay_ms, product.name), |ui| {
-        if ContextMenuAction::new("Delete Product").show(ui).clicked() {
+        if ContextMenuAction::new(tr!(literal = "Delete Product")).show(ui).clicked() {
             delete = true;
             ui.close();
         }
@@ -166,7 +169,7 @@ fn draw_new_product_card(ui: &mut egui::Ui, width: f32) -> bool {
         let stroke = egui::Stroke::new(2.0, color);
         ui.painter().line_segment([center - egui::vec2(PLUS_ARM, 0.0), center + egui::vec2(PLUS_ARM, 0.0)], stroke);
         ui.painter().line_segment([center - egui::vec2(0.0, PLUS_ARM), center + egui::vec2(0.0, PLUS_ARM)], stroke);
-        paint_row(ui, rect, NAME_CENTER, "NEW PRODUCT", 9.0, color);
+        paint_row(ui, rect, NAME_CENTER, &tr!(literal = "New Product").to_uppercase(), 9.0, color);
     }
     response.clicked()
 }

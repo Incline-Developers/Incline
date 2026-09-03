@@ -36,6 +36,7 @@ pub(crate) use unthemed_icon;
 use winit::{event::WindowEvent, window::Window};
 
 use crate::{
+    i18n::{tr, tr_format},
     model::{Document, block_model::OpenBlockModel},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
@@ -262,7 +263,10 @@ fn mirror_copy_text_to_browser_clipboard(platform_output: &egui::PlatformOutput)
         let write = clipboard.write_text(text);
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(error) = wasm_bindgen_futures::JsFuture::from(write).await {
-                log::warn!("Could not copy text to the browser clipboard: {error:?}");
+                log::warn!(
+                    "{}",
+                    crate::i18n::tr_format!(literal = "Could not copy text to the browser clipboard: %error%", error = format!("{error:?}"))
+                );
             }
         });
     }
@@ -288,9 +292,9 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(
             if editor.slice_pending_start.is_none() {
-                "Click the first point of the slice line"
+                tr!(literal = "Click the first point of the slice line")
             } else {
-                "Click the second point of the slice line"
+                tr!(literal = "Click the second point of the slice line")
             }
             .to_string(),
         );
@@ -299,65 +303,64 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
     if editor.active_tool == ActiveTool::MeasureDistance
         && let (Some(start), Some(end)) = (editor.measurement_start, editor.measurement_end)
     {
-        return Some(format!("{:.3} meters", start.distance(end)));
+        return Some(tr_format!(literal = "%distance% meters", distance = format!("{:.3}", start.distance(end))));
     }
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
         if let Some(measurement) = state::batter_angle_measurement(editor.batter_angle_points.as_slice()) {
-            let dip = format!("{:.2}° dip", measurement.dip_degrees);
+            let dip = tr_format!(literal = "%value%° dip", value = format!("{:.2}", measurement.dip_degrees));
             return Some(match measurement.strike_degrees {
-                Some(strike) => format!("{strike:06.2}° strike · {dip}"),
-                None => format!("{dip} (horizontal, no strike)"),
+                Some(strike) => tr_format!(literal = "%strike%° strike · %dip%", strike = format!("{strike:06.2}"), dip = dip),
+                None => tr_format!(literal = "%dip% (horizontal, no strike)", dip = dip),
             });
         }
         return Some(
             match editor.batter_angle_points.len() {
-                0 => "Select first crest/toe point",
-                1 => "Select second crest/toe point",
-                _ => "Select opposite berm point",
+                0 => tr!(literal = "Select first crest/toe point"),
+                1 => tr!(literal = "Select second crest/toe point"),
+                _ => tr!(literal = "Select opposite berm point"),
             }
             .to_string(),
         );
     }
 
     if editor.slice_mode_enabled {
-        return Some("Slice view: middle-drag pan · W/S move slab · Q/E rotate · Esc exit".to_string());
+        return Some(tr!(literal = "Slice view: middle-drag pan · W/S move slab · Q/E rotate · Esc exit"));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
         return Some(match editor.circle_draft.as_ref() {
-            None => "Click the circle centre".to_string(),
-            Some(draft) if draft.radius_text.is_empty() => "Click a perimeter point or type a radius".to_string(),
-            Some(draft) if draft.typed_radius().is_some() => "Press Enter to use the typed radius, or click to use the pointer radius".to_string(),
-            Some(_) => "Enter a positive decimal radius".to_string(),
+            None => tr!(literal = "Click the circle centre"),
+            Some(draft) if draft.radius_text.is_empty() => tr!(literal = "Click a perimeter point or type a radius"),
+            Some(draft) if draft.typed_radius().is_some() => tr!(literal = "Press Enter to use the typed radius, or click to use the pointer radius"),
+            Some(_) => tr!(literal = "Enter a positive decimal radius"),
         });
     }
 
     match editor.active_tool {
-        ActiveTool::Move if editor.selected_handles.is_empty() => Some("Select an item"),
-        ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some("Choose offset side"),
-        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some("Select a line or polyline"),
-        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some("Select designs"),
-        ActiveTool::DrapeToTopology => Some("Select topologies"),
-        ActiveTool::RelimitLine if editor.relimit_confirming_end => Some("Choose relimit side"),
-        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => Some("Select line to relimit to"),
-        ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => Some("Select line to relimit"),
-        ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => Some("Select the endpoint to join"),
-        ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => Some("Select the next line to fuse"),
-        ActiveTool::FuseIntoPolyline => Some("Select a line to fuse"),
-        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => Some("Select a polyline or open line"),
-        ActiveTool::SplitAtPoints if editor.split_selected_verts[0].is_none() => Some("Select a split point"),
-        ActiveTool::SplitAtPoints if editor.split_selected_verts[1].is_none() => Some("Select second split point"),
-        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => Some("Select a polyline vertex"),
-        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => Some("Select a polyline"),
-        ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => Some("Click first vertex"),
-        ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => Some("Click second vertex"),
-        ActiveTool::ExplodePolyline => Some("Select a polyline"),
-        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => Some("Select a polyline"),
-        ActiveTool::DeletePoints => Some("Select a point"),
+        ActiveTool::Move if editor.selected_handles.is_empty() => Some(tr!(literal = "Select an item")),
+        ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some(tr!(literal = "Choose offset side")),
+        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some(tr!(literal = "Select a line or polyline")),
+        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some(tr!(literal = "Select designs")),
+        ActiveTool::DrapeToTopology => Some(tr!(literal = "Select topologies")),
+        ActiveTool::RelimitLine if editor.relimit_confirming_end => Some(tr!(literal = "Choose relimit side")),
+        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => Some(tr!(literal = "Select line to relimit to")),
+        ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => Some(tr!(literal = "Select line to relimit")),
+        ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => Some(tr!(literal = "Select the endpoint to join")),
+        ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => Some(tr!(literal = "Select the next line to fuse")),
+        ActiveTool::FuseIntoPolyline => Some(tr!(literal = "Select a line to fuse")),
+        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => Some(tr!(literal = "Select a polyline or open line")),
+        ActiveTool::SplitAtPoints if editor.split_selected_verts[0].is_none() => Some(tr!(literal = "Select a split point")),
+        ActiveTool::SplitAtPoints if editor.split_selected_verts[1].is_none() => Some(tr!(literal = "Select second split point")),
+        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => Some(tr!(literal = "Select a polyline vertex")),
+        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => Some(tr!(literal = "Select a polyline")),
+        ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => Some(tr!(literal = "Click first vertex")),
+        ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => Some(tr!(literal = "Click second vertex")),
+        ActiveTool::ExplodePolyline => Some(tr!(literal = "Select a polyline")),
+        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => Some(tr!(literal = "Select a polyline")),
+        ActiveTool::DeletePoints => Some(tr!(literal = "Select a point")),
         _ => None,
     }
-    .map(str::to_string)
 }
 
 /// Draw the compact MakeCircle radius editor beside (but never under) the cursor.
@@ -422,7 +425,7 @@ fn draw_circle_radius_input(ui: &mut egui::Ui, editor: &mut EditorState, command
                                 .hint_text(live_mouse_radius.as_str())
                                 .char_limit(32),
                         );
-                        ui.label("m");
+                        ui.label(tr!(literal = "m"));
 
                         if draft.focus_requested || !response.has_focus() {
                             response.request_focus();

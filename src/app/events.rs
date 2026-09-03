@@ -6,7 +6,7 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::{app::App, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error};
+use crate::{app::App, i18n::tr_format, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error};
 
 const RIGHT_CLICK_DRAG_THRESHOLD_PX: f32 = 3.0;
 
@@ -123,7 +123,7 @@ impl<'a> App<'a> {
             match event {
                 WindowEvent::CloseRequested => {
                     if let Err(error) = self.request_exit() {
-                        userspace_error!("Couldn't exit: {}", error);
+                        userspace_error!("{}", tr_format!(literal = "Couldn't exit: %error%", error = error));
                     }
                 }
                 WindowEvent::KeyboardInput { .. } => self.handle_key_action(&event),
@@ -987,7 +987,7 @@ impl<'a> App<'a> {
                 KeyCode::KeyY => self.apply_history_step(false),
                 KeyCode::KeyS => {
                     if let Err(error) = self.save_dirty_project() {
-                        userspace_error!("Couldn't save: {}", error);
+                        userspace_error!("{}", tr_format!(literal = "Couldn't save: %error%", error = error));
                     }
                 }
                 KeyCode::KeyA => {
@@ -1239,8 +1239,8 @@ impl<'a> App<'a> {
                     self.editor.z_input = z;
                     self.redraw_requested = true;
                     crate::logging::report_completed_action(
-                        CommandReportSpec::new("Set Elevation", format!("Z {z:.4}")),
-                        format!("Set elevation from cursor hit to Z {z:.4}"),
+                        CommandReportSpec::new(crate::i18n::tr!(literal = "Set Elevation"), format!("Z {z:.4}")),
+                        crate::i18n::tr_format!(literal = "Set elevation from cursor hit to Z %z%", z = format!("{z:.4}")),
                     );
                 }
             }

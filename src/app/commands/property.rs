@@ -1,11 +1,12 @@
 use crate::{
     app::App,
+    i18n::tr_format,
     model::{Axis, Command, FillStyle, LayerId, Object, ObjectColor, ObjectId, SceneEntityId},
     userspace_log,
 };
 
 macro_rules! batch_property {
-    ($self:expr, $ids:expr, $update_fn:expr, $log:literal $(, $arg:expr)*) => {{
+    ($self:expr, $ids:expr, $update_fn:expr, $log:literal $(, $arg_name:ident = $arg:expr)*) => {{
         let Some(project) = $self.workspace.active_project_mut() else {
             return;
         };
@@ -22,7 +23,7 @@ macro_rules! batch_property {
         if !cmds.is_empty() {
             $self.history.execute(doc, Command::Batch(cmds));
         }
-        userspace_log!($log, $ids.len() $(, $arg)*);
+        userspace_log!("{}", tr_format!(literal = $log, count = $ids.len() $(, $arg_name = $arg)*));
         $self.invalidate_geometry();
     }};
 }
@@ -88,7 +89,7 @@ impl<'a> App<'a> {
                 obj.set_axis_position(axis, value);
             },
             "Batch-set {1} value on {0} object(s)",
-            axis.label()
+            axis = axis.label()
         )
     }
 
@@ -135,6 +136,19 @@ impl<'a> App<'a> {
         self.history.execute(doc, Command::Batch(cmds));
         self.editor.selected_handles = selected_after.into_iter().map(SceneEntityId::Object).collect();
         self.invalidate_geometry();
-        userspace_log!("{} {} object(s) to layer {:?}", if copy { "Copied" } else { "Moved" }, ids.len(), target_layer);
+        let action = if copy {
+            crate::i18n::tr!(literal = "Copied")
+        } else {
+            crate::i18n::tr!(literal = "Moved")
+        };
+        userspace_log!(
+            "{}",
+            crate::i18n::tr_format!(
+                literal = "%action% %count% object(s) to layer %layer%",
+                action = action,
+                count = ids.len(),
+                layer = format!("{target_layer:?}")
+            )
+        );
     }
 }

@@ -80,10 +80,15 @@ impl<'a> App<'a> {
         if before != after {
             self.history.execute(doc, Command::Replace { before, after });
             crate::logging::report_completed_action(
-                CommandReportSpec::new("Chamfer", format!("Radius {:.3}", self.editor.chamfer_radius)),
-                format!(
-                    "Chamfered corner {} with radius {:.3} and {} segments",
-                    ci, self.editor.chamfer_radius, self.editor.chamfer_segments
+                CommandReportSpec::new(
+                    crate::i18n::tr!(literal = "Chamfer"),
+                    crate::i18n::tr_format!(literal = "Radius %radius%", radius = format!("{:.3}", self.editor.chamfer_radius)),
+                ),
+                crate::i18n::tr_format!(
+                    literal = "Chamfered corner %corner% with radius %radius% and %segments% segments",
+                    corner = ci,
+                    radius = format!("{:.3}", self.editor.chamfer_radius),
+                    segments = self.editor.chamfer_segments
                 ),
             );
         }
