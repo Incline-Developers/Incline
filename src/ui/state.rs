@@ -3305,14 +3305,6 @@ impl Workspace {
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
-
-    /// Whether the viewport bar's centre run carries anything in this
-    /// workspace: production's drawing settings, or the drill hole Drill &
-    /// Blast works on. A workspace with neither leaves the middle of the bar
-    /// empty.
-    pub(crate) fn has_centre_settings(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast)
-    }
 }
 
 /// Identity of one product in the Drill & Blast palette.
