@@ -1264,6 +1264,53 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
         });
 }
 
+/// Draw the floating Rotate Collar panel: the two angles a drill plan is
+/// written in, and an Apply button.
+///
+/// The values are absolute, not a delta - a round is drilled at one angle, so
+/// Apply points every selected hole this way. A ring drag is the delta gesture,
+/// and it drives these same fields as it goes, so the panel always reads out
+/// the setup the holes are standing at.
+pub(crate) fn draw_rotate_collar_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    use crate::model::drill_hole::{CollarRotation, HoleOrientation, MAX_HOLE_DIP};
+
+    ViewportDockPanel::new("rotate_collar_panel", "Rotate Collar", viewport_rect)
+        .min_width(230.0)
+        .show(ui.ctx(), |ui| {
+            if editor.rotate_panel_mixed {
+                ui.label("Selected holes point different ways. Apply sets them all to these angles.");
+                ui.add_space(2.0);
+            }
+            let azimuth = MenuFieldF64::new("Azimuth", &mut editor.rotate_panel_azimuth, 0.0..=360.0)
+                .help_text("Bearing the holes are drilled on, in degrees clockwise from grid north.")
+                .speed(0.25)
+                .show(ui);
+            let dip = MenuFieldF64::new("Dip", &mut editor.rotate_panel_dip, -MAX_HOLE_DIP..=MAX_HOLE_DIP)
+                .help_text("Angle from horizontal, negative downwards: -90 is a vertical hole.")
+                .speed(0.25)
+                .show(ui);
+            let target = CollarRotation::Absolute(HoleOrientation {
+                azimuth: editor.rotate_panel_azimuth,
+                dip: editor.rotate_panel_dip,
+            });
+            if azimuth.changed() || dip.changed() {
+                commands.push(UiCommand::PreviewCollarRotation(target));
+            }
+
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(MenuButton::new("Apply").primary()).clicked() {
+                    commands.push(UiCommand::ApplyCollarRotation);
+                    editor.active_tool = ActiveTool::None;
+                }
+                if ui.add(MenuButton::new("Cancel")).clicked() {
+                    commands.push(UiCommand::CancelCollarRotation);
+                    editor.active_tool = ActiveTool::None;
+                }
+            });
+        });
+}
+
 /// Chamfer tool viewport dock: segments input + Apply / Cancel.
 pub(crate) fn draw_chamfer_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     let corner_picked = editor.chamfer_poly_id.is_some() && editor.chamfer_corner_index.is_some();

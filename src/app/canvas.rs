@@ -111,7 +111,9 @@ impl<'a> App<'a> {
         if !self.workspace.has_active_project() && self.triangulations.is_empty() {
             return;
         }
-        if self.editor.active_tool.translates() {
+        // Picking a new target abandons whatever gesture was standing over the
+        // last one - a turn as much as a move.
+        if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
             self.cancel_move_delta();
             self.editor.move_vertex_target = None;
         }
@@ -180,7 +182,7 @@ impl<'a> App<'a> {
             }
             Some((None, world)) => {
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() {
+                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else if self.workspace.has_active_project() {
@@ -195,7 +197,7 @@ impl<'a> App<'a> {
                 // still begin a selection gesture so a short click can clear
                 // the current selection.
                 self.active_triangulation = None;
-                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() {
+                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else {
@@ -735,15 +737,16 @@ impl<'a> App<'a> {
 
     /// Whether the active tool will take what the cursor landed on.
     ///
-    /// The translate tools take only what they can translate - Move Design the
-    /// document's own objects, Move Collar the holes of a drillhole dataset -
-    /// so a pick they have no use for is treated as a click on nothing rather
-    /// than selecting something the gizmo would then stand uselessly over. A
-    /// tool that selects for its own reasons, and plain picking, take anything.
+    /// The gizmo tools take only what they can act on - Move Design the
+    /// document's own objects, Move Collar and Rotate Collar the holes of a
+    /// drillhole dataset - so a pick they have no use for is treated as a
+    /// click on nothing rather than selecting something the gizmo would then
+    /// stand uselessly over. A tool that selects for its own reasons, and
+    /// plain picking, take anything.
     fn tool_accepts_pick(&self, pick: &crate::rendering::graphics::camera::ScenePick) -> bool {
         match self.editor.active_tool {
             ActiveTool::Move => matches!(pick.entity, SceneEntityId::Object(_)),
-            ActiveTool::MoveCollar => pick.hole.is_some(),
+            ActiveTool::MoveCollar | ActiveTool::RotateCollar => pick.hole.is_some(),
             _ => true,
         }
     }

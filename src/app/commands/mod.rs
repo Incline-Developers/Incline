@@ -1059,8 +1059,22 @@ impl<'a> App<'a> {
                 self.cancel_move_delta();
                 Ok(())
             }
+            UiCommand::PreviewCollarRotation(rotation) => {
+                self.preview_collar_rotation(rotation);
+                Ok(())
+            }
+            UiCommand::ApplyCollarRotation => {
+                self.apply_pending_collar_rotation();
+                Ok(())
+            }
+            // The rollback is `cancel_move_delta`'s: it owns the collar
+            // session both gestures preview through.
+            UiCommand::CancelCollarRotation => {
+                self.cancel_move_delta();
+                Ok(())
+            }
             UiCommand::ConfirmDeleteSelection => {
-                if self.editor.active_tool.translates() {
+                if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.cancel_move_delta();
                 }
                 self.delete_selection();

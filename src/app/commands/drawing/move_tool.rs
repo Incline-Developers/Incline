@@ -57,12 +57,17 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
+    /// Put down whichever gesture is standing - a design move, a collar move
+    /// or a collar turn - and roll the geometry back to where it was captured.
+    /// All three write into the same captured originals, so one cancel covers
+    /// every path that has to abandon an edit in progress.
     pub(crate) fn cancel_move_delta(&mut self) {
         self.gizmo_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
         self.restore_move_session_original();
-        self.restore_collar_move_session();
+        self.restore_collar_session();
+        self.reset_rotate_editor_state();
         self.reset_move_editor_state();
         self.invalidate_geometry();
         self.invalidate_overlay();
@@ -76,8 +81,16 @@ impl<'a> App<'a> {
     /// paths so that an in-progress move is preserved rather than silently lost.
     pub(crate) fn commit_pending_move(&mut self) {
         self.gizmo_drag = None;
+        self.collar_rotate_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
+        self.editor.rotate_gizmo_drag_ring = None;
+        // A standing turn is checked first: it leaves the collars where they
+        // were, so the move delta read below would see zero and let it stand.
+        if let Some(rotation) = self.collar_rotation {
+            self.apply_collar_rotation(rotation);
+            return;
+        }
         // A collar preview is already written into the dataset it belongs to.
         // Its delta is not carried on the session, so it is read back off the
         // first hole the preview moved - every hole shares one delta - and the
@@ -117,8 +130,16 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
+    /// Whether any translate or turn gesture is standing over the document.
+    /// Every path that has to settle or abandon an edit in progress - saving,
+    /// switching project, changing tool - asks this one question, so a new
+    /// gesture is wired into all of them by capturing a session.
     pub(crate) fn has_pending_move_delta(&self) -> bool {
-        self.move_session_original.is_some() || self.collar_move_session.is_some() || self.editor.move_vertex_target.is_some() || self.gizmo_drag.is_some()
+        self.move_session_original.is_some()
+            || self.collar_move_session.is_some()
+            || self.editor.move_vertex_target.is_some()
+            || self.gizmo_drag.is_some()
+            || self.collar_rotate_drag.is_some()
     }
 
     pub(crate) fn begin_gizmo_drag(&mut self, axis_idx: u8, axis: DVec3, cursor_px: (f32, f32)) {
@@ -208,12 +229,12 @@ impl<'a> App<'a> {
 
     pub(crate) fn ensure_move_session_original(&mut self) {
         if self.editor.active_tool == ActiveTool::MoveCollar {
-            self.ensure_collar_move_session();
+            self.ensure_collar_session();
             return;
         }
         // The two tools never preview at once: whichever is being started
         // rolls the other one back before it captures anything of its own.
-        self.restore_collar_move_session();
+        self.restore_collar_session();
         let selected_ids = self.move_target_object_ids();
         if selected_ids.is_empty() {
             self.move_session_original = None;
@@ -313,17 +334,17 @@ impl<'a> App<'a> {
     /// starts a drag against an empty selection.
     fn has_move_targets(&self) -> bool {
         if self.editor.active_tool == ActiveTool::MoveCollar {
-            !self.collar_move_targets().is_empty()
+            !self.collar_targets().is_empty()
         } else {
             !self.move_target_object_ids().is_empty()
         }
     }
 
-    /// The holes Move Collar is holding, in a fixed order so a session can be
-    /// compared against the selection without regard to hash order. Holes in
-    /// datasets that are no longer loaded are dropped: a closed dataset has no
-    /// geometry left to move.
-    fn collar_move_targets(&self) -> Vec<DrillHoleRef> {
+    /// The holes a collar gesture is holding, in a fixed order so a session
+    /// can be compared against the selection without regard to hash order.
+    /// Holes in datasets that are no longer loaded are dropped: a closed
+    /// dataset has no geometry left to move or turn.
+    pub(super) fn collar_targets(&self) -> Vec<DrillHoleRef> {
         let mut targets: Vec<DrillHoleRef> = self
             .editor
             .selected_drill_holes
@@ -339,19 +360,19 @@ impl<'a> App<'a> {
         targets
     }
 
-    /// Capture the selected holes as they stand, so every preview can be
-    /// written from the originals rather than from the last preview. Mirrors
-    /// `ensure_move_session_original`, down to re-capturing when the selection
-    /// changes under a live preview.
-    fn ensure_collar_move_session(&mut self) {
-        // Starting a collar move ends any design move that was still previewing.
+    /// Capture the selected holes as they stand, so every preview - a move or
+    /// a turn - can be written from the originals rather than from the last
+    /// preview. Mirrors `ensure_move_session_original`, down to re-capturing
+    /// when the selection changes under a live preview.
+    pub(super) fn ensure_collar_session(&mut self) {
+        // Starting a collar gesture ends any design move that was still previewing.
         self.restore_move_session_original();
-        let targets = self.collar_move_targets();
+        let targets = self.collar_targets();
         if targets.is_empty() {
             // Nothing left to move - the holes were deselected, or the dataset
             // holding them was closed - so a preview standing over them is put
             // back rather than abandoned where it was dragged to.
-            self.restore_collar_move_session();
+            self.restore_collar_session();
             return;
         }
         let should_refresh = self
@@ -368,7 +389,7 @@ impl<'a> App<'a> {
         }
         // A changed target set must never use already-previewed geometry as
         // its new baseline. Restore first, then capture the new selection.
-        self.restore_collar_move_session();
+        self.restore_collar_session();
         let Some(project_runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
             return;
         };
@@ -395,10 +416,11 @@ impl<'a> App<'a> {
         });
     }
 
-    /// Roll back a live Move Collar preview if it is holding holes in the
-    /// dataset that is about to be closed or removed. The holes go back where
-    /// they were rather than the preview being left standing over a dataset
-    /// that is no longer the one it was captured from.
+    /// Roll back a live collar preview - a move or a turn, they share the one
+    /// session - if it is holding holes in the dataset that is about to be
+    /// closed or removed. The holes go back where they were rather than the
+    /// preview being left standing over a dataset that is no longer the one it
+    /// was captured from.
     pub(crate) fn cancel_collar_move_touching(&mut self, dataset: crate::model::drill_hole::DrillHoleId) {
         if self
             .collar_move_session
@@ -435,7 +457,7 @@ impl<'a> App<'a> {
     /// The datasets' content epochs go back too: the preview wrote to them,
     /// but the content it wrote is gone, so an abandoned drag must not leave
     /// them looking edited.
-    fn restore_collar_move_session(&mut self) {
+    pub(crate) fn restore_collar_session(&mut self) {
         let Some(session) = self.collar_move_session.take() else {
             return;
         };
@@ -444,7 +466,7 @@ impl<'a> App<'a> {
         self.invalidate_topology_bounds_and_redraw();
     }
 
-    fn restore_collar_epochs(&mut self, epochs: &[(crate::model::drill_hole::DrillHoleId, u64)]) {
+    pub(super) fn restore_collar_epochs(&mut self, epochs: &[(crate::model::drill_hole::DrillHoleId, u64)]) {
         for (id, epoch) in epochs {
             if let Some(dataset) = self.drill_holes.iter_mut().find(|dataset| dataset.id == *id) {
                 dataset.state.restore_epoch(*epoch);
@@ -459,7 +481,7 @@ impl<'a> App<'a> {
     /// somewhere clean to return to. Applying it immediately rewrites the same
     /// positions the preview was already showing, so nothing moves on screen.
     fn apply_collar_move_delta(&mut self, delta: DVec3) {
-        self.ensure_collar_move_session();
+        self.ensure_collar_session();
         let Some(session) = self.collar_move_session.take() else {
             return;
         };
@@ -502,10 +524,21 @@ impl<'a> App<'a> {
     }
 
     /// Rewrite every captured hole as its original translated by `delta` - a
-    /// zero delta therefore restores. Each dataset is unshared once and its
-    /// extent recomputed, and its revision carries the change through to the
-    /// instance cache: see `rendering::scene::drill_hole_cache`.
+    /// zero delta therefore restores, which is the whole of how a preview is
+    /// rolled back.
     fn write_collar_holes(&mut self, originals: &[(DrillHoleRef, HolePlacement)], delta: DVec3) {
+        self.write_collar_placements(originals, |hole, original| hole.set_placement(original, delta));
+    }
+
+    /// Rewrite every captured hole from the original it was captured at, by
+    /// whatever rule `write` applies - a translation for Move Collar, a turn
+    /// for Rotate Collar. Writing from the originals rather than from what is
+    /// on screen is what keeps a drag free of accumulated drift.
+    ///
+    /// Each dataset is unshared once and its extent recomputed, and its
+    /// revision carries the change through to the instance cache: see
+    /// `rendering::scene::drill_hole_cache`.
+    pub(super) fn write_collar_placements(&mut self, originals: &[(DrillHoleRef, HolePlacement)], write: impl Fn(&mut crate::model::drill_hole::DrillHole, &HolePlacement)) {
         for dataset in &mut self.drill_holes {
             if !originals.iter().any(|(target, _)| target.dataset == dataset.id) {
                 continue;
@@ -515,7 +548,7 @@ impl<'a> App<'a> {
                 let Some(hole) = data.holes.get_mut(target.hole) else {
                     continue;
                 };
-                hole.set_placement(original, delta);
+                write(hole, original);
             }
             data.refresh_bounds();
             dataset.state.touch();

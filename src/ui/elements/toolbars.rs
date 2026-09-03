@@ -91,7 +91,7 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
-/// nudge its holes, tie them together, then say where it starts.
+/// nudge its holes, re-aim them, tie them together, then say where it starts.
 fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     // Setting the initiation point acts on the pattern the viewport bar's
     // centre run names, and reads it the same way that run does: a dataset
@@ -114,6 +114,14 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             icon: egui::Image::new(themed_icon!(ui, "move_element.svg")),
             tooltip: tr!(literal = "Move Collar"),
             action: LeftToolAction::Tool(ActiveTool::MoveCollar),
+            enabled: has_active_dataset,
+        },
+        LeftTool {
+            // Move Collar's counterpart: the same holes, turned instead of
+            // shifted, so it sits directly beside it in the run.
+            icon: egui::Image::new(themed_icon!(ui, "rotate_element.svg")),
+            tooltip: "Rotate Collar",
+            action: LeftToolAction::Tool(ActiveTool::RotateCollar),
             enabled: has_active_dataset,
         },
         LeftTool {

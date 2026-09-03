@@ -349,6 +349,8 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
     match editor.active_tool {
         ActiveTool::Move if !editor.move_tool_has_targets() => Some(tr!(literal = "Select an item")),
         ActiveTool::MoveCollar if !editor.move_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
+        ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
+        ActiveTool::RotateCollar => Some(tr!(literal = "Drag a ring, or type an azimuth and dip - each hole turns about its own collar")),
         ActiveTool::SetInitiationPoint => Some(tr!(literal = "Click a collar to add or edit an initiation point")),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some(tr!(literal = "Choose offset side")),
         ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some(tr!(literal = "Select a line or polyline")),
@@ -657,6 +659,13 @@ fn draw_ui(
     if editor.move_tool_has_targets() {
         draw_move_gizmo(root_ui, editor);
         dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
+    }
+
+    // Rotate Collar: the two-ring gizmo and its angle panel, over the holes it
+    // would turn.
+    if editor.rotate_tool_has_targets() {
+        draw_rotate_gizmo(root_ui, editor);
+        dialogs::editing::draw_rotate_collar_panel(root_ui, editor, commands, canvas_rect);
     }
 
     // Chamfer tool: gizmo overlay + dock panel
@@ -1389,6 +1398,56 @@ fn draw_move_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
             egui::Stroke::NONE,
         ));
     }
+}
+
+/// Ring colours for the Rotate Collar gizmo, azimuth then dip.
+///
+/// Azimuth takes the Z colour because it is a turn about Z, and the whole of
+/// what it changes is a bearing on the flat. Dip takes amber rather than an
+/// axis colour: the axis it turns about is not a world axis at all - it swings
+/// with the bearing - so naming it after one would be a lie.
+const ROTATE_RING_COLORS: [egui::Color32; 2] = [GIZMO_AXIS_COLORS[2], egui::Color32::from_rgb(247, 168, 34)];
+
+/// Draw the Rotate Collar gizmo: an azimuth ring lying flat and a dip ring
+/// standing in the vertical plane the holes point along, with a dot at the
+/// centre marking the collars they turn about.
+///
+/// There is no third ring. A hole is a cylinder, so a spin about its own axis
+/// is not something that can be drilled differently.
+fn draw_rotate_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
+    use state::{ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING};
+    let gizmo = &editor.rotate_gizmo;
+    let Some(center_px) = gizmo.center_px else {
+        return;
+    };
+    let ppp = root_ui.ctx().pixels_per_point();
+    let to_pos = |point: (f32, f32)| egui::pos2(point.0 / ppp, point.1 / ppp);
+    let painter = root_ui.painter();
+
+    // The dip ring is drawn last so it reads as standing in front where the
+    // two cross, which is the way round they are stacked in world space from
+    // most working viewpoints.
+    for ring in [ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING] {
+        let index = usize::from(ring);
+        let fade = gizmo.ring_fade[index];
+        let points = &gizmo.ring_px[index];
+        if fade <= 0.0 || points.len() < 2 {
+            continue;
+        }
+        let is_active = editor.rotate_gizmo_hovered_ring == Some(ring) || editor.rotate_gizmo_drag_ring == Some(ring);
+        let color = if is_active { egui::Color32::WHITE } else { ROTATE_RING_COLORS[index] };
+        let alpha = if is_active { fade } else { fade * GIZMO_IDLE_ALPHA };
+        let stroke = egui::Stroke::new(if is_active { 3.0 } else { 2.0 }, gizmo_color(color, alpha));
+        let mut path: Vec<egui::Pos2> = points.iter().copied().map(to_pos).collect();
+        // Close the loop by repeating the first sample: a ring is a closed
+        // curve, and `line` draws an open one.
+        path.push(path[0]);
+        painter.add(egui::Shape::line(path, stroke));
+    }
+
+    // The collars themselves are the pivots; this only marks where the gizmo
+    // is anchored, so it stays small and stays neutral.
+    painter.circle_filled(to_pos(center_px), 3.0, gizmo_color(egui::Color32::WHITE, GIZMO_IDLE_ALPHA));
 }
 
 /// Build an `egui::Visuals` set with selection styling applied to the given theme.

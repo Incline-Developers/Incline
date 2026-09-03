@@ -49,7 +49,7 @@ use crate::{
     model::{
         Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, StepEffects,
         block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
-        drill_hole::{DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
+        drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
         spatial::ObjectSnapIndex,
@@ -110,6 +110,30 @@ pub(crate) struct GizmoDragState {
     pub(crate) constraint: GizmoDragConstraint,
     pub(crate) start_cursor_screen_px: (f32, f32),
     pub(crate) start_delta: DVec3,
+}
+
+/// A live Rotate Collar ring drag.
+///
+/// The sweep is measured on screen, as the cursor's angle about the projected
+/// gizmo centre - the ring under the pointer is drawn as exactly that circle,
+/// so following it needs no unprojection back into the ring's world plane.
+pub(crate) struct CollarRotateDrag {
+    /// Which ring is being dragged: see `ui::state::ROTATE_GIZMO_AZIMUTH_RING`.
+    pub(crate) ring: u8,
+    /// Gizmo centre the sweep is measured about, held for the length of the
+    /// drag so a preview moving the collars cannot move the pivot under it.
+    pub(crate) center_px: (f32, f32),
+    /// Cursor angle last frame, for the step this frame is measured against.
+    pub(crate) last_angle: f64,
+    /// Total swept angle in screen radians, unwrapped, so a sweep past the
+    /// atan2 discontinuity keeps going and a multi-turn sweep is honoured.
+    pub(crate) swept: f64,
+    /// The turn standing when the drag began, so grabbing a ring again
+    /// continues the edit rather than restarting it from the originals.
+    pub(crate) start: CollarRotation,
+    /// How far the anchor hole may still be tipped either way before it would
+    /// pass vertical, bounding the accumulated dip so a drag stays reversible.
+    pub(crate) dip_room: (f64, f64),
 }
 
 /// A live Move preview belongs to the project whose objects were captured.
@@ -332,7 +356,15 @@ pub(crate) struct App<'a> {
     slice_preview_middle_down: bool,
     pending_topology_click: Option<(SceneEntityId, DVec3)>,
     move_session_original: Option<MoveSession>,
+    /// Captured collar placements, shared by Move Collar and Rotate Collar:
+    /// both rewrite the same holes from the same originals, and only one of
+    /// the two ever previews at a time.
     collar_move_session: Option<CollarMoveSession>,
+    /// The turn a live Rotate Collar preview is standing at, `None` when no
+    /// turn is previewed. Held beside the session rather than inside it so a
+    /// move and a turn share one capture.
+    pub(crate) collar_rotation: Option<CollarRotation>,
+    pub(crate) collar_rotate_drag: Option<CollarRotateDrag>,
     background_tasks: BackgroundTaskState,
     pending_triangulation_loads: Vec<PendingLoad<PathBuf, crate::model::triangulation::LoadedTriangulation>>,
     pending_block_model_loads: Vec<PendingLoad<BlockModelSource, crate::model::block_model::LoadedBlockModel>>,
@@ -437,6 +469,8 @@ impl<'a> Default for App<'a> {
             pending_topology_click: None,
             move_session_original: None,
             collar_move_session: None,
+            collar_rotation: None,
+            collar_rotate_drag: None,
             background_tasks: BackgroundTaskState::default(),
             pending_triangulation_loads: Vec::new(),
             pending_block_model_loads: Vec::new(),
@@ -1115,19 +1149,28 @@ impl<'a> App<'a> {
         // active.
         if self.has_pending_move_delta() {
             self.restore_move_session_original();
+            // And the collar session beside it: a preview standing when the
+            // project changes is written into its dataset already, so dropping
+            // it below without this leaves the holes moved and the item
+            // starred over an edit nothing can undo.
+            self.restore_collar_session();
         }
         if self.editor.text_editing_enabled {
             self.cancel_text_edit();
         }
         self.editor.clear_project_transients();
         self.pending_topology_click = None;
-        // Clear any in-progress move session so it cannot bleed into the new project.
+        // Clear any in-progress gesture so it cannot bleed into the new project.
         self.move_session_original = None;
         self.collar_move_session = None;
+        self.collar_rotation = None;
+        self.collar_rotate_drag = None;
         self.drag = None;
         self.gizmo_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
+        self.editor.rotate_gizmo_drag_ring = None;
+        self.editor.rotate_preview_active = false;
     }
 
     fn invalidate_geometry(&mut self) {

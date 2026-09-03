@@ -242,9 +242,30 @@ impl<'a> App<'a> {
                                     self.editor.move_panel_last_preview = d;
                                     self.invalidate_geometry();
                                 }
+                                // Keep the Rotate Collar panel previewing on the same
+                                // belt-and-braces rule: a typed angle does not always
+                                // report changed() on the frame it lands.
+                                if self.editor.active_tool.rotates() && self.collar_rotate_drag.is_none() && self.editor.rotate_tool_has_targets() {
+                                    let angles = [self.editor.rotate_panel_azimuth, self.editor.rotate_panel_dip];
+                                    if angles != self.editor.rotate_panel_last_preview {
+                                        self.preview_collar_rotation(crate::model::drill_hole::CollarRotation::Absolute(crate::model::drill_hole::HoleOrientation {
+                                            azimuth: angles[0],
+                                            dip: angles[1],
+                                        }));
+                                    }
+                                }
+                                // And keep them reading out where the selected holes
+                                // point whenever no turn of the user's own stands over
+                                // them - so arming the tool, or picking another hole,
+                                // shows the angles that hole is drilled at.
+                                if self.editor.active_tool.rotates() {
+                                    self.refresh_rotate_panel_readout();
+                                }
                                 // Clean up per-tool state when the tool is switched via the
-                                // toolbar.
-                                if !self.editor.active_tool.translates() && self.has_pending_move_delta() {
+                                // toolbar. A standing turn is not stale state: it is the
+                                // rotate tool's own preview, and it is cancelled by the
+                                // same rule only once that tool is put down.
+                                if !self.editor.active_tool.translates() && !self.editor.active_tool.rotates() && self.has_pending_move_delta() {
                                     self.editor.move_panel_last_preview = [f64::NAN; 3];
                                     self.cancel_move_delta();
                                 }
@@ -399,6 +420,19 @@ impl<'a> App<'a> {
                     if self.gizmo_drag.is_some() {
                         self.move_gizmo_to_cursor();
                         self.invalidate_overlay();
+                    }
+                    if self.collar_rotate_drag.is_some() {
+                        self.collar_rotate_drag_to_cursor();
+                        self.invalidate_overlay();
+                    }
+                    if self.editor.active_tool.rotates()
+                        && let Some(cursor_px) = self.editor.cursor_screen_px
+                    {
+                        let hovered = hit_rotate_gizmo_ring(&self.editor, cursor_px);
+                        if self.editor.rotate_gizmo_hovered_ring != hovered {
+                            self.editor.rotate_gizmo_hovered_ring = hovered;
+                            self.invalidate_overlay();
+                        }
                     }
                     if self.editor.active_tool.translates()
                         && let Some(cursor_px) = self.editor.cursor_screen_px
@@ -573,7 +607,9 @@ impl<'a> App<'a> {
                         || self.editor.relimit_waiting_for_pick
                         || self.editor.offset_awaiting_side_pick
                         || self.gizmo_drag.is_some()
+                        || self.collar_rotate_drag.is_some()
                         || self.editor.active_tool.translates()
+                        || self.editor.active_tool.rotates()
                         || self.editor.active_tool == ActiveTool::MeasureDistance
                         || self.editor.active_tool == ActiveTool::MeasureBatterAngle
                         || self.editor.active_tool == ActiveTool::DeletePoints
@@ -830,6 +866,19 @@ impl<'a> App<'a> {
                         None => self.begin_select_or_drag(),
                     }
                 }
+                // Rotate Collar has nothing to grab but its rings, so a press
+                // off them is an ordinary Drill & Blast selection - the same
+                // rule Move Collar follows for a press off its gizmo.
+                ActiveTool::RotateCollar => {
+                    match self
+                        .editor
+                        .cursor_screen_px
+                        .and_then(|cursor_px| hit_rotate_gizmo_ring(&self.editor, cursor_px).map(|ring| (cursor_px, ring)))
+                    {
+                        Some((cursor_px, ring)) => self.begin_collar_rotate_drag(ring, cursor_px),
+                        None => self.begin_select_or_drag(),
+                    }
+                }
                 ActiveTool::TieHoles => self.tie_holes_click(),
                 ActiveTool::Chamfer => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
@@ -884,6 +933,9 @@ impl<'a> App<'a> {
         self.finish_drag();
         if self.gizmo_drag.is_some() {
             self.finish_gizmo_drag();
+        }
+        if self.collar_rotate_drag.is_some() {
+            self.finish_collar_rotate_drag();
         }
         if self.editor.chamfer_gizmo_drag_start_px.is_some() {
             self.editor.chamfer_gizmo_drag_start_px = None;
@@ -1220,7 +1272,7 @@ impl<'a> App<'a> {
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
                     self.cancel_split_at_points();
-                } else if self.editor.active_tool.translates() {
+                } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.gizmo_drag = None;
                     self.editor.gizmo_drag_axis_index = None;
                     self.editor.gizmo_drag_plane_index = None;
@@ -1282,6 +1334,9 @@ impl<'a> App<'a> {
                     let d = self.editor.move_panel_delta;
                     self.apply_move_delta(glam::DVec3::new(d[0], d[1], d[2]));
                     self.editor.active_tool = ActiveTool::None;
+                } else if self.editor.active_tool.rotates() {
+                    self.apply_pending_collar_rotation();
+                    self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::OffsetElement && self.editor.offset_awaiting_side_pick {
                     self.commit_offset();
                 } else if self.editor.active_tool == ActiveTool::DrapeToTopology {
@@ -1338,7 +1393,7 @@ impl<'a> App<'a> {
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
             self.cancel_split_at_points();
-        } else if self.editor.active_tool.translates() {
+        } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
             self.gizmo_drag = None;
             self.editor.gizmo_drag_axis_index = None;
             self.editor.gizmo_drag_plane_index = None;
@@ -1434,7 +1489,7 @@ impl<'a> App<'a> {
                 self.editor.selected_drill_holes.clear();
                 self.editor.selected_handles.retain(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
             }
-            ActiveTool::MoveCollar => self.editor.selected_handles.clear(),
+            ActiveTool::MoveCollar | ActiveTool::RotateCollar => self.editor.selected_handles.clear(),
             _ => {}
         }
         if self.editor.selected_handles.len() + self.editor.selected_drill_holes.len() != held {
@@ -1593,6 +1648,41 @@ fn hit_gizmo_handle(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32
     let view_axes = gizmo.view_axes?;
     let distance = (cursor_px.0 - center.0).hypot(cursor_px.1 - center.1);
     ((distance - gizmo.ring_radius_px).abs() < threshold * 0.7).then_some(GizmoHandleHit::Plane(crate::ui::state::MOVE_GIZMO_VIEW_PLANE, view_axes))
+}
+
+/// Which Rotate Collar ring the cursor is over.
+///
+/// Whichever ring passes closest wins, so the two can cross - which they do
+/// from most viewpoints - without either becoming ungrabbable near the join.
+fn hit_rotate_gizmo_ring(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32)) -> Option<u8> {
+    use crate::ui::state::{ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING};
+    let gizmo = &editor.rotate_gizmo;
+    gizmo.center_px?;
+    let threshold = GIZMO_HIT_POINTS * gizmo.scale_factor.max(1.0);
+    let mut best: Option<(u8, f32)> = None;
+    for ring in [ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING] {
+        let index = usize::from(ring);
+        // A faded-out ring is not clickable: the user cannot see what they
+        // would be grabbing, and a sweep round it would not read reliably.
+        if gizmo.ring_fade[index] <= 0.0 {
+            continue;
+        }
+        let points = &gizmo.ring_px[index];
+        if points.len() < 2 {
+            continue;
+        }
+        // The ring closes, so the last sample joins back to the first.
+        let distance = points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .take(points.len())
+            .map(|(&from, &to)| point_to_segment_distance(cursor_px, from, to))
+            .fold(f32::INFINITY, f32::min);
+        if distance < threshold && best.is_none_or(|(_, closest)| distance < closest) {
+            best = Some((ring, distance));
+        }
+    }
+    best.map(|(ring, _)| ring)
 }
 
 /// Point on the ring where an axis arrow starts, given its projected tip.

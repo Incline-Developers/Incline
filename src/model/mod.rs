@@ -1477,6 +1477,29 @@ impl EditTarget<'_> {
         self.touch_item(ItemRef::DrillHole(dataset));
     }
 
+    /// The turn counterpart of [`Self::move_collars`], hole for hole: each
+    /// captured placement is rewritten swung about its own collar, so a
+    /// selection turns in place rather than orbiting a shared centre.
+    fn rotate_collars(&mut self, dataset: drill_hole::DrillHoleId, originals: &[(usize, drill_hole::HolePlacement)], rotation: drill_hole::CollarRotation) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        let mut turned = false;
+        for (index, original) in originals {
+            let Some(hole) = data.holes.get_mut(*index) else {
+                continue;
+            };
+            hole.set_rotated_placement(original, rotation);
+            turned = true;
+        }
+        if !turned {
+            return;
+        }
+        data.refresh_bounds();
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
     /// Clear every hole pair named by either side of a tie-in edit, then lay
     /// `insert` across them. One connector to a pair, so a pair is cleared
     /// before it is written whichever direction the old one ran in.
@@ -1603,6 +1626,19 @@ pub(crate) enum Command {
         originals: Vec<(usize, drill_hole::HolePlacement)>,
         delta: DVec3,
     },
+    /// Turn drillhole collars about themselves, each hole swinging around its
+    /// own collar so the pattern stays laid out where it was surveyed.
+    ///
+    /// Captured placements are the originals on the same rewrite-from-the-
+    /// original rule [`Command::MoveCollars`] follows: applying writes
+    /// `original` turned by `rotation`, reverting writes `original` back, and
+    /// no amount of apply/revert accumulates drift.
+    RotateCollars {
+        dataset: drill_hole::DrillHoleId,
+        /// Hole index within the dataset, paired with where it started.
+        originals: Vec<(usize, drill_hole::HolePlacement)>,
+        rotation: drill_hole::CollarRotation,
+    },
     /// Lay, replace or lift the surface connectors of a tie-in.
     ///
     /// The two sides name the same pairs of holes: `before` is whatever was
@@ -1678,7 +1714,7 @@ impl Command {
                     .map(|tie| size_of::<drill_hole::TieIn>() + tie.product.len())
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
-                Command::MoveCollars { originals, .. } => originals
+                Command::MoveCollars { originals, .. } | Command::RotateCollars { originals, .. } => originals
                     .iter()
                     .map(|(_, placement)| size_of::<drill_hole::HolePlacement>() + placement.trace.len() * size_of::<drill_hole::TraceStation>())
                     .fold(0usize, usize::saturating_add),
@@ -1737,7 +1773,7 @@ impl Command {
                     into.push(*item);
                 }
             }
-            Command::MoveCollars { dataset, .. } | Command::SetTieIns { dataset, .. } | Command::SetInitiation { dataset, .. } => {
+            Command::MoveCollars { dataset, .. } | Command::RotateCollars { dataset, .. } | Command::SetTieIns { dataset, .. } | Command::SetInitiation { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
                     into.push(item);
@@ -1821,6 +1857,7 @@ impl Command {
             Command::SetItemStyle { item, after, .. } => target.set_item_style(*item, after),
             Command::RenameItem { item, after, .. } => target.set_item_name(*item, after),
             Command::MoveCollars { dataset, originals, delta } => target.move_collars(*dataset, originals, *delta),
+            Command::RotateCollars { dataset, originals, rotation } => target.rotate_collars(*dataset, originals, *rotation),
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
             Command::AddItem { item, index, added } => {
@@ -1900,6 +1937,8 @@ impl Command {
             Command::RenameItem { item, before, .. } => target.set_item_name(*item, before),
             // A zero delta puts every captured hole back exactly where it was.
             Command::MoveCollars { dataset, originals, .. } => target.move_collars(*dataset, originals, DVec3::ZERO),
+            // And the identity turn does the same for a rotation.
+            Command::RotateCollars { dataset, originals, .. } => target.rotate_collars(*dataset, originals, drill_hole::CollarRotation::IDENTITY),
             // The same clear-then-write, with the two sides swapped: the pairs
             // the edit touched are named by both of them.
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),

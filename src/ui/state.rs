@@ -712,6 +712,16 @@ impl CircleDraft {
     }
 }
 
+/// How a Rotate Collar edit reads in the activity console: the angles it set,
+/// or the angles it turned by.
+pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::CollarRotation) -> String {
+    use crate::model::drill_hole::CollarRotation;
+    match rotation {
+        CollarRotation::Absolute(orientation) => format!("to azimuth {:.1}\u{00b0}, dip {:.1}\u{00b0}", orientation.azimuth, orientation.dip),
+        CollarRotation::Delta { azimuth, dip } => format!("by azimuth {azimuth:+.1}\u{00b0}, dip {dip:+.1}\u{00b0}"),
+    }
+}
+
 /// Plane-handle index used for the Move gizmo's view-aligned ring, which
 /// translates in the camera plane instead of a world-axis plane.
 pub(crate) const MOVE_GIZMO_VIEW_PLANE: u8 = 3;
@@ -758,6 +768,49 @@ impl Default for MoveGizmoScreen {
             ring_radius_px: 0.0,
             view_axes: None,
             view_basis_px: [(1.0, 0.0), (0.0, 1.0)],
+            scale_factor: 1.0,
+        }
+    }
+}
+
+/// The Rotate Collar gizmo's two rings, in the order they are indexed.
+pub(crate) const ROTATE_GIZMO_AZIMUTH_RING: u8 = 0;
+pub(crate) const ROTATE_GIZMO_DIP_RING: u8 = 1;
+
+/// One frame's screen-space projection of the Rotate Collar gizmo: an azimuth
+/// ring lying flat and a dip ring standing in the plane the holes currently
+/// point along. Pixel values are physical pixels, matching `cursor_screen_px`,
+/// so hit tests and drawing share one source of truth - the same contract
+/// [`MoveGizmoScreen`] keeps.
+///
+/// There is deliberately no third ring. A hole is a cylinder, so spinning one
+/// about its own axis changes nothing that can be drilled, and a ring offering
+/// it would only produce orientations no rig can be set to.
+#[derive(Clone)]
+pub(crate) struct RotateGizmoScreen {
+    pub(crate) center_px: Option<(f32, f32)>,
+    /// Each ring as a closed screen polyline, azimuth first. Built in world
+    /// space and projected point by point, so perspective shapes them.
+    pub(crate) ring_px: [Vec<(f32, f32)>; 2],
+    /// Per-ring opacity. A ring turning edge-on fades out and stops being
+    /// clickable rather than collapsing to a line the cursor cannot follow.
+    pub(crate) ring_fade: [f32; 2],
+    /// Sign turning a cursor sweep about the centre into a rotation about the
+    /// ring's world axis. A ring whose far face is towards the camera reads
+    /// the opposite way round on screen, and this is what carries that.
+    pub(crate) ring_sign: [f64; 2],
+    /// Physical pixels per logical point at the time of projection, so hit
+    /// tests can size their slack the same way the gizmo is sized.
+    pub(crate) scale_factor: f32,
+}
+
+impl Default for RotateGizmoScreen {
+    fn default() -> Self {
+        Self {
+            center_px: None,
+            ring_px: [Vec::new(), Vec::new()],
+            ring_fade: [0.0; 2],
+            ring_sign: [1.0; 2],
             scale_factor: 1.0,
         }
     }
@@ -1214,6 +1267,28 @@ pub(crate) struct EditorState {
     pub(crate) move_gizmo_hovered_plane: Option<u8>,
     pub(crate) gizmo_drag_axis_index: Option<u8>,
     pub(crate) gizmo_drag_plane_index: Option<u8>,
+
+    // Rotate Collar gizmo and panel
+    //
+    /// Projected Rotate Collar gizmo for the current frame.
+    pub(crate) rotate_gizmo: RotateGizmoScreen,
+    pub(crate) rotate_gizmo_hovered_ring: Option<u8>,
+    pub(crate) rotate_gizmo_drag_ring: Option<u8>,
+    /// Panel values, in degrees. Absolute rather than a delta: a round is
+    /// drilled at one angle, so Apply points every selected hole this way.
+    pub(crate) rotate_panel_azimuth: f64,
+    pub(crate) rotate_panel_dip: f64,
+    /// Whether the selected holes already disagree about where they point, so
+    /// the panel can say that the values shown are the anchor hole's rather
+    /// than the selection's.
+    pub(crate) rotate_panel_mixed: bool,
+    /// The angles the tool last previewed at, so a value the user typed can be
+    /// told from one the readout itself wrote back.
+    pub(crate) rotate_panel_last_preview: [f64; 2],
+    /// Whether a Rotate Collar preview is standing. While one is, the panel
+    /// values are the edit being made and must not be re-seeded from the holes
+    /// the preview is itself rewriting.
+    pub(crate) rotate_preview_active: bool,
     pub(crate) move_panel_delta: [f64; 3],
     /// Last delta that was actually applied as a preview (to avoid redundant rebuilds).
     pub(crate) move_panel_last_preview: [f64; 3],
@@ -1756,6 +1831,14 @@ impl EditorState {
         self.gizmo_drag_plane_index = None;
         self.move_panel_delta = [0.0; 3];
         self.move_panel_last_preview = [0.0; 3];
+        self.rotate_gizmo = RotateGizmoScreen::default();
+        self.rotate_gizmo_hovered_ring = None;
+        self.rotate_gizmo_drag_ring = None;
+        self.rotate_panel_azimuth = 0.0;
+        self.rotate_panel_dip = -90.0;
+        self.rotate_panel_mixed = false;
+        self.rotate_panel_last_preview = [0.0, -90.0];
+        self.rotate_preview_active = false;
         self.tool_highlight_id = None;
 
         self.batter_berm_dialog_open = false;
@@ -2032,6 +2115,14 @@ impl EditorState {
             move_gizmo_hovered_plane: None,
             gizmo_drag_axis_index: None,
             gizmo_drag_plane_index: None,
+            rotate_gizmo: RotateGizmoScreen::default(),
+            rotate_gizmo_hovered_ring: None,
+            rotate_gizmo_drag_ring: None,
+            rotate_panel_azimuth: 0.0,
+            rotate_panel_dip: -90.0,
+            rotate_panel_mixed: false,
+            rotate_panel_last_preview: [0.0, -90.0],
+            rotate_preview_active: false,
             move_panel_delta: [0.0; 3],
             move_panel_last_preview: [f64::NAN; 3],
             tool_highlight_id: None,
@@ -2265,6 +2356,19 @@ impl EditorState {
         self.active_workspace == Workspace::DrillAndBlast && self.active_tool == ActiveTool::TieHoles
     }
 
+    /// Whether surface connectors are drawn.
+    ///
+    /// A tie-in is blasting content, not ground: it describes a firing order
+    /// rather than anything that exists on the bench, and over a pit design it
+    /// is a mesh of lines across the very geometry the other workspaces are
+    /// there to look at. So it is shown only where it is worked on. Selecting
+    /// one is already Drill & Blast's alone - see `App::select_tie_at_cursor`
+    /// and the marquee in `App::finish_blast_box_selection` - and this is the
+    /// same rule for drawing them, so nothing is ever pickable unseen.
+    pub(crate) fn shows_tie_ins(&self) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast
+    }
+
     /// Whether the active translate tool has anything to move: design
     /// entities for Move Design, individually picked holes for Move Collar.
     /// Both tools' overlays hang off this, so neither draws a gizmo over an
@@ -2277,6 +2381,12 @@ impl EditorState {
             ActiveTool::MoveCollar => !self.selected_drill_holes.is_empty(),
             _ => false,
         }
+    }
+
+    /// Whether Rotate Collar has holes to turn. Its gizmo and panel hang off
+    /// this the way both translate tools' hang off `move_tool_has_targets`.
+    pub(crate) fn rotate_tool_has_targets(&self) -> bool {
+        self.active_tool == ActiveTool::RotateCollar && !self.selected_drill_holes.is_empty()
     }
 
     /// Apply a display action to the current selection. Returns `true` when the
@@ -2338,6 +2448,9 @@ pub(crate) enum ActiveTool {
     /// Drill & Blast's translate tool, which moves the holes it is given the
     /// way [`Self::Move`] moves design geometry.
     MoveCollar,
+    /// Drill & Blast's turn tool: the holes it is given each swing about their
+    /// own collar, so a pattern is re-aimed without being re-laid.
+    RotateCollar,
     /// Lay a product along the visible screen-space corridor between collars.
     TieHoles,
     /// Drill & Blast's initiation tool: a click puts the point a round starts
@@ -2356,6 +2469,20 @@ impl ActiveTool {
     /// places that run that shared machinery ask this rather than naming one.
     pub(crate) fn translates(self) -> bool {
         matches!(self, Self::Move | Self::MoveCollar)
+    }
+
+    /// Drill & Blast's Rotate Collar, the turn counterpart to Move Collar. It
+    /// has a gizmo and a numeric panel of its own rather than sharing the
+    /// translate ones, so the places that run that machinery ask this.
+    pub(crate) fn rotates(self) -> bool {
+        matches!(self, Self::RotateCollar)
+    }
+
+    /// Either collar gesture. Both work on individually picked holes rather
+    /// than on whole datasets, and so want the same selection, the same picks
+    /// and the same session capture.
+    pub(crate) fn acts_on_collars(self) -> bool {
+        matches!(self, Self::MoveCollar | Self::RotateCollar)
     }
 }
 
@@ -2609,6 +2736,13 @@ pub(crate) enum UiCommand {
     CancelBezier,
     ApplyMoveDelta(DVec3),
     CancelMoveDelta,
+    /// Preview a Rotate Collar turn without committing it.
+    PreviewCollarRotation(crate::model::drill_hole::CollarRotation),
+    /// Settle whatever turn the tool is previewing onto the undo stack - the
+    /// delta a ring drag built, or the angles the panel was typed to. Which of
+    /// the two it is, is the tool's own business, so this carries neither.
+    ApplyCollarRotation,
+    CancelCollarRotation,
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
     /// Show/hide a design layer without unloading it.
@@ -2888,9 +3022,11 @@ impl UiCommand {
             | Self::SetInitiation { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
+            | Self::PreviewCollarRotation(_)
             | Self::CancelChamfer
             | Self::CancelBezier
             | Self::CancelMoveDelta
+            | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
             | Self::OpenCreateBlockModel(_)
@@ -3012,6 +3148,7 @@ impl UiCommand {
             Self::ApplyChamfer => report(tr!(literal = "Chamfer"), tr!(literal = "Apply to selection")),
             Self::ApplyBezier => report(tr!(literal = "Create Bezier Curve"), tr!(literal = "Apply to selection")),
             Self::ApplyMoveDelta(delta) => report(tr!(literal = "Move Selection"), format!("{delta}")),
+            Self::ApplyCollarRotation => report(tr!(literal = "Rotate Collar"), tr!(literal = "Apply to selection")),
             Self::LoadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} shown")),
             Self::UnloadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} hidden")),
             Self::ToggleLayerVisible(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?}")),

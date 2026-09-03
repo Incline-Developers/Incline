@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
-use glam::{DVec2, DVec3};
+use glam::{DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -329,6 +329,113 @@ pub(crate) struct HolePlacement {
     pub(crate) trace: Vec<TraceStation>,
 }
 
+/// Where a hole points, in the terms a drill plan is written in: `azimuth`
+/// degrees clockwise from grid north, `dip` degrees from horizontal with down
+/// negative. This is the convention [`project_tangent`] resolves a survey in,
+/// so a hole read out of a file and a hole turned here describe themselves the
+/// same way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HoleOrientation {
+    pub(crate) azimuth: f64,
+    pub(crate) dip: f64,
+}
+
+/// How far a hole may be tipped either side of horizontal. Passing vertical
+/// would carry the hole over to the opposite bearing, silently rewriting the
+/// azimuth the driller was given, so a turn stops there instead.
+pub(crate) const MAX_HOLE_DIP: f64 = 90.0;
+
+/// How a Rotate Collar edit turns the holes it was handed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CollarRotation {
+    /// Point every hole the same way, whatever each was pointing before - what
+    /// the panel applies, a round being drilled at one angle.
+    Absolute(HoleOrientation),
+    /// Turn each hole from where it stood, so a pattern that was not uniform
+    /// to begin with keeps its spread - what a ring drag produces.
+    Delta { azimuth: f64, dip: f64 },
+}
+
+impl CollarRotation {
+    /// The turn that leaves every hole exactly where it was, which is what
+    /// reverting a Rotate Collar command writes.
+    pub(crate) const IDENTITY: Self = Self::Delta { azimuth: 0.0, dip: 0.0 };
+
+    pub(crate) fn is_identity(self) -> bool {
+        matches!(self, Self::Delta { azimuth, dip } if azimuth == 0.0 && dip == 0.0)
+    }
+}
+
+/// Which way a collar was set up, read off the first surveyed length below
+/// it - the piece of the hole the rig actually aimed, rather than the
+/// collar-to-toe chord, which on a hole that bends is neither.
+///
+/// A trace with no length below the collar has no direction to report.
+fn trace_orientation(collar: DVec3, trace: &[TraceStation]) -> Option<HoleOrientation> {
+    let direction = trace.iter().find_map(|station| {
+        let offset = station.position - collar;
+        (offset.length_squared() > 1.0e-12).then_some(offset)
+    })?;
+    Some(direction_orientation(direction))
+}
+
+/// Azimuth and dip of a direction, in the drill-plan convention.
+///
+/// A dead-vertical direction has no bearing to report and comes back as north,
+/// the same stand-in [`resolve_trace`] falls back on for a survey that never
+/// gave one.
+pub(crate) fn direction_orientation(direction: DVec3) -> HoleOrientation {
+    HoleOrientation {
+        azimuth: direction.x.atan2(direction.y).to_degrees().rem_euclid(360.0),
+        dip: direction.z.atan2(direction.x.hypot(direction.y)).to_degrees(),
+    }
+}
+
+/// The world rotation taking a hole pointing `from` to one pointing `to`: a
+/// swing about the vertical, then a tilt within the vertical plane the swing
+/// left it in.
+///
+/// Decomposed that way rather than as a shortest-arc rotation because the two
+/// halves are the two numbers on the drill plan: each gizmo ring drives one of
+/// them, and neither disturbs the other.
+fn orientation_rotation(from: HoleOrientation, to: HoleOrientation) -> DQuat {
+    // Azimuth runs clockwise seen from above, which is the negative direction
+    // about +Z.
+    let swing = DQuat::from_rotation_z(-(to.azimuth - from.azimuth).to_radians());
+    // Horizontal axis square to the destination bearing: turning about it is
+    // what raises or drops the toe.
+    let bearing = to.azimuth.to_radians();
+    let tilt_axis = DVec3::new(bearing.cos(), -bearing.sin(), 0.0);
+    DQuat::from_axis_angle(tilt_axis, (to.dip - from.dip).to_radians()) * swing
+}
+
+impl HolePlacement {
+    /// Where the collar stands. Mirrors [`DrillHole::collar_position`]: the
+    /// trace's first station is it, and `collar` only stands in for a hole
+    /// that arrived without a trace.
+    pub(crate) fn collar_position(&self) -> DVec3 {
+        self.trace.first().map_or(self.collar, |station| station.position)
+    }
+
+    /// Which way the collar was set up. See [`trace_orientation`].
+    pub(crate) fn orientation(&self) -> Option<HoleOrientation> {
+        trace_orientation(self.collar_position(), &self.trace)
+    }
+
+    /// What `rotation` would leave this hole pointing at. `None` where the
+    /// hole has no direction of its own to turn from.
+    pub(crate) fn rotated_orientation(&self, rotation: CollarRotation) -> Option<HoleOrientation> {
+        let from = self.orientation()?;
+        Some(match rotation {
+            CollarRotation::Absolute(target) => target,
+            CollarRotation::Delta { azimuth, dip } => HoleOrientation {
+                azimuth: (from.azimuth + azimuth).rem_euclid(360.0),
+                dip: (from.dip + dip).clamp(-MAX_HOLE_DIP, MAX_HOLE_DIP),
+            },
+        })
+    }
+}
+
 impl DrillHole {
     /// Capture where the hole stands, for a preview to rewrite it from.
     pub(crate) fn placement(&self) -> HolePlacement {
@@ -352,6 +459,39 @@ impl DrillHole {
         }
     }
 
+    /// Put the hole back at `placement` turned by `rotation` about its own
+    /// collar - [`CollarRotation::IDENTITY`] therefore restores it exactly.
+    ///
+    /// The collar never moves: the whole trace swings rigidly about it, survey
+    /// curvature and all, so a turned hole is the same hole aimed elsewhere
+    /// rather than a straightened one. Interval geometry is measured down the
+    /// trace rather than in world space, so it needs no adjustment - the same
+    /// reason [`Self::set_placement`] leaves it alone.
+    pub(crate) fn set_rotated_placement(&mut self, placement: &HolePlacement, rotation: CollarRotation) {
+        self.collar = placement.collar;
+        self.trace.clone_from(&placement.trace);
+        if rotation.is_identity() {
+            // The restore path, taken on every rollback: the trace copy above
+            // is already the whole of it.
+            return;
+        }
+        let Some(from) = placement.orientation() else {
+            // Nothing below the collar to aim, so there is nothing to turn.
+            return;
+        };
+        let Some(to) = placement.rotated_orientation(rotation) else {
+            return;
+        };
+        if to == from {
+            return;
+        }
+        let quat = orientation_rotation(from, to);
+        let pivot = placement.collar_position();
+        for station in &mut self.trace {
+            station.position = pivot + quat * (station.position - pivot);
+        }
+    }
+
     /// The world radius the hole is drawn at. A dataset that arrived without
     /// physical diameters falls back to a nominal production hole, so the
     /// collar markers and ties that scale off it stay a sensible size.
@@ -363,6 +503,13 @@ impl DrillHole {
     /// only stands in for a dataset that arrived without a trace.
     pub(crate) fn collar_position(&self) -> DVec3 {
         self.trace.first().map_or(self.collar, |station| station.position)
+    }
+
+    /// Which way the hole was set up. See [`trace_orientation`]. Asked of the
+    /// hole rather than of a captured placement so a per-frame readout costs
+    /// no trace copy.
+    pub(crate) fn orientation(&self) -> Option<HoleOrientation> {
+        trace_orientation(self.collar_position(), &self.trace)
     }
 
     pub(crate) fn position_at_depth(&self, depth: f64) -> Option<DVec3> {

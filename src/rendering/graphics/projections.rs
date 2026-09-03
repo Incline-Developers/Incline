@@ -1,7 +1,10 @@
 //! World-to-screen projection updates for UI/tool overlays.
 
 use super::*;
-use crate::ui::state::MoveGizmoScreen;
+use crate::{
+    app::commands::drawing::rotate_collar::{ring_axis, ring_basis},
+    ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen},
+};
 
 pub(crate) type ScreenSegmentPx = ((f32, f32), (f32, f32));
 
@@ -59,6 +62,18 @@ const GIZMO_AXIS_FADE_FULL: f32 = 0.44;
 /// edge-on: measured as how squarely the plane faces the camera.
 const GIZMO_PLANE_FADE_MIN: f32 = 0.175;
 const GIZMO_PLANE_FADE_FULL: f32 = 0.25;
+
+/// Points sampled around each Rotate Collar ring. Enough that a ring reads as
+/// a circle at the size it is drawn, and cheap enough to reproject per frame.
+const ROTATE_RING_SEGMENTS: usize = 72;
+/// Ring radius as a fraction of the Move gizmo's arm length, so the two tools'
+/// gizmos come up at about the same size over the same selection.
+const ROTATE_RING_RATIO: f64 = 0.85;
+/// A ring turning edge-on cannot be followed round, so it fades out over this
+/// band of how squarely it faces the camera and stops being clickable at the
+/// bottom of it - the same rule the Move gizmo's plane handles follow.
+const ROTATE_RING_FADE_MIN: f32 = 0.1;
+const ROTATE_RING_FADE_FULL: f32 = 0.28;
 
 /// How far across the view the initiation card's scale probe reaches, in world
 /// units. Long enough to measure cleanly, short enough that a perspective
@@ -141,6 +156,97 @@ pub(crate) fn projected_relimit_candidate_nearest_cursor(
     nearest_screen_segment(cursor, projected)
 }
 
+/// The camera-plane reference a gizmo sizes itself against: two world
+/// directions lying in the view plane, the screen vectors one world unit along
+/// each produces, and the pixels per world unit that follows from them.
+///
+/// Both gizmos measure against this, which is what makes "80 logical points"
+/// mean the same size on screen whichever one is up.
+struct GizmoScreenScale {
+    right: DVec3,
+    up: DVec3,
+    right_px: (f64, f64),
+    up_px: (f64, f64),
+    px_per_world: f64,
+}
+
+fn gizmo_screen_scale(center: DVec3, center_px: (f32, f32), forward: DVec3, camera_up_hint: DVec3, project: &impl Fn(DVec3) -> Option<(f32, f32)>) -> Option<GizmoScreenScale> {
+    let up_hint = if forward.cross(camera_up_hint).length_squared() > 1.0e-9 {
+        camera_up_hint
+    } else {
+        DVec3::X
+    };
+    let right = forward.cross(up_hint).normalize();
+    let up = right.cross(forward).normalize();
+    let screen_vector = |direction: DVec3| -> Option<(f64, f64)> {
+        let tip = project(center + direction)?;
+        Some((f64::from(tip.0 - center_px.0), f64::from(tip.1 - center_px.1)))
+    };
+    let right_px = screen_vector(right).unwrap_or((1.0, 0.0));
+    let up_px = screen_vector(up).unwrap_or((0.0, -1.0));
+    let px_per_world = right_px.0.hypot(right_px.1).max(up_px.0.hypot(up_px.1));
+    (px_per_world.partial_cmp(&1.0e-9) == Some(std::cmp::Ordering::Greater)).then_some(GizmoScreenScale {
+        right,
+        up,
+        right_px,
+        up_px,
+        px_per_world,
+    })
+}
+
+/// Project the Rotate Collar gizmo around `center`: an azimuth ring lying flat
+/// and a dip ring standing in the vertical plane the holes point along, so the
+/// dip ring swings round as the bearing is turned and always shows the plane
+/// the toe actually moves in.
+///
+/// Rings are sampled in world space and projected point by point, so
+/// perspective shapes them into the ellipses they really are.
+fn build_rotate_gizmo(
+    center: DVec3,
+    azimuth_degrees: f64,
+    forward: DVec3,
+    camera_up_hint: DVec3,
+    length_px: f32,
+    project: impl Fn(DVec3) -> Option<(f32, f32)>,
+) -> RotateGizmoScreen {
+    let Some(center_px) = project(center) else {
+        return RotateGizmoScreen::default();
+    };
+    let Some(scale) = gizmo_screen_scale(center, center_px, forward, camera_up_hint, &project) else {
+        return RotateGizmoScreen::default();
+    };
+    let radius = f64::from(length_px) * ROTATE_RING_RATIO / scale.px_per_world;
+
+    let mut gizmo = RotateGizmoScreen {
+        center_px: Some(center_px),
+        scale_factor: (f64::from(length_px) / GIZMO_LENGTH_POINTS) as f32,
+        ..RotateGizmoScreen::default()
+    };
+    for ring in [ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING] {
+        let index = usize::from(ring);
+        let normal = ring_axis(ring, azimuth_degrees);
+        let towards_view = normal.dot(forward);
+        // A ring is fully readable face-on and useless edge-on, which is
+        // exactly how squarely its axis points along the view.
+        gizmo.ring_fade[index] = fade_ramp(towards_view.abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
+        // Screen angles grow clockwise (screen Y runs down), and a ring whose
+        // far face is towards the camera reads the other way round again; both
+        // are folded into this one sign.
+        gizmo.ring_sign[index] = if towards_view < 0.0 { -1.0 } else { 1.0 };
+        if gizmo.ring_fade[index] <= 0.0 {
+            continue;
+        }
+        let [across, along] = ring_basis(ring, azimuth_degrees);
+        gizmo.ring_px[index] = (0..ROTATE_RING_SEGMENTS)
+            .filter_map(|step| {
+                let theta = std::f64::consts::TAU * step as f64 / ROTATE_RING_SEGMENTS as f64;
+                project(center + (across * theta.cos() + along * theta.sin()) * radius)
+            })
+            .collect();
+    }
+    gizmo
+}
+
 /// Project the Move gizmo around `center`, Blender-style: fixed on-screen
 /// size, each axis foreshortened by its own angle to the camera, and
 /// handles faded out as they turn towards the view direction.
@@ -151,31 +257,17 @@ fn build_move_gizmo(center: DVec3, forward: DVec3, camera_up_hint: DVec3, length
 
     // Camera-plane basis: the reference for "unforeshortened" screen size,
     // and the drag basis for the view-aligned ring.
-    let up_hint = if forward.cross(camera_up_hint).length_squared() > 1.0e-9 {
-        camera_up_hint
-    } else {
-        DVec3::X
-    };
-    let right = forward.cross(up_hint).normalize();
-    let camera_up = right.cross(forward).normalize();
-    let screen_vector = |direction: DVec3| -> Option<(f64, f64)> {
-        let tip = project(center + direction)?;
-        Some((f64::from(tip.0 - center_px.0), f64::from(tip.1 - center_px.1)))
-    };
-    let right_px = screen_vector(right).unwrap_or((1.0, 0.0));
-    let up_px = screen_vector(camera_up).unwrap_or((0.0, -1.0));
-    let px_per_world = right_px.0.hypot(right_px.1).max(up_px.0.hypot(up_px.1));
-    if px_per_world.partial_cmp(&1.0e-9) != Some(std::cmp::Ordering::Greater) {
+    let Some(scale) = gizmo_screen_scale(center, center_px, forward, camera_up_hint, &project) else {
         return MoveGizmoScreen::default();
-    }
-    let world_length = f64::from(length_px) / px_per_world;
+    };
+    let world_length = f64::from(length_px) / scale.px_per_world;
 
     let mut gizmo = MoveGizmoScreen {
         center_px: Some(center_px),
         scale_factor: (f64::from(length_px) / GIZMO_LENGTH_POINTS) as f32,
         ring_radius_px: length_px * GIZMO_RING_RATIO,
-        view_axes: Some([right, camera_up]),
-        view_basis_px: [right_px, up_px],
+        view_axes: Some([scale.right, scale.up]),
+        view_basis_px: [scale.right_px, scale.up_px],
         ..MoveGizmoScreen::default()
     };
 
@@ -223,6 +315,36 @@ fn build_move_gizmo(center: DVec3, forward: DVec3, camera_up_hint: DVec3, length
     gizmo
 }
 
+/// Where a collar gesture's gizmo stands, and the bearing its dip ring should
+/// lie in: the mean of the selected collars, and the orientation of the anchor
+/// hole among them.
+///
+/// The anchor is the lowest-numbered hole of the lowest-numbered dataset - the
+/// same order `App::collar_targets` sorts into - so which hole the panel and
+/// the dip ring speak for does not shift about with hash order.
+fn selected_collar_anchor(editor: &EditorState, drill_holes: &[OpenDrillHoleDataset]) -> Option<(DVec3, f64)> {
+    let hole_at = |target: &crate::model::drill_hole::DrillHoleRef| {
+        drill_holes
+            .iter()
+            .find(|dataset| dataset.id == target.dataset && dataset.state.loaded)
+            .and_then(|dataset| dataset.dataset.holes.get(target.hole))
+    };
+    let mut selected: Vec<_> = editor.selected_drill_holes.iter().filter(|target| hole_at(target).is_some()).collect();
+    if selected.is_empty() {
+        return None;
+    }
+    selected.sort_by_key(|target| (target.dataset.0, target.hole));
+    let sum: DVec3 = selected.iter().filter_map(|target| hole_at(target)).map(|hole| hole.collar).sum();
+    // A hole with no length below its collar has no bearing of its own; north
+    // is the same stand-in the survey resolver falls back on.
+    let azimuth = selected
+        .first()
+        .and_then(|target| hole_at(target))
+        .and_then(|hole| hole.orientation())
+        .map_or(0.0, |orientation| orientation.azimuth);
+    Some((sum / selected.len() as f64, azimuth))
+}
+
 impl<'a> Graphics<'a> {
     /// Project the Move gizmo around `center` using the live camera.
     fn project_move_gizmo(&self, center: DVec3) -> MoveGizmoScreen {
@@ -236,6 +358,22 @@ impl<'a> Graphics<'a> {
             // so its arms reach furthest in world units exactly when the camera
             // is zoomed in and the scene-fitted depth slab is thinnest - project
             // without that slab's rejection or the arms vanish.
+            |world| self.world_to_window_px_unclipped_depth(&view_proj, world),
+        )
+    }
+
+    /// Project the Rotate Collar gizmo around `center`, with its dip ring
+    /// standing in the vertical plane `azimuth_degrees` names.
+    fn project_rotate_gizmo(&self, center: DVec3, azimuth_degrees: f64) -> RotateGizmoScreen {
+        let view_proj = self.view_proj();
+        build_rotate_gizmo(
+            center,
+            azimuth_degrees,
+            self.camera.forward(),
+            self.camera.up(),
+            (GIZMO_LENGTH_POINTS * self.window.scale_factor()) as f32,
+            // Sized to constant screen space like the Move gizmo, so it wants
+            // the same freedom from the scene-fitted depth slab.
             |world| self.world_to_window_px_unclipped_depth(&view_proj, world),
         )
     }
@@ -324,24 +462,20 @@ impl<'a> Graphics<'a> {
         }
 
         use crate::ui::state::ActiveTool;
+        // Both collar tools stand their gizmo at the middle of the collars
+        // they are holding, read from the datasets themselves so it follows a
+        // live preview the way the design gizmo follows the moved objects.
+        let collar_anchor = editor.active_tool.acts_on_collars().then(|| selected_collar_anchor(editor, drill_holes)).flatten();
+        editor.rotate_gizmo = match collar_anchor.filter(|_| editor.active_tool.rotates()) {
+            // The dip ring stands in the vertical plane the anchor hole points
+            // along, so it always shows the plane its toe would swing in.
+            Some((center, azimuth)) => self.project_rotate_gizmo(center, azimuth),
+            None => RotateGizmoScreen::default(),
+        };
         if editor.active_tool == ActiveTool::MoveCollar {
-            // Move Collar's gizmo stands at the middle of the collars it is
-            // holding, read from the datasets themselves so it follows a live
-            // preview the way the design gizmo follows the moved objects.
-            let mut sum = DVec3::ZERO;
-            let mut count = 0usize;
-            for hole in &editor.selected_drill_holes {
-                if let Some(dataset) = drill_holes.iter().find(|dataset| dataset.id == hole.dataset && dataset.state.loaded)
-                    && let Some(hole) = dataset.dataset.holes.get(hole.hole)
-                {
-                    sum += hole.collar;
-                    count += 1;
-                }
-            }
-            editor.move_gizmo = if count > 0 {
-                self.project_move_gizmo(sum / count as f64)
-            } else {
-                MoveGizmoScreen::default()
+            editor.move_gizmo = match collar_anchor {
+                Some((center, _)) => self.project_move_gizmo(center),
+                None => MoveGizmoScreen::default(),
             };
         } else if editor.active_tool == ActiveTool::Move && (!editor.selected_handles.is_empty() || editor.move_vertex_target.is_some()) {
             let mut sum = DVec3::ZERO;
