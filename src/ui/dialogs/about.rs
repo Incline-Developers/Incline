@@ -1,9 +1,9 @@
 //! The About dialog: version, copyright, and licence.
 //!
-//! The GPL asks a program with a graphical interface to make its copyright and
-//! warranty notice reachable from the running application; this dialog is that
-//! notice. The bundled MIT and Apache-2.0 components are attributed in the
-//! third-party licence file shipped alongside the binary, not here.
+//! The MIT licence asks that the copyright and warranty notice travel with the
+//! software; this dialog is where the running application carries it. The
+//! bundled third-party components keep their own notices in the third-party
+//! licence file shipped alongside the binary, not here.
 
 use crate::{
     i18n::tr,
@@ -31,7 +31,7 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(format!("{} {}", crate::APP_NAME, crate::APP_RELEASE)).heading());
                     ui.label(tr!(literal = "Free Open Source Mine Design"));
-                    ui.label(egui::RichText::new(tr!(literal = "Licensed under the GNU General Public License v3.0")).weak());
+                    ui.label(egui::RichText::new(tr!(literal = "Licensed under the MIT License")).weak());
                 });
             });
 
@@ -41,12 +41,12 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
 
             ui.label(
                 egui::RichText::new(tr!(
-                    literal = "Incline Design is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License version 3 as published by the Free Software Foundation.\n\nIncline Design is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details."
+                    literal = "Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.\n\nIncline Design is provided \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT."
                 ))
                 .small(),
             );
             ui.add_space(4.0);
-            ui.hyperlink_to(tr!("about-read-full-licence"), "https://www.gnu.org/licenses/gpl-3.0.html");
+            ui.hyperlink_to(tr!("about-read-full-licence"), "https://opensource.org/license/mit");
 
             ui.add_space(10.0);
             ui.separator();

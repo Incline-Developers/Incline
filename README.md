@@ -25,7 +25,7 @@ The [`examples`](examples/) directory contains an import-ready project with a co
 
 ## License
 
-Incline Design is licensed under the GNU General Public License. See [LICENSE](LICENSE.md) for the full terms.
+Incline Design is licensed under the MIT License. See [LICENSE](LICENSE.md) for the full terms.
 
 ## Maintainers
 

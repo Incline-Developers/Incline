@@ -1263,12 +1263,13 @@ fn dashed_line_segments(start: egui::Pos2, end: egui::Pos2, dash: f32, gap: f32)
     segments
 }
 
-/// Axis colours taken from Blender's default theme, so the gizmo reads the same
-/// way: X red, Y green, Z blue.
+/// Axis colours, following the near-universal CAD convention: X red, Y green,
+/// Z blue. Each is desaturated off the primary so three saturated handles never
+/// sit against the scene at once.
 const GIZMO_AXIS_COLORS: [egui::Color32; 3] = [
-    egui::Color32::from_rgb(255, 51, 82),
-    egui::Color32::from_rgb(139, 220, 0),
-    egui::Color32::from_rgb(40, 144, 255),
+    egui::Color32::from_rgb(250, 58, 86),
+    egui::Color32::from_rgb(132, 214, 10),
+    egui::Color32::from_rgb(46, 138, 248),
 ];
 /// Opacity of an idle handle; a hovered or dragged one goes fully opaque.
 const GIZMO_IDLE_ALPHA: f32 = 0.6;

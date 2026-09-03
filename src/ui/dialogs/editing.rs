@@ -405,7 +405,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     egui::Panel::bottom("meta_splash").show_separator_line(false).show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
                             ui.label(tr_format!(literal = "%app%: %release%", app = crate::APP_NAME, release = crate::APP_RELEASE));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label("GNU General Public License v3.0"));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(tr!(literal = "MIT License")));
                         });
                     });
 
