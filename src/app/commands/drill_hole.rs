@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     app::App,
-    i18n::tr_format,
+    i18n::{tr, tr_format},
     model::{
         Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
         drill_hole::{
@@ -45,19 +45,19 @@ impl<'a> App<'a> {
     pub(crate) fn create_drill_pattern(&mut self, name: String, collars: Vec<glam::DVec3>, depth: f64, diameter: f64) -> Result<()> {
         let name = name.trim();
         if name.is_empty() {
-            anyhow::bail!("Enter a name for the drill pattern");
+            anyhow::bail!("{}", tr!(literal = "Enter a name for the drill pattern"));
         }
         if !depth.is_finite() || depth <= 0.0 {
-            anyhow::bail!("Hole depth must be greater than zero");
+            anyhow::bail!("{}", tr!(literal = "Hole depth must be greater than zero"));
         }
         if !diameter.is_finite() || diameter <= 0.0 {
-            anyhow::bail!("Hole diameter must be greater than zero");
+            anyhow::bail!("{}", tr!(literal = "Hole diameter must be greater than zero"));
         }
         if collars.is_empty() {
-            anyhow::bail!("The pattern contains no holes");
+            anyhow::bail!("{}", tr!(literal = "The pattern contains no holes"));
         }
         if collars.len() > crate::model::drill_hole::MAX_PATTERN_HOLES || collars.iter().any(|collar| !collar.is_finite()) {
-            anyhow::bail!("The drill pattern is too large or contains invalid collar coordinates");
+            anyhow::bail!("{}", tr!(literal = "The drill pattern is too large or contains invalid collar coordinates"));
         }
 
         let width = collars.len().to_string().len().max(3);

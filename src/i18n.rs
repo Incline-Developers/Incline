@@ -190,8 +190,19 @@ pub(crate) fn available_languages() -> Vec<LanguageIdentifier> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn system_languages() -> Vec<LanguageIdentifier> {
-    use i18n_embed::LanguageRequester;
-    i18n_embed::DesktopLanguageRequester::new().requested_languages()
+    sys_locale::get_locales().filter_map(|locale| parse_system_language(&locale)).collect()
+}
+
+/// Convert platform locale spellings such as `en_US.UTF-8` into Unicode
+/// language identifiers. `C` and `POSIX` deliberately mean no language; the
+/// caller will use English when they are the only configured locales.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_system_language(locale: &str) -> Option<LanguageIdentifier> {
+    let locale = locale.split(['.', '@']).next().unwrap_or(locale);
+    if locale.eq_ignore_ascii_case("c") || locale.eq_ignore_ascii_case("posix") {
+        return None;
+    }
+    locale.replace('_', "-").parse().ok()
 }
 
 #[cfg(target_arch = "wasm32")]

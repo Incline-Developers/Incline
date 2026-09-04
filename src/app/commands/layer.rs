@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     app::App,
-    i18n::tr_format,
+    i18n::{tr, tr_format},
     model::{Command, Document, Layer, LayerId, Object, SceneEntityId},
     userspace_log,
 };
@@ -241,7 +241,7 @@ impl<'a> App<'a> {
             before,
             after: !before,
         });
-        let state = if before { "Hidden" } else { "Shown" };
+        let state = if before { tr!(literal = "Hidden") } else { tr!(literal = "Shown") };
         userspace_log!("{}", tr_format!(literal = "%state% layer '%name%'", state = state, name = name));
         self.invalidate_geometry();
     }
@@ -269,7 +269,7 @@ impl<'a> App<'a> {
                 self.editor.active_layer = None;
             }
         }
-        let state = if locked { "Locked" } else { "Unlocked" };
+        let state = if locked { tr!(literal = "Locked") } else { tr!(literal = "Unlocked") };
         userspace_log!("{}", tr_format!(literal = "%state% layer '%name%'", state = state, name = name));
         self.invalidate_geometry();
     }

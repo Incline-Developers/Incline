@@ -122,8 +122,11 @@ impl<'a> App<'a> {
         });
         let described = crate::ui::state::describe_collar_rotation(rotation);
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Rotate Collar", format!("{turned} hole(s)")),
-            format!("Turned {turned} drillhole collar(s) {described}"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Rotate Collar"),
+                crate::i18n::tr_format!(literal = "%count% hole(s)", count = turned),
+            ),
+            crate::i18n::tr_format!(literal = "Turned %count% drillhole collar(s) %rotation%", count = turned, rotation = described),
         );
         self.reset_rotate_editor_state();
         self.invalidate_topology_bounds_and_redraw();

@@ -42,7 +42,7 @@ impl<'a> App<'a> {
             {
                 let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
                 self.editor.drill_pattern_boundary_id = Some(id);
-                self.editor.drill_pattern_boundary_name = format!("Polyline on '{layer}'");
+                self.editor.drill_pattern_boundary_name = tr_format!(literal = "Polyline on '%layer%'", layer = layer);
                 self.editor.drill_pattern_awaiting_shape_pick = false;
                 self.editor.viewport_pick_hover_label = None;
                 self.editor.tool_highlight_id = Some(id);

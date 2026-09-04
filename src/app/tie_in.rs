@@ -13,6 +13,7 @@
 
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{
         Command,
@@ -163,11 +164,11 @@ impl App<'_> {
     pub(crate) fn tie_holes_click(&mut self) {
         let product = self.editor.active_product().cloned();
         if product.is_none() {
-            crate::userspace_warn!("Select a delay product in the palette before tying holes in");
+            crate::userspace_warn!("{}", tr!(literal = "Select a delay product in the palette before tying holes in"));
             return;
         }
         if self.tie_target().is_none() {
-            crate::userspace_warn!("Choose the drillhole dataset to tie in first");
+            crate::userspace_warn!("{}", tr!(literal = "Choose the drillhole dataset to tie in first"));
             return;
         }
         if self.editor.tie_anchor.is_none() {
@@ -220,10 +221,25 @@ impl App<'_> {
         let Some(product) = product else {
             return;
         };
-        let replaced_note = if replaced > 0 { format!(", replacing {replaced}") } else { String::new() };
+        let detail = if replaced > 0 {
+            tr_format!(
+                literal = "Tied %count% connector(s) at %delay% ms with %product%, replacing %replaced%",
+                count = laid,
+                delay = product.delay_ms,
+                product = &product.name,
+                replaced = replaced
+            )
+        } else {
+            tr_format!(
+                literal = "Tied %count% connector(s) at %delay% ms with %product%",
+                count = laid,
+                delay = product.delay_ms,
+                product = &product.name
+            )
+        };
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Tie Holes", format!("{laid} connector(s)")),
-            format!("Tied {laid} connector(s) at {} ms with {}{replaced_note}", product.delay_ms, product.name),
+            CommandReportSpec::new(tr!(literal = "Tie Holes"), tr_format!(literal = "%count% connector(s)", count = laid)),
+            detail,
         );
     }
 
@@ -236,7 +252,7 @@ impl App<'_> {
         let Some(dataset) = self.drill_holes.iter().find(|dataset| dataset.id == hole.dataset) else {
             return;
         };
-        let name = dataset.dataset.holes.get(hole.hole).map_or_else(|| "hole".to_owned(), |hole| hole.dhid.clone());
+        let name = dataset.dataset.holes.get(hole.hole).map_or_else(|| tr!(literal = "hole"), |hole| hole.dhid.clone());
         let existing = dataset.dataset.initiations.iter().find(|initiation| initiation.hole == hole.hole).copied();
         self.editor.initiation_dialog = Some(InitiationDialog {
             target: hole,
@@ -262,17 +278,17 @@ impl App<'_> {
         if before == after {
             return;
         }
-        let name = dataset.dataset.holes.get(target.hole).map_or_else(|| "hole".to_owned(), |hole| hole.dhid.clone());
+        let name = dataset.dataset.holes.get(target.hole).map_or_else(|| tr!(literal = "hole"), |hole| hole.dhid.clone());
         self.execute_edit(Command::SetInitiation {
             dataset: target.dataset,
             before,
             after,
         });
         let detail = match after {
-            Some(initiation) => format!("Initiation point set on {name} at {} ms", initiation.delay_ms),
-            None => format!("Initiation point lifted from {name}"),
+            Some(initiation) => tr_format!(literal = "Initiation point set on %name% at %delay% ms", name = &name, delay = initiation.delay_ms),
+            None => tr_format!(literal = "Initiation point lifted from %name%", name = &name),
         };
-        crate::logging::report_completed_action(CommandReportSpec::new("Set Initiation Point", name), detail);
+        crate::logging::report_completed_action(CommandReportSpec::new(tr!(literal = "Set Initiation Point"), name), detail);
     }
 
     /// Select the nearest visible tie under the pointer. Returns `false` when
@@ -376,8 +392,8 @@ impl App<'_> {
         self.execute_edit(Command::Batch(commands));
         self.editor.selected_tie_ins.clear();
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Delete Tie-Ins", format!("{count} connector(s)")),
-            format!("Deleted {count} selected tie-in connector(s)"),
+            CommandReportSpec::new(tr!(literal = "Delete Tie-Ins"), tr_format!(literal = "%count% connector(s)", count = count)),
+            tr_format!(literal = "Deleted %count% selected tie-in connector(s)", count = count),
         );
     }
 }

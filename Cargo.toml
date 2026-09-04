@@ -62,6 +62,7 @@ i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
 semver = "1.0.28"
+sys-locale = "0.3.2"
 tempfile = "3.27.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"

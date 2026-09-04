@@ -514,8 +514,11 @@ impl<'a> App<'a> {
             Command::Batch(commands)
         });
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Move Collar", format!("{moved} hole(s)")),
-            format!("Applied move delta ({delta}) to {moved} drillhole collar(s)"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Move Collar"),
+                crate::i18n::tr_format!(literal = "%count% hole(s)", count = moved),
+            ),
+            crate::i18n::tr_format!(literal = "Applied move delta (%delta%) to %count% drillhole collar(s)", delta = delta, count = moved),
         );
         self.reset_move_editor_state();
         self.invalidate_topology_bounds_and_redraw();

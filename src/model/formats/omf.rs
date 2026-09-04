@@ -1666,9 +1666,11 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         {
             let dropped = dataset.apply_stored_ties(stored);
             if dropped > 0 {
-                self.bundle
-                    .warnings
-                    .push(format!("Element '{}' has {dropped} tie-in(s) naming holes it no longer contains", element.name));
+                self.bundle.warnings.push(tr_format!(
+                    literal = "Element '%name%' has %count% tie-in(s) naming holes it no longer contains",
+                    name = &element.name,
+                    count = dropped
+                ));
             }
         }
         let dataset = Arc::new(dataset);

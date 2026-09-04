@@ -1272,19 +1272,19 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
 pub(crate) fn draw_rotate_collar_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     use crate::model::drill_hole::{CollarRotation, HoleOrientation, MAX_HOLE_DIP};
 
-    ViewportDockPanel::new("rotate_collar_panel", "Rotate Collar", viewport_rect)
+    ViewportDockPanel::new("rotate_collar_panel", tr!(literal = "Rotate Collar"), viewport_rect)
         .min_width(230.0)
         .show(ui.ctx(), |ui| {
             if editor.rotate_panel_mixed {
-                ui.label("Selected holes point different ways. Apply sets them all to these angles.");
+                ui.label(tr!(literal = "Selected holes point different ways. Apply sets them all to these angles."));
                 ui.add_space(2.0);
             }
-            let azimuth = MenuFieldF64::new("Azimuth", &mut editor.rotate_panel_azimuth, 0.0..=360.0)
-                .help_text("Bearing the holes are drilled on, in degrees clockwise from grid north.")
+            let azimuth = MenuFieldF64::new(tr!(literal = "Azimuth"), &mut editor.rotate_panel_azimuth, 0.0..=360.0)
+                .help_text(tr!(literal = "Bearing the holes are drilled on, in degrees clockwise from grid north."))
                 .speed(0.25)
                 .show(ui);
-            let dip = MenuFieldF64::new("Dip", &mut editor.rotate_panel_dip, -MAX_HOLE_DIP..=MAX_HOLE_DIP)
-                .help_text("Angle from horizontal, negative downwards: -90 is a vertical hole.")
+            let dip = MenuFieldF64::new(tr!(literal = "Dip"), &mut editor.rotate_panel_dip, -MAX_HOLE_DIP..=MAX_HOLE_DIP)
+                .help_text(tr!(literal = "Angle from horizontal, negative downwards: -90 is a vertical hole."))
                 .speed(0.25)
                 .show(ui);
             let target = CollarRotation::Absolute(HoleOrientation {
@@ -1297,11 +1297,11 @@ pub(crate) fn draw_rotate_collar_panel(ui: &mut egui::Ui, editor: &mut EditorSta
 
             ui.add_space(4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(MenuButton::new("Apply").primary()).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
                     commands.push(UiCommand::ApplyCollarRotation);
                     editor.active_tool = ActiveTool::None;
                 }
-                if ui.add(MenuButton::new("Cancel")).clicked() {
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
                     commands.push(UiCommand::CancelCollarRotation);
                     editor.active_tool = ActiveTool::None;
                 }

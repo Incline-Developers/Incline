@@ -296,7 +296,7 @@ struct UiFrameContext<'a> {
 
 fn viewport_label_text(editor: &EditorState) -> Option<String> {
     if editor.drill_pattern_awaiting_shape_pick {
-        return Some("Click a closed polyline to use as the blast shape · Esc cancels".to_owned());
+        return Some(tr!(literal = "Click a closed polyline to use as the blast shape · Esc cancels"));
     }
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(

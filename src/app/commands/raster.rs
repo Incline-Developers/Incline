@@ -259,7 +259,7 @@ impl<'a> App<'a> {
             .map(|triangulation| (triangulation.id, triangulation.name.clone()))
             .collect();
         if overlapping.is_empty() {
-            anyhow::bail!("No loaded triangulation overlaps the extents of {raster_name}");
+            anyhow::bail!("{}", tr_format!(literal = "No loaded triangulation overlaps the extents of %name%", name = raster_name));
         }
         for (id, name) in &overlapping {
             if self

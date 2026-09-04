@@ -185,10 +185,10 @@ pub(crate) enum DrillPatternLayout {
 impl DrillPatternLayout {
     pub(crate) const ALL: [Self; 2] = [Self::Square, Self::Staggered];
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> String {
         match self {
-            Self::Square => "Square",
-            Self::Staggered => "Staggered",
+            Self::Square => tr!(literal = "Square"),
+            Self::Staggered => tr!(literal = "Staggered"),
         }
     }
 }
@@ -206,13 +206,13 @@ pub(crate) fn generate_pattern_collars(
     layout: DrillPatternLayout,
 ) -> Result<Vec<DVec3>, String> {
     if boundary.len() < 3 || boundary.iter().any(|point| !point.is_finite()) {
-        return Err("Choose a valid closed polyline".to_owned());
+        return Err(tr!(literal = "Choose a valid closed polyline"));
     }
     if !burden.is_finite() || !spacing.is_finite() || burden <= 0.0 || spacing <= 0.0 {
-        return Err("Burden and spacing must be greater than zero".to_owned());
+        return Err(tr!(literal = "Burden and spacing must be greater than zero"));
     }
     if !rotation_degrees.is_finite() || !offset.is_finite() {
-        return Err("Rotation and offsets must contain valid numbers".to_owned());
+        return Err(tr!(literal = "Rotation and offsets must contain valid numbers"));
     }
 
     let centroid = boundary.iter().copied().sum::<DVec3>() / boundary.len() as f64;
@@ -239,8 +239,9 @@ pub(crate) fn generate_pattern_collars(
     let rows = ((height / burden).ceil() as usize).max(1);
     let cells = columns.saturating_mul(rows);
     if cells > MAX_PATTERN_HOLES.saturating_mul(20) {
-        return Err(format!(
-            "This spacing would scan too many grid cells; increase burden or spacing (maximum {MAX_PATTERN_HOLES} holes)"
+        return Err(crate::i18n::tr_format!(
+            literal = "This spacing would scan too many grid cells; increase burden or spacing (maximum %maximum% holes)",
+            maximum = MAX_PATTERN_HOLES
         ));
     }
 
@@ -256,7 +257,7 @@ pub(crate) fn generate_pattern_collars(
         normal.z += (current.x - next.x) * (current.y + next.y);
     }
     if normal.z.abs() <= (width * height).abs().max(1.0) * 1.0e-12 {
-        return Err("The selected polyline has no usable XY area".to_owned());
+        return Err(tr!(literal = "The selected polyline has no usable XY area"));
     }
     let elevation = |x: f64, y: f64| {
         if normal.z.abs() > 1.0e-12 {
@@ -290,13 +291,16 @@ pub(crate) fn generate_pattern_collars(
                 let world_y = centroid.y + x * sin_rotation + y * cos_rotation;
                 collars.push(DVec3::new(world_x, world_y, elevation(world_x, world_y)));
                 if collars.len() > MAX_PATTERN_HOLES {
-                    return Err(format!("Pattern exceeds the maximum of {MAX_PATTERN_HOLES} holes; increase burden or spacing"));
+                    return Err(crate::i18n::tr_format!(
+                        literal = "Pattern exceeds the maximum of %maximum% holes; increase burden or spacing",
+                        maximum = MAX_PATTERN_HOLES
+                    ));
                 }
             }
         }
     }
     if collars.is_empty() {
-        return Err("No holes fit inside this boundary at the current burden and spacing".to_owned());
+        return Err(tr!(literal = "No holes fit inside this boundary at the current burden and spacing"));
     }
     Ok(collars)
 }

@@ -70,25 +70,26 @@ pub(crate) fn draw_initiation_dialog(ui: &mut egui::Ui, editor: &mut EditorState
     let mut close = false;
     let target = dialog.target;
     let existing = dialog.existing;
-    let title = format!("Initiation · {}", dialog.hole_name);
+    let title = crate::i18n::tr_format!(literal = "Initiation · %name%", name = &dialog.hole_name);
     DragableMenu::new("initiation_dialog", title).open(&mut open).min_width(300.0).show(ui.ctx(), |ui| {
-        MenuFieldU32::new("Delay", &mut dialog.delay_ms, 0..=MAX_DELAY_MS)
+        MenuFieldU32::new(tr!(literal = "Delay"), &mut dialog.delay_ms, 0..=MAX_DELAY_MS)
             .suffix(" ms")
-            .help_text("How long after the shot is fired this collar initiates the round.")
+            .help_text(tr!(literal = "How long after the shot is fired this collar initiates the round."))
             .show(ui);
         menu::menu_actions(ui, |ui| {
-            if menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(if existing { "Update" } else { "Add Initiation" }).primary()).clicked() {
+            let confirm_label = if existing { tr!(literal = "Update") } else { tr!(literal = "Add Initiation") };
+            if menu::dialog_confirm_pressed(ui.ctx()) || ui.add(MenuButton::new(confirm_label).primary()).clicked() {
                 commands.push(UiCommand::SetInitiation {
                     target,
                     delay_ms: Some(dialog.delay_ms),
                 });
                 close = true;
             }
-            if existing && ui.add(MenuButton::new("Remove")).clicked() {
+            if existing && ui.add(MenuButton::new(tr!(literal = "Remove"))).clicked() {
                 commands.push(UiCommand::SetInitiation { target, delay_ms: None });
                 close = true;
             }
-            if ui.add(MenuButton::new("Cancel")).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                 close = true;
             }
         });

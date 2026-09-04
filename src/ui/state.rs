@@ -717,8 +717,16 @@ impl CircleDraft {
 pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::CollarRotation) -> String {
     use crate::model::drill_hole::CollarRotation;
     match rotation {
-        CollarRotation::Absolute(orientation) => format!("to azimuth {:.1}\u{00b0}, dip {:.1}\u{00b0}", orientation.azimuth, orientation.dip),
-        CollarRotation::Delta { azimuth, dip } => format!("by azimuth {azimuth:+.1}\u{00b0}, dip {dip:+.1}\u{00b0}"),
+        CollarRotation::Absolute(orientation) => tr_format!(
+            literal = "to azimuth %azimuth%°, dip %dip%°",
+            azimuth = format!("{:.1}", orientation.azimuth),
+            dip = format!("{:.1}", orientation.dip)
+        ),
+        CollarRotation::Delta { azimuth, dip } => tr_format!(
+            literal = "by azimuth %azimuth%°, dip %dip%°",
+            azimuth = format!("{azimuth:+.1}"),
+            dip = format!("{dip:+.1}")
+        ),
     }
 }
 
@@ -1686,7 +1694,7 @@ impl EditorState {
         self.drill_pattern_preview_error = None;
         self.drill_pattern_awaiting_shape_pick = false;
         if self.drill_pattern_name.trim().is_empty() {
-            self.drill_pattern_name = "Drill Pattern".to_owned();
+            self.drill_pattern_name = tr!(literal = "Drill Pattern");
         }
         self.drill_pattern_open = true;
     }
@@ -1984,7 +1992,7 @@ impl EditorState {
             drill_pattern_diameter_mm: 165.0,
             drill_pattern_depth: 10.0,
             drill_pattern_layout: DrillPatternLayout::Square,
-            drill_pattern_name: "Drill Pattern".to_owned(),
+            drill_pattern_name: tr!(literal = "Drill Pattern"),
             drill_pattern_preview_collars: Vec::new(),
             drill_pattern_preview_depth: 10.0,
             drill_pattern_preview_diameter: 0.165,
