@@ -1130,7 +1130,7 @@ impl ViewportScaleBar {
                 }
 
                 let labels = scale_bar_labels(distance);
-                let font = egui::FontId::new(11.0, egui::FontFamily::Name("open_sans_bold".into()));
+                let font = egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()));
                 let label_y = bar_rect.bottom() + 2.0;
                 for (index, fraction) in SCALE_BAR_SEGMENT_FRACTIONS.iter().copied().enumerate() {
                     let x = bar_rect.left() + bar_width * fraction as f32;

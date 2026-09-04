@@ -152,7 +152,7 @@ fn paint_title_text(ui: &mut egui::Ui, title: &egui::WidgetText, rect: egui::Rec
     let mut job = egui::text::LayoutJob::single_section(
         title.text().to_owned(),
         egui::TextFormat {
-            font_id: egui::FontId::new(13.0, egui::FontFamily::Name("open_sans_bold".into())),
+            font_id: egui::FontId::new(13.0, egui::FontFamily::Name("noto_sans_bold".into())),
             color: ui.visuals().text_color(),
             ..Default::default()
         },

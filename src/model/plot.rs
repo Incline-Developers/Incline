@@ -7,15 +7,12 @@
 //! so the layout maths, the text and the output encoding stay testable and
 //! independent of wgpu.
 
-use std::sync::Arc;
-
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
 
-use crate::i18n::{tr, tr_format};
-
-/// Bundled face, so a plot looks the same on every platform (and works at all
-/// in the browser, where no system fonts are visible).
-const PLOT_FONT: &[u8] = include_bytes!("../../res/fonts/open-sans/OpenSans-Regular.ttf");
+use crate::{
+    fonts::cosmic_text_font_system,
+    i18n::{tr, tr_format},
+};
 
 const MM_PER_INCH: f64 = 25.4;
 
@@ -579,7 +576,7 @@ pub(crate) struct TextPainter {
 impl TextPainter {
     pub(crate) fn new() -> Self {
         Self {
-            font_system: FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(Arc::new(PLOT_FONT))]),
+            font_system: cosmic_text_font_system(),
             cache: SwashCache::new(),
         }
     }

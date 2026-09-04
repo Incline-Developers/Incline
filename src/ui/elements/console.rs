@@ -188,7 +188,7 @@ fn draw_header_row(ui: &mut egui::Ui, rect: egui::Rect, row_id: egui::Id, entry_
     let text_color = ui.visuals().text_color();
     let body_font = egui::TextStyle::Body.resolve(ui.style());
     let timestamp_font = egui::FontId::new((body_font.size - 1.0).max(8.0), egui::FontFamily::Monospace);
-    let title_font = egui::FontId::new(body_font.size, egui::FontFamily::Name("open_sans_bold".into()));
+    let title_font = egui::FontId::new(body_font.size, egui::FontFamily::Name("noto_sans_bold".into()));
     let center_y = rect.center().y;
 
     let mut x = rect.left() + 6.0;
