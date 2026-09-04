@@ -88,6 +88,15 @@ pub(crate) fn context_menu_popup<R>(
 
 /// Paint the header and run `add_contents` inside the menu's content margins.
 fn draw_body<R>(ui: &mut egui::Ui, title: &egui::WidgetText, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let title_width = ui
+        .painter()
+        .layout_no_wrap(title.text().to_owned(), egui::FontId::proportional(11.0), egui::Color32::PLACEHOLDER)
+        .size()
+        .x
+        + f32::from(CONTENT_HORIZONTAL_MARGIN) * 2.0;
+    let measured_width = super::menu::intrinsic_content_width(ui) + f32::from(CONTENT_HORIZONTAL_MARGIN) * 2.0;
+    let available_width = (ui.ctx().content_rect().width() - 16.0).max(1.0);
+    let width = width.max(title_width).max(measured_width).min(available_width);
     ui.set_width(width);
     ui.set_min_width(width);
     ui.set_max_width(width);
@@ -195,35 +204,48 @@ impl ContextMenuAction {
             checked,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
+            let font_id = egui::TextStyle::Button.resolve(ui.style());
+            let full_label = label.text().to_owned();
+            let label_width = ui.painter().layout_no_wrap(full_label.clone(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
+            let shortcut_width = shortcut.as_ref().map_or(0.0, |shortcut| {
+                ui.painter()
+                    .layout_no_wrap(shortcut.text().to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            });
+            let text_left = if checked.is_some() { CHECK_COLUMN } else { 4.0 };
+            let right_padding = if submenu { 14.0 } else { 4.0 };
+            let shortcut_gap = if shortcut.is_some() { 16.0 } else { 0.0 };
+            let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
+            super::menu::record_intrinsic_content_width(ui, natural_width);
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.text()));
             if ui.is_rect_visible(rect) {
+                let painter = ui.painter().with_clip_rect(rect);
                 let visuals = ui.style().interact(&response);
                 if response.hovered() || response.has_focus() {
-                    ui.painter().rect_filled(rect, 1.0, visuals.bg_fill);
+                    painter.rect_filled(rect, 1.0, visuals.bg_fill);
                 }
                 let text_color = visuals.fg_stroke.color;
-                let text_left = if checked.is_some() { CHECK_COLUMN } else { 4.0 };
                 if checked == Some(true) {
                     // A tick drawn rather than set as text: the row's glyphs
                     // come from the button style, and a checkmark character is
                     // not in every font that style can resolve to.
                     let center = rect.left_center() + egui::vec2(CHECK_COLUMN / 2.0, 0.0);
-                    ui.painter().add(egui::Shape::line(
+                    painter.add(egui::Shape::line(
                         vec![center + egui::vec2(-3.0, 0.0), center + egui::vec2(-1.0, 2.5), center + egui::vec2(3.0, -3.0)],
                         egui::Stroke::new(1.4, text_color),
                     ));
                 }
-                ui.painter().text(
+                painter.text(
                     rect.left_center() + egui::vec2(text_left, 0.0),
                     egui::Align2::LEFT_CENTER,
                     label.text(),
                     egui::TextStyle::Button.resolve(ui.style()),
                     text_color,
                 );
-                let right_padding = if submenu { 14.0 } else { 4.0 };
                 if let Some(shortcut) = shortcut {
-                    ui.painter().text(
+                    painter.text(
                         rect.right_center() - egui::vec2(right_padding, 0.0),
                         egui::Align2::RIGHT_CENTER,
                         shortcut.text(),
@@ -233,14 +255,18 @@ impl ContextMenuAction {
                 }
                 if submenu {
                     let center = rect.right_center() - egui::vec2(5.0, 0.0);
-                    ui.painter().add(egui::Shape::convex_polygon(
+                    painter.add(egui::Shape::convex_polygon(
                         vec![center + egui::vec2(-2.0, -3.0), center + egui::vec2(2.0, 0.0), center + egui::vec2(-2.0, 3.0)],
                         ui.visuals().weak_text_color(),
                         egui::Stroke::NONE,
                     ));
                 }
             }
-            response
+            if rect.width() + 0.5 < natural_width {
+                response.on_hover_text(full_label)
+            } else {
+                response
+            }
         })
         .inner
     }

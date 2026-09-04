@@ -19,14 +19,12 @@ pub(crate) fn draw_about_dialog(ui: &mut egui::Ui, editor: &mut EditorState) {
         return;
     }
     let mut open = true;
-    DragableMenu::new(tr!("about-title", app = crate::APP_NAME))
+    DragableMenu::new("about_dialog", tr!("about-title", app = crate::APP_NAME))
         .open(&mut open)
         .min_width(420.0)
         .max_width(460.0)
         .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui.ctx(), |ui| {
-            ui.set_max_width(440.0);
-
             ui.horizontal(|ui| {
                 ui.add(egui::Image::new(egui::include_image!("../../../res/logo.svg")).fit_to_exact_size(egui::vec2(52.0, 52.0)));
                 ui.add_space(4.0);

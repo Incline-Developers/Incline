@@ -16,7 +16,7 @@ use crate::{
 
 pub(crate) fn draw_create_block_model_dialog(ui: &mut egui::Ui, editor: &mut EditorState, drill_holes: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     let mut open = true;
-    DragableMenu::new(tr!(literal = "Create Block Model"))
+    DragableMenu::new("create_block_model_dialog", tr!(literal = "Create Block Model"))
         .open(&mut open)
         .min_width(390.0)
         .show(ui.ctx(), |ui| {
@@ -284,7 +284,7 @@ fn initialise_grid_from_dataset(editor: &mut EditorState, dataset: &OpenDrillHol
 
 pub(crate) fn draw_ore_triangulation_dialog(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], commands: &mut Vec<UiCommand>) {
     let mut open = true;
-    DragableMenu::new(tr!(literal = "Create Ore Triangulation"))
+    DragableMenu::new("create_ore_triangulation_dialog", tr!(literal = "Create Ore Triangulation"))
         .open(&mut open)
         .min_width(340.0)
         .show(ui.ctx(), |ui| {

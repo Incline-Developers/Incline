@@ -60,12 +60,14 @@ impl ViewportDockPanel {
                     .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
                     .show(ui, |ui| {
                         menu::apply_menu_style(ui, surface);
-                        if self.min_width > 0.0 {
-                            ui.set_min_width(self.min_width);
-                        }
-                        ui.set_max_width(self.max_width);
-                        let title_rect = ui.allocate_exact_size(egui::vec2(self.min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
-                        let inner = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8)).show(ui, add_contents).inner;
+                        let inner_margin = egui::Margin::symmetric(10, 8);
+                        let measured_width = menu::intrinsic_content_width(ui) + inner_margin.sum().x;
+                        let available_width = (self.viewport_rect.width() - self.margin.x * 2.0).max(1.0);
+                        let adaptive_min_width = self.min_width.max(measured_width).min(available_width);
+                        ui.set_min_width(adaptive_min_width);
+                        ui.set_max_width(self.max_width.max(adaptive_min_width));
+                        let title_rect = ui.allocate_exact_size(egui::vec2(adaptive_min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
+                        let inner = egui::Frame::NONE.inner_margin(inner_margin).show(ui, add_contents).inner;
                         let mut title_rect = title_rect;
                         title_rect.max.x = ui.min_rect().right();
                         menu::draw_menu_heading(ui, &self.title, title_rect, surface);

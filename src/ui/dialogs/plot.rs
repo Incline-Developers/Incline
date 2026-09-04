@@ -362,7 +362,7 @@ pub(crate) fn draw_plot_dialog(ui: &mut egui::Ui, editor: &mut EditorState, proj
     let mut export = false;
     let legend_entries = preview_legend_entries(project);
 
-    DragableMenu::new(tr!(literal = "Export Engineering Drawing"))
+    DragableMenu::new("export_engineering_drawing_dialog", tr!(literal = "Export Engineering Drawing"))
         .open(&mut open)
         .min_width(PLOT_DIALOG_WIDTH)
         .max_width(PLOT_DIALOG_WIDTH + 40.0)

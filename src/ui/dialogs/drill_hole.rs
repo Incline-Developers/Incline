@@ -16,7 +16,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
         return;
     };
     let mut open = true;
-    DragableMenu::new(tr!("drill-hole-colour-title", name = dataset.name.clone()))
+    DragableMenu::new("drill_hole_colour_dialog", tr!("drill-hole-colour-title", name = dataset.name.clone()))
         .open(&mut open)
         .min_width(400.0)
         .max_width(480.0)

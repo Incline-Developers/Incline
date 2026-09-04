@@ -31,6 +31,113 @@ const BUTTON_MIN_WIDTH: f32 = 72.0;
 /// Space either side of a button's label.
 const BUTTON_HORIZONTAL_PADDING: f32 = 12.0;
 
+/// Natural width of a plain-text [`MenuButton`] with the given floor.
+///
+/// Custom rows that arrange several buttons need this before allocating their
+/// group; otherwise each button discovers that it is too narrow only after
+/// the fixed group has already claimed its width.
+pub(crate) fn natural_button_width(ui: &egui::Ui, text: &str, min_width: f32) -> f32 {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let text_width = ui.painter().layout_no_wrap(text.to_owned(), font_id, egui::Color32::PLACEHOLDER).size().x;
+    (text_width + BUTTON_HORIZONTAL_PADDING * 2.0).max(min_width)
+}
+
+/// Width requested by translated menu content during the current egui pass.
+///
+/// Floating menus and viewport cards start from compact, English-era widths,
+/// while their fields know the exact rendered width of the active language.
+/// Keep the largest request on the area's layer so the container can use it
+/// on the next (usually discarded) pass without coupling layout to a locale.
+#[derive(Clone, Copy)]
+struct IntrinsicWidth {
+    pass: u64,
+    running: f32,
+    settled: f32,
+}
+
+impl Default for IntrinsicWidth {
+    fn default() -> Self {
+        Self {
+            pass: u64::MAX,
+            running: 0.0,
+            settled: 0.0,
+        }
+    }
+}
+
+fn intrinsic_width_id(ui: &egui::Ui) -> egui::Id {
+    ui.layer_id().id.with("menu_intrinsic_content_width")
+}
+
+fn advance_intrinsic_width(pass: u64, state: &mut IntrinsicWidth) {
+    if state.pass != pass {
+        state.settled = state.running;
+        state.running = 0.0;
+        state.pass = pass;
+    }
+}
+
+/// Largest natural content width measured on the preceding egui pass.
+pub(crate) fn intrinsic_content_width(ui: &egui::Ui) -> f32 {
+    let id = intrinsic_width_id(ui);
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().memory_mut(|memory| {
+        let mut state = memory.data.get_temp::<IntrinsicWidth>(id).unwrap_or_default();
+        advance_intrinsic_width(pass, &mut state);
+        memory.data.insert_temp(id, state);
+        state.settled
+    })
+}
+
+/// Add a row's natural width to the surrounding menu-family container.
+///
+/// A newly discovered larger width requests a hidden follow-up pass, so a
+/// language switch does not expose one frame of clipped controls.
+pub(crate) fn record_intrinsic_content_width(ui: &egui::Ui, width: f32) {
+    let id = intrinsic_width_id(ui);
+    let pass = ui.ctx().cumulative_pass_nr();
+    let grew = ui.ctx().memory_mut(|memory| {
+        let Some(mut state) = memory.data.get_temp::<IntrinsicWidth>(id) else {
+            // Menu-family widgets also live in fixed, user-resizable panels.
+            // Only containers that called `intrinsic_content_width` opt in.
+            return false;
+        };
+        advance_intrinsic_width(pass, &mut state);
+        state.running = state.running.max(width);
+        let grew = state.running > state.settled + 0.5;
+        memory.data.insert_temp(id, state);
+        grew
+    });
+    if grew && ui.is_visible() {
+        ui.ctx().request_discard("translated menu content width changed");
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct ActionRowWidth {
+    width: f32,
+    buttons: usize,
+}
+
+fn action_row_width_id(ui: &egui::Ui) -> egui::Id {
+    ui.layer_id().id.with("menu_action_row_width")
+}
+
+fn record_action_button_width(ui: &egui::Ui, width: f32) {
+    let id = action_row_width_id(ui);
+    let spacing = ui.spacing().item_spacing.x;
+    ui.ctx().memory_mut(|memory| {
+        if let Some(mut row) = memory.data.get_temp::<ActionRowWidth>(id) {
+            if row.buttons > 0 {
+                row.width += spacing;
+            }
+            row.width += width;
+            row.buttons += 1;
+            memory.data.insert_temp(id, row);
+        }
+    });
+}
+
 /// Surface a floating menu paints itself with: one step brighter than the
 /// panels it floats over, so the card lifts off them without a shadow (the
 /// interface is deliberately flat - see `theme_visuals`).
@@ -202,10 +309,13 @@ pub(crate) struct DragableMenu<'open> {
 }
 
 impl<'open> DragableMenu<'open> {
-    pub(crate) fn new(title: impl Into<egui::WidgetText>) -> Self {
+    /// Create a draggable menu with an identity that does not depend on its
+    /// displayed title. Titles are localized and can change at runtime; the
+    /// stable id keeps egui's remembered position attached to the same dialog.
+    pub(crate) fn new(id_source: impl Hash + Debug, title: impl Into<egui::WidgetText>) -> Self {
         let title = title.into().fallback_text_style(egui::TextStyle::Button);
         Self {
-            id: egui::Id::new(("dragable_menu", title.text())),
+            id: egui::Id::new(("dragable_menu", id_source)),
             title,
             title_bar: true,
             open: None,
@@ -305,8 +415,11 @@ impl<'open> DragableMenu<'open> {
                         ui.set_min_size(fixed_size);
                         ui.set_max_size(fixed_size);
                     } else {
-                        ui.set_min_width(min_width);
-                        ui.set_max_width(max_width);
+                        let measured_width = intrinsic_content_width(ui) + inner_margin.sum().x;
+                        let available_width = (ctx.content_rect().width() - 32.0).max(1.0);
+                        let adaptive_min_width = min_width.max(measured_width).min(available_width);
+                        ui.set_min_width(adaptive_min_width);
+                        ui.set_max_width(max_width.max(adaptive_min_width));
                     }
 
                     let title_rect = title_bar.then(|| {
@@ -468,9 +581,13 @@ impl egui::Widget for MenuButton {
             selected,
         } = self;
         let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+        let full_text = galley.text().to_owned();
+        let natural_width = (galley.size().x + BUTTON_HORIZONTAL_PADDING * 2.0).max(min_width);
+        record_intrinsic_content_width(ui, natural_width);
+        record_action_button_width(ui, natural_width);
         // The row may be narrower than the button would like to be; a button
         // that overflows its row pushes the rest of the set off the card.
-        let width = (galley.size().x + BUTTON_HORIZONTAL_PADDING * 2.0).max(min_width).min(ui.available_width().max(1.0));
+        let width = natural_width.min(ui.available_width().max(1.0));
         // A disabled button senses hover only, so it can never report a click.
         let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, BUTTON_HEIGHT), sense);
@@ -516,10 +633,10 @@ impl egui::Widget for MenuButton {
 
             ui.painter().rect_filled(rect, CONTROL_CORNER_RADIUS, fill);
             let text_pos = rect.center() - galley.size() / 2.0;
-            ui.painter().galley(text_pos, galley, text_color);
+            ui.painter().with_clip_rect(rect).galley(text_pos, galley, text_color);
         }
 
-        response
+        if width + 0.5 < natural_width { response.on_hover_text(full_text) } else { response }
     }
 }
 
@@ -529,12 +646,19 @@ impl egui::Widget for MenuButton {
 /// lands on the right where the eye leaves the dialog.
 pub(crate) fn menu_actions<R>(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.add_space(6.0);
-    ui.allocate_ui_with_layout(
+    let width_id = action_row_width_id(ui);
+    ui.ctx().memory_mut(|memory| memory.data.insert_temp(width_id, ActionRowWidth::default()));
+    let response = ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), BUTTON_HEIGHT),
         egui::Layout::right_to_left(egui::Align::Center),
         add_buttons,
-    )
-    .inner
+    );
+    let natural_width = ui
+        .ctx()
+        .memory_mut(|memory| memory.data.remove_temp::<ActionRowWidth>(width_id))
+        .map_or(0.0, |row| row.width);
+    record_intrinsic_content_width(ui, natural_width);
+    response.inner
 }
 
 /// A heading that groups the rows under it.
@@ -545,6 +669,7 @@ pub(crate) fn menu_section(ui: &mut egui::Ui, heading: impl Into<String>) {
     ui.add_space(4.0);
     let color = ui.visuals().weak_text_color();
     let galley = ui.painter().layout_no_wrap(heading.into(), egui::FontId::proportional(11.0), color);
+    record_intrinsic_content_width(ui, galley.size().x);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), galley.size().y.max(14.0)), egui::Sense::hover());
     let text_end = rect.left() + galley.size().x;
     ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, color);
@@ -745,13 +870,17 @@ const HELP_MARKER_SIZE: f32 = 14.0;
 fn menu_field_row<R>(ui: &mut egui::Ui, label: egui::WidgetText, help_text: Option<egui::WidgetText>, add_field: impl FnOnce(&mut egui::Ui, f32, f32) -> R) -> R {
     let row_height = ui.spacing().interact_size.y;
     let row_width = ui.available_width();
-    let column_width = field_column(ui, label_needs(ui, label.text(), help_text.is_some()));
+    let natural_label_width = label_needs(ui, label.text(), help_text.is_some());
+    let column_width = field_column(ui, natural_label_width);
 
     // The control claims its width first and the label takes what is left, so
     // a label too long for the row ends in an ellipsis instead of running on
     // underneath the control.
     ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let available_before_field = ui.available_width();
         let inner = add_field(ui, row_height, column_width);
+        let field_width = (available_before_field - ui.available_width()).max(0.0);
+        record_intrinsic_content_width(ui, natural_label_width + field_width);
         let label_width = ui.available_width();
         ui.allocate_ui_with_layout(egui::vec2(label_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             menu_field_label(ui, label, help_text);
@@ -1185,8 +1314,15 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             options,
             width,
         } = self;
+        let font_id = egui::TextStyle::Button.resolve(ui.style());
+        let widest_text = std::iter::once(selected_text.text())
+            .chain(options.iter().map(|(_, text)| text.text()))
+            .map(|text| ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x)
+            .fold(0.0, f32::max);
+        let natural_control_width =
+            (widest_text + ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0).clamp(MENU_FIELD_MIN_WIDTH, MENU_FIELD_MAX_WIDTH);
         menu_field_row(ui, label, help_text, |ui, _, column_width| {
-            let width = width.unwrap_or(column_width);
+            let width = width.unwrap_or(column_width).max(natural_control_width);
             let selected_tooltip = selected_text.text().to_owned();
             let mut selection_changed = false;
             let mut response = egui::ComboBox::from_id_salt(id)

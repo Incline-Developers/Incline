@@ -193,35 +193,38 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     let mut apply = false;
     let mut open = true;
 
-    DragableMenu::new(tr!(literal = "Move to Layer")).open(&mut open).min_width(260.0).show(ui.ctx(), |ui| {
-        ui.set_max_width(280.0);
-        // Added in reverse: a field row lays its control out from the right.
-        MenuField::new(tr!(literal = "Action")).show(ui, |ui, _, _| {
-            ui.horizontal(|ui| {
-                if ui.add(MenuButton::new(tr!(literal = "Copy")).selected(dialog.copy).min_width(64.0)).clicked() {
-                    dialog.copy = true;
+    DragableMenu::new("move_to_layer_dialog", tr!(literal = "Move to Layer"))
+        .open(&mut open)
+        .min_width(260.0)
+        .max_width(280.0)
+        .show(ui.ctx(), |ui| {
+            // Added in reverse: a field row lays its control out from the right.
+            MenuField::new(tr!(literal = "Action")).show(ui, |ui, _, _| {
+                ui.horizontal(|ui| {
+                    if ui.add(MenuButton::new(tr!(literal = "Copy")).selected(dialog.copy).min_width(64.0)).clicked() {
+                        dialog.copy = true;
+                    }
+                    if ui.add(MenuButton::new(tr!(literal = "Move")).selected(!dialog.copy).min_width(64.0)).clicked() {
+                        dialog.copy = false;
+                    }
+                })
+                .response
+            });
+            MenuFieldCombo::new("move_to_layer_target", tr!(literal = "Layer"), &mut dialog.target_layer, selected_label, layer_options)
+                .width(180.0)
+                .show(ui);
+            menu::menu_actions(ui, |ui| {
+                let action_label = if dialog.copy { tr!(literal = "Copy") } else { tr!(literal = "Move") };
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
+                    apply = true;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Move")).selected(!dialog.copy).min_width(64.0)).clicked() {
-                    dialog.copy = false;
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    close = true;
                 }
-            })
-            .response
+            });
+            ui.label(tr!("ui-selected-objects", count = object_count));
         });
-        MenuFieldCombo::new("move_to_layer_target", tr!(literal = "Layer"), &mut dialog.target_layer, selected_label, layer_options)
-            .width(180.0)
-            .show(ui);
-        menu::menu_actions(ui, |ui| {
-            let action_label = if dialog.copy { tr!(literal = "Copy") } else { tr!(literal = "Move") };
-            let confirm = menu::dialog_confirm_pressed(ui.ctx());
-            if ui.add(MenuButton::new(action_label).primary().enabled(can_apply)).clicked() || (confirm && can_apply) {
-                apply = true;
-            }
-            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
-                close = true;
-            }
-        });
-        ui.label(tr!("ui-selected-objects", count = object_count));
-    });
 
     if apply {
         if let Some(target_layer) = dialog.target_layer {
@@ -250,11 +253,11 @@ pub(crate) fn draw_move_to_axis_dialog(ui: &mut egui::Ui, editor: &mut EditorSta
     let mut apply = false;
     let mut open = true;
 
-    DragableMenu::new(tr_format!(literal = "Set %axis%", axis = axis_label))
+    DragableMenu::new("move_to_axis_dialog", tr_format!(literal = "Set %axis%", axis = axis_label))
         .open(&mut open)
         .min_width(260.0)
+        .max_width(280.0)
         .show(ui.ctx(), |ui| {
-            ui.set_max_width(280.0);
             MenuFieldF64::new(tr_format!(literal = "%axis% value", axis = axis_label), &mut dialog.value, f64::MIN..=f64::MAX)
                 .width(120.0)
                 .show(ui);
@@ -299,11 +302,11 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
     let mut apply = false;
     let mut open = true;
 
-    DragableMenu::new(tr!(literal = "Insert Point at Elevation"))
+    DragableMenu::new("insert_point_at_elevation_dialog", tr!(literal = "Insert Point at Elevation"))
         .open(&mut open)
         .min_width(280.0)
+        .max_width(300.0)
         .show(ui.ctx(), |ui| {
-            ui.set_max_width(300.0);
             MenuFieldF64::new(tr!(literal = "Elevation"), &mut dialog.elevation, dialog.min_elevation..=dialog.max_elevation)
                 .width(120.0)
                 .show(ui);
@@ -727,12 +730,12 @@ pub(crate) fn draw_rename_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
     let mut close = false;
     let mut rename_to: Option<String> = None;
     let mut open = true;
-    DragableMenu::new(tr!("dialog-rename-title", kind = target.kind_label()))
+    DragableMenu::new("rename_dialog", tr!("dialog-rename-title", kind = target.kind_label()))
         .open(&mut open)
+        .max_width(380.0)
         .show(ui.ctx(), |ui| {
             // `menu_field_row` gives the entry its requested width and leaves the
             // rest of the row to the label, so the extra width here is the label's.
-            ui.set_max_width(380.);
             MenuFieldText::new(tr!("dialog-rename-field"), &mut name_buf)
                 .width(260.0)
                 .hint_text(tr!("dialog-rename-field-hint"))

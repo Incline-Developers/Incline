@@ -47,7 +47,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
     let mut show_import = editor.show_import;
     let mut close_after_action = false;
     let mut cancelled = false;
-    DragableMenu::new(tr!(literal = "Import")).open(&mut show_import).show(ui.ctx(), |ui| {
+    DragableMenu::new("import_dialog", tr!(literal = "Import")).open(&mut show_import).show(ui.ctx(), |ui| {
         ui.set_height(MENU_HEIGHT);
         ui.set_width(MENU_WIDTH);
 
@@ -102,7 +102,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
     let mut show_export = editor.show_export;
     let mut close_after_action = false;
     let mut cancelled = false;
-    DragableMenu::new(tr!(literal = "Export")).open(&mut show_export).show(ui.ctx(), |ui| {
+    DragableMenu::new("export_dialog", tr!(literal = "Export")).open(&mut show_export).show(ui.ctx(), |ui| {
         ui.set_height(MENU_HEIGHT);
         ui.set_width(MENU_WIDTH);
 
