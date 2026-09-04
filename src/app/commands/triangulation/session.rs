@@ -27,7 +27,7 @@ impl<'a> App<'a> {
     pub(crate) fn open_triangulation_input(&mut self, input: crate::model::input::InputFile) {
         let source_name = input.source.name.clone();
         self.spawn_job_reporting_progress(
-            format!("Loading {source_name}"),
+            crate::i18n::tr_format!(literal = "Loading %name%", name = &source_name),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
@@ -35,7 +35,7 @@ impl<'a> App<'a> {
                 }
                 let crate::model::input::InputFile { source, bytes, reservation } = input;
                 let source_name = source.name;
-                let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), "Triangulation");
+                let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!(literal = "Triangulation"));
                 // The bytes are already in memory here, so the read share of
                 // the bar covers parsing alone.
                 let mesh = formats::read_mesh_bytes(&source_name, &bytes, &progress.phase(0.0, LOAD_READ_SHARE))
@@ -81,7 +81,7 @@ impl<'a> App<'a> {
                     }
                     app.invalidate_topology_bounds_and_redraw();
                 }
-                Err(error) => userspace_warn!("Failed to load triangulation: {error:#}"),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load triangulation: %error%", error = format!("{error:#}"))),
             },
         );
     }
@@ -101,9 +101,9 @@ impl<'a> App<'a> {
         }
 
         let source_name = file_name(path);
-        let name = crate::model::project::imported_item_name(path, "Triangulation");
+        let name = crate::model::project::imported_item_name(path, &crate::i18n::tr!(literal = "Triangulation"));
         let path = path.to_path_buf();
-        let (ticket, progress) = self.begin_reported_task(format!("Loading {source_name}"));
+        let (ticket, progress) = self.begin_reported_task(tr_format!(literal = "Loading %name%", name = &source_name));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
@@ -117,11 +117,14 @@ impl<'a> App<'a> {
                     let mesh = formats::read_mesh_with_progress(&path, &progress.phase(0.0, LOAD_READ_SHARE))
                         .map_err(|err| anyhow::anyhow!("Failed to read {}: {err}", path.display()))?;
                     userspace_log!(
-                        "Loaded triangulation '{}' ({}, {} vertices, {} faces)",
-                        name,
-                        path.display(),
-                        mesh.vertex_count(),
-                        mesh.face_count()
+                        "{}",
+                        tr_format!(
+                            literal = "Loaded triangulation '%name%' (%path%, %vertex_count% vertices, %face_count% faces)",
+                            name = name,
+                            path = path.display(),
+                            vertex_count = mesh.vertex_count(),
+                            face_count = mesh.face_count()
+                        )
                     );
                     let (spatial, edges, surface_face_order) = build_triangulation_indexes(&mesh, &progress.phase(LOAD_READ_SHARE, 1.0));
                     Ok(LoadedTriangulation {
@@ -194,12 +197,12 @@ impl<'a> App<'a> {
                 }
                 Ok(Err(e)) => {
                     let message = format!("{e:#}");
-                    userspace_warn!("Failed to load triangulation: {message}");
+                    userspace_warn!("{}", tr_format!(literal = "Failed to load triangulation: %message%", message = message));
                     self.finish_background_task(ticket, false);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    userspace_warn!("Triangulation load for {} ended without a result", path.display());
+                    userspace_warn!("{}", tr_format!(literal = "Triangulation load for %path% ended without a result", path = path.display()));
                     self.finish_background_task(ticket, false);
                 }
             };
@@ -222,7 +225,7 @@ impl<'a> App<'a> {
         if self.active_triangulation == Some(id) && self.editor.selected_handles.contains(&handle) {
             self.active_triangulation = None;
             self.editor.selected_handles.remove(&handle);
-            userspace_log!("Deselected triangulation '{}'", tri.name);
+            userspace_log!("{}", tr_format!(literal = "Deselected triangulation '%name%'", name = tri.name));
             self.request_topology_redraw();
             return;
         }
@@ -230,7 +233,7 @@ impl<'a> App<'a> {
         self.active_triangulation = Some(id);
         self.editor.selected_handles.clear();
         self.editor.selected_handles.insert(handle);
-        userspace_log!("Activated triangulation '{}'", tri.name);
+        userspace_log!("{}", tr_format!(literal = "Activated triangulation '%name%'", name = tri.name));
         if cleared_object_selection {
             self.invalidate_geometry();
         } else {
@@ -252,8 +255,12 @@ impl<'a> App<'a> {
             // must clear both sources of hidden state.
             self.editor.hidden_handles.remove(&handle);
         }
-        let action = if tri.visible { "Shown" } else { "Hidden" };
-        userspace_log!("{} triangulation '{}'", action, tri.name);
+        let message = if tri.visible {
+            tr_format!(literal = "Shown triangulation '%name%'", name = tri.name)
+        } else {
+            tr_format!(literal = "Hidden triangulation '%name%'", name = tri.name)
+        };
+        userspace_log!("{}", message);
         self.touch_active_project_content();
         self.invalidate_topology_bounds_and_redraw();
     }
@@ -273,7 +280,7 @@ impl<'a> App<'a> {
         if self.active_triangulation == Some(id) {
             self.active_triangulation = None;
         }
-        userspace_log!("Unloaded triangulation '{}'", name);
+        userspace_log!("{}", tr_format!(literal = "Unloaded triangulation '%name%'", name = name));
         self.invalidate_topology_bounds_and_redraw();
         self.persist_session();
     }
@@ -291,7 +298,7 @@ impl<'a> App<'a> {
                 self.active_triangulation = None;
             }
             self.invalidate_topology_bounds_and_redraw();
-            userspace_log!("Deleted triangulation '{}' from project", tri.name);
+            userspace_log!("{}", tr_format!(literal = "Deleted triangulation '%name%' from project", name = tri.name));
             self.touch_active_project_content();
         }
         self.persist_session();
@@ -339,7 +346,14 @@ impl<'a> App<'a> {
             tri.state.touch();
             self.touch_active_project_content();
         }
-        userspace_log!("Set triangulation {:?} color to {:?}", tri_id, new_color);
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Set triangulation %tri_id% color to %color%",
+                tri_id = format!("{tri_id:?}"),
+                color = format!("{new_color:?}")
+            )
+        );
         self.request_topology_redraw();
     }
     /// Apply the result of a background job that produces one triangulation
@@ -353,7 +367,7 @@ impl<'a> App<'a> {
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                userspace_warn!("Triangulation operation failed: {message}");
+                userspace_warn!("{}", tr_format!(literal = "Triangulation operation failed: %message%", message = message));
             }
         }
     }
@@ -399,8 +413,14 @@ impl<'a> App<'a> {
         self.editor.selected_handles.clear();
         self.editor.selected_handles.insert(crate::model::SceneEntityId::Triangulation(id));
         userspace_log!(
-            "Created triangulation '{name}' ({vertex_count} vertices, {face_count} faces) from surface type {:?}",
-            surface_type
+            "{}",
+            tr_format!(
+                literal = "Created triangulation '%name%' (%vertex_count% vertices, %face_count% faces) from surface type %surface_type%",
+                name = name,
+                vertex_count = vertex_count,
+                face_count = face_count,
+                surface_type = format!("{surface_type:?}")
+            )
         );
         if cleared_object_selection {
             self.invalidate_geometry();

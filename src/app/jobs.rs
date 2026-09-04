@@ -34,7 +34,10 @@ use std::sync::{
 use std::sync::{Mutex, OnceLock};
 
 use super::App;
-use crate::model::{progress::Progress, triangulation::TriangulationId};
+use crate::{
+    i18n::tr_format,
+    model::{progress::Progress, triangulation::TriangulationId},
+};
 
 /// Identifies the sources a job derives from, so stale in-flight jobs can be
 /// cancelled when their source changes or is removed.
@@ -72,10 +75,6 @@ impl CancelFlag {
 /// A heavy operation running on a background thread.
 pub(crate) struct BackgroundJob<'a> {
     pub(crate) ticket: crate::app::BackgroundTaskTicket,
-    /// Only the native revert flow matches on this, so it reads as dead code
-    /// on the web build.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    pub(crate) label: String,
     /// Every source this job depends on; cancelling any of them cancels the job.
     pub(crate) keys: Vec<JobKey>,
     cancel: CancelFlag,
@@ -247,7 +246,13 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_warn!("Discarded stale background result for '{poll_label}' because a source changed or closed");
+                        crate::userspace_warn!(
+                            "{}",
+                            tr_format!(
+                                literal = "Discarded stale background result for '%poll_label%' because a source changed or closed",
+                                poll_label = poll_label.clone()
+                            )
+                        );
                     } else if let Some(apply) = apply.take() {
                         apply(app, result);
                     }
@@ -259,7 +264,10 @@ impl<'a> App<'a> {
                 // must be visible rather than quietly treated as done.
                 Err(mpsc::TryRecvError::Disconnected) => {
                     if !poll_cancel.is_cancelled() {
-                        crate::userspace_error!("Background task '{poll_label}' ended without a result");
+                        crate::userspace_error!(
+                            "{}",
+                            tr_format!(literal = "Background task '%poll_label%' ended without a result", poll_label = poll_label.clone())
+                        );
                     }
                     true
                 }
@@ -281,13 +289,7 @@ impl<'a> App<'a> {
             settled
         });
 
-        self.pending_jobs.push(BackgroundJob {
-            ticket,
-            label,
-            keys,
-            cancel,
-            poll,
-        });
+        self.pending_jobs.push(BackgroundJob { ticket, keys, cancel, poll });
     }
 
     /// Drain finished background jobs, running their apply closures on the UI

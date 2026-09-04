@@ -6,11 +6,14 @@
 //! floating tile at the scene's right edge are one row now - see
 //! [`crate::ui::elements::viewport_bar`].
 
-use crate::ui::{
-    EditorState, UiProjectView,
-    state::{ActiveTool, BlastCursor, CursorMode, UiCommand, Workspace},
-    themed_icon, unthemed_icon,
-    widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+use crate::{
+    i18n::tr,
+    ui::{
+        EditorState, UiProjectView,
+        state::{ActiveTool, BlastCursor, CursorMode, UiCommand, Workspace},
+        themed_icon, unthemed_icon,
+        widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
+    },
 };
 
 /// Height claimed by the bottom toolbar, including its chrome margins.
@@ -34,7 +37,7 @@ enum LeftToolAction {
 /// One button in the drawing toolbar's run.
 struct LeftTool {
     icon: egui::Image<'static>,
-    tooltip: &'static str,
+    tooltip: String,
     action: LeftToolAction,
     /// Whether the tool can be used at all this frame.
     enabled: bool,
@@ -47,7 +50,7 @@ struct LeftTool {
 /// One flat list rather than clusters: the column is a single run of cells, so
 /// what a tool belongs to is its neighbours' business, not a tile's.
 fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
-    let tool = |icon: egui::ImageSource<'static>, tooltip: &'static str, tool: ActiveTool| LeftTool {
+    let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| LeftTool {
         icon: egui::Image::new(icon),
         tooltip,
         action: LeftToolAction::Tool(tool),
@@ -56,26 +59,34 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
     vec![
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("layer.svg")),
-            tooltip: "New Layer",
+            tooltip: tr!(literal = "New Layer"),
             action: LeftToolAction::NewLayer,
             enabled: project_active,
         },
-        tool(themed_icon!(ui, "create_point.svg"), "Create Point", ActiveTool::MakePoint),
-        tool(themed_icon!(ui, "create_line.svg"), "Create Line", ActiveTool::MakeLine),
-        tool(themed_icon!(ui, "create_polyline.svg"), "Create Polyline", ActiveTool::MakePoly),
-        tool(themed_icon!(ui, "create_circle.svg"), "Create Circle", ActiveTool::MakeCircle),
-        tool(unthemed_icon!("create_text.svg"), "Create Text", ActiveTool::MakeText),
-        tool(themed_icon!(ui, "move_element.svg"), "Move", ActiveTool::Move),
-        tool(themed_icon!(ui, "offset_element.svg"), "Offset", ActiveTool::OffsetElement),
-        tool(themed_icon!(ui, "drape_element.svg"), "Drape to Topology", ActiveTool::DrapeToTopology),
-        tool(unthemed_icon!("auto_bench.svg"), "Auto-Bench", ActiveTool::BatterBermOffset),
-        tool(themed_icon!(ui, "relimit_line.svg"), "Relimit Line", ActiveTool::RelimitLine),
-        tool(themed_icon!(ui, "create_bezier.svg"), "Bezier Polyline", ActiveTool::Bezier),
-        tool(themed_icon!(ui, "chamfer_corners.svg"), "Chamfer Polyline Corners", ActiveTool::Chamfer),
-        tool(themed_icon!(ui, "fuse_lines.svg"), "Fuse Polylines", ActiveTool::FuseIntoPolyline),
-        tool(themed_icon!(ui, "split_at_points.svg"), "Split Polyline At Points", ActiveTool::SplitAtPoints),
-        tool(unthemed_icon!("explode_polyline.svg"), "Explode Polyline to Lines", ActiveTool::ExplodePolyline),
-        tool(unthemed_icon!("delete_element.svg"), "Delete Points", ActiveTool::DeletePoints),
+        tool(themed_icon!(ui, "create_point.svg"), tr!(literal = "Create Point"), ActiveTool::MakePoint),
+        tool(themed_icon!(ui, "create_line.svg"), tr!(literal = "Create Line"), ActiveTool::MakeLine),
+        tool(themed_icon!(ui, "create_polyline.svg"), tr!(literal = "Create Polyline"), ActiveTool::MakePoly),
+        tool(themed_icon!(ui, "create_circle.svg"), tr!(literal = "Create Circle"), ActiveTool::MakeCircle),
+        tool(unthemed_icon!("create_text.svg"), tr!(literal = "Create Text"), ActiveTool::MakeText),
+        tool(themed_icon!(ui, "move_element.svg"), tr!(literal = "Move"), ActiveTool::Move),
+        tool(themed_icon!(ui, "offset_element.svg"), tr!(literal = "Offset"), ActiveTool::OffsetElement),
+        tool(themed_icon!(ui, "drape_element.svg"), tr!(literal = "Drape to Topology"), ActiveTool::DrapeToTopology),
+        tool(unthemed_icon!("auto_bench.svg"), tr!(literal = "Auto-Bench"), ActiveTool::BatterBermOffset),
+        tool(themed_icon!(ui, "relimit_line.svg"), tr!(literal = "Relimit Line"), ActiveTool::RelimitLine),
+        tool(themed_icon!(ui, "create_bezier.svg"), tr!(literal = "Bezier Polyline"), ActiveTool::Bezier),
+        tool(themed_icon!(ui, "chamfer_corners.svg"), tr!(literal = "Chamfer Polyline Corners"), ActiveTool::Chamfer),
+        tool(themed_icon!(ui, "fuse_lines.svg"), tr!(literal = "Fuse Polylines"), ActiveTool::FuseIntoPolyline),
+        tool(
+            themed_icon!(ui, "split_at_points.svg"),
+            tr!(literal = "Split Polyline At Points"),
+            ActiveTool::SplitAtPoints,
+        ),
+        tool(
+            unthemed_icon!("explode_polyline.svg"),
+            tr!(literal = "Explode Polyline to Lines"),
+            ActiveTool::ExplodePolyline,
+        ),
+        tool(unthemed_icon!("delete_element.svg"), tr!(literal = "Delete Points"), ActiveTool::DeletePoints),
     ]
 }
 
@@ -96,19 +107,19 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
     vec![
         LeftTool {
             icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
-            tooltip: "Create Drill Pattern [PLACEHOLDER]",
+            tooltip: tr!(literal = "Create Drill Pattern [PLACEHOLDER]"),
             action: LeftToolAction::Placeholder,
             enabled: project_active,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("move_drillhole.svg")),
-            tooltip: "Move Drill Hole [PLACEHOLDER]",
+            tooltip: tr!(literal = "Move Drill Hole [PLACEHOLDER]"),
             action: LeftToolAction::Placeholder,
             enabled: has_active_dataset,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
-            tooltip: "Set Initiation Point [PLACEHOLDER]",
+            tooltip: tr!(literal = "Set Initiation Point [PLACEHOLDER]"),
             action: LeftToolAction::Placeholder,
             enabled: has_active_dataset,
         },
@@ -126,7 +137,9 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::Tool(active) => editor.active_tool == active,
         LeftToolAction::Placeholder => false,
     };
-    let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip).id_salt(("left_tool", tool.tooltip)).selected(selected);
+    let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
+        .id_salt(("left_tool", tool.tooltip.as_str()))
+        .selected(selected);
     if !ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner.clicked() {
         return;
     }
@@ -134,7 +147,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => {
             editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
             if editor.new_layer_dialog_open {
-                editor.new_layer_name = "design".to_owned();
+                editor.new_layer_name = tr!(literal = "design");
                 commands.push(UiCommand::SetActiveTool(ActiveTool::None));
             }
         }
@@ -247,7 +260,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                             tool_button(
                                 ui,
                                 egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
-                                "Measure Distance",
+                                tr!(literal = "Measure Distance").as_str(),
                                 editor,
                                 commands,
                                 ActiveTool::MeasureDistance,
@@ -257,7 +270,7 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                             tool_button(
                                 ui,
                                 egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
-                                "Strike and Dip",
+                                tr!(literal = "Strike and Dip").as_str(),
                                 editor,
                                 commands,
                                 ActiveTool::MeasureBatterAngle,
@@ -285,7 +298,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "cursor_select.svg")),
-        "Cursor: Regular",
+        tr!(literal = "Cursor: Regular").as_str(),
         editor,
         CursorMode::Select,
         side,
@@ -294,7 +307,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "snap_to_surface.svg")),
-        "Cursor: Snap to Surface",
+        tr!(literal = "Cursor: Snap to Surface").as_str(),
         editor,
         CursorMode::SnapToSurface,
         side,
@@ -303,7 +316,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "snap_to_line.svg")),
-        "Cursor: Snap to Line",
+        tr!(literal = "Cursor: Snap to Line").as_str(),
         editor,
         CursorMode::SnapToLine,
         side,
@@ -312,7 +325,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "snap_to_point.svg")),
-        "Cursor: Snap to Point",
+        tr!(literal = "Cursor: Snap to Point").as_str(),
         editor,
         CursorMode::SnapToPoint,
         side,
@@ -327,9 +340,23 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
 /// `products::paint_tie_in_mark` - so the tool and the palette it arms say the
 /// same thing.
 fn draw_blast_cursors(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
-    blast_cursor_button(ui, egui::Image::new(themed_icon!(ui, "cursor_select.svg")), "Select", editor, BlastCursor::Select, side);
+    blast_cursor_button(
+        ui,
+        egui::Image::new(themed_icon!(ui, "cursor_select.svg")),
+        tr!(literal = "Select").as_str(),
+        editor,
+        BlastCursor::Select,
+        side,
+    );
 
-    blast_cursor_button(ui, egui::Image::new(themed_icon!(ui, "tie_holes.svg")), "Tie Holes", editor, BlastCursor::TieHoles, side);
+    blast_cursor_button(
+        ui,
+        egui::Image::new(themed_icon!(ui, "tie_holes.svg")),
+        tr!(literal = "Tie Holes").as_str(),
+        editor,
+        BlastCursor::TieHoles,
+        side,
+    );
 }
 
 /// Draw a tool button in a horizontal toolbar; sets `editor.active_tool` on click.

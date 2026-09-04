@@ -9,7 +9,10 @@
 
 use thousands::Separable;
 
-use crate::ui::{EditorState, widgets::shifted};
+use crate::{
+    i18n::tr_format,
+    ui::{EditorState, widgets::shifted},
+};
 
 /// Space left above and below the ring, which is what sets its diameter: the
 /// readout is as tall as the strip allows, less what keeps it off the edges of
@@ -83,7 +86,7 @@ pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState) {
         None => {
             if let Some(finished) = &editor.last_finished_task {
                 let status = ring_status_text(1.0, finished.total_units.map(|total| (total, total)));
-                draw_ring(ui, &status, &format!("{}: Finished", finished.text), RingFill::Fraction(1.0));
+                draw_ring(ui, &status, &tr_format!(literal = "%task%: Finished", task = finished.text), RingFill::Fraction(1.0));
             }
         }
     }
@@ -93,7 +96,12 @@ pub(crate) fn draw_task_progress(ui: &mut egui::Ui, editor: &EditorState) {
 fn ring_status_text(fraction: f32, units: Option<(u64, u64)>) -> String {
     let percent = format!("{:.0}%", fraction * 100.0);
     match units {
-        Some((done, total)) => format!("{percent} ({} of {})", done.separate_with_commas(), total.separate_with_commas()),
+        Some((done, total)) => tr_format!(
+            literal = "%percent% (%done% of %total%)",
+            percent = percent,
+            done = done.separate_with_commas(),
+            total = total.separate_with_commas()
+        ),
         None => percent,
     }
 }

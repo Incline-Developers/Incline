@@ -7,6 +7,7 @@ use spade::Triangulation as SpadeTriangulation;
 use crate::app::file_name;
 use crate::{
     app::App,
+    i18n::{tr, tr_format},
     model::{
         Layer, Object, ObjectId, formats,
         formats::mesh_data,

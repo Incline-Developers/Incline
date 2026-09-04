@@ -2,6 +2,7 @@ use glam::DVec3;
 
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
     ui::state::{ActiveTool, RelimitCandidate, RelimitMode, TrimEnd},
@@ -70,7 +71,7 @@ impl<'a> App<'a> {
 
         // Phase 1: pick the second line (only when dialog is closed).
         if !self.editor.relimit_waiting_for_pick {
-            userspace_warn!("Relimit: click ignored, tool is not currently waiting for a target pick");
+            userspace_warn!("{}", tr!(literal = "Relimit: click ignored, tool is not currently waiting for a target pick"));
             return;
         }
         let frozen = &self.editor.frozen_handles;
@@ -79,15 +80,15 @@ impl<'a> App<'a> {
             .as_ref()
             .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &self.triangulations, &self.editor.hidden_handles, frozen, self.editor.xray_enabled));
         let Some((SceneEntityId::Object(second_id), _)) = picked else {
-            userspace_warn!("Relimit: click did not hit any object (nothing under cursor)");
+            userspace_warn!("{}", tr!(literal = "Relimit: click did not hit any object (nothing under cursor)"));
             return;
         };
         let Some(source_id) = self.editor.relimit_source_id else {
-            userspace_warn!("Relimit: no source line is set, aborting pick");
+            userspace_warn!("{}", tr!(literal = "Relimit: no source line is set, aborting pick"));
             return;
         };
         if second_id == source_id {
-            userspace_warn!("Relimit: clicked the source line itself, pick a different line");
+            userspace_warn!("{}", tr!(literal = "Relimit: clicked the source line itself, pick a different line"));
             return;
         }
 
@@ -97,22 +98,45 @@ impl<'a> App<'a> {
             let src = match self.active_document().get_object(source_id) {
                 Some(Object::Polyline { verts, closed: false, .. }) if verts.len() >= 2 => verts.clone(),
                 _ => {
-                    userspace_warn!("Relimit: source object {source_id:?} is no longer a valid open polyline");
+                    userspace_warn!(
+                        "{}",
+                        tr_format!(
+                            literal = "Relimit: source object %source_id% is no longer a valid open polyline",
+                            source_id = format!("{source_id:?}")
+                        )
+                    );
                     return;
                 }
             };
             let tgt = match self.active_document().get_object(second_id) {
                 Some(Object::Polyline { verts, closed, .. }) if verts.len() >= 2 => (verts.clone(), *closed),
                 Some(Object::Polyline { verts, .. }) => {
-                    userspace_warn!("Relimit: clicked polyline {second_id:?} has only {} vertex/vertices, need at least 2", verts.len());
+                    userspace_warn!(
+                        "{}",
+                        tr_format!(
+                            literal = "Relimit: clicked polyline %second_id% has only %count% vertex/vertices, need at least 2",
+                            second_id = format!("{second_id:?}"),
+                            count = verts.len()
+                        )
+                    );
                     return;
                 }
                 Some(other) => {
-                    userspace_warn!("Relimit: clicked object {second_id:?} is not a polyline (it's a {})", other.kind_name());
+                    userspace_warn!(
+                        "{}",
+                        tr_format!(
+                            literal = "Relimit: clicked object %second_id% is not a polyline (it's a %kind%)",
+                            second_id = format!("{second_id:?}"),
+                            kind = other.kind_name()
+                        )
+                    );
                     return;
                 }
                 None => {
-                    userspace_warn!("Relimit: clicked object {second_id:?} no longer exists");
+                    userspace_warn!(
+                        "{}",
+                        tr_format!(literal = "Relimit: clicked object %second_id% no longer exists", second_id = format!("{second_id:?}"))
+                    );
                     return;
                 }
             };
@@ -124,7 +148,7 @@ impl<'a> App<'a> {
         // chord here makes every bent polyline relimit in the wrong direction.
         let world_candidates = relimit_world_candidates(&src_verts, &tgt_verts, tgt_closed);
         if world_candidates.is_empty() {
-            userspace_warn!("Relimit: neither terminal segment crosses the selected target line in plan view");
+            userspace_warn!("{}", tr!(literal = "Relimit: neither terminal segment crosses the selected target line in plan view"));
             return;
         }
 
@@ -238,8 +262,8 @@ impl<'a> App<'a> {
         self.cancel_relimit();
         if changed {
             crate::logging::report_completed_action(
-                CommandReportSpec::new("Relimit Line", format!("{source_id:?}")),
-                format!("Relimited line {source_id:?} to the selected target"),
+                CommandReportSpec::new(crate::i18n::tr!(literal = "Relimit Line"), format!("{source_id:?}")),
+                tr_format!(literal = "Relimited line %source_id% to the selected target", source_id = format!("{source_id:?}")),
             );
         }
         self.invalidate_geometry();
@@ -274,8 +298,13 @@ impl<'a> App<'a> {
         self.cancel_relimit();
         if changed {
             crate::logging::report_completed_action(
-                CommandReportSpec::new("Relimit Line", format!("{source_id:?}")),
-                format!("Resized line {source_id:?} using {mode:?} value {value}"),
+                CommandReportSpec::new(crate::i18n::tr!(literal = "Relimit Line"), format!("{source_id:?}")),
+                tr_format!(
+                    literal = "Resized line %source_id% using %mode% value %value%",
+                    source_id = format!("{source_id:?}"),
+                    mode = format!("{mode:?}"),
+                    value = value
+                ),
             );
         }
         self.invalidate_geometry();

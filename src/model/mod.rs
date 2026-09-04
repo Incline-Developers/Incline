@@ -160,12 +160,12 @@ impl Object {
 
     /// Short human-readable variant name, for diagnostics/logging. A two-vertex
     /// polyline is a plain line and is named as one.
-    pub(crate) fn kind_name(&self) -> &'static str {
+    pub(crate) fn kind_name(&self) -> String {
         match self {
-            Object::Point { .. } => "Point",
-            Object::Polyline { verts, .. } if verts.len() == 2 => "Line",
-            Object::Polyline { .. } => "Polyline",
-            Object::Text { .. } => "Text",
+            Object::Point { .. } => crate::i18n::tr!(literal = "Point"),
+            Object::Polyline { verts, .. } if verts.len() == 2 => crate::i18n::tr!(literal = "Line"),
+            Object::Polyline { .. } => crate::i18n::tr!(literal = "Polyline"),
+            Object::Text { .. } => crate::i18n::tr!(literal = "Text"),
         }
     }
 

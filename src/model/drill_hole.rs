@@ -3,7 +3,10 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState};
+use crate::{
+    i18n::tr,
+    model::{formats::csv_drill_hole::CsvDrillFileMapping, project::ProjectItemState},
+};
 
 pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
 /// Screen diameter of the marker drawn at every collar. It is the floor, not
@@ -40,7 +43,11 @@ pub(crate) enum DrillHoleSource {
 impl DrillHoleSource {
     pub(crate) fn display_name(&self) -> String {
         match self {
-            Self::LegacyDhd { path } => path.file_name().and_then(|name| name.to_str()).unwrap_or("unsupported drillhole source").to_owned(),
+            Self::LegacyDhd { path } => path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| tr!(literal = "Unsupported drillhole source")),
             Self::Csv { name, .. } => name.clone(),
             Self::Omf { name, .. } => name.clone(),
         }
@@ -142,12 +149,12 @@ pub(crate) enum DrillColorPreset {
 impl DrillColorPreset {
     pub(crate) const ALL: [Self; 4] = [Self::Rainbow, Self::Grayscale, Self::Heat, Self::GreenYellowRed];
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> String {
         match self {
-            Self::Rainbow => "Rainbow",
-            Self::Grayscale => "Grayscale",
-            Self::Heat => "Heat",
-            Self::GreenYellowRed => "Green–Yellow–Red",
+            Self::Rainbow => crate::i18n::tr!(literal = "Rainbow"),
+            Self::Grayscale => crate::i18n::tr!(literal = "Grayscale"),
+            Self::Heat => crate::i18n::tr!(literal = "Heat"),
+            Self::GreenYellowRed => crate::i18n::tr!(literal = "Green–Yellow–Red"),
         }
     }
 

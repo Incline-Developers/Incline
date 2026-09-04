@@ -20,6 +20,7 @@ use omf as omf_crate;
 use serde_json::{Value, json};
 
 use crate::{
+    i18n::{tr, tr_format},
     model::{
         Document, FillStyle, Layer, Object, ObjectColor, PolyVertex,
         block_model::{
@@ -232,9 +233,10 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
     }
 
     make_element_names_unique(&mut elements);
-    let mut project = omf_crate::Project::new(if snapshot.name.trim().is_empty() { "Incline Design project" } else { &snapshot.name });
+    let fallback_name = tr!(literal = "Incline Design project");
+    let mut project = omf_crate::Project::new(if snapshot.name.trim().is_empty() { fallback_name.as_str() } else { &snapshot.name });
     project.application = format!("Incline {}", env!("CARGO_PKG_VERSION"));
-    project.description = "Mining data exported by Incline".to_owned();
+    project.description = tr!(literal = "Mining data exported by Incline");
     if let Some(design) = snapshot.designs.as_ref()
         && !design.metadata.coordinate_reference_system.trim().is_empty()
     {
@@ -910,23 +912,29 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
         origin: project.origin,
         ..Default::default()
     };
-    if !project.description.trim().is_empty() && project.description != "Mining data exported by Incline" {
-        bundle.warnings.push("Project description is not retained".to_owned());
+    let written_by_incline = project.application.starts_with("Incline ");
+    if !project.description.trim().is_empty() && !written_by_incline {
+        bundle.warnings.push(tr!(literal = "Project description is not retained"));
     }
     if !project.author.trim().is_empty() {
-        bundle.warnings.push("Project author is not retained".to_owned());
+        bundle.warnings.push(tr!(literal = "Project author is not retained"));
     }
     if !project.application.trim().is_empty() && !project.application.starts_with("Incline ") {
-        bundle.warnings.push(format!("Project application metadata '{}' is not retained", project.application));
+        bundle.warnings.push(tr_format!(
+            literal = "Project application metadata '%application%' is not retained",
+            application = &project.application
+        ));
     }
     if !project.metadata.is_empty() {
-        bundle.warnings.push(format!(
-            "Project has unsupported metadata keys: {}",
-            project.metadata.keys().cloned().collect::<Vec<_>>().join(", ")
+        bundle.warnings.push(tr_format!(
+            literal = "Project has unsupported metadata keys: %keys%",
+            keys = project.metadata.keys().cloned().collect::<Vec<_>>().join(", ")
         ));
     }
     if !problems.is_empty() {
-        bundle.warnings.push(format!("OMF validation warnings: {problems:?}"));
+        bundle
+            .warnings
+            .push(tr_format!(literal = "OMF validation warnings: %warnings%", warnings = format!("{problems:?}")));
     }
     let mut decoder = Decoder {
         reader: &reader,
@@ -1501,7 +1509,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     Ok(transfer) => {
                         transfers.insert(attribute.name.clone(), transfer);
                     }
-                    Err(error) => crate::userspace_warn!("Ignoring the colour map on OMF attribute '{}': {error:#}", attribute.name),
+                    Err(error) => crate::userspace_warn!(
+                        "{}",
+                        crate::i18n::tr_format!(
+                            literal = "Ignoring the colour map on OMF attribute '%attribute%': %error%",
+                            attribute = &attribute.name,
+                            error = format!("{error:#}")
+                        )
+                    ),
                 },
                 // Category colours arrive on the column as `category_colors`
                 // (see `read_block_column`) and are already merged into the
@@ -1782,7 +1797,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     rgba,
                     world_to_uv,
                     projection,
-                    driver_name: "OMF texture".to_owned(),
+                    driver_name: tr!(literal = "OMF texture"),
                 },
             });
         }
@@ -1970,7 +1985,11 @@ fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str)
 }
 
 fn file_stem(path: &str) -> String {
-    Path::new(path).file_stem().and_then(|stem| stem.to_str()).unwrap_or("OMF import").to_owned()
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| tr!(literal = "OMF import"))
 }
 
 fn safe_component(name: &str) -> String {

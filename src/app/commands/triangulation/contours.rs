@@ -96,19 +96,29 @@ impl<'a> App<'a> {
             let polylines = match result {
                 Ok(polylines) => polylines,
                 Err(error) => {
-                    userspace_warn!("Contour generation failed: {error:#}");
+                    userspace_warn!("{}", tr_format!(literal = "Contour generation failed: %error%", error = format!("{error:#}")));
                     return;
                 }
             };
             let project_is_active = app.workspace.active_project().is_some_and(|project| project.runtime_id == project_runtime_id);
             let Some(project) = app.workspace.projects.iter_mut().find(|project| project.runtime_id == project_runtime_id) else {
-                userspace_warn!("Contours for '{apply_tri_name}' were discarded: the project was closed");
+                userspace_warn!(
+                    "{}",
+                    tr_format!(literal = "Contours for '%name%' were discarded: the project was closed", name = apply_tri_name)
+                );
                 return;
             };
             let (layer_id, layer_name, create_layer) = match output_layer {
                 ContourOutputLayer::New(layer_name) => {
                     if project.project.document.layer_id_by_name(&layer_name).is_some() {
-                        userspace_warn!("Contours for '{apply_tri_name}' were discarded: layer '{layer_name}' now exists");
+                        userspace_warn!(
+                            "{}",
+                            tr_format!(
+                                literal = "Contours for '%name%' were discarded: layer '%layer_name%' now exists",
+                                name = apply_tri_name,
+                                layer_name = layer_name
+                            )
+                        );
                         return;
                     }
                     let layer_id = project.project.document.allocate_layer_id();
@@ -116,7 +126,13 @@ impl<'a> App<'a> {
                 }
                 ContourOutputLayer::Existing(layer_id) => {
                     let Some(layer_name) = project.project.document.layer(layer_id).map(|layer| layer.name.clone()) else {
-                        userspace_warn!("Contours for '{apply_tri_name}' were discarded: the selected output layer was deleted");
+                        userspace_warn!(
+                            "{}",
+                            tr_format!(
+                                literal = "Contours for '%name%' were discarded: the selected output layer was deleted",
+                                name = apply_tri_name
+                            )
+                        );
                         return;
                     };
                     (layer_id, layer_name, false)
@@ -153,7 +169,15 @@ impl<'a> App<'a> {
             if project_is_active {
                 app.editor.active_layer = Some(layer_id);
             }
-            userspace_log!("Generated {line_count} contour polyline(s) for triangulation '{apply_tri_name}' in layer '{layer_name}'");
+            userspace_log!(
+                "{}",
+                tr_format!(
+                    literal = "Generated %line_count% contour polyline(s) for triangulation '%name%' in layer '%layer_name%'",
+                    line_count = line_count,
+                    name = apply_tri_name,
+                    layer_name = layer_name
+                )
+            );
             app.invalidate_geometry();
         };
         self.spawn_job_reporting_progress("Generating contours…", vec![crate::app::jobs::JobKey::Triangulation(tri_id)], compute, apply);

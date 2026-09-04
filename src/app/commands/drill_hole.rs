@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     app::App,
+    i18n::tr_format,
     model::{
         SceneEntityId,
         drill_hole::{
@@ -68,7 +69,7 @@ impl<'a> App<'a> {
             return Ok(());
         }
         let name = source.display_name();
-        let (ticket, progress) = self.begin_reported_task(format!("Loading {name}"));
+        let (ticket, progress) = self.begin_reported_task(crate::i18n::tr_format!(literal = "Loading %name%", name = &name));
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
         let worker_report = console_report.as_ref().map(crate::logging::ConsoleReportHandle::child);
@@ -113,11 +114,11 @@ impl<'a> App<'a> {
                     self.add_loaded_drill_holes(loaded);
                 }
                 Ok(Err(error)) => {
-                    userspace_warn!("Failed to load drillholes: {error:#}");
+                    userspace_warn!("{}", tr_format!(literal = "Failed to load drillholes: %error%", error = format!("{error:#}")));
                     self.finish_background_task(ticket, false);
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    userspace_warn!("Drillhole loader disconnected for {}", source.display_name());
+                    userspace_warn!("{}", tr_format!(literal = "Drillhole loader disconnected for %name%", name = source.display_name()));
                     self.finish_background_task(ticket, false);
                 }
             }
@@ -130,10 +131,13 @@ impl<'a> App<'a> {
         self.next_drill_hole_id += 1;
         let name = crate::model::project::unique_item_name(loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
         userspace_log!(
-            "Loaded drillhole dataset '{}': {} holes, {} colour fields",
-            name,
-            loaded.dataset.holes.len(),
-            loaded.dataset.fields.len()
+            "{}",
+            tr_format!(
+                literal = "Loaded drillhole dataset '%name%': %holes% holes, %fields% colour fields",
+                name = name.clone(),
+                holes = loaded.dataset.holes.len(),
+                fields = loaded.dataset.fields.len()
+            )
         );
         self.drill_holes.push(OpenDrillHoleDataset {
             id,

@@ -1,5 +1,6 @@
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
     rendering::pick,
@@ -96,7 +97,7 @@ impl<'a> App<'a> {
         // would leave an empty piece and are therefore not actionable.
         if !closed {
             if vertex_index == 0 || vertex_index + 1 == verts.len() {
-                userspace_warn!("Split At Points: choose an interior vertex of the open line");
+                userspace_warn!("{}", tr!(literal = "Split At Points: choose an interior vertex of the open line"));
                 return;
             }
             self.editor.split_selected_verts = [Some(vertex_index), None];
@@ -153,9 +154,9 @@ impl<'a> App<'a> {
             let Some(second) = second else {
                 return;
             };
-            split_closed_ring(verts, first, second).ok_or("Split At Points: choose two non-adjacent polyline vertices")
+            split_closed_ring(verts, first, second).ok_or_else(|| tr!(literal = "Split At Points: choose two non-adjacent polyline vertices"))
         } else {
-            split_open_line(verts, first).ok_or("Split At Points: choose an interior vertex of the open line")
+            split_open_line(verts, first).ok_or_else(|| tr!(literal = "Split At Points: choose an interior vertex of the open line"))
         };
         let (first_ring, second_ring) = match pieces {
             Ok(pieces) => pieces,
@@ -197,8 +198,8 @@ impl<'a> App<'a> {
         self.clear_split_at_points_state();
         self.editor.active_tool = ActiveTool::None;
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Split Line", "Created 2 open polylines"),
-            "Split source polyline into two open polylines",
+            CommandReportSpec::new(crate::i18n::tr!(literal = "Split Line"), crate::i18n::tr!(literal = "Created 2 open polylines")),
+            crate::i18n::tr!(literal = "Split source polyline into two open polylines"),
         );
         self.invalidate_geometry();
         self.invalidate_overlay();

@@ -13,6 +13,7 @@ use crate::app::file_name;
 use crate::model::formats::point_cloud::{PointCloudFormat, read_point_cloud};
 use crate::{
     app::App,
+    i18n::tr_format,
     model::{
         SceneEntityId,
         point_cloud::{LoadedPointCloud, OpenPointCloud, PointCloudId, finite_bounds, prepare_for_render},
@@ -34,7 +35,10 @@ impl<'a> App<'a> {
         let id = PointCloudId(self.next_point_cloud_id);
         self.next_point_cloud_id += 1;
         let name = crate::model::project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
-        userspace_log!("Loaded point cloud {} ({} points)", name, loaded.points.len());
+        userspace_log!(
+            "{}",
+            tr_format!(literal = "Loaded point cloud %name% (%count% points)", name = name.clone(), count = loaded.points.len())
+        );
         self.point_clouds.push(OpenPointCloud {
             id,
             state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
@@ -57,9 +61,9 @@ impl<'a> App<'a> {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn open_point_cloud_input(&mut self, input: crate::model::input::InputFile, display_path: std::path::PathBuf) {
         let source_name = input.source.name.clone();
-        let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), "Point cloud");
+        let name = crate::model::project::imported_item_name(std::path::Path::new(&source_name), &crate::i18n::tr!(literal = "Point cloud"));
         self.spawn_job_reporting_progress(
-            format!("Loading {source_name}"),
+            crate::i18n::tr_format!(literal = "Loading %name%", name = &source_name),
             vec![crate::app::jobs::JobKey::Anonymous],
             move |cancel, progress| {
                 if cancel.is_cancelled() {
@@ -94,7 +98,7 @@ impl<'a> App<'a> {
                     }
                     app.invalidate_topology_bounds_and_redraw();
                 }
-                Err(error) => userspace_warn!("Failed to load point cloud: {error:#}"),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "Failed to load point cloud: %error%", error = format!("{error:#}"))),
             },
         );
     }
@@ -121,8 +125,8 @@ impl<'a> App<'a> {
         }
 
         let source_name = file_name(&path);
-        let name = crate::model::project::imported_item_name(&path, "Point cloud");
-        let (ticket, progress) = self.begin_reported_task(format!("Loading {source_name}"));
+        let name = crate::model::project::imported_item_name(&path, &crate::i18n::tr!(literal = "Point cloud"));
+        let (ticket, progress) = self.begin_reported_task(crate::i18n::tr_format!(literal = "Loading %name%", name = &source_name));
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console_report = crate::logging::retain_current_report();
@@ -187,12 +191,12 @@ impl<'a> App<'a> {
                     self.invalidate_topology_bounds_and_redraw();
                 }
                 Ok(Err(error)) => {
-                    userspace_warn!("Failed to load point cloud: {error:#}");
+                    userspace_warn!("{}", tr_format!(literal = "Failed to load point cloud: %error%", error = format!("{error:#}")));
                     self.finish_background_task(ticket, false);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => unreachable!(),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    userspace_warn!("Point-cloud loader disconnected for {}", path.display());
+                    userspace_warn!("{}", tr_format!(literal = "Point-cloud loader disconnected for %path%", path = path.display()));
                     self.finish_background_task(ticket, false);
                 }
             };

@@ -88,6 +88,15 @@ pub(crate) fn context_menu_popup<R>(
 
 /// Paint the header and run `add_contents` inside the menu's content margins.
 fn draw_body<R>(ui: &mut egui::Ui, title: &egui::WidgetText, width: f32, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let title_width = ui
+        .painter()
+        .layout_no_wrap(title.text().to_owned(), egui::FontId::proportional(11.0), egui::Color32::PLACEHOLDER)
+        .size()
+        .x
+        + f32::from(CONTENT_HORIZONTAL_MARGIN) * 2.0;
+    let measured_width = super::menu::intrinsic_content_width(ui) + f32::from(CONTENT_HORIZONTAL_MARGIN) * 2.0;
+    let available_width = (ui.ctx().content_rect().width() - 16.0).max(1.0);
+    let width = width.max(title_width).max(measured_width).min(available_width);
     ui.set_width(width);
     ui.set_min_width(width);
     ui.set_max_width(width);
@@ -164,7 +173,6 @@ impl ContextMenuAction {
     /// Mark this row as a switch rather than a command, drawing a tick at its
     /// head while the setting is on. Rows in the same menu that are not
     /// switches keep their own left edge; only checkable ones are indented.
-    #[cfg(not(target_os = "macos"))]
     pub(crate) fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self
@@ -196,35 +204,48 @@ impl ContextMenuAction {
             checked,
         } = self;
         ui.add_enabled_ui(enabled, |ui| {
+            let font_id = egui::TextStyle::Button.resolve(ui.style());
+            let full_label = label.text().to_owned();
+            let label_width = ui.painter().layout_no_wrap(full_label.clone(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x;
+            let shortcut_width = shortcut.as_ref().map_or(0.0, |shortcut| {
+                ui.painter()
+                    .layout_no_wrap(shortcut.text().to_owned(), font_id.clone(), egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            });
+            let text_left = if checked.is_some() { CHECK_COLUMN } else { 4.0 };
+            let right_padding = if submenu { 14.0 } else { 4.0 };
+            let shortcut_gap = if shortcut.is_some() { 16.0 } else { 0.0 };
+            let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
+            super::menu::record_intrinsic_content_width(ui, natural_width);
             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), egui::Sense::click());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.text()));
             if ui.is_rect_visible(rect) {
+                let painter = ui.painter().with_clip_rect(rect);
                 let visuals = ui.style().interact(&response);
                 if response.hovered() || response.has_focus() {
-                    ui.painter().rect_filled(rect, 1.0, visuals.bg_fill);
+                    painter.rect_filled(rect, 1.0, visuals.bg_fill);
                 }
                 let text_color = visuals.fg_stroke.color;
-                let text_left = if checked.is_some() { CHECK_COLUMN } else { 4.0 };
                 if checked == Some(true) {
                     // A tick drawn rather than set as text: the row's glyphs
                     // come from the button style, and a checkmark character is
                     // not in every font that style can resolve to.
                     let center = rect.left_center() + egui::vec2(CHECK_COLUMN / 2.0, 0.0);
-                    ui.painter().add(egui::Shape::line(
+                    painter.add(egui::Shape::line(
                         vec![center + egui::vec2(-3.0, 0.0), center + egui::vec2(-1.0, 2.5), center + egui::vec2(3.0, -3.0)],
                         egui::Stroke::new(1.4, text_color),
                     ));
                 }
-                ui.painter().text(
+                painter.text(
                     rect.left_center() + egui::vec2(text_left, 0.0),
                     egui::Align2::LEFT_CENTER,
                     label.text(),
                     egui::TextStyle::Button.resolve(ui.style()),
                     text_color,
                 );
-                let right_padding = if submenu { 14.0 } else { 4.0 };
                 if let Some(shortcut) = shortcut {
-                    ui.painter().text(
+                    painter.text(
                         rect.right_center() - egui::vec2(right_padding, 0.0),
                         egui::Align2::RIGHT_CENTER,
                         shortcut.text(),
@@ -234,14 +255,18 @@ impl ContextMenuAction {
                 }
                 if submenu {
                     let center = rect.right_center() - egui::vec2(5.0, 0.0);
-                    ui.painter().add(egui::Shape::convex_polygon(
+                    painter.add(egui::Shape::convex_polygon(
                         vec![center + egui::vec2(-2.0, -3.0), center + egui::vec2(2.0, 0.0), center + egui::vec2(-2.0, 3.0)],
                         ui.visuals().weak_text_color(),
                         egui::Stroke::NONE,
                     ));
                 }
             }
-            response
+            if rect.width() + 0.5 < natural_width {
+                response.on_hover_text(full_label)
+            } else {
+                response
+            }
         })
         .inner
     }
@@ -286,26 +311,40 @@ impl<'a> MenuBarMenu<'a> {
     }
 
     pub(crate) fn show<R>(self, ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
-        use egui::containers::menu::MenuConfig;
-
         let Self { label, enabled } = self;
-        // Mirrors `menu::MenuButton::ui` with a default (non-bar) menu config,
-        // so rows and nested submenus behave as they do in egui's own menus -
-        // only the frame, width and row metrics are this module's.
-        let config = MenuConfig::new();
         let response = ui.add_enabled(enabled, egui::Button::new(label));
         if !enabled {
             return None;
         }
-        let title: egui::WidgetText = label.into();
-        egui::Popup::menu(&response)
-            .close_behavior(config.close_behavior)
-            .style(config.style.clone())
-            .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
-            .width(MENU_WIDTH)
-            .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
-            .show(|ui| draw_body(ui, &title, MENU_WIDTH, add_contents))
+        dropdown_menu(&response, label, MENU_WIDTH, add_contents)
     }
+}
+
+/// Show this module's menu under a widget the caller drew and sensed itself,
+/// so a picker that is not a bar label - the status bar's language button -
+/// still opens the same frame, header and rows.
+///
+/// Mirrors `menu::MenuButton::ui` with a default (non-bar) menu config, so rows
+/// and nested submenus behave as they do in egui's own menus; only the frame,
+/// width and row metrics are this module's. The popup flips above the button
+/// when there is no room below it, which is how the status bar's picker opens.
+pub(crate) fn dropdown_menu<R>(
+    response: &egui::Response,
+    title: impl Into<egui::WidgetText>,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<R>> {
+    use egui::containers::menu::MenuConfig;
+
+    let config = MenuConfig::new();
+    let title = title.into();
+    egui::Popup::menu(response)
+        .close_behavior(config.close_behavior)
+        .style(config.style.clone())
+        .frame(menu_frame(&response.ctx.style_of(response.ctx.theme())))
+        .width(width)
+        .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+        .show(|ui| draw_body(ui, &title, width, add_contents))
 }
 
 /// A submenu row inside a [`MenuBarMenu`] or [`context_menu_popup`], opening a

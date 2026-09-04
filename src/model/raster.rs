@@ -501,7 +501,7 @@ fn decode_raster_reader<R: Read + Seek>(reader: R, path: &Path, max_preview_dime
 
     let rgba = Arc::new(rgba);
     Ok(LoadedRasterTexture {
-        name: imported_item_name(path, "Raster"),
+        name: imported_item_name(path, &crate::i18n::tr!(literal = "Raster")),
         path: path.to_owned(),
         source_size: [source_width, source_height],
         preview_size: [preview_width, preview_height],

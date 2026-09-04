@@ -103,8 +103,11 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         self.editor.tool_highlight_id = None;
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Explode Polyline", format!("{edge_count} line(s)")),
-            format!("Exploded polyline into {edge_count} line segments"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Explode Polyline"),
+                crate::i18n::tr_format!(literal = "%count% line(s)", count = edge_count),
+            ),
+            crate::i18n::tr_format!(literal = "Exploded polyline into %count% line segments", count = edge_count),
         );
         self.invalidate_geometry();
     }

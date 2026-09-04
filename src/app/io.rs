@@ -6,8 +6,16 @@ use std::{fs, io::Write, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::LanguageChoice;
+
 pub(crate) fn default_renderer_background_color() -> [f32; 4] {
     crate::rendering::color::hex_to_linear_rgba(0x232c36)
+}
+
+/// The OS locale on a config with no `language` key - so, in practice, on the
+/// first launch. See [`LanguageChoice::default`].
+pub(crate) fn default_language() -> LanguageChoice {
+    LanguageChoice::default()
 }
 
 pub(crate) const fn default_snap_poll_rate() -> u32 {
@@ -130,6 +138,11 @@ pub(crate) struct Session {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Config {
+    /// UI language, switched live from the status bar's picker. Absent from a
+    /// config written before there were languages, and from the config of a
+    /// first launch, where it resolves to the OS locale - see [`crate::i18n`].
+    #[serde(default = "default_language")]
+    pub(crate) language: LanguageChoice,
     /// Use egui's dark visuals and the dark UI icon set.
     #[serde(default = "default_dark_mode")]
     pub(crate) dark_mode: bool,
@@ -202,6 +215,7 @@ pub(crate) struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: default_language(),
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
             panel_chrome: default_panel_chrome(),

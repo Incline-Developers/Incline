@@ -2,7 +2,12 @@
 
 use glam::DVec2;
 
-use crate::{app::App, ui::state::ActiveTool, userspace_log};
+use crate::{
+    app::App,
+    i18n::{tr, tr_format},
+    ui::state::ActiveTool,
+    userspace_log,
+};
 
 impl<'a> App<'a> {
     /// Canvas click while the Vertical Slice tool is armed. First click
@@ -57,13 +62,16 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
         self.redraw_requested = true;
         userspace_log!(
-            "Entered slice view @ {:.3}, {:.3}, {:.3} along {:.3}, {:.3} ({}m line)",
-            center.x,
-            center.y,
-            center.z,
-            direction.x,
-            direction.y,
-            half_length * 2.0
+            "{}",
+            tr_format!(
+                literal = "Entered slice view @ %cx%, %cy%, %cz% along %dx%, %dy% (%length%m line)",
+                cx = format!("{:.3}", center.x),
+                cy = format!("{:.3}", center.y),
+                cz = format!("{:.3}", center.z),
+                dx = format!("{:.3}", direction.x),
+                dy = format!("{:.3}", direction.y),
+                length = half_length * 2.0
+            )
         );
     }
 
@@ -89,6 +97,6 @@ impl<'a> App<'a> {
             graphics.exit_slice_mode();
         }
         self.redraw_requested = true;
-        userspace_log!("Exited slice view");
+        userspace_log!("{}", tr!(literal = "Exited slice view"));
     }
 }

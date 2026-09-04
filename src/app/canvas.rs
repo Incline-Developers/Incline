@@ -1,5 +1,6 @@
 use crate::{
     app::{App, PICK_THRESHOLD_PX},
+    i18n::{tr, tr_format},
     model::{Command, Object, SceneEntityId, drill_hole::OpenDrillHoleDataset},
     ui::state::{ActiveTool, DrapePhase, SelectionMode, TriangulationPickTarget, Workspace},
 };
@@ -19,7 +20,7 @@ impl<'a> App<'a> {
                     .iter()
                     .find(|triangulation| triangulation.id == id)
                     .map(|triangulation| triangulation.name.clone())
-                    .unwrap_or_else(|| "surface".to_owned());
+                    .unwrap_or_else(|| tr!(literal = "Surface"));
                 self.apply_triangulation_field_pick(target, id, &name);
             }
             return;
@@ -57,9 +58,9 @@ impl<'a> App<'a> {
                         .get_object(oid)
                         .and_then(|o| {
                             let layer_id = o.layer();
-                            self.scene_document.layer(layer_id).map(|l| format!("Polyline on '{}'", l.name))
+                            self.scene_document.layer(layer_id).map(|l| tr_format!(literal = "Polyline on '%layer%'", layer = &l.name))
                         })
-                        .unwrap_or_else(|| "Polyline".to_owned());
+                        .unwrap_or_else(|| tr!(literal = "Polyline"));
                     self.editor.tri_cut_poly_object_id = Some(oid);
                     self.editor.tri_cut_poly_object_name = name;
                     self.editor.tri_cut_poly_awaiting_pick = false;
@@ -200,7 +201,7 @@ impl<'a> App<'a> {
                 self.triangulations
                     .iter()
                     .find(|triangulation| triangulation.id == id)
-                    .map(|triangulation| format!("Surface | {}", triangulation.name))
+                    .map(|triangulation| tr_format!(literal = "Surface | %name%", name = &triangulation.name))
             });
             if self.editor.tri_hover_handles != next_handles || self.editor.viewport_pick_hover_label != next_label {
                 self.editor.tri_hover_handles = next_handles;
@@ -223,11 +224,14 @@ impl<'a> App<'a> {
             Some(SceneEntityId::Object(id)) => match self.scene_document.get_object(id) {
                 Some(object @ Object::Polyline { closed: true, verts, .. }) if verts.len() >= 3 => {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
-                    (Some(id), Some(format!("Polyline | Layer: {layer} | {} vertices", verts.len())))
+                    (
+                        Some(id),
+                        Some(tr_format!(literal = "Polyline | Layer: %layer% | %count% vertices", layer = layer, count = verts.len())),
+                    )
                 }
-                _ => (None, Some("Not selectable | Choose a closed polyline".to_owned())),
+                _ => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
             },
-            Some(_) => (None, Some("Not selectable | Choose a closed polyline".to_owned())),
+            Some(_) => (None, Some(tr!(literal = "Not selectable | Choose a closed polyline"))),
             None => (None, None),
         };
         if self.editor.tool_highlight_id != next_highlight || self.editor.viewport_pick_hover_label != next_label {
@@ -241,11 +245,16 @@ impl<'a> App<'a> {
         match target {
             TriangulationPickTarget::ClipSurface => {
                 self.editor.tri_cut_poly_tri_id = Some(id);
-                update_auto_derived_name(&mut self.editor.tri_cut_poly_name_input, self.editor.tri_cut_poly_name_auto, name, "Clipped");
+                update_auto_derived_name(
+                    &mut self.editor.tri_cut_poly_name_input,
+                    self.editor.tri_cut_poly_name_auto,
+                    name,
+                    &tr!(literal = "Clipped"),
+                );
             }
             TriangulationPickTarget::SliceSurface => {
                 self.editor.tri_cut_z_tri_id = Some(id);
-                update_auto_derived_name(&mut self.editor.tri_cut_z_name_input, self.editor.tri_cut_z_name_auto, name, "Sliced");
+                update_auto_derived_name(&mut self.editor.tri_cut_z_name_input, self.editor.tri_cut_z_name_auto, name, &tr!(literal = "Sliced"));
             }
             TriangulationPickTarget::TrimTopology => {
                 self.editor.tri_cut_surface_reference_id = Some(id);
@@ -258,14 +267,24 @@ impl<'a> App<'a> {
                 if self.editor.tri_cut_surface_reference_id == Some(id) {
                     self.editor.tri_cut_surface_reference_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_cut_surface_name_input, self.editor.tri_cut_surface_name_auto, name, "Trimmed");
+                update_auto_derived_name(
+                    &mut self.editor.tri_cut_surface_name_input,
+                    self.editor.tri_cut_surface_name_auto,
+                    name,
+                    &tr!(literal = "Trimmed"),
+                );
             }
             TriangulationPickTarget::CutPitTopology => {
                 self.editor.tri_cut_pitshell_topology_id = Some(id);
                 if self.editor.tri_cut_pitshell_pitshell_id == Some(id) {
                     self.editor.tri_cut_pitshell_pitshell_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_cut_pitshell_name_input, self.editor.tri_cut_pitshell_name_auto, name, "Cut");
+                update_auto_derived_name(
+                    &mut self.editor.tri_cut_pitshell_name_input,
+                    self.editor.tri_cut_pitshell_name_auto,
+                    name,
+                    &tr!(literal = "Cut"),
+                );
             }
             TriangulationPickTarget::CutPitShell => {
                 self.editor.tri_cut_pitshell_pitshell_id = Some(id);
@@ -278,7 +297,12 @@ impl<'a> App<'a> {
                 if self.editor.tri_include_solid_shape_id == Some(id) {
                     self.editor.tri_include_solid_shape_id = None;
                 }
-                update_auto_derived_name(&mut self.editor.tri_include_solid_name_input, self.editor.tri_include_solid_name_auto, name, "With Shell");
+                update_auto_derived_name(
+                    &mut self.editor.tri_include_solid_name_input,
+                    self.editor.tri_include_solid_name_auto,
+                    name,
+                    &tr!(literal = "With Shell"),
+                );
             }
             TriangulationPickTarget::IncludeShape => {
                 self.editor.tri_include_solid_shape_id = Some(id);

@@ -2,6 +2,8 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod app;
+mod fonts;
+mod i18n;
 mod logging;
 #[cfg(target_os = "macos")]
 mod mac;
@@ -34,8 +36,10 @@ fn main() -> Result<()> {
     let _logging_guard = logging::init();
     (|| {
         let event_loop = EventLoop::new()?;
-        logging::startup_log();
         let mut app = App::new()?;
+        // App construction loads the saved language. Log startup afterwards so
+        // the terminal and activity console use that language too.
+        logging::startup_log();
         event_loop.run_app(&mut app)?;
         Ok(())
     })()
@@ -49,7 +53,7 @@ fn main() {
 
     wasm_bindgen_futures::spawn_local(async {
         if let Err(error) = start_web().await {
-            log::error!("Incline Design Web startup failed: {error}");
+            log::error!("{}", crate::i18n::tr_format!(literal = "Incline Design Web startup failed: %error%", error = error));
             show_web_startup_error(&error);
         }
     });

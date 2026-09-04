@@ -7,6 +7,7 @@
 
 use crate::{
     app::App,
+    i18n::tr_format,
     model::{LayerId, SceneEntityId},
     ui::state::ExplorerSection,
     userspace_log,
@@ -138,7 +139,15 @@ impl<'a> App<'a> {
         if asset_changed {
             self.touch_active_project_content();
         }
-        userspace_log!("{} {changed} item(s) in {}", if visible { "Revealed" } else { "Hid" }, section.label());
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "%verb% %count% item(s) in %section%",
+                verb = if visible { "Revealed" } else { "Hid" },
+                count = changed,
+                section = section.label()
+            )
+        );
         self.invalidate_geometry();
     }
 
@@ -194,7 +203,15 @@ impl<'a> App<'a> {
                 }
             }
         }
-        userspace_log!("{} {changed} item(s) in {}", if locked { "Locked" } else { "Unlocked" }, section.label());
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "%verb% %count% item(s) in %section%",
+                verb = if locked { "Locked" } else { "Unlocked" },
+                count = changed,
+                section = section.label()
+            )
+        );
         self.invalidate_geometry();
     }
 }

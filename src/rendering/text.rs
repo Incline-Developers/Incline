@@ -3,24 +3,21 @@
 use std::{
     collections::{HashMap, HashSet, hash_map},
     hash::{BuildHasher, Hash, Hasher},
-    sync::Arc,
 };
 
 use cosmic_text::{Attrs, AttrsList, BufferLine, Color, FamilyOwned, FontSystem, Style, Weight};
 use fontmesh::{FontMeshError, FontRef, GlyphId, Mesh2D, glyph_to_mesh_2d};
 use glam::{Mat4, Vec3};
 
-use crate::rendering::{Vertex, color::linear_to_srgb_byte};
+use crate::{
+    fonts::cosmic_text_font_system,
+    rendering::{Vertex, color::linear_to_srgb_byte},
+};
 
 /// Curves are flattened once per distinct glyph. Twelve subdivisions per
 /// Bezier is smooth at normal CAD label sizes without producing excessive
 /// document geometry when the same cached glyph is emitted many times.
 const GLYPH_CURVE_SUBDIVISIONS: u8 = 12;
-
-/// Browsers do not expose their installed fonts to WASM. Keep at least one
-/// bundled face in cosmic-text's database so shaping always has a default
-/// font instead of panicking with `no default font found`.
-const DOCUMENT_FONT: &[u8] = include_bytes!("../../res/fonts/open-sans/OpenSans-Regular.ttf");
 
 #[derive(Debug, Clone, Copy, Hash)]
 struct Font<'a> {
@@ -148,7 +145,15 @@ impl GlyphMeshCache {
                 match generated {
                     Ok(mesh) => mesh,
                     Err(error) => {
-                        log::warn!("Could not build vector mesh for font {:?}, glyph {}: {error}", key.font_id, key.glyph_id);
+                        log::warn!(
+                            "{}",
+                            crate::i18n::tr_format!(
+                                literal = "Could not build vector mesh for font %font%, glyph %glyph%: %error%",
+                                font = format!("{:?}", key.font_id),
+                                glyph = key.glyph_id,
+                                error = error
+                            )
+                        );
                         None
                     }
                 }
@@ -166,7 +171,7 @@ pub(crate) struct TextSystem {
 impl TextSystem {
     pub(crate) fn new() -> Self {
         Self {
-            font_system: FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(Arc::new(DOCUMENT_FONT))]),
+            font_system: cosmic_text_font_system(),
             text_cache: TextCache::new(),
             glyph_mesh_cache: GlyphMeshCache::default(),
         }
@@ -332,7 +337,7 @@ impl TextBox {
                 let baseline_y = run.line_y + glyph.y - glyph.font_size * glyph.y_offset;
 
                 if !append_glyph_mesh(mesh, glyph_x, baseline_y, glyph.font_size, transform, color, vertices, indices) {
-                    log::warn!("Document text mesh exceeded its u32 index range");
+                    log::warn!("{}", crate::i18n::tr!(literal = "Document text mesh exceeded its u32 index range"));
                     return;
                 }
             }

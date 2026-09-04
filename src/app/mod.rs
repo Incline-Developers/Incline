@@ -72,13 +72,13 @@ fn rate_interval(rate: u32) -> Duration {
 
 fn window_icon() -> Option<Icon> {
     let image = egui_extras::image::load_svg_bytes(include_bytes!("../../res/logo.svg"), &Default::default())
-        .map_err(|error| log::error!("Failed to rasterize window icon: {error}"))
+        .map_err(|error| log::error!("{}", crate::i18n::tr_format!(literal = "Failed to rasterize window icon: %error%", error = error)))
         .ok()?;
     let [width, height] = image.size;
     let rgba = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
 
     Icon::from_rgba(rgba, width as u32, height as u32)
-        .map_err(|error| log::error!("Failed to create window icon: {error}"))
+        .map_err(|error| log::error!("{}", crate::i18n::tr_format!(literal = "Failed to create window icon: %error%", error = error)))
         .ok()
 }
 
@@ -495,7 +495,7 @@ impl<'a> App<'a> {
             Ok(session) => session,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => io::Session::default(),
             Err(e) => {
-                userspace_warn!("Failed to load session file: {e}");
+                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to load session file: %error%", error = e));
                 io::Session::default()
             }
         };
@@ -503,7 +503,7 @@ impl<'a> App<'a> {
             Ok(config) => config,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => io::Config::default(),
             Err(e) => {
-                userspace_warn!("Failed to load config file: {e}");
+                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to load config file: %error%", error = e));
                 io::Config::default()
             }
         };
@@ -520,6 +520,10 @@ impl<'a> App<'a> {
     }
 
     fn apply_config(&mut self, config: io::Config) {
+        // The status bar's picker switches this live afterwards; here it just
+        // installs what the last session (or the OS locale) left in the config.
+        self.editor.language = config.language;
+        crate::i18n::select_language(config.language);
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
         self.editor.panel_chrome = config.panel_chrome;
@@ -563,7 +567,7 @@ impl<'a> App<'a> {
         match io::load_config() {
             Ok(config) => app.apply_config(config),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => userspace_warn!("Failed to load browser preferences: {error}"),
+            Err(error) => userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to load browser preferences: %error%", error = error)),
         }
         crate::app::web_storage::install_dirty_guard();
         crate::app::web_storage::install_paste_listener(event_loop_proxy.clone());
@@ -1092,7 +1096,10 @@ impl<'a> App<'a> {
                 .open_slice_preview(window)
         });
         if let Err(error) = result {
-            log::error!("Failed to detach top-down preview: {error:#}");
+            log::error!(
+                "{}",
+                crate::i18n::tr_format!(literal = "Failed to detach top-down preview: %error%", error = format!("{error:#}"))
+            );
             self.editor.slice_preview_detached = false;
         }
     }
@@ -1240,7 +1247,10 @@ impl<'a> App<'a> {
                     let name = if is_active {
                         active.map(|project| project.project.metadata.name.clone()).unwrap_or_else(|| file_name(path))
                     } else {
-                        path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("project").to_owned()
+                        path.file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| crate::i18n::tr!(literal = "Project"))
                     };
                     UiTrackedProjectEntry {
                         name,
@@ -1445,7 +1455,7 @@ impl<'a> App<'a> {
             current_project_path: self.workspace.active_project().and_then(|project| project.path.clone()),
         };
         if let Err(e) = io::save_session(&session) {
-            log::warn!("Failed to save session: {e}");
+            log::warn!("{}", crate::i18n::tr_format!(literal = "Failed to save session: %error%", error = e));
         }
     }
 
@@ -1457,7 +1467,7 @@ impl<'a> App<'a> {
         });
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(error) = crate::app::web_storage::save_session(id).await {
-                userspace_warn!("Failed to save browser session: {error}");
+                userspace_warn!("{}", crate::i18n::tr_format!(literal = "Failed to save browser session: %error%", error = error));
             }
         });
     }
@@ -1495,7 +1505,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         let window = match event_loop.create_window(window_attributes) {
             Ok(window) => Arc::new(window),
             Err(e) => {
-                log::error!("Failed to create window: {e}");
+                log::error!("{}", crate::i18n::tr_format!(literal = "Failed to create window: %error%", error = e));
                 #[cfg(target_arch = "wasm32")]
                 crate::show_web_startup_error(&format!("failed to create the browser window: {e}"));
                 self.close_requested = true;
@@ -1516,7 +1526,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 self.start_release_check();
             }
             Err(e) => {
-                log::error!("Failed to initialize graphics: {e:?}");
+                log::error!("{}", crate::i18n::tr_format!(literal = "Failed to initialize graphics: %error%", error = format!("{e:?}")));
                 self.close_requested = true;
             }
         }
@@ -1653,7 +1663,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                     // left for the startup dialog to offer.
                     self.tracked_browser_projects = restored.projects;
                 }
-                Err(error) => userspace_warn!("Could not restore the browser project: {error}"),
+                Err(error) => userspace_warn!("{}", crate::i18n::tr_format!(literal = "Could not restore the browser project: %error%", error = error)),
             },
             AppEvent::BrowserProjectLoaded { project_id, ticket, result } => {
                 self.finish_background_task(ticket, false);
@@ -1678,20 +1688,23 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                                         project.persistence = crate::model::project::ProjectPersistence::BrowserRecord(record_id);
                                     }
                                     app.persist_session();
-                                    userspace_log!("Activated browser project '{}'.", record_name);
+                                    userspace_log!("{}", crate::i18n::tr_format!(literal = "Activated browser project '%name%'.", name = record_name));
                                 }
-                                Err(error) => userspace_warn!("Could not activate browser project: {error:#}"),
+                                Err(error) => userspace_warn!(
+                                    "{}",
+                                    crate::i18n::tr_format!(literal = "Could not activate browser project: %error%", error = format!("{error:#}"))
+                                ),
                             }
                         };
                         self.spawn_job_reporting_progress("Switching project…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
                     }
                     Ok(None) => {
                         self.browser_project_loads_pending.remove(&project_id);
-                        userspace_warn!("That browser project no longer exists");
+                        userspace_warn!("{}", crate::i18n::tr!(literal = "That browser project no longer exists"));
                     }
                     Err(error) => {
                         self.browser_project_loads_pending.remove(&project_id);
-                        userspace_warn!("Could not load the browser project: {error}");
+                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Could not load the browser project: %error%", error = error));
                     }
                 }
             }
@@ -1719,14 +1732,17 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                                 project.project.metadata.name.clone()
                             };
                             self.track_browser_project(project_id, name.clone());
-                            userspace_log!("Saved '{}' to browser storage", name);
+                            userspace_log!("{}", crate::i18n::tr_format!(literal = "Saved '%name%' to browser storage", name = name));
                             self.persist_session();
                         }
                         if self.project_replacement_after_save
                             && self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id)
                             && let Err(error) = self.continue_project_replacement()
                         {
-                            userspace_warn!("Could not replace the current project: {error:#}");
+                            userspace_warn!(
+                                "{}",
+                                crate::i18n::tr_format!(literal = "Could not replace the current project: %error%", error = format!("{error:#}"))
+                            );
                         }
                         if self.editor.pending_close_project == Some(runtime_id) {
                             self.close_project(runtime_id);
@@ -1743,14 +1759,17 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                             self.workspace.projects[index].lossy_save_confirmed = false;
                             self.editor.lossy_save_confirm_open = true;
                         }
-                        userspace_warn!("Browser save failed: {error}");
+                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser save failed: %error%", error = error));
                     }
                 }
 
                 if self.browser_delete_after_save.remove(&runtime_id)
                     && let Err(error) = self.delete_browser_project(runtime_id)
                 {
-                    userspace_warn!("Could not delete browser project: {error:#}");
+                    userspace_warn!(
+                        "{}",
+                        crate::i18n::tr_format!(literal = "Could not delete browser project: %error%", error = format!("{error:#}"))
+                    );
                 }
                 self.try_finish_deferred_exit();
             }
@@ -1765,10 +1784,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                             self.close_project(runtime_id);
                         }
                         self.persist_session();
-                        userspace_log!("Deleted browser project");
+                        userspace_log!("{}", crate::i18n::tr!(literal = "Deleted browser project"));
                     }
                     Err(error) => {
-                        userspace_warn!("Browser project deletion failed: {error}");
+                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser project deletion failed: %error%", error = error));
                     }
                 }
             }
@@ -1784,7 +1803,10 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn file_name(path: &Path) -> String {
-    path.file_name().and_then(|name| name.to_str()).unwrap_or("project.omf").to_string()
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("{}.omf", crate::i18n::tr!(literal = "Untitled")))
 }
 
 #[cfg(target_arch = "wasm32")]

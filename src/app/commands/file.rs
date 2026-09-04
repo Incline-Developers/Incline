@@ -29,6 +29,7 @@ use crate::{
 };
 use crate::{
     app::{App, commands::omf::ViewOnOpen},
+    i18n::{tr, tr_format},
     model::{
         LayerId,
         block_model::BlockModelId,
@@ -243,11 +244,6 @@ fn save_label(kind: &PendingSaveKind, path: &Path) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const PROJECT_REVERT_JOB_LABEL: &str = "Reverting project…";
-#[cfg(not(target_arch = "wasm32"))]
-const LAYER_REVERT_JOB_LABEL: &str = "Reverting layer…";
-
-#[cfg(not(target_arch = "wasm32"))]
 type LayerSnapshot = (usize, Layer, Vec<(usize, Object)>);
 
 impl<'a> App<'a> {
@@ -289,7 +285,7 @@ impl<'a> App<'a> {
                 let execute = || {
                     if let Err(err) = self.execute_file_dialog_action(action) {
                         let msg = format!("{err:#}");
-                        userspace_warn!("File dialog action failed: {msg}");
+                        userspace_warn!("{}", tr_format!(literal = "File dialog action failed: %msg%", msg = msg));
                         if self.exit_after_pending_saves {
                             self.cancel_exit_request();
                         }
@@ -334,7 +330,10 @@ impl<'a> App<'a> {
             app.pending_project_open_paths.remove(&reserved_path);
             match result {
                 Ok((path, source_name, bundle)) => app.apply_opened_omf_bundle(Some(path), source_name, bundle, ViewOnOpen::Fit),
-                Err(error) => userspace_warn!("Could not open {}: {error:#}", reserved_path.display()),
+                Err(error) => userspace_warn!(
+                    "{}",
+                    tr_format!(literal = "Could not open %path%: %error%", path = reserved_path.display(), error = format!("{error:#}"))
+                ),
             }
         };
         self.spawn_job_reporting_progress(status_label, vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
@@ -380,7 +379,7 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::NewProject => {
                 self.start_untitled_project()?;
-                userspace_log!("Created new project");
+                userspace_log!("{}", tr!(literal = "Created new project"));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -406,7 +405,7 @@ impl<'a> App<'a> {
                 let apply = |app: &mut App, result: Result<(String, formats::omf::ImportBundle)>| match result {
                     Ok((name, bundle)) => app.apply_opened_omf_bundle(None, name, bundle, ViewOnOpen::Fit),
                     Err(error) => {
-                        userspace_warn!("Could not open browser project: {error:#}");
+                        userspace_warn!("{}", tr_format!(literal = "Could not open browser project: %error%", error = format!("{error:#}")));
                     }
                 };
                 self.spawn_job_reporting_progress("Opening browser project…", vec![crate::app::jobs::JobKey::Anonymous], compute, apply);
@@ -421,7 +420,7 @@ impl<'a> App<'a> {
                 if !self.browser_project_loads_pending.insert(project_id) {
                     return Ok(());
                 }
-                let (ticket, _progress) = self.begin_reported_task("Switching project…");
+                let (ticket, _progress) = self.begin_reported_task(tr!(literal = "Switching project…"));
                 wasm_bindgen_futures::spawn_local(async move {
                     let result = crate::app::web_storage::load_project(project_id).await;
                     let _ = proxy.send_event(crate::app::AppEvent::BrowserProjectLoaded { project_id, ticket, result });
@@ -434,7 +433,7 @@ impl<'a> App<'a> {
                 project_file.metadata.name = sanitize_project_name(&name);
                 let project = project::open_project(None, project_file)?;
                 self.set_active_project(project);
-                userspace_log!("Created new browser project");
+                userspace_log!("{}", tr!(literal = "Created new browser project"));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -458,7 +457,7 @@ impl<'a> App<'a> {
                     let parsed = match result {
                         Ok(parsed) => parsed,
                         Err(error) => {
-                            userspace_warn!("DXF import failed: {error:#}");
+                            userspace_warn!("{}", tr_format!(literal = "DXF import failed: %error%", error = format!("{error:#}")));
                             return;
                         }
                     };
@@ -470,7 +469,7 @@ impl<'a> App<'a> {
                     let mut total_added = 0usize;
                     for (path, imported) in parsed {
                         let added = project::merge_document(&mut project.project.document, &imported);
-                        userspace_log!("Imported {added} object(s) from {}", path.display());
+                        userspace_log!("{}", tr_format!(literal = "Imported %added% object(s) from %path%", added = added, path = path.display()));
                         total_added += added;
                     }
                     let new_ids: Vec<LayerId> = project
@@ -489,10 +488,17 @@ impl<'a> App<'a> {
                     }
                     app.invalidate_geometry();
                     app.fit_view_to_extents();
-                    userspace_log!("Imported {import_count} DXF(s) into the project: {total_added} object(s)");
+                    userspace_log!(
+                        "{}",
+                        tr_format!(
+                            literal = "Imported %import_count% DXF(s) into the project: %total_added% object(s)",
+                            import_count = import_count,
+                            total_added = total_added
+                        )
+                    );
                 };
                 self.spawn_job(
-                    "Parsing DXF import…",
+                    tr!(literal = "Parsing DXF import…"),
                     vec![crate::app::jobs::JobKey::Project { runtime_id, document_revision }],
                     compute,
                     apply,
@@ -505,7 +511,7 @@ impl<'a> App<'a> {
                 for path in &paths {
                     self.open_triangulation_path(path)?;
                 }
-                userspace_log!("Queued {count} triangulation file(s) for import");
+                userspace_log!("{}", tr_format!(literal = "Queued %count% triangulation file(s) for import", count = count));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -569,7 +575,7 @@ impl<'a> App<'a> {
                 for file in files {
                     match file {
                         Ok(file) => accepted.push(file),
-                        Err(error) => userspace_warn!("Could not read selected file: {error}"),
+                        Err(error) => userspace_warn!("{}", tr_format!(literal = "Could not read selected file: %error%", error = error)),
                     }
                 }
                 self.editor.import_source_menu = kind;
@@ -632,7 +638,7 @@ impl<'a> App<'a> {
                     .project_index_for_runtime_id(project_runtime_id)
                     .context("The project selected for export is no longer open")?;
                 let project = &self.workspace.projects[project_index];
-                self.spawn_dxf_write(project.project.clone(), None, path, "project".to_owned());
+                self.spawn_dxf_write(project.project.clone(), None, path, tr!(literal = "Project"));
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -652,7 +658,7 @@ impl<'a> App<'a> {
                 let triangulation = self.triangulations.iter().find(|t| t.id == id).context("The selected triangulation is no longer loaded")?;
                 let mesh = std::sync::Arc::clone(&triangulation.mesh);
                 let name = triangulation.name.clone();
-                userspace_log!("Exporting triangulation '{}' to {}", name, path.display());
+                userspace_log!("{}", tr_format!(literal = "Exporting triangulation '%name%' to %path%", name = name, path = path.display()));
                 self.spawn_triangulation_write(PendingSaveKind::Export { name }, mesh, path);
                 Ok(())
             }
@@ -672,7 +678,11 @@ impl<'a> App<'a> {
                 }
                 self.ensure_project_has_no_pending_text_edit(project_index)?;
                 self.ensure_project_save_path_available(project_index, &path)?;
-                let new_name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline Design project").to_owned();
+                let new_name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| tr!(literal = "Incline Design project"));
                 let (previous_name, snapshot_hash, snapshot_layer_hashes) = {
                     let project = &mut self.workspace.projects[project_index];
                     let previous_name = std::mem::replace(&mut project.project.metadata.name, new_name.clone());
@@ -725,7 +735,7 @@ impl<'a> App<'a> {
                     .context("The project selected for export is no longer open")?;
                 let snapshot = project.project.clone();
                 self.spawn_job(
-                    "Encoding DXF download…",
+                    tr!(literal = "Encoding DXF download…"),
                     vec![crate::app::jobs::JobKey::Anonymous],
                     move |cancel| {
                         if cancel.is_cancelled() {
@@ -735,7 +745,7 @@ impl<'a> App<'a> {
                     },
                     move |_app, result| match result {
                         Ok(bytes) => Self::trigger_browser_download(file_name, bytes, "application/dxf", "DXF"),
-                        Err(error) => userspace_warn!("DXF download encoding failed: {error:#}"),
+                        Err(error) => userspace_warn!("{}", tr_format!(literal = "DXF download encoding failed: %error%", error = format!("{error:#}"))),
                     },
                 );
                 Ok(())
@@ -754,7 +764,7 @@ impl<'a> App<'a> {
                     .context("The selected triangulation is no longer loaded")?;
                 let mesh = std::sync::Arc::clone(&triangulation.mesh);
                 self.spawn_job(
-                    "Encoding triangulation download…",
+                    tr!(literal = "Encoding triangulation download…"),
                     vec![crate::app::jobs::JobKey::Anonymous],
                     move |cancel| {
                         if cancel.is_cancelled() {
@@ -770,7 +780,7 @@ impl<'a> App<'a> {
                             }
                         }
                         Err(error) => {
-                            userspace_warn!("Triangulation download encoding failed: {error:#}")
+                            userspace_warn!("{}", tr_format!(literal = "Triangulation download encoding failed: %error%", error = format!("{error:#}")))
                         }
                     },
                 );
@@ -787,7 +797,7 @@ impl<'a> App<'a> {
                 let blocks = std::sync::Arc::clone(&block_model.blocks);
                 let renderable = std::sync::Arc::clone(&block_model.renderable_block_indices);
                 self.spawn_job(
-                    "Encoding block-model CSV download…",
+                    tr!(literal = "Encoding block-model CSV download…"),
                     vec![crate::app::jobs::JobKey::Anonymous],
                     move |cancel| {
                         if cancel.is_cancelled() {
@@ -802,7 +812,7 @@ impl<'a> App<'a> {
                                 app.close_block_model(id);
                             }
                         }
-                        Err(error) => userspace_warn!("Block-model CSV encoding failed: {error:#}"),
+                        Err(error) => userspace_warn!("{}", tr_format!(literal = "Block-model CSV encoding failed: %error%", error = format!("{error:#}"))),
                     },
                 );
                 Ok(())
@@ -819,15 +829,21 @@ impl<'a> App<'a> {
     #[cfg(target_arch = "wasm32")]
     pub(super) fn trigger_browser_download(file_name: String, bytes: Vec<u8>, mime_type: &'static str, description: &'static str) {
         match crate::app::web_download::download(&file_name, &bytes, mime_type) {
-            Ok(()) => userspace_log!("Downloaded {description}: {file_name}"),
-            Err(error) => userspace_warn!("{description} download failed: {error}"),
+            Ok(()) => userspace_log!(
+                "{}",
+                tr_format!(literal = "Downloaded %description%: %file_name%", description = description, file_name = file_name)
+            ),
+            Err(error) => userspace_warn!(
+                "{}",
+                tr_format!(literal = "%description% download failed: %error%", description = description, error = error)
+            ),
         }
     }
 
     #[cfg(target_arch = "wasm32")]
     fn start_browser_export(&mut self, action: FileDialogAction) {
         if let Err(error) = self.execute_file_dialog_action(action) {
-            userspace_warn!("Could not start browser export: {error:#}");
+            userspace_warn!("{}", tr_format!(literal = "Could not start browser export: %error%", error = format!("{error:#}")));
         }
     }
 
@@ -899,7 +915,10 @@ impl<'a> App<'a> {
                         self.redraw_requested = true;
                         match save.kind {
                             PendingSaveKind::Export { name } => {
-                                userspace_log!("Exported triangulation '{}' to {}", name, save.path.display());
+                                userspace_log!(
+                                    "{}",
+                                    tr_format!(literal = "Exported triangulation '%name%' to %path%", name = name, path = save.path.display())
+                                );
                             }
                             PendingSaveKind::Project {
                                 runtime_id,
@@ -915,11 +934,15 @@ impl<'a> App<'a> {
                                     self.workspace.projects[index].lossy_save_confirmed = false;
                                     if save_as_previous_name.is_some() {
                                         self.workspace.projects[index].path = Some(save.path.clone());
-                                        self.workspace.projects[index].project.metadata.name =
-                                            save.path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Incline Design project").to_owned();
-                                        userspace_log!("Saved project as: {}", save.path.display());
+                                        self.workspace.projects[index].project.metadata.name = save
+                                            .path
+                                            .file_stem()
+                                            .and_then(|stem| stem.to_str())
+                                            .map(ToOwned::to_owned)
+                                            .unwrap_or_else(|| tr!(literal = "Incline Design project"));
+                                        userspace_log!("{}", tr_format!(literal = "Saved project as: %path%", path = save.path.display()));
                                     } else {
-                                        userspace_log!("Saved project: {}", save.path.display());
+                                        userspace_log!("{}", tr_format!(literal = "Saved project: %path%", path = save.path.display()));
                                     }
                                     self.workspace.projects[index].mark_snapshot_saved(snapshot_hash, snapshot_layer_hashes);
                                     if save_as_previous_name.is_some() {
@@ -936,7 +959,10 @@ impl<'a> App<'a> {
                                 }
                             }
                             PendingSaveKind::DxfExport { description } => {
-                                userspace_log!("Exported {description} to DXF: {}", save.path.display());
+                                userspace_log!(
+                                    "{}",
+                                    tr_format!(literal = "Exported %description% to DXF: %path%", description = description, path = save.path.display())
+                                );
                             }
                         }
                     };
@@ -953,7 +979,7 @@ impl<'a> App<'a> {
                         self.finish_background_task(save.ticket, false);
                         self.redraw_requested = true;
                         let message = format!("{e:#}");
-                        userspace_warn!("Save failed: {message}");
+                        userspace_warn!("{}", tr_format!(literal = "Save failed: %message%", message = message));
                         if let Some(runtime_id) = deferred_project_close
                             && self.workspace.project_index_for_runtime_id(runtime_id).is_some()
                         {
@@ -990,7 +1016,7 @@ impl<'a> App<'a> {
                     let mut complete = || {
                         self.finish_background_task(save.ticket, false);
                         self.redraw_requested = true;
-                        userspace_warn!("Save worker ended without a result");
+                        userspace_warn!("{}", tr!(literal = "Save worker ended without a result"));
                         if let Some(runtime_id) = deferred_project_close
                             && self.workspace.project_index_for_runtime_id(runtime_id).is_some()
                         {
@@ -1013,10 +1039,13 @@ impl<'a> App<'a> {
 
         self.pending_saves = still_pending;
         if finish_project_actions && let Err(error) = self.finish_pending_project_actions() {
-            userspace_warn!("Could not finish the pending project action: {error:#}");
+            userspace_warn!(
+                "{}",
+                tr_format!(literal = "Could not finish the pending project action: %error%", error = format!("{error:#}"))
+            );
         }
         if continue_project_replacement && let Err(error) = self.continue_project_replacement() {
-            userspace_warn!("Could not replace the current project: {error:#}");
+            userspace_warn!("{}", tr_format!(literal = "Could not replace the current project: %error%", error = format!("{error:#}")));
         }
         self.try_finish_deferred_exit();
     }
@@ -1040,7 +1069,7 @@ impl<'a> App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Err(error) = self.execute_file_dialog_action(FileDialogAction::NewProject) {
-            userspace_warn!("Could not create a new project: {error:#}");
+            userspace_warn!("{}", tr_format!(literal = "Could not create a new project: %error%", error = format!("{error:#}")));
         }
     }
 
@@ -1252,7 +1281,7 @@ impl<'a> App<'a> {
                 let parsed = match result {
                     Ok(parsed) => parsed,
                     Err(error) => {
-                        userspace_warn!("DXF import failed: {error:#}");
+                        userspace_warn!("{}", tr_format!(literal = "DXF import failed: %error%", error = format!("{error:#}")));
                         return;
                     }
                 };
@@ -1265,7 +1294,7 @@ impl<'a> App<'a> {
                 for (name, document) in parsed {
                     let added = project::merge_document(&mut project.project.document, &document);
                     total += added;
-                    userspace_log!("Imported {added} object(s) from {name}");
+                    userspace_log!("{}", tr_format!(literal = "Imported %added% object(s) from %name%", added = added, name = name));
                 }
                 let new_layers: Vec<_> = project
                     .project
@@ -1283,10 +1312,10 @@ impl<'a> App<'a> {
                 }
                 app.invalidate_geometry();
                 app.fit_view_to_extents();
-                userspace_log!("Imported {total} DXF object(s)");
+                userspace_log!("{}", tr_format!(literal = "Imported %total% DXF object(s)", total = total));
             };
             self.spawn_job(
-                "Parsing browser DXF import…",
+                tr!(literal = "Parsing browser DXF import…"),
                 vec![crate::app::jobs::JobKey::Project { runtime_id, document_revision }],
                 compute,
                 apply,
@@ -1438,13 +1467,13 @@ impl<'a> App<'a> {
         self.start_browser_export(FileDialogAction::WebDownloadDxf {
             project_runtime_id,
             layer: None,
-            file_name: "project.dxf".to_owned(),
+            file_name: format!("{}.dxf", tr!(literal = "Project")),
         });
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async move {
             let path: PathBuf = AsyncFileDialog::new()
                 .add_filter("DXF", &["dxf"])
-                .set_file_name("project.dxf")
+                .set_file_name(format!("{}.dxf", tr!(literal = "Project")))
                 .save_file()
                 .await?
                 .into_path();
@@ -1454,7 +1483,7 @@ impl<'a> App<'a> {
 
     pub(crate) fn choose_export_block_model_csv(&mut self, id: BlockModelId) {
         let Some(model) = self.block_models.iter().find(|model| model.id == id) else {
-            userspace_warn!("The selected block model is no longer loaded");
+            userspace_warn!("{}", tr!(literal = "The selected block model is no longer loaded"));
             return;
         };
         let stem = Path::new(&model.name)
@@ -1496,7 +1525,7 @@ impl<'a> App<'a> {
         let renderable = std::sync::Arc::clone(&block_model.renderable_block_indices);
         let display_path = path.clone();
         self.spawn_job(
-            format!("Exporting {}…", file_name(&path)),
+            tr_format!(literal = "Exporting %name%…", name = file_name(&path)),
             vec![crate::app::jobs::JobKey::BlockModel(id)],
             move |cancel| {
                 if cancel.is_cancelled() {
@@ -1507,8 +1536,8 @@ impl<'a> App<'a> {
                 })
             },
             move |_app, result| match result {
-                Ok(()) => userspace_log!("Exported block-model CSV to {}", display_path.display()),
-                Err(error) => userspace_warn!("Block-model CSV export failed: {error:#}"),
+                Ok(()) => userspace_log!("{}", tr_format!(literal = "Exported block-model CSV to %path%", path = display_path.display())),
+                Err(error) => userspace_warn!("{}", tr_format!(literal = "Block-model CSV export failed: %error%", error = format!("{error:#}"))),
             },
         );
         Ok(())
@@ -1523,7 +1552,12 @@ impl<'a> App<'a> {
         };
         let project = &self.workspace.projects[project_index];
         let project_runtime_id = project.runtime_id;
-        let layer_name = project.project.document.layer(layer).map(|layer| layer.name.clone()).unwrap_or_else(|| "layer".to_string());
+        let layer_name = project
+            .project
+            .document
+            .layer(layer)
+            .map(|layer| layer.name.clone())
+            .unwrap_or_else(|| tr!(literal = "Layer"));
         let default_name = format!("{}.dxf", sanitize_file_stem(&layer_name));
         #[cfg(target_arch = "wasm32")]
         self.start_browser_export(FileDialogAction::WebDownloadDxf {
@@ -1549,7 +1583,7 @@ impl<'a> App<'a> {
             .iter()
             .find(|t| t.id == id)
             .map(|triangulation| sanitize_file_stem(&triangulation.name))
-            .unwrap_or_else(|| "triangulation".to_owned());
+            .unwrap_or_else(|| tr!(literal = "Triangulation"));
         #[cfg(target_arch = "wasm32")]
         {
             let (_, extension) = mesh_format_name_and_extension(format);
@@ -1578,11 +1612,11 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn spawn_save_project_as_dialog(&mut self, project_runtime_id: u32) {
         if self.project_revert_is_pending(project_runtime_id) {
-            userspace_warn!("Wait for the project revert to finish before saving");
+            userspace_warn!("{}", tr!(literal = "Wait for the project revert to finish before saving"));
             return;
         }
         if self.project_save_is_pending(project_runtime_id) {
-            userspace_warn!("Wait for the current project save to finish");
+            userspace_warn!("{}", tr!(literal = "Wait for the current project save to finish"));
             return;
         }
         if self.workspace.active_project().is_some_and(|project| project.runtime_id == project_runtime_id) {
@@ -1594,7 +1628,7 @@ impl<'a> App<'a> {
         self.spawn_file_dialog(async move {
             let path: PathBuf = AsyncFileDialog::new()
                 .add_filter("Project", &["omf"])
-                .set_file_name("project.omf")
+                .set_file_name(format!("{}.omf", tr!(literal = "Untitled")))
                 .save_file()
                 .await?
                 .into_path();
@@ -1604,12 +1638,12 @@ impl<'a> App<'a> {
 
     pub(crate) fn spawn_export_viewport_image_dialog(&mut self) {
         #[cfg(target_arch = "wasm32")]
-        self.start_browser_export(FileDialogAction::WebViewportImage("viewport.png".to_owned()));
+        self.start_browser_export(FileDialogAction::WebViewportImage(format!("{}.png", tr!(literal = "Viewport"))));
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_file_dialog(async move {
             let path: PathBuf = AsyncFileDialog::new()
                 .add_filter("PNG image", &["png"])
-                .set_file_name("viewport.png")
+                .set_file_name(format!("{}.png", tr!(literal = "Viewport")))
                 .save_file()
                 .await?
                 .into_path();
@@ -1670,8 +1704,8 @@ impl<'a> App<'a> {
     /// recovery copies immediately; `about_to_wait` then exits once atomic
     /// background writers have settled.
     pub(crate) fn begin_fatal_shutdown(&mut self, reason: &str) {
-        log::error!("Fatal renderer failure: {reason}");
-        userspace_warn!("Fatal renderer failure: {reason}");
+        log::error!("{}", tr_format!(literal = "Fatal renderer failure: %reason%", reason = reason));
+        userspace_warn!("{}", tr_format!(literal = "Fatal renderer failure: %reason%", reason = reason));
         // Fold any live move preview into the documents so the recovery
         // copies capture what the user last saw.
         if self.has_pending_move_delta() {
@@ -1689,29 +1723,35 @@ impl<'a> App<'a> {
                     Ok(snapshot) => match write_recovery_copy(snapshot, runtime_id, &recovery_dir) {
                         Ok(report) => {
                             for path in &report.written {
-                                log::error!("Recovery copy written: {}", path.display());
-                                userspace_warn!("Recovery copy written: {}", path.display());
+                                log::error!("{}", tr_format!(literal = "Recovery copy written: %path%", path = path.display()));
+                                userspace_warn!("{}", tr_format!(literal = "Recovery copy written: %path%", path = path.display()));
                             }
                             for failure in &report.failures {
-                                log::error!("Recovery copy failed: {failure}");
-                                userspace_warn!("Recovery copy failed: {failure}");
+                                log::error!("{}", tr_format!(literal = "Recovery copy failed: %error%", error = failure));
+                                userspace_warn!("{}", tr_format!(literal = "Recovery copy failed: %failure%", failure = failure));
                             }
-                            log::error!("Recovery copies are in {}; reopen them after restarting", recovery_dir.display());
+                            log::error!(
+                                "{}",
+                                tr_format!(literal = "Recovery copies are in %path%; reopen them after restarting", path = recovery_dir.display())
+                            );
                         }
                         Err(error) => {
-                            log::error!("Could not write recovery copies: {error:#}");
+                            log::error!("{}", tr_format!(literal = "Could not write recovery copies: %error%", error = format!("{error:#}")));
                         }
                     },
-                    Err(error) => log::error!("Could not snapshot the dirty project for recovery: {error:#}"),
+                    Err(error) => log::error!(
+                        "{}",
+                        tr_format!(literal = "Could not snapshot the dirty project for recovery: %error%", error = format!("{error:#}"))
+                    ),
                 },
-                None => log::error!("No unsaved project content; nothing to recover"),
+                None => log::error!("{}", tr!(literal = "No unsaved project content; nothing to recover")),
             },
             Err(error) => {
-                log::error!("No recovery directory available: {error:#}");
+                log::error!("{}", tr_format!(literal = "No recovery directory available: %error%", error = format!("{error:#}")));
             }
         }
         #[cfg(target_arch = "wasm32")]
-        log::error!("Browser recovery files are unavailable; saved projects remain in IndexedDB");
+        log::error!("{}", tr!(literal = "Browser recovery files are unavailable; saved projects remain in IndexedDB"));
         self.persist_session();
         self.fatal_shutdown = true;
         self.redraw_requested = true;
@@ -1722,16 +1762,16 @@ impl<'a> App<'a> {
         self.discard_changes_on_deferred_exit = false;
         if self.has_unsaved_changes_for_exit() {
             self.editor.exit_confirm_open = true;
-            userspace_log!("User requested exit (project export or unsaved-work confirmation required)");
+            userspace_log!("{}", tr!(literal = "User requested exit (project export or unsaved-work confirmation required)"));
         } else if !self.pending_saves.is_empty() {
             self.exit_after_pending_saves = true;
             self.discard_changes_on_deferred_exit = true;
             self.redraw_requested = true;
-            userspace_log!("Exit deferred until background exports finish");
+            userspace_log!("{}", tr!(literal = "Exit deferred until background exports finish"));
         } else {
             self.persist_session();
             self.close_requested = true;
-            userspace_log!("Exit requested with no unsaved changes");
+            userspace_log!("{}", tr!(literal = "Exit requested with no unsaved changes"));
         }
         Ok(())
     }
@@ -1760,14 +1800,14 @@ impl<'a> App<'a> {
             self.exit_after_pending_saves = true;
             self.discard_changes_on_deferred_exit = true;
             self.redraw_requested = true;
-            userspace_log!("Exit deferred until background exports finish");
+            userspace_log!("{}", tr!(literal = "Exit deferred until background exports finish"));
             return;
         }
         self.exit_after_pending_saves = false;
         self.discard_changes_on_deferred_exit = false;
         self.persist_session();
         self.close_requested = true;
-        userspace_log!("User chose to exit without saving");
+        userspace_log!("{}", tr!(literal = "User chose to exit without saving"));
     }
 
     pub(crate) fn cancel_exit_request(&mut self) {
@@ -1811,7 +1851,7 @@ impl<'a> App<'a> {
             Ok(true) if !self.has_unsaved_changes_for_exit() => self.finish_deferred_exit(),
             Ok(_) => {}
             Err(error) => {
-                userspace_warn!("Could not finish saving before exit: {error:#}");
+                userspace_warn!("{}", tr_format!(literal = "Could not finish saving before exit: %error%", error = format!("{error:#}")));
                 self.cancel_exit_request();
             }
         }
@@ -2066,7 +2106,7 @@ impl<'a> App<'a> {
     pub(crate) fn request_close_project(&mut self, runtime_id: u32) {
         #[cfg(target_arch = "wasm32")]
         if !self.browser_project_loads_pending.is_empty() {
-            userspace_warn!("Wait for the current project switch to finish");
+            userspace_warn!("{}", tr!(literal = "Wait for the current project switch to finish"));
             return;
         }
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
@@ -2083,7 +2123,7 @@ impl<'a> App<'a> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.defer_project_close_until_save_finishes(runtime_id) {
-            userspace_log!("Project will close after its current save finishes");
+            userspace_log!("{}", tr!(literal = "Project will close after its current save finishes"));
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -2126,16 +2166,15 @@ impl<'a> App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     fn project_revert_is_pending(&self, runtime_id: u32) -> bool {
         self.pending_jobs.iter().any(|job| {
-            (job.label == PROJECT_REVERT_JOB_LABEL || job.label == LAYER_REVERT_JOB_LABEL)
-                && job.keys.iter().any(|key| {
-                    matches!(
-                        key,
-                        crate::app::jobs::JobKey::Project {
-                            runtime_id: pending,
-                            ..
-                        } if *pending == runtime_id
-                    )
-                })
+            job.keys.iter().any(|key| {
+                matches!(
+                    key,
+                    crate::app::jobs::JobKey::Project {
+                        runtime_id: pending,
+                        ..
+                    } if *pending == runtime_id
+                )
+            })
         })
     }
 
@@ -2185,7 +2224,7 @@ impl<'a> App<'a> {
             let (path, source_name, bundle) = match result {
                 Ok(loaded) => loaded,
                 Err(error) => {
-                    userspace_warn!("Could not reload project from disk: {error:#}");
+                    userspace_warn!("{}", tr_format!(literal = "Could not reload project from disk: %error%", error = format!("{error:#}")));
                     return;
                 }
             };
@@ -2193,14 +2232,14 @@ impl<'a> App<'a> {
                 return;
             };
             if app.workspace.projects[index].current_content_hash() != expected_hash {
-                userspace_warn!("Discard was cancelled because the project changed while the OMF was reloading");
+                userspace_warn!("{}", tr!(literal = "Discard was cancelled because the project changed while the OMF was reloading"));
                 return;
             }
             app.apply_opened_omf_bundle(Some(path.clone()), source_name, bundle, ViewOnOpen::Keep);
-            userspace_log!("Discarded changes: reloaded {}", path.display());
+            userspace_log!("{}", tr_format!(literal = "Discarded changes: reloaded %path%", path = path.display()));
         };
         self.spawn_job_reporting_progress(
-            PROJECT_REVERT_JOB_LABEL,
+            tr!(literal = "Reverting project…"),
             vec![crate::app::jobs::JobKey::Project { runtime_id, document_revision }],
             compute,
             apply,
@@ -2227,7 +2266,7 @@ impl<'a> App<'a> {
             )
         }) || self.project_revert_is_pending(project.runtime_id)
         {
-            userspace_warn!("Wait for the project operation to finish before discarding changes");
+            userspace_warn!("{}", tr!(literal = "Wait for the project operation to finish before discarding changes"));
             return;
         }
         if let Some(layer) = project.project.document.layer(layer_id) {
@@ -2274,7 +2313,7 @@ impl<'a> App<'a> {
             .document
             .layer(layer_id)
             .map(|layer| layer.name.clone())
-            .unwrap_or_else(|| "layer".to_owned());
+            .unwrap_or_else(|| tr!(literal = "Layer"));
         let document_revision = project.project.document.revision();
 
         // Convert the current document back to portable ids, then retain only
@@ -2326,7 +2365,7 @@ impl<'a> App<'a> {
             let (path, project) = match result {
                 Ok(loaded) => loaded,
                 Err(error) => {
-                    userspace_warn!("Could not reload layer from disk: {error:#}");
+                    userspace_warn!("{}", tr_format!(literal = "Could not reload layer from disk: %error%", error = format!("{error:#}")));
                     return;
                 }
             };
@@ -2334,13 +2373,16 @@ impl<'a> App<'a> {
                 return;
             };
             if app.workspace.projects[index].project.document.revision() != document_revision {
-                userspace_warn!("Layer discard was cancelled because the project changed while the project was reloading");
+                userspace_warn!(
+                    "{}",
+                    tr!(literal = "Layer discard was cancelled because the project changed while the project was reloading")
+                );
                 return;
             }
             let mut replacement = match project::open_project(Some(path), project) {
                 Ok(project) => project,
                 Err(error) => {
-                    userspace_warn!("Could not restore layer from project: {error:#}");
+                    userspace_warn!("{}", tr_format!(literal = "Could not restore layer from project: %error%", error = format!("{error:#}")));
                     return;
                 }
             };
@@ -2378,10 +2420,10 @@ impl<'a> App<'a> {
                 });
             }
             app.invalidate_geometry();
-            userspace_log!("Discarded changes to layer '{target_name}'");
+            userspace_log!("{}", tr_format!(literal = "Discarded changes to layer '%target_name%'", target_name = target_name));
         };
         self.spawn_job(
-            LAYER_REVERT_JOB_LABEL,
+            tr!(literal = "Reverting layer…"),
             vec![crate::app::jobs::JobKey::Project { runtime_id, document_revision }],
             compute,
             apply,
@@ -2440,12 +2482,12 @@ impl<'a> App<'a> {
     pub(crate) fn close_project(&mut self, runtime_id: u32) {
         #[cfg(target_arch = "wasm32")]
         if !self.browser_project_loads_pending.is_empty() {
-            userspace_warn!("Wait for the current project switch to finish");
+            userspace_warn!("{}", tr!(literal = "Wait for the current project switch to finish"));
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.defer_project_close_until_save_finishes(runtime_id) {
-            userspace_warn!("The project will close after its current save finishes");
+            userspace_warn!("{}", tr!(literal = "The project will close after its current save finishes"));
             return;
         }
         let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
@@ -2474,14 +2516,14 @@ impl<'a> App<'a> {
             if self.editor.remove_project_after_close {
                 self.editor.remove_project_after_close = false;
                 if let Err(error) = self.delete_browser_project(runtime_id) {
-                    userspace_warn!("Could not remove browser project: {error:#}");
+                    userspace_warn!("{}", tr_format!(literal = "Could not remove browser project: %error%", error = format!("{error:#}")));
                 }
                 return;
             }
             self.clear_project_owned_data();
             self.startup_dialog_dismissed = false;
             self.persist_session();
-            userspace_log!("Closed project runtime id {runtime_id}");
+            userspace_log!("{}", tr_format!(literal = "Closed project runtime id %runtime_id%", runtime_id = runtime_id));
             self.invalidate_geometry();
             // The scene the camera was framed on is gone, and the splash is
             // back: reset to the same view the app starts on.
@@ -2506,7 +2548,7 @@ impl<'a> App<'a> {
             });
         }
         self.persist_session();
-        userspace_log!("Closed project runtime id {runtime_id}");
+        userspace_log!("{}", tr_format!(literal = "Closed project runtime id %runtime_id%", runtime_id = runtime_id));
         self.invalidate_geometry();
     }
 
@@ -2544,7 +2586,7 @@ fn sanitize_project_name(name: &str) -> String {
         }
         stem = stem.get(..suffix_start).unwrap_or_default().trim_end();
     }
-    let stem = if stem.is_empty() { "project".to_owned() } else { sanitize_file_stem(stem) };
+    let stem = if stem.is_empty() { tr!(literal = "Project") } else { sanitize_file_stem(stem) };
     format!("{stem}.omf")
 }
 
@@ -2554,7 +2596,7 @@ fn sanitize_file_stem(name: &str) -> String {
     const INVALID: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
     let cleaned: String = name.trim().chars().map(|c| if INVALID.contains(&c) { '_' } else { c }).collect();
     let trimmed = cleaned.trim();
-    if trimmed.is_empty() { "layer".to_string() } else { trimmed.to_string() }
+    if trimmed.is_empty() { tr!(literal = "Layer") } else { trimmed.to_string() }
 }
 
 /// Show `path` in the platform's file manager.

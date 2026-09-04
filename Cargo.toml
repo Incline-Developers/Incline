@@ -30,6 +30,8 @@ egui_extras = { version = "0.35.0", default-features = false, features = ["svg"]
 foldhash = "0.2.0"
 fontmesh = "0.6.0"
 glam = { version = "0.33.6", features = ["serde"] }
+i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
+i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.33"
 lyon = "1.0.19"
@@ -38,6 +40,7 @@ png = "0.18.1"
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
 robust = "1.2.0"
+rust-embed = { version = "8.12.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 spade = "2.15.1"
@@ -46,6 +49,7 @@ thousands = "0.2.0"
 tiff = { version = "0.11.3", features = ["deflate", "fax", "jpeg", "lzw"], default-features = false }
 toml = "1.1.4"
 twox-hash = "2.1.4"
+unic-langid = { version = "0.9.6", features = ["macros"] }
 uuid = { version = "1.26.0", features = ["js", "serde", "v4"] }
 web-time = "1.1.0"
 wgpu = "29.0.4"
@@ -54,6 +58,7 @@ winit = "0.30.13"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "6.0.0"
 egui-winit = "0.35.0"
+i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
 semver = "1.0.28"

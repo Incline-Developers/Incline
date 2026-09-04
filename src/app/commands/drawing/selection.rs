@@ -146,8 +146,12 @@ impl<'a> App<'a> {
         self.editor.selected_handles.clear();
         self.editor.selected_handles.insert(SceneEntityId::Object(hit.object_id));
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Delete Vertex", format!("{:?}", hit.object_id)),
-            format!("Deleted vertex {} from polyline {:?}", hit.vertex_index, hit.object_id),
+            CommandReportSpec::new(crate::i18n::tr!(literal = "Delete Vertex"), format!("{:?}", hit.object_id)),
+            crate::i18n::tr_format!(
+                literal = "Deleted vertex %vertex% from polyline %object_id%",
+                vertex = hit.vertex_index,
+                object_id = format!("{:?}", hit.object_id)
+            ),
         );
         self.invalidate_geometry();
         self.invalidate_overlay();
@@ -215,8 +219,11 @@ impl<'a> App<'a> {
             self.editor.fuse_close_marker = None;
             self.editor.active_tool = ActiveTool::None;
             crate::logging::report_completed_action(
-                CommandReportSpec::new("Delete Selection", format!("{deleted} object(s)")),
-                format!("Deleted {deleted} selected object(s)"),
+                CommandReportSpec::new(
+                    crate::i18n::tr!(literal = "Delete Selection"),
+                    crate::i18n::tr_format!(literal = "%count% object(s)", count = deleted),
+                ),
+                crate::i18n::tr_format!(literal = "Deleted %count% selected object(s)", count = deleted),
             );
             self.invalidate_geometry();
             self.invalidate_overlay();
@@ -262,8 +269,11 @@ impl<'a> App<'a> {
             self.editor.selected_handles.insert(id);
         }
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Duplicate Selection", format!("{count} object(s)")),
-            format!("Duplicated {count} object(s)"),
+            CommandReportSpec::new(
+                crate::i18n::tr!(literal = "Duplicate Selection"),
+                crate::i18n::tr_format!(literal = "%count% object(s)", count = count),
+            ),
+            crate::i18n::tr_format!(literal = "Duplicated %count% object(s)", count = count),
         );
         self.invalidate_geometry();
         self.invalidate_overlay();

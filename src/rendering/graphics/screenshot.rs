@@ -136,9 +136,16 @@ impl<'a> Graphics<'a> {
                 ScreenshotTarget::Native(path) => path.clone(),
             };
             if let Err(error) = self.write_screenshot_png(&capture) {
-                userspace_warn!("Could not save viewport image {}: {error:#}", path.display());
+                userspace_warn!(
+                    "{}",
+                    crate::i18n::tr_format!(
+                        literal = "Could not save viewport image %path%: %error%",
+                        path = path.display(),
+                        error = format!("{error:#}")
+                    )
+                );
             } else {
-                userspace_log!("Saved viewport image: {}", path.display());
+                userspace_log!("{}", crate::i18n::tr_format!(literal = "Saved viewport image: %path%", path = path.display()));
             }
         }
 
@@ -148,20 +155,23 @@ impl<'a> Graphics<'a> {
             let callback_buffer = std::sync::Arc::clone(&buffer);
             buffer.map_async(wgpu::MapMode::Read, .., move |result| {
                 if let Err(error) = result {
-                    userspace_warn!("Could not map viewport screenshot: {error}");
+                    userspace_warn!("{}", crate::i18n::tr_format!(literal = "Could not map viewport screenshot: %error%", error = error));
                     return;
                 }
                 let encoded = encode_mapped_png(&capture);
                 callback_buffer.unmap();
                 match (capture.target, encoded) {
                     (ScreenshotTarget::Browser(file_name), Ok(bytes)) => match crate::app::web_download::download(&file_name, &bytes, "image/png") {
-                        Ok(()) => userspace_log!("Downloaded viewport image: {file_name}"),
+                        Ok(()) => userspace_log!("{}", crate::i18n::tr_format!(literal = "Downloaded viewport image: %file_name%", file_name = file_name)),
                         Err(error) => {
-                            userspace_warn!("Viewport image download failed: {error}")
+                            userspace_warn!("{}", crate::i18n::tr_format!(literal = "Viewport image download failed: %error%", error = error))
                         }
                     },
                     (_, Err(error)) => {
-                        userspace_warn!("Could not encode viewport image: {error:#}")
+                        userspace_warn!(
+                            "{}",
+                            crate::i18n::tr_format!(literal = "Could not encode viewport image: %error%", error = format!("{error:#}"))
+                        )
                     }
                 }
             });

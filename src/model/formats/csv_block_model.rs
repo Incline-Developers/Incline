@@ -43,18 +43,18 @@ pub(crate) enum CsvColumnRole {
 impl CsvColumnRole {
     pub(crate) const ALL: [Self; 10] = [Self::Value, Self::Category, Self::Ignore, Self::Id, Self::X, Self::Y, Self::Z, Self::Dx, Self::Dy, Self::Dz];
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> String {
         match self {
-            Self::Value => "Value",
-            Self::Category => "Category",
-            Self::Ignore => "Ignore",
-            Self::Id => "ID",
-            Self::X => "x",
-            Self::Y => "y",
-            Self::Z => "z",
-            Self::Dx => "dx",
-            Self::Dy => "dy",
-            Self::Dz => "dz",
+            Self::Value => crate::i18n::tr!(literal = "Value"),
+            Self::Category => crate::i18n::tr!(literal = "Category"),
+            Self::Ignore => crate::i18n::tr!(literal = "Ignore"),
+            Self::Id => "ID".to_owned(),
+            Self::X => "x".to_owned(),
+            Self::Y => "y".to_owned(),
+            Self::Z => "z".to_owned(),
+            Self::Dx => "dx".to_owned(),
+            Self::Dy => "dy".to_owned(),
+            Self::Dz => "dz".to_owned(),
         }
     }
 }

@@ -66,7 +66,7 @@ pub(crate) fn stripe_bands(x_range: egui::Rangef, top: f32, bottom: f32, height:
 }
 
 /// A section's empty-state line ("No design layers"), as a tree row.
-pub(crate) fn explorer_note(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn explorer_note(ui: &mut egui::Ui, text: impl Into<String>) {
     let height = row_height(ui);
     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);

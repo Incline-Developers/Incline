@@ -16,7 +16,8 @@ use objc2_app_kit::{NSApplication, NSControlStateValueOff, NSControlStateValueOn
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 
 use crate::{
-    model::SceneEntityId,
+    i18n::{tr, tr_format},
+    model::{Axis, SceneEntityId},
     ui::state::{EditorState, UiProjectView, ViewToggle, Workspace},
 };
 
@@ -90,8 +91,6 @@ pub(crate) enum MacMenuAction {
 /// the same three - see [`crate::ui::elements::main_menu`].
 pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid];
 
-/// Root menus that disappear entirely outside Production.
-const PRODUCTION_ONLY_MENUS: [&str; 3] = ["Design", "Raster", "Point Cloud"];
 /// Tags distinguish the live and empty root items, which deliberately share a
 /// title and trade places as the workspace changes.
 const TRIANGULATION_MENU_TAG: isize = -1;
@@ -261,7 +260,7 @@ fn add_action(menu: &NSMenu, title: &str, key: &str, action: MacMenuAction, targ
 /// Replace winit's fallback macOS menu with Incline Design's native menu bar.
 pub(crate) fn install_menu_bar() {
     let Some(mtm) = MainThreadMarker::new() else {
-        log::error!("Cannot install the macOS menu bar away from the main thread");
+        log::error!("{}", crate::i18n::tr!(literal = "Cannot install the macOS menu bar away from the main thread"));
         return;
     };
 
@@ -273,64 +272,120 @@ pub(crate) fn install_menu_bar() {
 
     let application_menu = menu(crate::APP_NAME, mtm);
     application_menu.setAutoenablesItems(false);
-    add_action(&application_menu, &format!("About {}", crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);
+    add_action(
+        &application_menu,
+        &tr!("menu-file-about", app = crate::APP_NAME),
+        "",
+        MacMenuAction::OpenAbout,
+        &target,
+        mtm,
+    );
     add_separator(&application_menu, mtm);
-    add_action(&application_menu, &format!("Quit {}", crate::APP_NAME), "q", MacMenuAction::RequestExit, &target, mtm);
+    add_action(
+        &application_menu,
+        &tr_format!(literal = "Quit %app%", app = crate::APP_NAME),
+        "q",
+        MacMenuAction::RequestExit,
+        &target,
+        mtm,
+    );
     add_submenu(&root, crate::APP_NAME, &application_menu, mtm);
 
-    let file_menu = menu("File", mtm);
+    let file_menu = menu(&tr!("menu-file"), mtm);
     file_menu.setAutoenablesItems(false);
-    add_action(&file_menu, "New Project…", "n", MacMenuAction::NewProject, &target, mtm);
-    add_action(&file_menu, "Open Project…", "o", MacMenuAction::OpenProject, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-new-project"), "n", MacMenuAction::NewProject, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-open-project"), "o", MacMenuAction::OpenProject, &target, mtm);
     // Empty until the first sync pass fills it - see `rebuild_recent_menu`.
-    let recent_menu = menu("Open Recent", mtm);
+    let recent_menu = menu(&tr!("menu-file-open-recent"), mtm);
     recent_menu.setAutoenablesItems(false);
-    let recent_item = add_submenu(&file_menu, "Open Recent", &recent_menu, mtm);
+    let recent_item = add_submenu(&file_menu, &tr!("menu-file-open-recent"), &recent_menu, mtm);
     recent_item.setTag(RECENT_SUBMENU_TAG);
     recent_item.setEnabled(false);
-    add_action(&file_menu, "Reveal in Finder", "", MacMenuAction::ShowProjectInFileManager, &target, mtm);
+    add_action(&file_menu, &tr!(literal = "Reveal in Finder"), "", MacMenuAction::ShowProjectInFileManager, &target, mtm);
     add_separator(&file_menu, mtm);
-    add_action(&file_menu, "Save Project", "s", MacMenuAction::SaveProject, &target, mtm);
-    add_action(&file_menu, "Save Project As…", "S", MacMenuAction::SaveProjectAs, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-save-project"), "s", MacMenuAction::SaveProject, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-save-project-as"), "S", MacMenuAction::SaveProjectAs, &target, mtm);
     add_separator(&file_menu, mtm);
-    add_action(&file_menu, "Import…", "", MacMenuAction::OpenImport, &target, mtm);
-    add_action(&file_menu, "Export…", "", MacMenuAction::OpenExport, &target, mtm);
-    add_action(&file_menu, "Export Viewport Image…", "", MacMenuAction::ExportViewportImage, &target, mtm);
-    add_action(&file_menu, "Export Engineering Drawing…", "", MacMenuAction::OpenPlotDialog, &target, mtm);
-    add_submenu(&root, "File", &file_menu, mtm);
+    add_action(&file_menu, &tr!("menu-file-import"), "", MacMenuAction::OpenImport, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-export"), "", MacMenuAction::OpenExport, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-export-viewport-image"), "", MacMenuAction::ExportViewportImage, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-export-engineering-drawing"), "", MacMenuAction::OpenPlotDialog, &target, mtm);
+    add_submenu(&root, &tr!("menu-file"), &file_menu, mtm);
 
     // Switches onto the same settings the Interface preferences tab holds;
     // their checkmarks are kept current by `sync_menu_state`.
-    let view_menu = menu("View", mtm);
+    let view_menu = menu(&tr!("menu-view"), mtm);
     view_menu.setAutoenablesItems(false);
     for (index, toggle) in VIEW_TOGGLES.iter().enumerate() {
-        add_action(&view_menu, toggle.label(), "", MacMenuAction::ToggleView(index), &target, mtm);
+        add_action(&view_menu, &toggle.label(), "", MacMenuAction::ToggleView(index), &target, mtm);
     }
-    add_submenu(&root, "View", &view_menu, mtm);
+    add_submenu(&root, &tr!("menu-view"), &view_menu, mtm);
 
-    let design_menu = menu("Design", mtm);
+    let design_menu = menu(&tr!("ws-menubar-design"), mtm);
     design_menu.setAutoenablesItems(false);
-    let insert_point_menu = menu("Insert Point", mtm);
+    let insert_point_menu = menu(&tr!("ws-menubar-design-insert-point"), mtm);
     insert_point_menu.setAutoenablesItems(false);
-    add_action(&insert_point_menu, "At Intersection", "", MacMenuAction::InsertPointsAtIntersections, &target, mtm);
-    add_action(&insert_point_menu, "At Elevation…", "", MacMenuAction::OpenInsertPointAtElevation, &target, mtm);
-    add_submenu(&design_menu, "Insert Point", &insert_point_menu, mtm);
+    add_action(
+        &insert_point_menu,
+        &tr!("ws-menubar-design-insert-point-at-intersection"),
+        "",
+        MacMenuAction::InsertPointsAtIntersections,
+        &target,
+        mtm,
+    );
+    add_action(
+        &insert_point_menu,
+        &tr!("ws-menubar-design-insert-point-at-elevation"),
+        "",
+        MacMenuAction::OpenInsertPointAtElevation,
+        &target,
+        mtm,
+    );
+    add_submenu(&design_menu, &tr!("ws-menubar-design-insert-point"), &insert_point_menu, mtm);
     add_separator(&design_menu, mtm);
-    let move_to_menu = menu("Move to", mtm);
+    let move_to_menu = menu(&tr!("ws-menubar-design-move-to"), mtm);
     move_to_menu.setAutoenablesItems(false);
-    add_action(&move_to_menu, "Set X…", "", MacMenuAction::OpenMoveToX, &target, mtm);
-    add_action(&move_to_menu, "Set Y…", "", MacMenuAction::OpenMoveToY, &target, mtm);
-    add_action(&move_to_menu, "Set Z…", "", MacMenuAction::OpenMoveToZ, &target, mtm);
-    add_submenu(&design_menu, "Move to", &move_to_menu, mtm);
+    add_action(
+        &move_to_menu,
+        &format!("{} {}...", tr!("common-set"), Axis::X.label()),
+        "",
+        MacMenuAction::OpenMoveToX,
+        &target,
+        mtm,
+    );
+    add_action(
+        &move_to_menu,
+        &format!("{} {}...", tr!("common-set"), Axis::Y.label()),
+        "",
+        MacMenuAction::OpenMoveToY,
+        &target,
+        mtm,
+    );
+    add_action(
+        &move_to_menu,
+        &format!("{} {}...", tr!("common-set"), Axis::Z.label()),
+        "",
+        MacMenuAction::OpenMoveToZ,
+        &target,
+        mtm,
+    );
+    add_submenu(&design_menu, &tr!("ws-menubar-design-move-to"), &move_to_menu, mtm);
     add_separator(&design_menu, mtm);
-    add_action(&design_menu, "Create Triangulation…", "", MacMenuAction::OpenCreateTriangulation, &target, mtm);
-    add_submenu(&root, "Design", &design_menu, mtm);
+    add_action(
+        &design_menu,
+        &tr!("ws-menubar-design-create-triangulation"),
+        "",
+        MacMenuAction::OpenCreateTriangulation,
+        &target,
+        mtm,
+    );
+    add_submenu(&root, &tr!("ws-menubar-design"), &design_menu, mtm);
 
-    let triangulation_menu = menu("Triangulation", mtm);
+    let triangulation_menu = menu(&tr!("ws-menubar-triangulation"), mtm);
     triangulation_menu.setAutoenablesItems(false);
     add_action(
         &triangulation_menu,
-        "Clip Surface by Polyline…",
+        &tr!(literal = "Clip Surface by Polyline..."),
         "",
         MacMenuAction::OpenCutTriangulationByPolyline,
         &target,
@@ -338,17 +393,24 @@ pub(crate) fn install_menu_bar() {
     );
     add_action(
         &triangulation_menu,
-        "Slice Triangulation by Z Range…",
+        &tr!(literal = "Slice Triangulation by Z Range..."),
         "",
         MacMenuAction::OpenCutTriangulationByZ,
         &target,
         mtm,
     );
-    add_action(&triangulation_menu, "Trim to Topology…", "", MacMenuAction::OpenCutTriangulationBySurface, &target, mtm);
+    add_action(
+        &triangulation_menu,
+        &tr!(literal = "Trim to Topology..."),
+        "",
+        MacMenuAction::OpenCutTriangulationBySurface,
+        &target,
+        mtm,
+    );
     add_separator(&triangulation_menu, mtm);
     add_action(
         &triangulation_menu,
-        "Cut Topology with Pit Shell…",
+        &tr!(literal = "Cut Topology with Pit Shell..."),
         "",
         MacMenuAction::OpenCutTopologyByPitShell,
         &target,
@@ -356,47 +418,75 @@ pub(crate) fn install_menu_bar() {
     );
     add_action(
         &triangulation_menu,
-        "Merge Shell into Topology…",
+        &tr!(literal = "Merge Shell into Topology..."),
         "",
         MacMenuAction::OpenIncludeSolidInTopology,
         &target,
         mtm,
     );
     add_separator(&triangulation_menu, mtm);
-    add_action(&triangulation_menu, "Generate Contour Lines…", "", MacMenuAction::OpenContourTriangulation, &target, mtm);
-    let triangulation_item = add_submenu(&root, "Triangulation", &triangulation_menu, mtm);
+    add_action(
+        &triangulation_menu,
+        &tr!(literal = "Generate Contour Lines..."),
+        "",
+        MacMenuAction::OpenContourTriangulation,
+        &target,
+        mtm,
+    );
+    let triangulation_item = add_submenu(&root, &tr!("ws-menubar-triangulation"), &triangulation_menu, mtm);
     triangulation_item.setTag(TRIANGULATION_MENU_TAG);
-    let empty_triangulation_menu = menu("Triangulation", mtm);
-    let empty_triangulation_item = add_submenu(&root, "Triangulation", &empty_triangulation_menu, mtm);
+    let empty_triangulation_menu = menu(&tr!("ws-menubar-triangulation"), mtm);
+    let empty_triangulation_item = add_submenu(&root, &tr!("ws-menubar-triangulation"), &empty_triangulation_menu, mtm);
     empty_triangulation_item.setTag(TRIANGULATION_PLACEHOLDER_TAG);
 
-    let raster_menu = menu("Raster", mtm);
+    let raster_menu = menu(&tr!("ws-menubar-raster"), mtm);
     raster_menu.setAutoenablesItems(false);
-    add_action(&raster_menu, "Undrape All", "", MacMenuAction::UndrapeAllRasters, &target, mtm);
-    add_submenu(&root, "Raster", &raster_menu, mtm);
+    add_action(&raster_menu, &tr!(literal = "Undrape All"), "", MacMenuAction::UndrapeAllRasters, &target, mtm);
+    add_submenu(&root, &tr!("ws-menubar-raster"), &raster_menu, mtm);
 
-    let point_cloud_menu = menu("Point Cloud", mtm);
+    let point_cloud_menu = menu(&tr!("ws-menubar-point-cloud"), mtm);
     point_cloud_menu.setAutoenablesItems(false);
-    add_action(&point_cloud_menu, "Create Triangulation…", "", MacMenuAction::OpenPointCloudTin, &target, mtm);
-    add_submenu(&root, "Point Cloud", &point_cloud_menu, mtm);
+    add_action(
+        &point_cloud_menu,
+        &tr!(literal = "Create Triangulation..."),
+        "",
+        MacMenuAction::OpenPointCloudTin,
+        &target,
+        mtm,
+    );
+    add_submenu(&root, &tr!("ws-menubar-point-cloud"), &point_cloud_menu, mtm);
 
-    let block_model_menu = menu("Block Model", mtm);
+    let block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
     block_model_menu.setAutoenablesItems(false);
-    add_action(&block_model_menu, "Create Ore Triangulation…", "", MacMenuAction::OpenCreateOreTriangulation, &target, mtm);
-    let block_model_item = add_submenu(&root, "Block Model", &block_model_menu, mtm);
+    add_action(
+        &block_model_menu,
+        &tr!(literal = "Create Ore Triangulation..."),
+        "",
+        MacMenuAction::OpenCreateOreTriangulation,
+        &target,
+        mtm,
+    );
+    let block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &block_model_menu, mtm);
     block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
-    let empty_block_model_menu = menu("Block Model", mtm);
-    let empty_block_model_item = add_submenu(&root, "Block Model", &empty_block_model_menu, mtm);
+    let empty_block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
+    let empty_block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &empty_block_model_menu, mtm);
     empty_block_model_item.setTag(BLOCK_MODEL_PLACEHOLDER_TAG);
 
-    let drill_hole_menu = menu("Drill Holes", mtm);
+    let drill_hole_menu = menu(&tr!("ws-menubar-drillholes"), mtm);
     drill_hole_menu.setAutoenablesItems(false);
-    add_action(&drill_hole_menu, "Create Block Model…", "", MacMenuAction::OpenCreateBlockModel, &target, mtm);
-    let drill_hole_item = add_submenu(&root, "Drill Holes", &drill_hole_menu, mtm);
+    add_action(
+        &drill_hole_menu,
+        &tr!(literal = "Create Block Model..."),
+        "",
+        MacMenuAction::OpenCreateBlockModel,
+        &target,
+        mtm,
+    );
+    let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
 
-    let empty_drill_hole_menu = menu("Drill Holes", mtm);
-    let empty_drill_hole_item = add_submenu(&root, "Drill Holes", &empty_drill_hole_menu, mtm);
+    let empty_drill_hole_menu = menu(&tr!("ws-menubar-drillholes"), mtm);
+    let empty_drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &empty_drill_hole_menu, mtm);
     empty_drill_hole_item.setTag(DRILL_HOLES_PLACEHOLDER_TAG);
 
     app.setMainMenu(Some(&root));
@@ -424,9 +514,12 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 }
 
 /// Match the native discipline menus to the active workspace.
+///
+/// Looked up by title rather than by tag, so the titles below must stay in
+/// sync with the ones `install_menu_bar` gives the same root menus.
 fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
-    for title in PRODUCTION_ONLY_MENUS {
-        if let Some(item) = root.itemWithTitle(&NSString::from_str(title)) {
+    for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster"), tr!("ws-menubar-point-cloud")] {
+        if let Some(item) = root.itemWithTitle(&NSString::from_str(&title)) {
             item.setHidden(workspace != Workspace::Production);
         }
     }

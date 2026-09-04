@@ -1,6 +1,7 @@
 use std::{fmt::Debug, hash::Hash};
 
 use crate::{
+    i18n::{tr, tr_format},
     model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
     ui::{
         state::{EditorState, UiCommand},
@@ -59,12 +60,14 @@ impl ViewportDockPanel {
                     .corner_radius(egui::CornerRadius::same(menu::MENU_CORNER_RADIUS))
                     .show(ui, |ui| {
                         menu::apply_menu_style(ui, surface);
-                        if self.min_width > 0.0 {
-                            ui.set_min_width(self.min_width);
-                        }
-                        ui.set_max_width(self.max_width);
-                        let title_rect = ui.allocate_exact_size(egui::vec2(self.min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
-                        let inner = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8)).show(ui, add_contents).inner;
+                        let inner_margin = egui::Margin::symmetric(10, 8);
+                        let measured_width = menu::intrinsic_content_width(ui) + inner_margin.sum().x;
+                        let available_width = (self.viewport_rect.width() - self.margin.x * 2.0).max(1.0);
+                        let adaptive_min_width = self.min_width.max(measured_width).min(available_width);
+                        ui.set_min_width(adaptive_min_width);
+                        ui.set_max_width(self.max_width.max(adaptive_min_width));
+                        let title_rect = ui.allocate_exact_size(egui::vec2(adaptive_min_width, menu::TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
+                        let inner = egui::Frame::NONE.inner_margin(inner_margin).show(ui, add_contents).inner;
                         let mut title_rect = title_rect;
                         title_rect.max.x = ui.min_rect().right();
                         menu::draw_menu_heading(ui, &self.title, title_rect, surface);
@@ -79,11 +82,14 @@ impl ViewportDockPanel {
 ///
 /// Sized to its own label with tight padding and `Extend` wrap - the properties
 /// panel sets a global `Truncate` that would otherwise clip it to "Re…".
-fn reset_section_button(ui: &mut egui::Ui, tooltip: &str) -> bool {
+fn reset_section_button(ui: &mut egui::Ui, tooltip: impl Into<String>) -> bool {
+    let tooltip = tooltip.into();
     ui.scope(|ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
-        ui.add(egui::Button::new(egui::RichText::new("Reset").small())).on_hover_text(tooltip.to_owned()).clicked()
+        ui.add(egui::Button::new(egui::RichText::new(tr!(literal = "Reset")).small()))
+            .on_hover_text(tooltip)
+            .clicked()
     })
     .inner
 }
@@ -496,9 +502,9 @@ impl<'a> BlockModelProperties<'a> {
         ui.add_space(6.0);
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Colour mapping").strong().color(ui.visuals().weak_text_color()));
+            ui.label(egui::RichText::new(tr!(literal = "Colour mapping")).strong().color(ui.visuals().weak_text_color()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if reset_section_button(ui, "Rebuild this variable's colours from its data") {
+                if reset_section_button(ui, tr!(literal = "Rebuild this variable's colours from its data")) {
                     commands.push(UiCommand::ResetBlockModelColorTransfer { id: model.id });
                 }
             });
@@ -523,9 +529,9 @@ impl<'a> BlockModelProperties<'a> {
         let mut changed = false;
 
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Slice").strong().color(ui.visuals().weak_text_color()));
+            ui.label(egui::RichText::new(tr!(literal = "Slice")).strong().color(ui.visuals().weak_text_color()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if reset_section_button(ui, "Restore the full model range") {
+                if reset_section_button(ui, tr!(literal = "Restore the full model range")) {
                     commands.push(UiCommand::SetBlockModelSlice { id: model.id, slice: None });
                 }
             });
@@ -544,14 +550,14 @@ impl<'a> BlockModelProperties<'a> {
                         egui::vec2(value_width, 20.0),
                         egui::DragValue::new(&mut slice.min[axis]).range(lower[axis]..=slice.max[axis]).speed(speed).max_decimals(4),
                     )
-                    .on_hover_text(format!("{label} minimum"))
+                    .on_hover_text(tr_format!(literal = "%axis% minimum", axis = label))
                     .changed();
                 changed |= ui
                     .add_sized(
                         egui::vec2(value_width, 20.0),
                         egui::DragValue::new(&mut slice.max[axis]).range(slice.min[axis]..=upper[axis]).speed(speed).max_decimals(4),
                     )
-                    .on_hover_text(format!("{label} maximum"))
+                    .on_hover_text(tr_format!(literal = "%axis% maximum", axis = label))
                     .changed();
             });
         }
@@ -574,10 +580,10 @@ impl<'a> BlockModelProperties<'a> {
                 } else if let Some((min, max)) = cached_variable_range(editor, model, name) {
                     format!("{name} {}", format_grade_range(min, max))
                 } else {
-                    format!("{name} (no range)")
+                    tr_format!(literal = "%name% (no range)", name = name)
                 }
             })
-            .unwrap_or_else(|| "Choose a variable".to_owned());
+            .unwrap_or_else(|| tr!(literal = "Choose a variable"));
         let filter_id = self.id.with(("variable_filter", model.id));
         let mut filter = ui.data_mut(|data| data.get_persisted::<String>(filter_id)).unwrap_or_default();
 
@@ -585,14 +591,18 @@ impl<'a> BlockModelProperties<'a> {
         let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
         let button_response = ui
             .add_sized(egui::vec2(content_width, 22.0), egui::Button::selectable(open, egui::RichText::new(selected_text).strong()))
-            .on_hover_text("Choose the active block model variable");
+            .on_hover_text(tr!(literal = "Choose the active block model variable"));
 
         let _ = egui::Popup::menu(&button_response)
             .id(popup_id)
             .width(content_width)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                let response = ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter variables").desired_width(content_width - 12.0));
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut filter)
+                        .hint_text(tr!(literal = "Filter variables"))
+                        .desired_width(content_width - 12.0),
+                );
                 if response.changed() {
                     ui.data_mut(|data| data.insert_persisted(filter_id, filter.clone()));
                 }
@@ -612,7 +622,7 @@ impl<'a> BlockModelProperties<'a> {
                         } else {
                             cached_variable_range(editor, model, name)
                                 .map(|(min, max)| format_grade_range(min, max))
-                                .unwrap_or_else(|| "(no usable range)".to_owned())
+                                .unwrap_or_else(|| tr!(literal = "(no usable range)"))
                         };
                         let selected = name == current;
                         let row = ui
@@ -634,7 +644,7 @@ impl<'a> BlockModelProperties<'a> {
                     }
                 });
                 if !any {
-                    ui.label(egui::RichText::new("No matches").color(ui.visuals().weak_text_color()));
+                    ui.label(egui::RichText::new(tr!(literal = "No matches")).color(ui.visuals().weak_text_color()));
                 }
             });
     }
@@ -676,9 +686,9 @@ impl<'a> BlockModelProperties<'a> {
                             let mut srgba = straight_to_unmultiplied_srgba(color);
                             if color_edit_button_srgba_unmultiplied(ui, &mut srgba)
                                 .on_hover_text(if is_default {
-                                    "Edit the colour used for empty values"
+                                    tr!(literal = "Edit the colour used for empty values")
                                 } else {
-                                    "Edit this category colour"
+                                    tr!(literal = "Edit this category colour")
                                 })
                                 .changed()
                             {
@@ -686,13 +696,13 @@ impl<'a> BlockModelProperties<'a> {
                                 changed = true;
                             }
                         }
-                        let display_label = if label.trim().is_empty() { "(blank)" } else { label.as_str() };
+                        let display_label = if label.trim().is_empty() { tr!(literal = "(blank)") } else { label.clone() };
                         let suffix = if is_default && model.hide_empty_color_values {
-                            " (empty · hidden)"
+                            tr!(literal = " (empty · hidden)")
                         } else if is_default {
-                            " (empty)"
+                            tr!(literal = " (empty)")
                         } else {
-                            ""
+                            String::new()
                         };
                         ui.label(format!("{display_label}{suffix}"));
                     });
@@ -701,10 +711,10 @@ impl<'a> BlockModelProperties<'a> {
         });
         if variable.strings.len() >= MAX_GRADIENT_ENTRIES {
             ui.label(
-                egui::RichText::new(format!(
-                    "All {} categories keep their colour; only the first {} are drawn distinctly",
-                    variable.strings.len(),
-                    MAX_GRADIENT_ENTRIES - 1
+                egui::RichText::new(tr_format!(
+                    literal = "All %total% categories keep their colour; only the first %shown% are drawn distinctly",
+                    total = variable.strings.len(),
+                    shown = MAX_GRADIENT_ENTRIES - 1
                 ))
                 .color(ui.visuals().weak_text_color()),
             );
@@ -724,7 +734,7 @@ impl<'a> BlockModelProperties<'a> {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "No data for this variable",
+            tr!(literal = "No data for this variable"),
             egui::FontId::proportional(11.0),
             ui.visuals().weak_text_color(),
         );
@@ -802,7 +812,7 @@ impl<'a> BlockModelProperties<'a> {
 
         let bar_response = ui
             .interact(bar_rect, self.id.with("color_stop_bar"), egui::Sense::click())
-            .on_hover_text("Double-click to add a boundary here");
+            .on_hover_text(tr!(literal = "Double-click to add a boundary here"));
         // A double-click on either the bar or a handle requests an insert.
         // We record the target `t` and apply it *after* the handle loop so the
         // insertion never shifts indices mid-iteration, and so it lands in
@@ -820,9 +830,9 @@ impl<'a> BlockModelProperties<'a> {
             let handle_rect = egui::Rect::from_center_size(egui::pos2(handle_center_x, y), egui::vec2(COLOR_STOP_HANDLE_SIZE, COLOR_STOP_HANDLE_SIZE));
             let handle_id = self.id.with(("color_stop_handle", ramp.stops[i].id));
             let response = ui.interact(handle_rect, handle_id, egui::Sense::click_and_drag()).on_hover_text(if ramp.stops.len() > 1 {
-                "Drag to move · Right-click to remove · Middle-click toggles ≤"
+                tr!(literal = "Drag to move · Right-click to remove · Middle-click toggles ≤")
             } else {
-                "Drag to move · Middle-click toggles ≤"
+                tr!(literal = "Drag to move · Middle-click toggles ≤")
             });
             // Handles sit directly beside the gradient strip, so a
             // double-click aimed at the bar near an existing stop (most
@@ -917,7 +927,7 @@ impl<'a> BlockModelProperties<'a> {
                 let label = ui
                     .interact(value_rect, self.id.with(("color_stop_value_label", ramp.stops[i].id)), egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::Text)
-                    .on_hover_text("Click to type this boundary's value");
+                    .on_hover_text(tr!(literal = "Click to type this boundary's value"));
                 value_field_hovered = label.hovered();
                 if label.clicked() {
                     selected = i;
@@ -999,7 +1009,7 @@ impl<'a> BlockModelProperties<'a> {
                     color_edit_button_srgba_unmultiplied(ui, &mut srgba)
                 })
                 .inner
-                .on_hover_text("Click to edit color; right-click to remove");
+                .on_hover_text(tr!(literal = "Click to edit color; right-click to remove"));
             let picker_remove_clicked =
                 (response.secondary_clicked() || (ui.rect_contains_pointer(swatch_rect) && ui.input(|input| input.pointer.secondary_clicked()))) && ramp.stops.len() > 1;
             if picker_remove_clicked {
@@ -1122,7 +1132,7 @@ impl ViewportScaleBar {
                 }
 
                 let labels = scale_bar_labels(distance);
-                let font = egui::FontId::new(11.0, egui::FontFamily::Name("open_sans_bold".into()));
+                let font = egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()));
                 let label_y = bar_rect.bottom() + 2.0;
                 for (index, fraction) in SCALE_BAR_SEGMENT_FRACTIONS.iter().copied().enumerate() {
                     let x = bar_rect.left() + bar_width * fraction as f32;
@@ -1222,7 +1232,11 @@ fn category_count(variable: &crate::model::formats::block_model_data::BlockVaria
 
 fn format_category_count(variable: &crate::model::formats::block_model_data::BlockVariable) -> String {
     let count = category_count(variable);
-    format!("{count} categor{}", if count == 1 { "y" } else { "ies" })
+    if count == 1 {
+        tr_format!(literal = "%count% category", count = count)
+    } else {
+        tr_format!(literal = "%count% categories", count = count)
+    }
 }
 
 /// Compact share label for a legend category: `0%`, `<1%`, or a whole percent.
@@ -1428,9 +1442,9 @@ impl ViewportMiniMap {
                     commands.push(UiCommand::SetSlicePreviewDetached(true));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                response.on_hover_text("Middle-drag to pan · Scroll to zoom · Click to detach");
+                response.on_hover_text(tr!(literal = "Middle-drag to pan · Scroll to zoom · Click to detach"));
                 #[cfg(target_arch = "wasm32")]
-                response.on_hover_text("Middle-drag to pan · Scroll to zoom");
+                response.on_hover_text(tr!(literal = "Middle-drag to pan · Scroll to zoom"));
             });
     }
 }

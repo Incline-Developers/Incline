@@ -187,8 +187,8 @@ impl<'a> App<'a> {
 
         self.cancel_batter_berm();
         crate::logging::report_completed_action(
-            CommandReportSpec::new("Create Batter Berm", format!("{object_id:?}")),
-            format!("Created batter berm from object {object_id:?}"),
+            CommandReportSpec::new(crate::i18n::tr!(literal = "Create Batter Berm"), format!("{object_id:?}")),
+            crate::i18n::tr_format!(literal = "Created batter berm from object %object_id%", object_id = format!("{object_id:?}")),
         );
         self.invalidate_geometry();
     }

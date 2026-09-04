@@ -180,7 +180,13 @@ impl<'a> App<'a> {
             anyhow::bail!("No usable polylines selected; triangulation requires a closed boundary, or open strings whose endpoints form one");
         }
         if rejected > 0 {
-            userspace_warn!("Ignored {} non-polyline or degenerate object(s) during triangulation", rejected);
+            userspace_warn!(
+                "{}",
+                tr_format!(
+                    literal = "Ignored %rejected% non-polyline or degenerate object(s) during triangulation",
+                    rejected = rejected
+                )
+            );
         }
 
         // Whether a coarse-weld retry could help, computed from the un-welded
@@ -229,7 +235,7 @@ impl<'a> App<'a> {
                 });
             }
         };
-        self.spawn_job("Creating triangulation…", vec![project_key], compute, apply);
+        self.spawn_job(crate::i18n::tr!(literal = "Creating triangulation…"), vec![project_key], compute, apply);
         Ok(())
     }
 
@@ -306,15 +312,20 @@ fn build_created_triangulation(
 ) -> Result<crate::model::triangulation::GeneratedTriangulation> {
     let welded = weld_breakline_vertices(&mut paths, crate::model::kernel::XY_TOL, crate::model::kernel::Z_TOL);
     if welded > 0 {
-        userspace_log!("Welded {} breakline vertex/vertices that coincided within tolerance", welded);
+        userspace_log!(
+            "{}",
+            tr_format!(literal = "Welded %welded% breakline vertex/vertices that coincided within tolerance", welded = welded)
+        );
     }
     if coarse_weld {
         let coarse_welded = weld_breakline_vertices(&mut paths, COARSE_WELD_TOL, COARSE_WELD_TOL);
         userspace_log!(
-            "Weld & retry: moved {} vertex/vertices onto shared positions (up to {} m); \
-             source objects are unchanged",
-            coarse_welded,
-            COARSE_WELD_TOL
+            "{}",
+            tr_format!(
+                literal = "Weld & retry: moved %coarse_welded% vertex/vertices onto shared positions (up to %coarse_weld_tol% m); source objects are unchanged",
+                coarse_welded = coarse_welded,
+                coarse_weld_tol = COARSE_WELD_TOL
+            )
         );
     }
 
@@ -343,10 +354,13 @@ fn build_created_triangulation(
     }
 
     userspace_log!(
-        "Created triangulation from {} boundary ring(s) and {} open constraint(s), surface type {:?}",
-        boundary_count,
-        constraint_count,
-        surface_type
+        "{}",
+        tr_format!(
+            literal = "Created triangulation from %boundary_count% boundary ring(s) and %constraint_count% open constraint(s), surface type %surface_type%",
+            boundary_count = boundary_count,
+            constraint_count = constraint_count,
+            surface_type = format!("{surface_type:?}")
+        )
     );
     session::build_generated_triangulation(name, all_verts, all_faces, surface_type, crate::model::triangulation::unique_edges)
 }
@@ -534,7 +548,13 @@ fn assemble_triangulation_input(paths: Vec<BreaklinePath>) -> Result<Triangulati
         anyhow::bail!("Selected open strings do not define an unambiguous closed boundary ({unmatched} unmatched endpoint(s), {junctions} branching junction(s))");
     }
     if assembled_count > 0 {
-        userspace_log!("Assembled {} closed boundary ring(s) from fragmented open strings", assembled_count);
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Assembled %assembled_count% closed boundary ring(s) from fragmented open strings",
+                assembled_count = assembled_count
+            )
+        );
     }
 
     Ok(TriangulationInput { boundaries, constraints })
@@ -837,8 +857,11 @@ fn cdt_surface_from_breaklines_impl(boundaries: &[Vec<glam::DVec3>], constraints
     let ignored_edges = if upper_surface { lower_conflicting_breakline_edges(&paths) } else { HashSet::new() };
     if upper_surface {
         userspace_warn!(
-            "Generate upper surface: ignored {} lower conflicting breakline segment(s); source objects are unchanged",
-            ignored_edges.len()
+            "{}",
+            tr_format!(
+                literal = "Generate upper surface: ignored %count% lower conflicting breakline segment(s); source objects are unchanged",
+                count = ignored_edges.len()
+            )
         );
     }
 

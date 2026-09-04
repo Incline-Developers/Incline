@@ -20,6 +20,7 @@ use anyhow::Result;
 
 use crate::{
     app::{App, canvas::is_triangulation_polyline},
+    i18n::{tr, tr_format},
     model::{Object, ObjectId, SceneEntityId},
     ui::state::{TriCreatePhase, UiCommand},
     userspace_error, userspace_warn,
@@ -71,7 +72,7 @@ impl<'a> App<'a> {
                 let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
                 crate::logging::finish_command_report(report_id, result.as_ref().err());
             } else if let Err(err) = self.handle_ui_command(command) {
-                userspace_error!("Command failed: {err:#}");
+                userspace_error!("{}", tr_format!(literal = "Command failed: %error%", error = format!("{err:#}")));
             }
         }
         if had_commands {
@@ -192,7 +193,7 @@ impl<'a> App<'a> {
                     raster.state.loaded = true;
                     self.redraw_requested = true;
                 } else {
-                    userspace_warn!("That raster no longer belongs to the active project");
+                    userspace_warn!("{}", tr!(literal = "That raster no longer belongs to the active project"));
                 }
                 Ok(())
             }
@@ -230,7 +231,7 @@ impl<'a> App<'a> {
                     cloud.state.loaded = true;
                     self.invalidate_topology_bounds_and_redraw();
                 } else {
-                    userspace_warn!("That point cloud no longer belongs to the active project");
+                    userspace_warn!("{}", tr!(literal = "That point cloud no longer belongs to the active project"));
                 }
                 Ok(())
             }
@@ -435,7 +436,7 @@ impl<'a> App<'a> {
                     triangulation.state.loaded = true;
                     self.invalidate_topology_bounds_and_redraw();
                 } else {
-                    userspace_warn!("That triangulation no longer belongs to the active project");
+                    userspace_warn!("{}", tr!(literal = "That triangulation no longer belongs to the active project"));
                 }
                 Ok(())
             }
@@ -444,7 +445,7 @@ impl<'a> App<'a> {
                     model.state.loaded = true;
                     self.invalidate_topology_bounds_and_redraw();
                 } else {
-                    userspace_warn!("That block model no longer belongs to the active project");
+                    userspace_warn!("{}", tr!(literal = "That block model no longer belongs to the active project"));
                 }
                 Ok(())
             }
@@ -491,7 +492,7 @@ impl<'a> App<'a> {
                     dataset.state.loaded = true;
                     self.invalidate_topology_bounds_and_redraw();
                 } else {
-                    userspace_warn!("That drillhole dataset no longer belongs to the active project");
+                    userspace_warn!("{}", tr!(literal = "That drillhole dataset no longer belongs to the active project"));
                 }
                 Ok(())
             }
@@ -633,6 +634,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
+            UiCommand::SetLanguage(choice) => self.set_language(choice),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
             UiCommand::SelectBlockModel(id) => {
                 self.select_block_model(id);
@@ -737,7 +739,7 @@ impl<'a> App<'a> {
                     .collect();
 
                 if selected_objects.is_empty() {
-                    userspace_warn!("Select one or more objects before setting {}", axis.label());
+                    userspace_warn!("{}", tr_format!(literal = "Select one or more objects before setting %axis%", axis = axis.label()));
                     return Ok(());
                 }
 
@@ -805,7 +807,7 @@ impl<'a> App<'a> {
                     .collect();
                 self.editor.selected_handles = self.editor.tri_selected_object_ids.iter().map(|&object_id| SceneEntityId::Object(object_id)).collect();
                 self.editor.tri_selected_layer_ids.clear();
-                self.editor.tri_name_input = "Surface".to_owned();
+                self.editor.tri_name_input = tr!(literal = "Surface");
                 self.editor.tri_hover_handles.clear();
                 Ok(())
             }
@@ -827,7 +829,7 @@ impl<'a> App<'a> {
                 // Keep any name the user already typed; otherwise restore the
                 // default rather than opening with an empty, un-runnable field.
                 if self.editor.point_cloud_tin_name_input.trim().is_empty() {
-                    self.editor.point_cloud_tin_name_input = "Surface".to_owned();
+                    self.editor.point_cloud_tin_name_input = tr!(literal = "Surface");
                 }
                 Ok(())
             }
@@ -845,7 +847,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_poly_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, "Clipped"))
+                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!(literal = "Clipped")))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -881,7 +883,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_z_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, "Sliced"))
+                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!(literal = "Sliced")))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -924,7 +926,7 @@ impl<'a> App<'a> {
                 self.editor.tri_cut_pitshell_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|t| t.id == id))
-                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, "Cut"))
+                    .map(|t| crate::app::canvas::derived_triangulation_name(&t.name, &tr!(literal = "Cut")))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -945,7 +947,7 @@ impl<'a> App<'a> {
                 self.editor.tri_include_solid_name_input = self
                     .active_triangulation
                     .and_then(|id| self.triangulations.iter().find(|triangulation| triangulation.id == id))
-                    .map(|triangulation| crate::app::canvas::derived_triangulation_name(&triangulation.name, "With Shell"))
+                    .map(|triangulation| crate::app::canvas::derived_triangulation_name(&triangulation.name, &tr!(literal = "With Shell")))
                     .unwrap_or_default();
                 Ok(())
             }
@@ -976,7 +978,7 @@ impl<'a> App<'a> {
                 if let Some(surface_name) = surface_name {
                     self.editor.update_contour_layer_name_from_surface(&surface_name);
                 } else {
-                    self.editor.tri_contour_layer_name_input = "Surface Contours".to_owned();
+                    self.editor.tri_contour_layer_name_input = tr!(literal = "Surface Contours");
                 }
                 Ok(())
             }
