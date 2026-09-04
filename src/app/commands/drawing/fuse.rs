@@ -312,9 +312,7 @@ impl<'a> App<'a> {
             }
             *closed = true;
         }
-        if let Some(project) = self.workspace.active_project_mut() {
-            self.history.execute(&mut project.project.document, Command::Replace { before, after });
-        }
+        self.execute_edit(Command::Replace { before, after });
         self.finish_fuse_state();
     }
 
@@ -405,7 +403,7 @@ impl<'a> App<'a> {
                     commands.push(Command::delete_object(obj));
                 }
             }
-            self.history.execute(doc, Command::Batch(commands));
+            self.execute_edit(Command::Batch(commands));
             let shape = if closed {
                 crate::i18n::tr!(literal = "Closed polyline")
             } else {

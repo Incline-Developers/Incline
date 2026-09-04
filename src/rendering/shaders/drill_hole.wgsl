@@ -8,8 +8,11 @@ struct CameraUniform {
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
 struct SegmentInput {
+    // xyz: segment start, relative to the scene origin. w: world radius.
     @location(0) start_radius: vec4<f32>,
+    // xyz: segment end. w: unused alignment padding.
     @location(1) end_pad: vec4<f32>,
+    // xyz: colour. w: unused alignment padding.
     @location(2) color_pad: vec4<f32>,
 };
 
@@ -55,27 +58,9 @@ fn vs_main(instance: SegmentInput, @builtin(vertex_index) vertex_index: u32) -> 
     let up = cross(axis, right);
     let center = instance.start_radius.xyz + axis_vector * axial;
     let radial_direction = right * radial.x + up * radial.y;
-    var radius = instance.start_radius.w;
-    if instance.end_pad.w > 0.0 {
-        // Use one scale for the whole ring. A radial direction can point
-        // exactly into the camera and have a zero screen-space derivative;
-        // deriving the radius from that individual vertex would make its
-        // minimum world radius unbounded and clip neighbouring triangles.
-        // At least one of the two cross-section axes remains visible, so the
-        // larger derivative gives the cylinder a stable projected width.
-        let center_clip = camera.view_proj * vec4<f32>(center, 1.0);
-        let right_clip = camera.view_proj * vec4<f32>(right, 0.0);
-        let up_clip = camera.view_proj * vec4<f32>(up, 0.0);
-        let safe_w = max(abs(center_clip.w), 1.0e-6);
-        let right_ndc_per_world = (right_clip.xy * center_clip.w - center_clip.xy * right_clip.w) / (safe_w * safe_w);
-        let up_ndc_per_world = (up_clip.xy * center_clip.w - center_clip.xy * up_clip.w) / (safe_w * safe_w);
-        let pixels_per_world = max(
-            length(right_ndc_per_world * camera.viewport.xy * 0.5),
-            length(up_ndc_per_world * camera.viewport.xy * 0.5),
-        );
-        let minimum_world_radius = (instance.end_pad.w * 0.5) / max(pixels_per_world, 1.0e-6);
-        radius = max(radius, minimum_world_radius);
-    }
+    // Purely physical: a hole and a tie are as wide as they are, with no
+    // screen-space minimum holding them open once they are far away.
+    let radius = instance.start_radius.w;
     let world = center + radial_direction * radius;
     let normal = normalize(right * local_normal.x + up * local_normal.y + axis * local_normal.z);
     var out: VertexOutput;

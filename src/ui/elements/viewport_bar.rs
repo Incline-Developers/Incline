@@ -6,9 +6,10 @@
 //! - **Left** - the project actions that are true in every workspace (save,
 //!   import, export, undo, redo), followed by the menus belonging to the
 //!   workspace itself.
-//! - **Centre** - what the workspace's tools will act on next: in Production
-//!   the active layer, the working elevation, the line colour and the fill; in
-//!   Drill & Blast the drill hole dataset being worked on.
+//! - **Centre** - the working elevation shared by every workspace, plus what
+//!   the workspace's tools will act on next: in Production the active layer,
+//!   line colour and fill; in Drill & Blast the drill hole dataset being
+//!   worked on.
 //! - **Right** - the view controls, which used to float on a tile hung off the
 //!   viewport's right edge.
 //!
@@ -39,10 +40,6 @@ const BUTTON_GAP: f32 = 0.0;
 /// How much shorter than a button a menu label's hover fill is drawn, so the
 /// dropdowns read as labels in the bar rather than as more buttons.
 const MENU_ROW_INSET: f32 = 6.0;
-/// Gap between two clusters of buttons. The floating tiles' gap reads as more
-/// space than it is, because the tiles pad themselves; this is the docked
-/// equivalent of that separation.
-const CLUSTER_GAP: f32 = 12.0;
 /// Clear space kept between the centre cluster and the two beside it.
 const CENTRE_CLEARANCE: f32 = 16.0;
 /// Clear space either side of the hairline parting the view controls every
@@ -107,12 +104,6 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                     let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         draw_view_tools(ui, editor, project, commands, side);
                     });
-
-                    if !editor.active_workspace.has_centre_settings() {
-                        // Nothing between the two clusters but the parting they
-                        // would take if they met.
-                        return left.width() + CLUSTER_GAP + right.width();
-                    }
 
                     // egui centres a block it is told the size of, and the run
                     // below is only measured once it has been laid out - so it
@@ -237,14 +228,34 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     }
 }
 
-/// The centre run, which each workspace fills with what its own tools act on.
-///
-/// Only the workspaces [`Workspace::has_centre_settings`] names get here; the
-/// caller leaves the middle of the bar empty for the rest.
+/// The centre run: every workspace gets the working elevation, alongside any
+/// settings belonging specifically to that workspace.
 fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     match editor.active_workspace {
-        Workspace::DrillAndBlast => draw_blast_settings(ui, editor, project, commands),
-        _ => draw_drawing_settings(ui, editor, project),
+        Workspace::Production => draw_drawing_settings(ui, editor, project),
+        Workspace::DrillAndBlast => {
+            draw_blast_settings(ui, editor, project, commands);
+            centre_part(ui);
+            draw_z_setting(ui, editor);
+        }
+        Workspace::Geology => {
+            ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+            draw_z_setting(ui, editor);
+        }
+    }
+}
+
+fn centre_part(ui: &mut egui::Ui) {
+    ui.add_space(CENTRE_ITEM_GAP - CENTRE_LABEL_GAP);
+}
+
+fn draw_z_setting(ui: &mut egui::Ui, editor: &mut EditorState) {
+    let response = MenuFieldF64::new(tr!(literal = "Z:"), &mut editor.z_input, f64::MIN..=f64::MAX)
+        .width(80.0)
+        .suffix(tr!(literal = "m"))
+        .show_inline(ui);
+    if response.changed() && editor.z_input.is_finite() {
+        editor.z_level = editor.z_input;
     }
 }
 
@@ -317,6 +328,9 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
     // in the outgoing one has nothing left to act on.
     if editor.active_drill_hole != previous {
         commands.push(UiCommand::ClearSelection);
+        // A tie-in runs between holes of one dataset, so it goes with it.
+        editor.end_tie_chain();
+        editor.initiation_dialog = None;
     }
 }
 
@@ -326,7 +340,6 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
     // parted from each other by [`CENTRE_ITEM_GAP`] on top of it, so "Z:" stays
     // against its field while the four settings read as four.
     ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
-    let part = |ui: &mut egui::Ui| ui.add_space(CENTRE_ITEM_GAP - CENTRE_LABEL_GAP);
 
     ui.label(tr!(literal = "Layer:"));
     let active_layers = project
@@ -351,24 +364,17 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
             }
         });
 
-    part(ui);
+    centre_part(ui);
+    draw_z_setting(ui, editor);
 
-    let z_resp = MenuFieldF64::new(tr!(literal = "Z:"), &mut editor.z_input, f64::MIN..=f64::MAX)
-        .width(80.0)
-        .suffix(tr!(literal = "m"))
-        .show_inline(ui);
-    if z_resp.changed() && editor.z_input.is_finite() {
-        editor.z_level = editor.z_input;
-    }
-
-    part(ui);
+    centre_part(ui);
     ui.label(tr!(literal = "Color:"));
     let mut line_c32 = rgba_to_color32(editor.tool_line_color);
     if ColorSquarePicker::new(&mut line_c32).show(ui).changed() {
         editor.tool_line_color = color32_to_rgba(line_c32);
     }
 
-    part(ui);
+    centre_part(ui);
     ui.label(tr!(literal = "Fill:"));
     HatchPicker::new(&mut editor.tool_hatch, rgba_to_color32(editor.tool_line_color)).show(ui);
 }

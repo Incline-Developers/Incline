@@ -19,7 +19,7 @@ use crate::{
     model::{
         Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
-        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource},
+        drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
         formats::{
             MeshFormat,
             csv_block_model::{CsvColumnMapping, CsvPreview},
@@ -139,6 +139,7 @@ impl EditorState {
     pub(crate) fn clear_scene_selection(&mut self) {
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
+        self.selected_tie_ins.clear();
     }
 
     fn replace_selection(&mut self, handle: SceneEntityId) {
@@ -183,7 +184,7 @@ impl EditorState {
     /// removes cannot depend on callers picking the right invalidation.
     pub(crate) fn render_style_key(&self) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
-        fn set_key(handles: &HashSet<SceneEntityId>) -> u64 {
+        fn set_key<T: Hash>(handles: &HashSet<T>) -> u64 {
             // XOR-fold per-element hashes: HashSet iteration order is
             // unstable, so the combination must be commutative.
             handles.iter().fold(handles.len() as u64, |acc, handle| {
@@ -194,6 +195,8 @@ impl EditorState {
         }
         let mut hasher = DefaultHasher::new();
         set_key(&self.selected_handles).hash(&mut hasher);
+        set_key(&self.selected_drill_holes).hash(&mut hasher);
+        set_key(&self.selected_tie_ins).hash(&mut hasher);
         set_key(&self.hidden_handles).hash(&mut hasher);
         set_key(&self.frozen_handles).hash(&mut hasher);
         set_key(&self.translucent_handles).hash(&mut hasher);
@@ -709,6 +712,16 @@ impl CircleDraft {
     }
 }
 
+/// How a Rotate Collar edit reads in the activity console: the angles it set,
+/// or the angles it turned by.
+pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::CollarRotation) -> String {
+    use crate::model::drill_hole::CollarRotation;
+    match rotation {
+        CollarRotation::Absolute(orientation) => format!("to azimuth {:.1}\u{00b0}, dip {:.1}\u{00b0}", orientation.azimuth, orientation.dip),
+        CollarRotation::Delta { azimuth, dip } => format!("by azimuth {azimuth:+.1}\u{00b0}, dip {dip:+.1}\u{00b0}"),
+    }
+}
+
 /// Plane-handle index used for the Move gizmo's view-aligned ring, which
 /// translates in the camera plane instead of a world-axis plane.
 pub(crate) const MOVE_GIZMO_VIEW_PLANE: u8 = 3;
@@ -755,6 +768,49 @@ impl Default for MoveGizmoScreen {
             ring_radius_px: 0.0,
             view_axes: None,
             view_basis_px: [(1.0, 0.0), (0.0, 1.0)],
+            scale_factor: 1.0,
+        }
+    }
+}
+
+/// The Rotate Collar gizmo's two rings, in the order they are indexed.
+pub(crate) const ROTATE_GIZMO_AZIMUTH_RING: u8 = 0;
+pub(crate) const ROTATE_GIZMO_DIP_RING: u8 = 1;
+
+/// One frame's screen-space projection of the Rotate Collar gizmo: an azimuth
+/// ring lying flat and a dip ring standing in the plane the holes currently
+/// point along. Pixel values are physical pixels, matching `cursor_screen_px`,
+/// so hit tests and drawing share one source of truth - the same contract
+/// [`MoveGizmoScreen`] keeps.
+///
+/// There is deliberately no third ring. A hole is a cylinder, so spinning one
+/// about its own axis changes nothing that can be drilled, and a ring offering
+/// it would only produce orientations no rig can be set to.
+#[derive(Clone)]
+pub(crate) struct RotateGizmoScreen {
+    pub(crate) center_px: Option<(f32, f32)>,
+    /// Each ring as a closed screen polyline, azimuth first. Built in world
+    /// space and projected point by point, so perspective shapes them.
+    pub(crate) ring_px: [Vec<(f32, f32)>; 2],
+    /// Per-ring opacity. A ring turning edge-on fades out and stops being
+    /// clickable rather than collapsing to a line the cursor cannot follow.
+    pub(crate) ring_fade: [f32; 2],
+    /// Sign turning a cursor sweep about the centre into a rotation about the
+    /// ring's world axis. A ring whose far face is towards the camera reads
+    /// the opposite way round on screen, and this is what carries that.
+    pub(crate) ring_sign: [f64; 2],
+    /// Physical pixels per logical point at the time of projection, so hit
+    /// tests can size their slack the same way the gizmo is sized.
+    pub(crate) scale_factor: f32,
+}
+
+impl Default for RotateGizmoScreen {
+    fn default() -> Self {
+        Self {
+            center_px: None,
+            ring_px: [Vec::new(), Vec::new()],
+            ring_fade: [0.0; 2],
+            ring_sign: [1.0; 2],
             scale_factor: 1.0,
         }
     }
@@ -813,6 +869,10 @@ pub(crate) struct EditorState {
     /// selects the dataset into [`Self::selected_handles`] and leaves this
     /// empty; the two are never populated for the same drill hole at once.
     pub(crate) selected_drill_holes: HashSet<DrillHoleRef>,
+    /// Surface connectors selected directly in Drill & Blast. They are not
+    /// scene entities in their own right, so their stable dataset/hole pair
+    /// lives beside the individual-hole selection.
+    pub(crate) selected_tie_ins: HashSet<TieInRef>,
     /// Entities removed from view (skipped by the renderer).
     pub(crate) hidden_handles: HashSet<SceneEntityId>,
     /// Entities frozen: still visible, but excluded from editing and snapping.
@@ -916,10 +976,9 @@ pub(crate) struct EditorState {
     /// is hidden entirely until then.
     pub(crate) last_finished_task: Option<FinishedTask>,
     pub(crate) active_tool: ActiveTool,
-    /// The cursor each workspace is holding - see [`WorkspaceCursors`]. There
-    /// is no cursor mode over the application as a whole: what a pick does is
-    /// a question about the workspace it is made in.
-    pub(crate) cursors: WorkspaceCursors,
+    /// Shared cursor mode, selected from the Production workspace's toolbar
+    /// and used in every workspace.
+    pub(crate) cursor_mode: CursorMode,
     pub(crate) tool_line_color: [f32; 4],
     pub(crate) tool_line_weight: f32,
     pub(crate) tool_hatch: ToolHatch,
@@ -929,6 +988,28 @@ pub(crate) struct EditorState {
     /// editing, tie-in and simulation tools act against. `None` until one is
     /// picked, and dropped again when that dataset is closed or removed.
     pub(crate) active_drill_hole: Option<DrillHoleId>,
+    /// Draggable blast-pattern builder and its document-backed boundary.
+    pub(crate) drill_pattern_open: bool,
+    pub(crate) drill_pattern_awaiting_shape_pick: bool,
+    pub(crate) drill_pattern_boundary_id: Option<ObjectId>,
+    pub(crate) drill_pattern_boundary_name: String,
+    pub(crate) drill_pattern_burden: f64,
+    pub(crate) drill_pattern_spacing: f64,
+    pub(crate) drill_pattern_rotation_deg: f64,
+    pub(crate) drill_pattern_offset_x: f64,
+    pub(crate) drill_pattern_offset_y: f64,
+    /// User-facing hole diameter in millimetres. Drillhole model geometry is
+    /// stored in metres, so this is converted when previewing and creating.
+    pub(crate) drill_pattern_diameter_mm: f64,
+    pub(crate) drill_pattern_depth: f64,
+    pub(crate) drill_pattern_layout: DrillPatternLayout,
+    pub(crate) drill_pattern_name: String,
+    /// Exact collar positions used both by the world-space preview and by the
+    /// eventual create command, so committing cannot differ from the preview.
+    pub(crate) drill_pattern_preview_collars: Vec<DVec3>,
+    pub(crate) drill_pattern_preview_depth: f64,
+    pub(crate) drill_pattern_preview_diameter: f64,
+    pub(crate) drill_pattern_preview_error: Option<String>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
     /// Browser-only viewport prompt shown before creating a named project.
@@ -1186,6 +1267,28 @@ pub(crate) struct EditorState {
     pub(crate) move_gizmo_hovered_plane: Option<u8>,
     pub(crate) gizmo_drag_axis_index: Option<u8>,
     pub(crate) gizmo_drag_plane_index: Option<u8>,
+
+    // Rotate Collar gizmo and panel
+    //
+    /// Projected Rotate Collar gizmo for the current frame.
+    pub(crate) rotate_gizmo: RotateGizmoScreen,
+    pub(crate) rotate_gizmo_hovered_ring: Option<u8>,
+    pub(crate) rotate_gizmo_drag_ring: Option<u8>,
+    /// Panel values, in degrees. Absolute rather than a delta: a round is
+    /// drilled at one angle, so Apply points every selected hole this way.
+    pub(crate) rotate_panel_azimuth: f64,
+    pub(crate) rotate_panel_dip: f64,
+    /// Whether the selected holes already disagree about where they point, so
+    /// the panel can say that the values shown are the anchor hole's rather
+    /// than the selection's.
+    pub(crate) rotate_panel_mixed: bool,
+    /// The angles the tool last previewed at, so a value the user typed can be
+    /// told from one the readout itself wrote back.
+    pub(crate) rotate_panel_last_preview: [f64; 2],
+    /// Whether a Rotate Collar preview is standing. While one is, the panel
+    /// values are the edit being made and must not be re-seeded from the holes
+    /// the preview is itself rewriting.
+    pub(crate) rotate_preview_active: bool,
     pub(crate) move_panel_delta: [f64; 3],
     /// Last delta that was actually applied as a preview (to avoid redundant rebuilds).
     pub(crate) move_panel_last_preview: [f64; 3],
@@ -1426,6 +1529,34 @@ pub(crate) struct EditorState {
     pub(crate) delay_products: Vec<DelayProduct>,
     /// Id the next product added to that palette takes.
     pub(crate) next_delay_product_id: u64,
+    /// The product a tie-in is laid with: the card standing selected in the
+    /// palette. `None` only while the palette is empty.
+    pub(crate) active_delay_product: Option<DelayProductId>,
+    /// The hole a tie-in chain is running from. Set by the first click of a
+    /// tie-in and moved to the far end of every leg confirmed after it, so a
+    /// row ties in with one click per leg; cleared by Escape, by a right
+    /// click, and by anything that changes what is being tied.
+    pub(crate) tie_anchor: Option<DrillHoleRef>,
+    /// The legs a click would lay right now, refreshed each frame from the
+    /// anchor and the cursor - see `App::refresh_tie_preview`. The commit
+    /// reads the same list, so what is drawn is exactly what is tied.
+    pub(crate) tie_preview: Vec<TiePreviewLeg>,
+    /// Where the anchor stands, for the overlay to mark it: a chain waiting
+    /// for its next leg has to be visible with the pointer over nothing.
+    pub(crate) tie_anchor_world: Option<DVec3>,
+    /// World point under the pointer that the screen-space snap corridor ends
+    /// at. The preview paints the whole corridor, not only the holes it found.
+    pub(crate) tie_path_end_world: Option<DVec3>,
+    /// What the active dataset's tie-in adds up to, for the products panel.
+    pub(crate) blast_round: BlastRoundSummary,
+    /// The dataset and revision [`Self::blast_round`] was worked out from, so
+    /// a pattern is only walked again when its content has moved on.
+    pub(crate) blast_round_key: Option<(u64, u64)>,
+    /// Collar currently being edited by the initiation dialog.
+    pub(crate) initiation_dialog: Option<InitiationDialog>,
+    /// Projected initiation cards, rebuilt from all visible drill datasets
+    /// each frame so the UI can keep them above scene depth.
+    pub(crate) initiation_cards: Vec<InitiationCard>,
     /// Whether the palette's New Product dialog is open.
     pub(crate) new_delay_product_open: bool,
     /// What that dialog has been filled in with so far.
@@ -1452,40 +1583,6 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
-    /// What a pick snaps to in the workspace that is up.
-    ///
-    /// Only production draws, and only its cursor run offers snapping, so
-    /// every other workspace picks plainly - the same thing
-    /// [`CursorMode::Select`] means there.
-    pub(crate) fn snap_cursor_mode(&self) -> CursorMode {
-        match self.active_workspace {
-            Workspace::Production => self.cursors.production,
-            Workspace::DrillAndBlast | Workspace::Geology => CursorMode::Select,
-        }
-    }
-
-    /// Step the active workspace's cursor one along its own run - what the
-    /// mouse's forward and back buttons do - and report whether it moved.
-    ///
-    /// A workspace with no cursor run of its own has nowhere to step, so the
-    /// buttons do nothing there rather than quietly changing another
-    /// workspace's cursor behind its back.
-    pub(crate) fn cycle_workspace_cursor(&mut self, forward: bool) -> bool {
-        match self.active_workspace {
-            Workspace::Production => {
-                let mode = &mut self.cursors.production;
-                *mode = if forward { mode.next() } else { mode.previous() };
-                true
-            }
-            Workspace::DrillAndBlast => {
-                let cursor = &mut self.cursors.blast;
-                *cursor = if forward { cursor.next() } else { cursor.previous() };
-                true
-            }
-            Workspace::Geology => false,
-        }
-    }
-
     /// Dialogs that take Enter as their confirm shortcut.
     ///
     /// The GUI only reports a key press as consumed when a text field holds
@@ -1512,7 +1609,11 @@ impl EditorState {
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
     /// to the pick (it returns to the dialog), and Enter means nothing.
     fn viewport_pick_in_progress(&self) -> bool {
-        self.triangulation_pick_target.is_some() || self.tri_cut_poly_awaiting_pick || self.canvas_context_menu_open || self.text_editing_enabled
+        self.triangulation_pick_target.is_some()
+            || self.tri_cut_poly_awaiting_pick
+            || self.drill_pattern_awaiting_shape_pick
+            || self.canvas_context_menu_open
+            || self.text_editing_enabled
     }
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
@@ -1530,12 +1631,14 @@ impl EditorState {
             || self.show_import
             || self.show_export
             || self.drill_hole_color_dialog.is_some()
+            || self.drill_pattern_open
             || self.plot_dialog.is_some()
             || self.move_to_layer_dialog.is_some()
             || self.move_to_axis_dialog.is_some()
             || self.insert_point_at_elevation_dialog.is_some()
             || self.new_layer_dialog_open
             || self.new_delay_product_open
+            || self.initiation_dialog.is_some()
             || self.renaming_item.is_some()
             || self.tri_create_open
             || self.tri_create_failure.is_some()
@@ -1572,6 +1675,35 @@ impl EditorState {
         self.new_delay_product_open = true;
     }
 
+    /// Open a fresh pattern session while retaining the user's useful numeric
+    /// defaults from the previous run.
+    pub(crate) fn begin_drill_pattern(&mut self) {
+        self.drill_pattern_boundary_id = None;
+        self.drill_pattern_boundary_name.clear();
+        self.drill_pattern_preview_collars.clear();
+        self.drill_pattern_preview_depth = self.drill_pattern_depth;
+        self.drill_pattern_preview_diameter = self.drill_pattern_diameter_mm / 1_000.0;
+        self.drill_pattern_preview_error = None;
+        self.drill_pattern_awaiting_shape_pick = false;
+        if self.drill_pattern_name.trim().is_empty() {
+            self.drill_pattern_name = "Drill Pattern".to_owned();
+        }
+        self.drill_pattern_open = true;
+    }
+
+    pub(crate) fn close_drill_pattern(&mut self) {
+        self.drill_pattern_open = false;
+        self.drill_pattern_awaiting_shape_pick = false;
+        self.drill_pattern_boundary_id = None;
+        self.drill_pattern_boundary_name.clear();
+        self.drill_pattern_preview_collars.clear();
+        self.drill_pattern_preview_depth = self.drill_pattern_depth;
+        self.drill_pattern_preview_diameter = self.drill_pattern_diameter_mm / 1_000.0;
+        self.drill_pattern_preview_error = None;
+        self.viewport_pick_hover_label = None;
+        self.tool_highlight_id = None;
+    }
+
     pub(crate) fn update_contour_layer_name_from_surface(&mut self, surface_name: &str) {
         if !self.tri_contour_layer_name_auto {
             return;
@@ -1593,6 +1725,7 @@ impl EditorState {
     pub(crate) fn clear_project_transients(&mut self) {
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
+        self.selected_tie_ins.clear();
         self.hidden_handles.clear();
         self.frozen_handles.clear();
         self.explicitly_frozen.clear();
@@ -1601,6 +1734,10 @@ impl EditorState {
         self.translucent_handles.clear();
         self.active_layer = None;
         self.active_drill_hole = None;
+        self.close_drill_pattern();
+        self.end_tie_chain();
+        self.initiation_dialog = None;
+        self.initiation_cards.clear();
         self.active_tool = ActiveTool::None;
         #[cfg(target_arch = "wasm32")]
         {
@@ -1694,6 +1831,14 @@ impl EditorState {
         self.gizmo_drag_plane_index = None;
         self.move_panel_delta = [0.0; 3];
         self.move_panel_last_preview = [0.0; 3];
+        self.rotate_gizmo = RotateGizmoScreen::default();
+        self.rotate_gizmo_hovered_ring = None;
+        self.rotate_gizmo_drag_ring = None;
+        self.rotate_panel_azimuth = 0.0;
+        self.rotate_panel_dip = -90.0;
+        self.rotate_panel_mixed = false;
+        self.rotate_panel_last_preview = [0.0, -90.0];
+        self.rotate_preview_active = false;
         self.tool_highlight_id = None;
 
         self.batter_berm_dialog_open = false;
@@ -1774,6 +1919,7 @@ impl EditorState {
         Self {
             selected_handles: HashSet::new(),
             selected_drill_holes: HashSet::new(),
+            selected_tie_ins: HashSet::new(),
             hidden_handles: HashSet::new(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
@@ -1820,12 +1966,29 @@ impl EditorState {
             status_message: None,
             last_finished_task: None,
             active_tool: ActiveTool::None,
-            cursors: WorkspaceCursors::default(),
+            cursor_mode: CursorMode::Select,
             tool_line_color: [1.0, 1.0, 1.0, 1.0],
             tool_line_weight: 1.0,
             tool_hatch: ToolHatch::Clear,
             active_layer: None,
             active_drill_hole: None,
+            drill_pattern_open: false,
+            drill_pattern_awaiting_shape_pick: false,
+            drill_pattern_boundary_id: None,
+            drill_pattern_boundary_name: String::new(),
+            drill_pattern_burden: 3.0,
+            drill_pattern_spacing: 3.5,
+            drill_pattern_rotation_deg: 0.0,
+            drill_pattern_offset_x: 0.0,
+            drill_pattern_offset_y: 0.0,
+            drill_pattern_diameter_mm: 165.0,
+            drill_pattern_depth: 10.0,
+            drill_pattern_layout: DrillPatternLayout::Square,
+            drill_pattern_name: "Drill Pattern".to_owned(),
+            drill_pattern_preview_collars: Vec::new(),
+            drill_pattern_preview_depth: 10.0,
+            drill_pattern_preview_diameter: 0.165,
+            drill_pattern_preview_error: None,
             cursor_world: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,
@@ -1952,6 +2115,14 @@ impl EditorState {
             move_gizmo_hovered_plane: None,
             gizmo_drag_axis_index: None,
             gizmo_drag_plane_index: None,
+            rotate_gizmo: RotateGizmoScreen::default(),
+            rotate_gizmo_hovered_ring: None,
+            rotate_gizmo_drag_ring: None,
+            rotate_panel_azimuth: 0.0,
+            rotate_panel_dip: -90.0,
+            rotate_panel_mixed: false,
+            rotate_panel_last_preview: [0.0, -90.0],
+            rotate_preview_active: false,
             move_panel_delta: [0.0; 3],
             move_panel_last_preview: [f64::NAN; 3],
             tool_highlight_id: None,
@@ -2095,6 +2266,15 @@ impl EditorState {
             active_workspace: Workspace::Production,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
+            active_delay_product: builtin_delay_products().first().map(|product| product.id),
+            tie_anchor: None,
+            tie_preview: Vec::new(),
+            tie_anchor_world: None,
+            tie_path_end_world: None,
+            blast_round: BlastRoundSummary::default(),
+            blast_round_key: None,
+            initiation_dialog: None,
+            initiation_cards: Vec::new(),
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
             new_delay_product_name: String::new(),
@@ -2150,6 +2330,63 @@ impl EditorState {
                 }
             }
         }
+    }
+
+    /// Put down whatever tie-in chain is running: the anchor it would carry
+    /// on from and the preview of the leg it would lay. Report whether there
+    /// was one, so a caller that has to redraw only does so when something
+    /// left the screen.
+    pub(crate) fn end_tie_chain(&mut self) -> bool {
+        let running = self.tie_anchor.is_some() || !self.tie_preview.is_empty();
+        self.tie_anchor = None;
+        self.tie_preview.clear();
+        self.tie_anchor_world = None;
+        self.tie_path_end_world = None;
+        running
+    }
+
+    /// The product a tie-in laid now would be made of.
+    pub(crate) fn active_product(&self) -> Option<&DelayProduct> {
+        let id = self.active_delay_product?;
+        self.delay_products.iter().find(|product| product.id == id)
+    }
+
+    /// Whether the Drill & Blast Tie Holes tool owns canvas clicks.
+    pub(crate) fn tying_holes(&self) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast && self.active_tool == ActiveTool::TieHoles
+    }
+
+    /// Whether surface connectors are drawn.
+    ///
+    /// A tie-in is blasting content, not ground: it describes a firing order
+    /// rather than anything that exists on the bench, and over a pit design it
+    /// is a mesh of lines across the very geometry the other workspaces are
+    /// there to look at. So it is shown only where it is worked on. Selecting
+    /// one is already Drill & Blast's alone - see `App::select_tie_at_cursor`
+    /// and the marquee in `App::finish_blast_box_selection` - and this is the
+    /// same rule for drawing them, so nothing is ever pickable unseen.
+    pub(crate) fn shows_tie_ins(&self) -> bool {
+        self.active_workspace == Workspace::DrillAndBlast
+    }
+
+    /// Whether the active translate tool has anything to move: design
+    /// entities for Move Design, individually picked holes for Move Collar.
+    /// Both tools' overlays hang off this, so neither draws a gizmo over an
+    /// empty selection.
+    pub(crate) fn move_tool_has_targets(&self) -> bool {
+        match self.active_tool {
+            // Document objects only: the whole-scene entities are selected in
+            // the same set, and neither tool moves those.
+            ActiveTool::Move => self.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_))),
+            ActiveTool::MoveCollar => !self.selected_drill_holes.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Whether Rotate Collar has holes to turn. Its gizmo and panel hang off
+    /// this the way both translate tools' hang off `move_tool_has_targets`.
+    pub(crate) fn rotate_tool_has_targets(&self) -> bool {
+        self.active_tool == ActiveTool::RotateCollar && !self.selected_drill_holes.is_empty()
     }
 
     /// Apply a display action to the current selection. Returns `true` when the
@@ -2208,10 +2445,45 @@ pub(crate) enum ActiveTool {
     FuseIntoPolyline,
     SplitAtPoints,
     Move,
+    /// Drill & Blast's translate tool, which moves the holes it is given the
+    /// way [`Self::Move`] moves design geometry.
+    MoveCollar,
+    /// Drill & Blast's turn tool: the holes it is given each swing about their
+    /// own collar, so a pattern is re-aimed without being re-laid.
+    RotateCollar,
+    /// Lay a product along the visible screen-space corridor between collars.
+    TieHoles,
+    /// Drill & Blast's initiation tool: a click puts the point a round starts
+    /// at on the hole under the cursor, at the delay the products panel holds.
+    SetInitiationPoint,
     Chamfer,
     BatterBermOffset,
     Bezier,
     VerticalSlice,
+}
+
+impl ActiveTool {
+    /// The two translate tools: production's Move Design and Drill & Blast's
+    /// Move Collar. They share the gizmo, the numeric panel and every drag
+    /// path there is - what differs is only what they translate - so the
+    /// places that run that shared machinery ask this rather than naming one.
+    pub(crate) fn translates(self) -> bool {
+        matches!(self, Self::Move | Self::MoveCollar)
+    }
+
+    /// Drill & Blast's Rotate Collar, the turn counterpart to Move Collar. It
+    /// has a gizmo and a numeric panel of its own rather than sharing the
+    /// translate ones, so the places that run that machinery ask this.
+    pub(crate) fn rotates(self) -> bool {
+        matches!(self, Self::RotateCollar)
+    }
+
+    /// Either collar gesture. Both work on individually picked holes rather
+    /// than on whole datasets, and so want the same selection, the same picks
+    /// and the same session capture.
+    pub(crate) fn acts_on_collars(self) -> bool {
+        matches!(self, Self::MoveCollar | Self::RotateCollar)
+    }
 }
 
 /// Immediate commands applied to the current selection (or whole drawing).
@@ -2227,58 +2499,6 @@ pub(crate) enum CursorMode {
     SnapToSurface,
     SnapToLine,
     SnapToPoint,
-}
-
-/// What a click in the scene does while the Drill & Blast workspace is up.
-///
-/// The production workspace's [`CursorMode`] is about what a pick *snaps* to
-/// while something is being drawn; this is about what a pick is *for*, which
-/// is the question Drill & Blast asks instead. `Select` is a plain pick with
-/// nothing armed - the same thing a click did before there were modes here -
-/// and `TieHoles` is the mode a round is tied in under, which is why the delay
-/// palette is only live while it is the one selected.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum BlastCursor {
-    Select,
-    TieHoles,
-}
-
-impl BlastCursor {
-    pub(crate) fn next(self) -> Self {
-        match self {
-            Self::Select => Self::TieHoles,
-            Self::TieHoles => Self::Select,
-        }
-    }
-
-    /// With two cursors in the run, either way round lands on the other one.
-    pub(crate) fn previous(self) -> Self {
-        self.next()
-    }
-}
-
-/// The cursor every workspace keeps, one field each.
-///
-/// A cursor mode belongs to the discipline whose tools read it - production
-/// snaps for the tools it draws with, Drill & Blast arms a tie-in - so leaving
-/// one workspace and coming back finds its cursor where it was left rather
-/// than wherever another workspace's run last put it. Geology has no cursor
-/// of its own yet, and so has nothing here.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct WorkspaceCursors {
-    /// What a production pick snaps to.
-    pub(crate) production: CursorMode,
-    /// What a Drill & Blast pick is for.
-    pub(crate) blast: BlastCursor,
-}
-
-impl Default for WorkspaceCursors {
-    fn default() -> Self {
-        Self {
-            production: CursorMode::Select,
-            blast: BlastCursor::Select,
-        }
-    }
 }
 
 impl CursorMode {
@@ -2367,6 +2587,17 @@ impl ViewToggle {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UiCommand {
     SetActiveTool(ActiveTool),
+    /// Open/close the Drill & Blast pattern builder from its toolbar cell.
+    ToggleCreateDrillPattern,
+    /// Give the next viewport click to the pattern boundary picker.
+    BeginDrillPatternShapePick,
+    /// Materialise the exact live preview as a new loaded drillhole dataset.
+    CreateDrillPattern {
+        name: String,
+        collars: Vec<DVec3>,
+        depth: f64,
+        diameter: f64,
+    },
     /// Drop everything selected, and rebuild the geometry that was drawing it
     /// as selected. Switching workspaces sends this: a selection belongs to
     /// the discipline it was made in, and the tabs are not a way of carrying
@@ -2449,6 +2680,11 @@ pub(crate) enum UiCommand {
     },
     /// Drop one stored product from that palette.
     DeleteDelayProduct(DelayProductId),
+    /// Apply or remove one collar's initiation delay after its dialog closes.
+    SetInitiation {
+        target: DrillHoleRef,
+        delay_ms: Option<u32>,
+    },
     FinishPolyClose,
     CommitStrokeOpen,
     CommitCircleTypedRadius,
@@ -2500,6 +2736,13 @@ pub(crate) enum UiCommand {
     CancelBezier,
     ApplyMoveDelta(DVec3),
     CancelMoveDelta,
+    /// Preview a Rotate Collar turn without committing it.
+    PreviewCollarRotation(crate::model::drill_hole::CollarRotation),
+    /// Settle whatever turn the tool is previewing onto the undo stack - the
+    /// delta a ring drag built, or the angles the panel was typed to. Which of
+    /// the two it is, is the tool's own business, so this carries neither.
+    ApplyCollarRotation,
+    CancelCollarRotation,
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
     /// Show/hide a design layer without unloading it.
@@ -2762,6 +3005,8 @@ impl UiCommand {
         }
         match self {
             Self::SetActiveTool(_)
+            | Self::ToggleCreateDrillPattern
+            | Self::BeginDrillPatternShapePick
             | Self::ClearSelection
             | Self::CloseStartupDialog
             | Self::CancelCloseProject
@@ -2774,11 +3019,14 @@ impl UiCommand {
             | Self::ApplyPreferences(_)
             | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
+            | Self::SetInitiation { .. }
             | Self::BeginRenameItem(_)
             | Self::PreviewMoveDelta(_)
+            | Self::PreviewCollarRotation(_)
             | Self::CancelChamfer
             | Self::CancelBezier
             | Self::CancelMoveDelta
+            | Self::CancelCollarRotation
             | Self::CancelTextEdit
             | Self::CloseCanvasContextMenu
             | Self::OpenCreateBlockModel(_)
@@ -2900,6 +3148,7 @@ impl UiCommand {
             Self::ApplyChamfer => report(tr!(literal = "Chamfer"), tr!(literal = "Apply to selection")),
             Self::ApplyBezier => report(tr!(literal = "Create Bezier Curve"), tr!(literal = "Apply to selection")),
             Self::ApplyMoveDelta(delta) => report(tr!(literal = "Move Selection"), format!("{delta}")),
+            Self::ApplyCollarRotation => report(tr!(literal = "Rotate Collar"), tr!(literal = "Apply to selection")),
             Self::LoadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} shown")),
             Self::UnloadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} hidden")),
             Self::ToggleLayerVisible(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?}")),
@@ -2948,6 +3197,10 @@ impl UiCommand {
             Self::ToggleBlockModelVisible(id) => report(tr!(literal = "Set Block Model Visibility"), format!("{id:?}")),
             Self::SetBlockModelColorVariable { variable, .. } => report(tr!(literal = "Set Block Model Variable"), variable.clone()),
             Self::ImportDrillHole(source) => report(tr!(literal = "Import Drillholes"), source.display_name()),
+            Self::CreateDrillPattern { name, collars, .. } => report(
+                tr!(literal = "Create Drill Pattern"),
+                tr_format!(literal = "%name% · %count% holes", name = name, count = collars.len()),
+            ),
             Self::LoadDrillHole(id) => report(tr!(literal = "Load Drillholes"), format!("{id:?}")),
             Self::CloseDrillHole(id) => report(tr!(literal = "Close Drillholes"), format!("{id:?}")),
             Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
@@ -3030,6 +3283,11 @@ pub(crate) struct UiFrameOutput {
     /// pass runs before this frame's egui layout. See
     /// `Graphics::apply_canvas_rect`.
     pub(crate) canvas_rect: ViewportRect,
+    /// Whether the pointer is still driving a widget as this frame ends - a
+    /// colour wheel or slider mid-drag. Edits reported while it is set belong
+    /// to a gesture the user has not finished, so they extend one undo entry
+    /// and report to the console once, instead of once per frame.
+    pub(crate) pointer_gesture_active: bool,
 }
 
 /// One loaded layer shown in the explorer tree.
@@ -3275,14 +3533,6 @@ impl Workspace {
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
     }
-
-    /// Whether the viewport bar's centre run carries anything in this
-    /// workspace: production's drawing settings, or the drill hole Drill &
-    /// Blast works on. A workspace with neither leaves the middle of the bar
-    /// empty.
-    pub(crate) fn has_centre_settings(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast)
-    }
 }
 
 /// Identity of one product in the Drill & Blast palette.
@@ -3316,6 +3566,76 @@ impl DelayProduct {
             color: self.color.to_srgba_unmultiplied(),
         }
     }
+}
+
+/// What the active dataset's tie-in adds up to, as the products panel reads
+/// it back.
+///
+/// Derived from the dataset rather than stored: it is recomputed by
+/// `App::refresh_blast_round` whenever the pattern's content changes, which is
+/// what keeps a delay the user typed into a connector visible as the time the
+/// round takes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BlastRoundSummary {
+    /// Names and delays of every collar feeding the round.
+    pub(crate) initiations: Vec<(String, u32)>,
+    pub(crate) connectors: usize,
+    /// When the last hole to fire goes, which is how long the round runs for.
+    pub(crate) duration_ms: Option<u32>,
+    /// Holes no signal reaches: tied to nothing, or tied only into a run that
+    /// never reaches the initiation point.
+    pub(crate) unreached: usize,
+}
+
+/// One tie-in connector as selection state addresses it. Hole order is
+/// canonical here because selection is about the physical connector, while
+/// [`crate::model::drill_hole::TieIn`] retains direction for firing order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TieInRef {
+    pub(crate) dataset: DrillHoleId,
+    pub(crate) a: usize,
+    pub(crate) b: usize,
+}
+
+impl TieInRef {
+    pub(crate) fn new(dataset: DrillHoleId, from: usize, to: usize) -> Self {
+        let (a, b) = if from <= to { (from, to) } else { (to, from) };
+        Self { dataset, a, b }
+    }
+}
+
+/// Draft held while the user edits one initiation point.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InitiationDialog {
+    pub(crate) target: DrillHoleRef,
+    pub(crate) hole_name: String,
+    pub(crate) delay_ms: u32,
+    pub(crate) existing: bool,
+}
+
+/// Screen-space red delay card projected above an initiated collar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InitiationCard {
+    pub(crate) target: DrillHoleRef,
+    pub(crate) delay_ms: u32,
+    pub(crate) screen_px: (f32, f32),
+    /// Physical window pixels one world unit spans at this collar, so the card
+    /// can be drawn at a world size instead of a fixed screen size. Measured
+    /// per card because under perspective the scale falls off with depth.
+    pub(crate) px_per_world: f32,
+}
+
+/// One leg of the tie-in a click would confirm: the two holes it joins, where
+/// they stand, and whether laying it would replace a connector already there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TiePreviewLeg {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    pub(crate) start: DVec3,
+    pub(crate) end: DVec3,
+    /// The pair is already tied, and confirming would overwrite it. Drawn
+    /// broken rather than solid, so nothing is replaced unannounced.
+    pub(crate) overwrite: bool,
 }
 
 /// Colour a product being entered starts on, until the user picks another.

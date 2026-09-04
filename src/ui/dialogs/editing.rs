@@ -405,7 +405,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     egui::Panel::bottom("meta_splash").show_separator_line(false).show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
                             ui.label(tr_format!(literal = "%app%: %release%", app = crate::APP_NAME, release = crate::APP_RELEASE));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label("GNU General Public License v3.0"));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(tr!(literal = "MIT License")));
                         });
                     });
 
@@ -1217,41 +1217,92 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
 
 /// Draw the floating Move tool panel with dX/dY/dZ inputs and an Apply button.
 pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("move_panel", tr!(literal = "Move"), viewport_rect)
-        .min_width(210.0)
-        .show(ui.ctx(), |ui| {
-            let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world X axis."))
-                .speed(0.1)
-                .show(ui);
-            let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world Y axis."))
-                .speed(0.1)
-                .show(ui);
-            let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world Z axis."))
-                .speed(0.1)
-                .show(ui);
-            if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
-                commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
+    // One panel for both translate tools, titled by the one running it.
+    let title = if editor.active_tool == ActiveTool::MoveCollar {
+        tr!(literal = "Move Collar")
+    } else {
+        tr!(literal = "Move Design")
+    };
+    ViewportDockPanel::new("move_panel", title, viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
+        let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world X axis."))
+            .speed(0.1)
+            .show(ui);
+        let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world Y axis."))
+            .speed(0.1)
+            .show(ui);
+        let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world Z axis."))
+            .speed(0.1)
+            .show(ui);
+        if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
+            commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
+                editor.move_panel_delta[0],
+                editor.move_panel_delta[1],
+                editor.move_panel_delta[2],
+            )));
+        }
+
+        ui.add_space(4.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
+                commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
                     editor.move_panel_delta[0],
                     editor.move_panel_delta[1],
                     editor.move_panel_delta[2],
                 )));
+                editor.active_tool = ActiveTool::None;
+            }
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
+                commands.push(UiCommand::CancelMoveDelta);
+                editor.active_tool = ActiveTool::None;
+            }
+        });
+    });
+}
+
+/// Draw the floating Rotate Collar panel: the two angles a drill plan is
+/// written in, and an Apply button.
+///
+/// The values are absolute, not a delta - a round is drilled at one angle, so
+/// Apply points every selected hole this way. A ring drag is the delta gesture,
+/// and it drives these same fields as it goes, so the panel always reads out
+/// the setup the holes are standing at.
+pub(crate) fn draw_rotate_collar_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    use crate::model::drill_hole::{CollarRotation, HoleOrientation, MAX_HOLE_DIP};
+
+    ViewportDockPanel::new("rotate_collar_panel", "Rotate Collar", viewport_rect)
+        .min_width(230.0)
+        .show(ui.ctx(), |ui| {
+            if editor.rotate_panel_mixed {
+                ui.label("Selected holes point different ways. Apply sets them all to these angles.");
+                ui.add_space(2.0);
+            }
+            let azimuth = MenuFieldF64::new("Azimuth", &mut editor.rotate_panel_azimuth, 0.0..=360.0)
+                .help_text("Bearing the holes are drilled on, in degrees clockwise from grid north.")
+                .speed(0.25)
+                .show(ui);
+            let dip = MenuFieldF64::new("Dip", &mut editor.rotate_panel_dip, -MAX_HOLE_DIP..=MAX_HOLE_DIP)
+                .help_text("Angle from horizontal, negative downwards: -90 is a vertical hole.")
+                .speed(0.25)
+                .show(ui);
+            let target = CollarRotation::Absolute(HoleOrientation {
+                azimuth: editor.rotate_panel_azimuth,
+                dip: editor.rotate_panel_dip,
+            });
+            if azimuth.changed() || dip.changed() {
+                commands.push(UiCommand::PreviewCollarRotation(target));
             }
 
             ui.add_space(4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
-                    commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
-                        editor.move_panel_delta[0],
-                        editor.move_panel_delta[1],
-                        editor.move_panel_delta[2],
-                    )));
+                if ui.add(MenuButton::new("Apply").primary()).clicked() {
+                    commands.push(UiCommand::ApplyCollarRotation);
                     editor.active_tool = ActiveTool::None;
                 }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
-                    commands.push(UiCommand::CancelMoveDelta);
+                if ui.add(MenuButton::new("Cancel")).clicked() {
+                    commands.push(UiCommand::CancelCollarRotation);
                     editor.active_tool = ActiveTool::None;
                 }
             });

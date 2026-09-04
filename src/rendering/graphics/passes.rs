@@ -184,34 +184,77 @@ fn document_primitive_order(primitive: DocumentPrimitive) -> u8 {
 }
 
 impl<'a> Graphics<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn draw_drill_holes<'pass>(
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
         drill_holes: &[OpenDrillHoleDataset],
-        hidden: &std::collections::HashSet<crate::model::SceneEntityId>,
+        editor: &EditorState,
         xray_enabled: bool,
+        draw_traces: bool,
+        draw_surface_marks: bool,
+        draw_preview: bool,
     ) {
         if self.drill_hole_gpu.is_empty() {
             return;
         }
-        render_pass.set_pipeline(if xray_enabled {
-            &self.xray_drill_hole_render_pipeline
-        } else {
-            &self.drill_hole_render_pipeline
-        });
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        for dataset in drill_holes {
-            if !dataset.state.loaded || !dataset.visible || hidden.contains(&dataset.entity_id()) {
-                continue;
+        if draw_traces {
+            render_pass.set_pipeline(if xray_enabled {
+                &self.xray_drill_hole_render_pipeline
+            } else {
+                &self.drill_hole_render_pipeline
+            });
+            for dataset in drill_holes {
+                if !dataset.state.loaded || !dataset.visible || editor.hidden_handles.contains(&dataset.entity_id()) {
+                    continue;
+                }
+                let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
+                    continue;
+                };
+                let Some(buffer) = cached.buffer.as_ref() else {
+                    continue;
+                };
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.draw(0..144, 0..cached.count);
             }
-            let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
-                continue;
-            };
-            let Some(buffer) = cached.buffer.as_ref() else {
-                continue;
-            };
-            render_pass.set_vertex_buffer(0, buffer.slice(..));
-            render_pass.draw(0..144, 0..cached.count);
+            if draw_preview
+                && let Some(cached) = self.drill_hole_gpu.preview()
+                && let Some(buffer) = cached.buffer.as_ref()
+            {
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.draw(0..144, 0..cached.count);
+            }
+        }
+        if !draw_surface_marks {
+            return;
+        }
+        // Surface tie-ins share the cylindrical segment shader with traces,
+        // but have their own buffer so Drill & Blast can lift only them above
+        // triangulations while leaving the down-hole traces depth tested - and
+        // so that they can be left out of the other workspaces entirely, which
+        // is what `shows_tie_ins` decides. The instances are still built and
+        // still cached; only the draw is skipped, so switching tab costs
+        // nothing to come back from.
+        if editor.shows_tie_ins() {
+            render_pass.set_pipeline(if xray_enabled {
+                &self.xray_drill_hole_render_pipeline
+            } else {
+                &self.drill_hole_render_pipeline
+            });
+            for dataset in drill_holes {
+                if !dataset.state.loaded || !dataset.visible || editor.hidden_handles.contains(&dataset.entity_id()) {
+                    continue;
+                }
+                let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
+                    continue;
+                };
+                let Some(buffer) = cached.tie_buffer.as_ref() else {
+                    continue;
+                };
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.draw(0..144, 0..cached.tie_count);
+            }
         }
         // Collar markers go over the traces they cap, in their own pass so the
         // pipeline switch happens once rather than per dataset.
@@ -221,7 +264,7 @@ impl<'a> Graphics<'a> {
             &self.drill_collar_render_pipeline
         });
         for dataset in drill_holes {
-            if !dataset.state.loaded || !dataset.visible || hidden.contains(&dataset.entity_id()) {
+            if !dataset.state.loaded || !dataset.visible || editor.hidden_handles.contains(&dataset.entity_id()) {
                 continue;
             }
             let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
@@ -230,6 +273,13 @@ impl<'a> Graphics<'a> {
             let Some(buffer) = cached.collar_buffer.as_ref() else {
                 continue;
             };
+            render_pass.set_vertex_buffer(0, buffer.slice(..));
+            render_pass.draw(0..6, 0..cached.collar_count);
+        }
+        if draw_preview
+            && let Some(cached) = self.drill_hole_gpu.preview()
+            && let Some(buffer) = cached.collar_buffer.as_ref()
+        {
             render_pass.set_vertex_buffer(0, buffer.slice(..));
             render_pass.draw(0..6, 0..cached.collar_count);
         }
@@ -574,7 +624,7 @@ impl<'a> Graphics<'a> {
         // Ordinarily drillholes are opaque, depth-writing scene assets. In
         // x-ray mode they move to the late overlay pass instead.
         if !editor.xray_enabled {
-            self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, false);
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, false, true, !editor.tying_holes(), include_editor_overlays);
         }
 
         // Opaque document fills and strokes must establish colour and depth
@@ -793,11 +843,14 @@ impl<'a> Graphics<'a> {
             // X-ray deliberately bypasses scene depth and stays above all
             // composited transparency. Drillholes draw first so design strings
             // and their outlines remain the topmost x-ray content.
-            self.draw_drill_holes(&mut render_pass, drill_holes, &editor.hidden_handles, true);
+            self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, true, true, include_editor_overlays);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Fill));
             self.draw_static_document_strokes(&mut render_pass, true);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, true, Some(DocumentPrimitive::Stroke));
         } else {
+            if editor.tying_holes() {
+                self.draw_drill_holes(&mut render_pass, drill_holes, editor, true, false, true, include_editor_overlays);
+            }
             // Alpha document primitives test the complete opaque depth buffer
             // but never update it, so farther translucent fills still blend.
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::Translucent, false, None);
@@ -808,7 +861,7 @@ impl<'a> Graphics<'a> {
         }
 
         if include_editor_overlays && !self.dynamic_vertex_buf.is_empty() && !self.dynamic_index_buf.is_empty() {
-            render_pass.set_pipeline(if editor.xray_enabled {
+            render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
                 &self.overlay_render_pipeline
             } else {
                 &self.stroke_render_pipeline

@@ -36,7 +36,7 @@ use crate::{
     },
     ui::{
         Gui,
-        state::{CursorMode, EditorState, UiFrameOutput, UiProjectView, ViewportRect},
+        state::{CursorMode, EditorState, TieInRef, UiFrameOutput, UiProjectView, ViewportRect},
     },
 };
 

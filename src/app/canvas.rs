@@ -26,6 +26,31 @@ impl<'a> App<'a> {
             return;
         }
 
+        // Blast-pattern boundary picker: accept only a valid closed design
+        // polyline and return immediately so the ordinary selection tools do
+        // not also act on the same click.
+        if self.editor.drill_pattern_awaiting_shape_pick {
+            let frozen = &self.editor.frozen_handles;
+            let active_object_ids = self.active_project_object_ids();
+            if let Some((SceneEntityId::Object(id), _)) = self
+                .graphics
+                .as_ref()
+                .and_then(|graphics| graphics.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
+                && active_object_ids.contains(&id)
+                && let Some(object) = self.scene_document.get_object(id)
+                && is_drill_pattern_boundary(object)
+            {
+                let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
+                self.editor.drill_pattern_boundary_id = Some(id);
+                self.editor.drill_pattern_boundary_name = format!("Polyline on '{layer}'");
+                self.editor.drill_pattern_awaiting_shape_pick = false;
+                self.editor.viewport_pick_hover_label = None;
+                self.editor.tool_highlight_id = Some(id);
+                self.invalidate_geometry();
+            }
+            return;
+        }
+
         // Drape owns a two-stage selection session. Defer both click and box
         // picks until release so each stage can strictly filter entity types.
         if self.editor.active_tool == ActiveTool::DrapeToTopology {
@@ -42,9 +67,9 @@ impl<'a> App<'a> {
                 .as_ref()
                 .and_then(|g| g.pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, frozen, self.editor.xray_enabled))
             {
-                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(|o| {
+                let is_closed_poly = self.scene_document.get_object(oid).is_some_and(|object| {
                     matches!(
-                        o,
+                        object,
                         Object::Polyline {
                             closed: true,
                             verts,
@@ -86,7 +111,9 @@ impl<'a> App<'a> {
         if !self.workspace.has_active_project() && self.triangulations.is_empty() {
             return;
         }
-        if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
+        // Picking a new target abandons whatever gesture was standing over the
+        // last one - a turn as much as a move.
+        if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
             self.cancel_move_delta();
             self.editor.move_vertex_target = None;
         }
@@ -101,6 +128,7 @@ impl<'a> App<'a> {
                     frozen,
                     self.editor.xray_enabled,
                 )
+                .filter(|pick| self.tool_accepts_pick(pick))
                 .map(|pick| (Some(pick), pick.world))
                 .or_else(|| graphics.cursor_world(self.editor.z_level).map(|world| (None, world)))
         });
@@ -154,7 +182,7 @@ impl<'a> App<'a> {
             }
             Some((None, world)) => {
                 self.active_triangulation = None;
-                if matches!(self.editor.active_tool, crate::ui::state::ActiveTool::None | crate::ui::state::ActiveTool::Move) {
+                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else if self.workspace.has_active_project() {
@@ -169,7 +197,7 @@ impl<'a> App<'a> {
                 // still begin a selection gesture so a short click can clear
                 // the current selection.
                 self.active_triangulation = None;
-                if matches!(self.editor.active_tool, crate::ui::state::ActiveTool::None | crate::ui::state::ActiveTool::Move) {
+                if self.editor.active_tool == ActiveTool::None || self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 } else {
@@ -211,7 +239,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        if !self.editor.tri_cut_poly_awaiting_pick {
+        if !self.editor.tri_cut_poly_awaiting_pick && !self.editor.drill_pattern_awaiting_shape_pick {
             return;
         }
 
@@ -220,9 +248,17 @@ impl<'a> App<'a> {
                 .pick_at_cursor(PICK_THRESHOLD_PX, &[], &self.editor.hidden_handles, &self.editor.frozen_handles, self.editor.xray_enabled)
                 .map(|(entity, _)| entity)
         });
+        let active_object_ids = self.active_project_object_ids();
+        let pattern_picker = self.editor.drill_pattern_awaiting_shape_pick;
         let (next_highlight, next_label) = match raw_hover {
-            Some(SceneEntityId::Object(id)) => match self.scene_document.get_object(id) {
-                Some(object @ Object::Polyline { closed: true, verts, .. }) if verts.len() >= 3 => {
+            Some(SceneEntityId::Object(id)) if !pattern_picker || active_object_ids.contains(&id) => match self.scene_document.get_object(id) {
+                Some(object @ Object::Polyline { verts, closed, .. })
+                    if if pattern_picker {
+                        is_drill_pattern_boundary(object)
+                    } else {
+                        *closed && verts.len() >= 3
+                    } =>
+                {
                     let layer = self.scene_document.layer(object.layer()).map(|layer| layer.name.as_str()).unwrap_or("?");
                     (
                         Some(id),
@@ -432,6 +468,7 @@ impl<'a> App<'a> {
             if !preserve {
                 self.editor.selected_handles.clear();
                 self.editor.selected_drill_holes.clear();
+                self.editor.selected_tie_ins.clear();
                 self.active_triangulation = None;
                 if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
                     self.editor.move_vertex_target = None;
@@ -444,10 +481,11 @@ impl<'a> App<'a> {
         // Box selection: left-to-right (end.x > start.x) = cross select (any vertex
         // inside box); right-to-left (end.x < start.x) = window select (all vertices inside).
         let cross_select = end.0 > start.0;
-        // Drill & Blast marquees drill holes, one hole at a time, where
-        // production's takes the design geometry over the same ground.
+        // Drill & Blast gives connectors first refusal on the marquee. If no
+        // tie-in is taken, it falls back to holes one at a time; production's
+        // marquee takes the design geometry over the same ground.
         if self.editor.active_workspace == Workspace::DrillAndBlast {
-            self.finish_drill_hole_box_selection(start, end, cross_select);
+            self.finish_blast_box_selection(start, end, cross_select);
             return;
         }
         let mut enclosed = self
@@ -462,12 +500,15 @@ impl<'a> App<'a> {
             })
             .unwrap_or_default();
         let active_object_ids = self.active_project_object_ids();
+        // Move Design marquees only what it can move, the same as its clicks
+        // do - see `tool_accepts_pick`.
+        let objects_only = self.editor.active_tool == ActiveTool::Move;
         enclosed.retain(|handle| match handle {
             SceneEntityId::Object(object_id) => active_object_ids.contains(object_id),
-            SceneEntityId::Triangulation(_) => true,
-            SceneEntityId::BlockModel(_) => true,
-            SceneEntityId::DrillHole(_) => true,
-            SceneEntityId::PointCloud(_) => true,
+            SceneEntityId::Triangulation(_) => !objects_only,
+            SceneEntityId::BlockModel(_) => !objects_only,
+            SceneEntityId::DrillHole(_) => !objects_only,
+            SceneEntityId::PointCloud(_) => !objects_only,
         });
         if self.modifiers.shift_key() {
             for handle in enclosed {
@@ -487,9 +528,43 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
-    /// The Drill & Blast marquee: every hole the box takes, held one hole at a
-    /// time rather than as the datasets they came from.
-    fn finish_drill_hole_box_selection(&mut self, start: (f32, f32), end: (f32, f32), cross_select: bool) {
+    /// The Drill & Blast marquee: select tie-ins exclusively when the box
+    /// takes any; otherwise select its holes one at a time rather than as the
+    /// datasets they came from.
+    fn finish_blast_box_selection(&mut self, start: (f32, f32), end: (f32, f32), cross_select: bool) {
+        let tie_ins = self
+            .graphics
+            .as_ref()
+            .map(|graphics| {
+                graphics.tie_ins_in_screen_rect(
+                    self.selectable_drill_holes(),
+                    start,
+                    end,
+                    cross_select,
+                    &self.editor.hidden_handles,
+                    &self.editor.frozen_handles,
+                )
+            })
+            .unwrap_or_default();
+        if !tie_ins.is_empty() {
+            if self.modifiers.shift_key() {
+                for tie in tie_ins {
+                    if !self.editor.selected_tie_ins.remove(&tie) {
+                        self.editor.selected_tie_ins.insert(tie);
+                    }
+                }
+            } else {
+                if !self.modifiers.control_key() {
+                    self.editor.selected_handles.clear();
+                    self.editor.selected_drill_holes.clear();
+                    self.editor.selected_tie_ins.clear();
+                }
+                self.editor.selected_tie_ins.extend(tie_ins);
+            }
+            self.invalidate_geometry();
+            return;
+        }
+
         let enclosed = self
             .graphics
             .as_ref()
@@ -514,6 +589,7 @@ impl<'a> App<'a> {
             if !self.modifiers.control_key() {
                 self.editor.selected_handles.clear();
                 self.editor.selected_drill_holes.clear();
+                self.editor.selected_tie_ins.clear();
             }
             self.editor.selected_drill_holes.extend(enclosed);
         }
@@ -635,7 +711,7 @@ impl<'a> App<'a> {
         if drag.moved
             && let Some(after) = self.active_document().get_object(drag.object_id).cloned()
         {
-            self.history.push_applied(Command::Replace { before: drag.before, after });
+            self.record_applied_edit(Command::Replace { before: drag.before, after });
         }
     }
 
@@ -657,6 +733,22 @@ impl<'a> App<'a> {
             .and_then(|id| self.drill_holes.iter().find(|dataset| dataset.id == id))
             .map(std::slice::from_ref)
             .unwrap_or_default()
+    }
+
+    /// Whether the active tool will take what the cursor landed on.
+    ///
+    /// The gizmo tools take only what they can act on - Move Design the
+    /// document's own objects, Move Collar and Rotate Collar the holes of a
+    /// drillhole dataset - so a pick they have no use for is treated as a
+    /// click on nothing rather than selecting something the gizmo would then
+    /// stand uselessly over. A tool that selects for its own reasons, and
+    /// plain picking, take anything.
+    fn tool_accepts_pick(&self, pick: &crate::rendering::graphics::camera::ScenePick) -> bool {
+        match self.editor.active_tool {
+            ActiveTool::Move => matches!(pick.entity, SceneEntityId::Object(_)),
+            ActiveTool::MoveCollar | ActiveTool::RotateCollar => pick.hole.is_some(),
+            _ => true,
+        }
     }
 
     pub(crate) fn active_project_object_ids(&self) -> std::collections::HashSet<crate::model::ObjectId> {
@@ -689,5 +781,13 @@ pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
             closed,
             ..
         } if verts.len() >= if *closed { 3 } else { 2 }
+    )
+}
+
+fn is_drill_pattern_boundary(object: &Object) -> bool {
+    matches!(
+        object,
+        Object::Polyline { verts, closed: true, .. }
+            if verts.len() >= 3 || (verts.len() == 2 && verts.iter().any(|vertex| vertex.bulge.abs() > f64::EPSILON))
     )
 }

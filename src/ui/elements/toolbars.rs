@@ -10,7 +10,7 @@ use crate::{
     i18n::tr,
     ui::{
         EditorState, UiProjectView,
-        state::{ActiveTool, BlastCursor, CursorMode, UiCommand, Workspace},
+        state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
         widgets::toolbar::{TOOL_CELL_SIZE, ToolbarButton},
     },
@@ -30,8 +30,8 @@ enum LeftToolAction {
     NewLayer,
     /// Make this the active tool.
     Tool(ActiveTool),
-    /// A tool whose button is drawn but has nothing behind it yet.
-    Placeholder,
+    /// Open or close the Drill & Blast pattern builder.
+    DrillPattern,
 }
 
 /// One button in the drawing toolbar's run.
@@ -68,7 +68,7 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
         tool(themed_icon!(ui, "create_polyline.svg"), tr!(literal = "Create Polyline"), ActiveTool::MakePoly),
         tool(themed_icon!(ui, "create_circle.svg"), tr!(literal = "Create Circle"), ActiveTool::MakeCircle),
         tool(unthemed_icon!("create_text.svg"), tr!(literal = "Create Text"), ActiveTool::MakeText),
-        tool(themed_icon!(ui, "move_element.svg"), tr!(literal = "Move"), ActiveTool::Move),
+        tool(themed_icon!(ui, "move_element.svg"), tr!(literal = "Move Design"), ActiveTool::Move),
         tool(themed_icon!(ui, "offset_element.svg"), tr!(literal = "Offset"), ActiveTool::OffsetElement),
         tool(themed_icon!(ui, "drape_element.svg"), tr!(literal = "Drape to Topology"), ActiveTool::DrapeToTopology),
         tool(unthemed_icon!("auto_bench.svg"), tr!(literal = "Auto-Bench"), ActiveTool::BatterBermOffset),
@@ -91,10 +91,7 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
 }
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
-/// nudge its holes, then say where it starts.
-///
-/// Placeholders: the cells, their icons and their enablement are here, but
-/// nothing is wired behind them yet.
+/// nudge its holes, re-aim them, tie them together, then say where it starts.
 fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
     // Setting the initiation point acts on the pattern the viewport bar's
     // centre run names, and reads it the same way that run does: a dataset
@@ -107,20 +104,36 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
     vec![
         LeftTool {
             icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
-            tooltip: tr!(literal = "Create Drill Pattern [PLACEHOLDER]"),
-            action: LeftToolAction::Placeholder,
+            tooltip: tr!(literal = "Create Drill Pattern"),
+            action: LeftToolAction::DrillPattern,
             enabled: project_active,
         },
         LeftTool {
-            icon: egui::Image::new(unthemed_icon!("move_drillhole.svg")),
-            tooltip: tr!(literal = "Move Drill Hole [PLACEHOLDER]"),
-            action: LeftToolAction::Placeholder,
+            // The same mark production's Move Design carries: one translate
+            // gesture, drawn the same way whichever discipline is running it.
+            icon: egui::Image::new(themed_icon!(ui, "move_element.svg")),
+            tooltip: tr!(literal = "Move Collar"),
+            action: LeftToolAction::Tool(ActiveTool::MoveCollar),
+            enabled: has_active_dataset,
+        },
+        LeftTool {
+            // Move Collar's counterpart: the same holes, turned instead of
+            // shifted, so it sits directly beside it in the run.
+            icon: egui::Image::new(themed_icon!(ui, "rotate_element.svg")),
+            tooltip: tr!(literal = "Rotate Collar"),
+            action: LeftToolAction::Tool(ActiveTool::RotateCollar),
+            enabled: has_active_dataset,
+        },
+        LeftTool {
+            icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
+            tooltip: tr!(literal = "Tie Holes"),
+            action: LeftToolAction::Tool(ActiveTool::TieHoles),
             enabled: has_active_dataset,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
-            tooltip: tr!(literal = "Set Initiation Point [PLACEHOLDER]"),
-            action: LeftToolAction::Placeholder,
+            tooltip: tr!(literal = "Set Initiation Point"),
+            action: LeftToolAction::Tool(ActiveTool::SetInitiationPoint),
             enabled: has_active_dataset,
         },
     ]
@@ -135,7 +148,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     let selected = match tool.action {
         LeftToolAction::NewLayer => editor.new_layer_dialog_open,
         LeftToolAction::Tool(active) => editor.active_tool == active,
-        LeftToolAction::Placeholder => false,
+        LeftToolAction::DrillPattern => editor.drill_pattern_open,
     };
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
@@ -152,7 +165,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
             }
         }
         LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
-        LeftToolAction::Placeholder => {}
+        LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
     }
 }
 
@@ -227,12 +240,10 @@ pub(crate) fn draw_left_toolbar(
 /// explorer's rows rather than as whole-scene toolbar actions: see
 /// `ExplorerEntry::toggles`.
 ///
-/// The snapping cursor modes go with the drawing tools they snap for, and the
-/// two measurements are of a pit being designed, so that run belongs to the
+/// Every workspace shows and edits the same shared cursor mode. The two
+/// measurements are of a pit being designed, so only that run belongs to the
 /// production workspace - see
-/// [`crate::ui::state::Workspace::has_production_tools`]. Drill & Blast has a
-/// cursor run of its own in its place; a workspace with neither is left with
-/// the strip and what is running on it.
+/// [`crate::ui::state::Workspace::has_production_tools`].
 pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
     let claimed = bottom_toolbar_height(ui.ctx());
     egui::Panel::bottom("bottom_tools_strip")
@@ -248,12 +259,9 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
             ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    if editor.active_workspace == Workspace::DrillAndBlast {
-                        draw_blast_cursors(ui, editor, side);
-                    }
+                    draw_cursor_modes(ui, editor, commands, side);
 
                     if editor.active_workspace.has_production_tools() {
-                        draw_cursor_modes(ui, editor, side);
                         ui.add_space(12.);
 
                         ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
@@ -294,12 +302,13 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
 
 /// The run of cursor modes at the head of the bottom toolbar: what a click in
 /// the scene snaps to.
-fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
+fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     cursor_mode_button(
         ui,
         egui::Image::new(themed_icon!(ui, "cursor_select.svg")),
         tr!(literal = "Cursor: Regular").as_str(),
         editor,
+        commands,
         CursorMode::Select,
         side,
     );
@@ -309,6 +318,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
         egui::Image::new(themed_icon!(ui, "snap_to_surface.svg")),
         tr!(literal = "Cursor: Snap to Surface").as_str(),
         editor,
+        commands,
         CursorMode::SnapToSurface,
         side,
     );
@@ -318,6 +328,7 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
         egui::Image::new(themed_icon!(ui, "snap_to_line.svg")),
         tr!(literal = "Cursor: Snap to Line").as_str(),
         editor,
+        commands,
         CursorMode::SnapToLine,
         side,
     );
@@ -327,34 +338,8 @@ fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
         egui::Image::new(themed_icon!(ui, "snap_to_point.svg")),
         tr!(literal = "Cursor: Snap to Point").as_str(),
         editor,
+        commands,
         CursorMode::SnapToPoint,
-        side,
-    );
-}
-
-/// The Drill & Blast workspace's cursor run, standing where production's
-/// snapping modes do.
-///
-/// Two so far: a plain pick, and the mode a round is tied in under. The tie-in
-/// mark is the same one a delay product's card is read by - see
-/// `products::paint_tie_in_mark` - so the tool and the palette it arms say the
-/// same thing.
-fn draw_blast_cursors(ui: &mut egui::Ui, editor: &mut EditorState, side: f32) {
-    blast_cursor_button(
-        ui,
-        egui::Image::new(themed_icon!(ui, "cursor_select.svg")),
-        tr!(literal = "Select").as_str(),
-        editor,
-        BlastCursor::Select,
-        side,
-    );
-
-    blast_cursor_button(
-        ui,
-        egui::Image::new(themed_icon!(ui, "tie_holes.svg")),
-        tr!(literal = "Tie Holes").as_str(),
-        editor,
-        BlastCursor::TieHoles,
         side,
     );
 }
@@ -379,25 +364,26 @@ pub(crate) fn tool_button(
     response
 }
 
-/// Draw a cursor mode button; sets production's cursor on click.
-pub(crate) fn cursor_mode_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, mode: CursorMode, side: f32) -> egui::Response {
-    let selected = editor.cursors.production == mode;
+/// Draw a cursor mode button; sets the shared cursor on click. In Drill &
+/// Blast, Regular also puts down the active tool so canvas input returns to
+/// that workspace's individual-hole click and marquee selection path.
+pub(crate) fn cursor_mode_button(
+    ui: &mut egui::Ui,
+    icon: egui::Image<'static>,
+    tooltip: &str,
+    editor: &mut EditorState,
+    commands: &mut Vec<UiCommand>,
+    mode: CursorMode,
+    side: f32,
+) -> egui::Response {
+    let selected = editor.cursor_mode == mode;
     let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).button_side(side).selected(selected));
 
     if response.clicked() {
-        editor.cursors.production = mode;
-    }
-
-    response
-}
-
-/// Draw a Drill & Blast cursor button; sets that workspace's cursor on click.
-pub(crate) fn blast_cursor_button(ui: &mut egui::Ui, icon: egui::Image<'static>, tooltip: &str, editor: &mut EditorState, cursor: BlastCursor, side: f32) -> egui::Response {
-    let selected = editor.cursors.blast == cursor;
-    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("blast_cursor", tooltip)).button_side(side).selected(selected));
-
-    if response.clicked() {
-        editor.cursors.blast = cursor;
+        editor.cursor_mode = mode;
+        if editor.active_workspace == Workspace::DrillAndBlast && mode == CursorMode::Select {
+            commands.push(UiCommand::SetActiveTool(ActiveTool::None));
+        }
     }
 
     response

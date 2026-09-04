@@ -181,7 +181,7 @@ impl<'a> App<'a> {
                 })
                 .collect::<Vec<_>>();
             if !commands.is_empty() {
-                self.history.execute(doc, Command::Batch(commands));
+                self.execute_edit(Command::Batch(commands));
             }
         }
 

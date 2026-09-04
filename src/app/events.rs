@@ -82,7 +82,8 @@ impl<'a> App<'a> {
         }
 
         if !gui_consumed {
-            let canvas_pick_mode_active = self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick;
+            let canvas_pick_mode_active =
+                self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick;
             let measurement_tool_active = matches!(self.editor.active_tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
             let suppress_view_mode_canvas_click = (self.editor.fly_mode_enabled || (self.editor.slice_mode_enabled && !measurement_tool_active))
                 && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
@@ -159,6 +160,8 @@ impl<'a> App<'a> {
                     // redraws generated directly by the compositor during resize.
                     self.redraw_requested = false;
                     self.refresh_intersection_availability();
+                    self.refresh_tie_preview();
+                    self.refresh_blast_round();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
                         let title = project.projects.first().map_or_else(
@@ -211,6 +214,7 @@ impl<'a> App<'a> {
                                 if completing_topology_load && !self.graphics.as_ref().is_some_and(|graphics| graphics.point_cloud_uploads_pending()) {
                                     self.finish_topology_load();
                                 }
+                                self.set_ui_pointer_gesture_active(ui_output.pointer_gesture_active);
                                 self.handle_ui_commands(ui_output.commands);
                                 self.sync_slice_preview_window(event_loop);
                                 if let Some(graphics) = self.graphics.as_mut() {
@@ -227,9 +231,9 @@ impl<'a> App<'a> {
                                 // Keep move panel preview in sync - apply whenever the panel delta
                                 // differs from the last applied preview (catches typed values that
                                 // don't always trigger changed() on every frame).
-                                if self.editor.active_tool == ActiveTool::Move
+                                if self.editor.active_tool.translates()
                                     && self.gizmo_drag.is_none()
-                                    && !self.editor.selected_handles.is_empty()
+                                    && self.editor.move_tool_has_targets()
                                     && self.editor.move_panel_delta != self.editor.move_panel_last_preview
                                 {
                                     let d = self.editor.move_panel_delta;
@@ -238,9 +242,30 @@ impl<'a> App<'a> {
                                     self.editor.move_panel_last_preview = d;
                                     self.invalidate_geometry();
                                 }
+                                // Keep the Rotate Collar panel previewing on the same
+                                // belt-and-braces rule: a typed angle does not always
+                                // report changed() on the frame it lands.
+                                if self.editor.active_tool.rotates() && self.collar_rotate_drag.is_none() && self.editor.rotate_tool_has_targets() {
+                                    let angles = [self.editor.rotate_panel_azimuth, self.editor.rotate_panel_dip];
+                                    if angles != self.editor.rotate_panel_last_preview {
+                                        self.preview_collar_rotation(crate::model::drill_hole::CollarRotation::Absolute(crate::model::drill_hole::HoleOrientation {
+                                            azimuth: angles[0],
+                                            dip: angles[1],
+                                        }));
+                                    }
+                                }
+                                // And keep them reading out where the selected holes
+                                // point whenever no turn of the user's own stands over
+                                // them - so arming the tool, or picking another hole,
+                                // shows the angles that hole is drilled at.
+                                if self.editor.active_tool.rotates() {
+                                    self.refresh_rotate_panel_readout();
+                                }
                                 // Clean up per-tool state when the tool is switched via the
-                                // toolbar.
-                                if self.editor.active_tool != ActiveTool::Move && self.has_pending_move_delta() {
+                                // toolbar. A standing turn is not stale state: it is the
+                                // rotate tool's own preview, and it is cancelled by the
+                                // same rule only once that tool is put down.
+                                if !self.editor.active_tool.translates() && !self.editor.active_tool.rotates() && self.has_pending_move_delta() {
                                     self.editor.move_panel_last_preview = [f64::NAN; 3];
                                     self.cancel_move_delta();
                                 }
@@ -350,7 +375,7 @@ impl<'a> App<'a> {
                     );
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
                     let snap_mode_enabled = matches!(
-                        self.editor.snap_cursor_mode(),
+                        self.editor.cursor_mode,
                         crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
                     );
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
@@ -370,7 +395,7 @@ impl<'a> App<'a> {
                                 &self.triangulations,
                                 &self.editor.hidden_handles,
                                 &self.editor.frozen_handles,
-                                &self.editor.snap_cursor_mode(),
+                                &self.editor.cursor_mode,
                                 self.editor.xray_enabled,
                             )
                         })
@@ -396,7 +421,20 @@ impl<'a> App<'a> {
                         self.move_gizmo_to_cursor();
                         self.invalidate_overlay();
                     }
-                    if self.editor.active_tool == ActiveTool::Move
+                    if self.collar_rotate_drag.is_some() {
+                        self.collar_rotate_drag_to_cursor();
+                        self.invalidate_overlay();
+                    }
+                    if self.editor.active_tool.rotates()
+                        && let Some(cursor_px) = self.editor.cursor_screen_px
+                    {
+                        let hovered = hit_rotate_gizmo_ring(&self.editor, cursor_px);
+                        if self.editor.rotate_gizmo_hovered_ring != hovered {
+                            self.editor.rotate_gizmo_hovered_ring = hovered;
+                            self.invalidate_overlay();
+                        }
+                    }
+                    if self.editor.active_tool.translates()
                         && let Some(cursor_px) = self.editor.cursor_screen_px
                     {
                         let hit = hit_gizmo_handle(&self.editor, cursor_px);
@@ -456,7 +494,8 @@ impl<'a> App<'a> {
                             || self.editor.relimit_waiting_for_pick
                             || self.editor.relimit_confirming_end
                             || self.editor.triangulation_pick_target.is_some()
-                            || self.editor.tri_cut_poly_awaiting_pick);
+                            || self.editor.tri_cut_poly_awaiting_pick
+                            || self.editor.drill_pattern_awaiting_shape_pick);
                     if hover_pick_due {
                         self.last_snap_poll_instant = Some(now);
                     }
@@ -555,7 +594,9 @@ impl<'a> App<'a> {
                     if self.editor.active_tool == ActiveTool::ExplodePolyline && hover_pick_due {
                         self.update_explode_hover();
                     }
-                    if (self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick) && hover_pick_due {
+                    if (self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick)
+                        && hover_pick_due
+                    {
                         self.update_viewport_field_pick_hover();
                     }
                     if !self.editor.pending_stroke.is_empty()
@@ -566,7 +607,9 @@ impl<'a> App<'a> {
                         || self.editor.relimit_waiting_for_pick
                         || self.editor.offset_awaiting_side_pick
                         || self.gizmo_drag.is_some()
-                        || self.editor.active_tool == ActiveTool::Move
+                        || self.collar_rotate_drag.is_some()
+                        || self.editor.active_tool.translates()
+                        || self.editor.active_tool.rotates()
                         || self.editor.active_tool == ActiveTool::MeasureDistance
                         || self.editor.active_tool == ActiveTool::MeasureBatterAngle
                         || self.editor.active_tool == ActiveTool::DeletePoints
@@ -754,20 +797,13 @@ impl<'a> App<'a> {
             return false;
         };
 
-        // The cursor belongs to the workspace that is up, so these buttons
-        // step that workspace's own run - see
-        // [`crate::ui::state::WorkspaceCursors`]. A workspace with no run of
-        // its own is left where it was, and the press is still the cursor
-        // button's rather than falling through to the scene.
-        let cycled = match button {
-            MouseButton::Forward => self.editor.cycle_workspace_cursor(true),
-            MouseButton::Back => self.editor.cycle_workspace_cursor(false),
+        self.editor.cursor_mode = match button {
+            MouseButton::Forward => self.editor.cursor_mode.next(),
+            MouseButton::Back => self.editor.cursor_mode.previous(),
             _ => return false,
         };
-        if cycled {
-            self.editor.cursor_snapped = false;
-            self.redraw_requested = true;
-        }
+        self.editor.cursor_snapped = false;
+        self.redraw_requested = true;
         true
     }
 
@@ -778,7 +814,7 @@ impl<'a> App<'a> {
             ..
         } = event
         {
-            if self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick {
+            if self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick {
                 self.editor.canvas_context_menu_open = false;
                 self.begin_select_or_drag();
                 return;
@@ -796,7 +832,11 @@ impl<'a> App<'a> {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
-                ActiveTool::None => self.begin_select_or_drag(),
+                ActiveTool::None => {
+                    if !self.select_tie_at_cursor() {
+                        self.begin_select_or_drag();
+                    }
+                }
                 ActiveTool::Move => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
                         match hit_gizmo_handle(&self.editor, cursor_px) {
@@ -812,6 +852,34 @@ impl<'a> App<'a> {
                         self.begin_select_or_drag();
                     }
                 }
+                // Move Collar has no equivalent of the vertex target: a hole
+                // is picked whole, so a press off the gizmo is an ordinary
+                // Drill & Blast selection.
+                ActiveTool::MoveCollar => {
+                    match self
+                        .editor
+                        .cursor_screen_px
+                        .and_then(|cursor_px| hit_gizmo_handle(&self.editor, cursor_px).map(|hit| (cursor_px, hit)))
+                    {
+                        Some((cursor_px, GizmoHandleHit::Plane(plane_idx, axes))) => self.begin_gizmo_plane_drag(plane_idx, axes, cursor_px),
+                        Some((cursor_px, GizmoHandleHit::Axis(axis_idx, axis))) => self.begin_gizmo_drag(axis_idx, axis, cursor_px),
+                        None => self.begin_select_or_drag(),
+                    }
+                }
+                // Rotate Collar has nothing to grab but its rings, so a press
+                // off them is an ordinary Drill & Blast selection - the same
+                // rule Move Collar follows for a press off its gizmo.
+                ActiveTool::RotateCollar => {
+                    match self
+                        .editor
+                        .cursor_screen_px
+                        .and_then(|cursor_px| hit_rotate_gizmo_ring(&self.editor, cursor_px).map(|ring| (cursor_px, ring)))
+                    {
+                        Some((cursor_px, ring)) => self.begin_collar_rotate_drag(ring, cursor_px),
+                        None => self.begin_select_or_drag(),
+                    }
+                }
+                ActiveTool::TieHoles => self.tie_holes_click(),
                 ActiveTool::Chamfer => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
                         if self.editor.chamfer_gizmo_hovered {
@@ -833,6 +901,7 @@ impl<'a> App<'a> {
                         }
                     }
                 }
+                ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
@@ -864,6 +933,9 @@ impl<'a> App<'a> {
         self.finish_drag();
         if self.gizmo_drag.is_some() {
             self.finish_gizmo_drag();
+        }
+        if self.collar_rotate_drag.is_some() {
+            self.finish_collar_rotate_drag();
         }
         if self.editor.chamfer_gizmo_drag_start_px.is_some() {
             self.editor.chamfer_gizmo_drag_start_px = None;
@@ -919,7 +991,12 @@ impl<'a> App<'a> {
                 }
                 _ => false,
             } && !orbit_was_active;
-            if is_quick_press && matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle) {
+            if is_quick_press && self.editor.tie_anchor.is_some() {
+                // The same thing a right click does to a polyline being drawn:
+                // put the run down, without the canvas menu over the pattern.
+                self.end_tie_chain();
+                self.redraw_requested = true;
+            } else if is_quick_press && matches!(self.editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly | ActiveTool::MakeCircle) {
                 self.try_finish_tool();
                 self.redraw_requested = true;
             } else if is_quick_press && self.editor.active_tool != ActiveTool::None {
@@ -1154,7 +1231,10 @@ impl<'a> App<'a> {
         }
         match &key {
             KeyCode::Escape => {
-                if self.editor.canvas_context_menu_open {
+                if self.editor.tie_anchor.is_some() {
+                    self.end_tie_chain();
+                    self.redraw_requested = true;
+                } else if self.editor.canvas_context_menu_open {
                     self.editor.canvas_context_menu_open = false;
                     self.redraw_requested = true;
                 } else if self.editor.text_editing_enabled {
@@ -1168,6 +1248,11 @@ impl<'a> App<'a> {
                     self.editor.tri_cut_poly_awaiting_pick = false;
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
+                    self.invalidate_geometry();
+                } else if self.editor.drill_pattern_awaiting_shape_pick {
+                    self.editor.drill_pattern_awaiting_shape_pick = false;
+                    self.editor.viewport_pick_hover_label = None;
+                    self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
                     self.invalidate_geometry();
                 } else if self.editor.slice_mode_enabled {
                     self.set_slice_mode_enabled(false);
@@ -1187,7 +1272,7 @@ impl<'a> App<'a> {
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
                     self.cancel_split_at_points();
-                } else if self.editor.active_tool == ActiveTool::Move {
+                } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.gizmo_drag = None;
                     self.editor.gizmo_drag_axis_index = None;
                     self.editor.gizmo_drag_plane_index = None;
@@ -1245,9 +1330,12 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter if !self.editor.text_editing_enabled => {
-                if self.editor.active_tool == ActiveTool::Move {
+                if self.editor.active_tool.translates() {
                     let d = self.editor.move_panel_delta;
                     self.apply_move_delta(glam::DVec3::new(d[0], d[1], d[2]));
+                    self.editor.active_tool = ActiveTool::None;
+                } else if self.editor.active_tool.rotates() {
+                    self.apply_pending_collar_rotation();
                     self.editor.active_tool = ActiveTool::None;
                 } else if self.editor.active_tool == ActiveTool::OffsetElement && self.editor.offset_awaiting_side_pick {
                     self.commit_offset();
@@ -1260,6 +1348,10 @@ impl<'a> App<'a> {
                 }
             }
             KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled => {
+                if !self.editor.selected_tie_ins.is_empty() {
+                    self.delete_selected_tie_ins();
+                    return;
+                }
                 let object_count = self.editor.selected_handles.iter().filter(|h| matches!(h, crate::model::SceneEntityId::Object(_))).count();
                 if object_count > 0 {
                     self.editor.delete_confirm_open = true;
@@ -1285,6 +1377,11 @@ impl<'a> App<'a> {
             self.editor.viewport_pick_hover_label = None;
             self.editor.tool_highlight_id = self.editor.tri_cut_poly_object_id;
             self.invalidate_geometry();
+        } else if self.editor.drill_pattern_awaiting_shape_pick {
+            self.editor.drill_pattern_awaiting_shape_pick = false;
+            self.editor.viewport_pick_hover_label = None;
+            self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
+            self.invalidate_geometry();
         } else if self.editor.active_tool == ActiveTool::DrapeToTopology {
             self.cancel_drape();
         } else if self.editor.offset_awaiting_side_pick || self.editor.offset_dialog_open {
@@ -1296,7 +1393,7 @@ impl<'a> App<'a> {
             self.editor.active_tool = ActiveTool::None;
         } else if self.editor.active_tool == ActiveTool::SplitAtPoints {
             self.cancel_split_at_points();
-        } else if self.editor.active_tool == ActiveTool::Move {
+        } else if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
             self.gizmo_drag = None;
             self.editor.gizmo_drag_axis_index = None;
             self.editor.gizmo_drag_plane_index = None;
@@ -1335,6 +1432,10 @@ impl<'a> App<'a> {
         if self.editor.text_editing_enabled {
             return;
         }
+        if self.editor.drill_pattern_open {
+            self.editor.close_drill_pattern();
+            self.invalidate_geometry();
+        }
         let allowed_in_slice = matches!(tool, ActiveTool::None | ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
         if (self.editor.fly_mode_enabled && tool != ActiveTool::None) || (self.editor.slice_mode_enabled && !allowed_in_slice) {
             return;
@@ -1344,6 +1445,9 @@ impl<'a> App<'a> {
         let next_tool = if previous_tool == tool { ActiveTool::None } else { tool };
 
         match previous_tool {
+            ActiveTool::TieHoles if next_tool != ActiveTool::TieHoles => {
+                self.end_tie_chain();
+            }
             ActiveTool::OffsetElement if next_tool != ActiveTool::OffsetElement => {
                 self.cancel_offset();
             }
@@ -1373,6 +1477,22 @@ impl<'a> App<'a> {
             self.editor.drape_phase = crate::ui::state::DrapePhase::Designs;
             self.editor.drape_object_ids.clear();
             self.editor.selected_handles.clear();
+            self.invalidate_geometry();
+        }
+        // Arming a translate tool puts down whatever it cannot translate: the
+        // selection it inherits is held to the same rule as the picks it will
+        // make from here - see `App::tool_accepts_pick` - so the gizmo never
+        // comes up over something the tool would leave where it is.
+        let held = self.editor.selected_handles.len() + self.editor.selected_drill_holes.len();
+        match next_tool {
+            ActiveTool::Move => {
+                self.editor.selected_drill_holes.clear();
+                self.editor.selected_handles.retain(|handle| matches!(handle, crate::model::SceneEntityId::Object(_)));
+            }
+            ActiveTool::MoveCollar | ActiveTool::RotateCollar => self.editor.selected_handles.clear(),
+            _ => {}
+        }
+        if self.editor.selected_handles.len() + self.editor.selected_drill_holes.len() != held {
             self.invalidate_geometry();
         }
         if next_tool != ActiveTool::MakeCircle && self.editor.circle_draft.take().is_some() {
@@ -1528,6 +1648,41 @@ fn hit_gizmo_handle(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32
     let view_axes = gizmo.view_axes?;
     let distance = (cursor_px.0 - center.0).hypot(cursor_px.1 - center.1);
     ((distance - gizmo.ring_radius_px).abs() < threshold * 0.7).then_some(GizmoHandleHit::Plane(crate::ui::state::MOVE_GIZMO_VIEW_PLANE, view_axes))
+}
+
+/// Which Rotate Collar ring the cursor is over.
+///
+/// Whichever ring passes closest wins, so the two can cross - which they do
+/// from most viewpoints - without either becoming ungrabbable near the join.
+fn hit_rotate_gizmo_ring(editor: &crate::ui::state::EditorState, cursor_px: (f32, f32)) -> Option<u8> {
+    use crate::ui::state::{ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING};
+    let gizmo = &editor.rotate_gizmo;
+    gizmo.center_px?;
+    let threshold = GIZMO_HIT_POINTS * gizmo.scale_factor.max(1.0);
+    let mut best: Option<(u8, f32)> = None;
+    for ring in [ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING] {
+        let index = usize::from(ring);
+        // A faded-out ring is not clickable: the user cannot see what they
+        // would be grabbing, and a sweep round it would not read reliably.
+        if gizmo.ring_fade[index] <= 0.0 {
+            continue;
+        }
+        let points = &gizmo.ring_px[index];
+        if points.len() < 2 {
+            continue;
+        }
+        // The ring closes, so the last sample joins back to the first.
+        let distance = points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .take(points.len())
+            .map(|(&from, &to)| point_to_segment_distance(cursor_px, from, to))
+            .fold(f32::INFINITY, f32::min);
+        if distance < threshold && best.is_none_or(|(_, closest)| distance < closest) {
+            best = Some((ring, distance));
+        }
+    }
+    best.map(|(ring, _)| ring)
 }
 
 /// Point on the ring where an axis arrow starts, given its projected tip.

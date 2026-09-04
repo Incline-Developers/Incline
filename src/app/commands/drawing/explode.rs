@@ -96,7 +96,7 @@ impl<'a> App<'a> {
                     line_weight,
                 }));
             }
-            self.history.execute(doc, Command::Batch(batch_cmds));
+            self.execute_edit(Command::Batch(batch_cmds));
         }
 
         self.editor.selected_handles.remove(&SceneEntityId::Object(object_id));

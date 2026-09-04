@@ -811,7 +811,7 @@ fn draw_triangulation_tab(ui: &mut egui::Ui, project: &UiProjectView, context: &
 
 /// A labelled value the panel only reports, laid out like the editable fields
 /// beside it so the columns line up.
-fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
+pub(crate) fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
     let row_height = ui.spacing().interact_size.y;
     let row_width = ui.available_width();
     // The same column width the fields resolve for themselves, or the values

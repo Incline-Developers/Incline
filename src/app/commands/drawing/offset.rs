@@ -270,7 +270,7 @@ impl<'a> App<'a> {
                     })
                 })
                 .collect();
-            self.history.execute(doc, Command::Batch(commands));
+            self.execute_edit(Command::Batch(commands));
         }
 
         self.cancel_offset();

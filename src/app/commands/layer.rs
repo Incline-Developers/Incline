@@ -50,9 +50,10 @@ impl<'a> App<'a> {
             visible: true,
             elevation: 0.0,
         };
-        self.history
-            .execute(&mut project.project.document, Command::AddLayerSnapshot { layer, objects: Vec::new() });
-        project.loaded_layers.insert(layer_id);
+        self.execute_edit(Command::AddLayerSnapshot { layer, objects: Vec::new() });
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.loaded_layers.insert(layer_id);
+        }
         self.editor.selected_handles.clear();
         self.editor.active_layer = Some(layer_id);
         userspace_log!("{}", tr_format!(literal = "Created layer '%name%'", name = name));
@@ -76,15 +77,14 @@ impl<'a> App<'a> {
             .position(|candidate| candidate.id == layer_id)
             .context("Layer position disappeared")?;
         let on_layer = positioned_objects_on_layer(&project.project.document, layer_id);
-        self.history.execute(
-            &mut project.project.document,
-            Command::DeleteLayerSnapshot {
-                layer,
-                layer_index,
-                objects: on_layer,
-            },
-        );
-        project.loaded_layers.remove(&layer_id);
+        self.execute_edit(Command::DeleteLayerSnapshot {
+            layer,
+            layer_index,
+            objects: on_layer,
+        });
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.loaded_layers.remove(&layer_id);
+        }
         if self.editor.active_layer == Some(layer_id) {
             self.editor.active_layer = None;
         }
@@ -125,14 +125,13 @@ impl<'a> App<'a> {
             })
             .collect();
 
-        self.history.execute(
-            doc,
-            Command::AddLayerSnapshot {
-                layer: duplicate_layer,
-                objects: duplicate_objects,
-            },
-        );
-        project.loaded_layers.insert(new_layer_id);
+        self.execute_edit(Command::AddLayerSnapshot {
+            layer: duplicate_layer,
+            objects: duplicate_objects,
+        });
+        if let Some(project) = self.workspace.active_project_mut() {
+            project.loaded_layers.insert(new_layer_id);
+        }
         self.editor.selected_handles.clear();
         userspace_log!("{}", tr_format!(literal = "Duplicated layer '%duplicate_name%'", duplicate_name = duplicate_name));
         self.invalidate_geometry();
@@ -233,15 +232,16 @@ impl<'a> App<'a> {
     /// document, so snapping targets and selection sets survive the toggle.
     pub(crate) fn toggle_layer_visible(&mut self, layer_id: LayerId) {
         self.activate_project_for_layer(layer_id);
-        let Some(document) = self.workspace.active_document_mut() else {
+        let Some(layer) = self.workspace.active_document().and_then(|document| document.layer(layer_id)) else {
             return;
         };
-        let Some(layer) = document.layer(layer_id) else {
-            return;
-        };
-        let (name, visible) = (layer.name.clone(), !layer.visible);
-        document.set_layer_visible(layer_id, visible);
-        let state = if visible { "Shown" } else { "Hidden" };
+        let (name, before) = (layer.name.clone(), layer.visible);
+        self.execute_edit(Command::SetLayerVisible {
+            id: layer_id,
+            before,
+            after: !before,
+        });
+        let state = if before { "Hidden" } else { "Shown" };
         userspace_log!("{}", tr_format!(literal = "%state% layer '%name%'", state = state, name = name));
         self.invalidate_geometry();
     }

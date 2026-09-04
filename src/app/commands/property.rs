@@ -21,9 +21,9 @@ macro_rules! batch_property {
             })
             .collect();
         if !cmds.is_empty() {
-            $self.history.execute(doc, Command::Batch(cmds));
+            $self.execute_edit(Command::Batch(cmds));
         }
-        userspace_log!("{}", tr_format!(literal = $log, count = $ids.len() $(, $arg_name = $arg)*));
+        $self.log_when_gesture_ends(tr_format!(literal = $log, count = $ids.len() $(, $arg_name = $arg)*));
         $self.invalidate_geometry();
     }};
 }
@@ -133,7 +133,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        self.history.execute(doc, Command::Batch(cmds));
+        self.execute_edit(Command::Batch(cmds));
         self.editor.selected_handles = selected_after.into_iter().map(SceneEntityId::Object).collect();
         self.invalidate_geometry();
         let action = if copy {

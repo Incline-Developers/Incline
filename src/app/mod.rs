@@ -6,6 +6,7 @@ pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod release_check; // Checks the website for a newer published release
+pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
 #[cfg(target_arch = "wasm32")]
@@ -41,12 +42,14 @@ use winit::{
 
 #[cfg(target_arch = "wasm32")]
 use crate::app::commands::omf::ViewOnOpen;
+#[cfg(target_arch = "wasm32")]
+use crate::userspace_error;
 use crate::{
     app::commands::file::PendingFileDialog,
     model::{
-        Document, LayerId, Object, ObjectId, SceneEntityId,
+        Command, Document, EditTarget, ItemRef, ItemStyle, LayerId, Object, ObjectId, SceneEntityId, StepEffects,
         block_model::{BlockModelId, BlockModelSource, OpenBlockModel},
-        drill_hole::{DrillHoleSource, OpenDrillHoleDataset},
+        drill_hole::{CollarRotation, DrillHoleRef, DrillHoleSource, HolePlacement, OpenDrillHoleDataset},
         project::{OpenProject, ProjectStore, SaveToken},
         raster::OpenRasterTexture,
         spatial::ObjectSnapIndex,
@@ -54,10 +57,8 @@ use crate::{
     },
     rendering::graphics::Graphics,
     ui::state::{EditorState, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiProjectView, UiTrackedProjectEntry, UiTriangulationEntry},
-    userspace_warn,
+    userspace_log, userspace_warn,
 };
-#[cfg(target_arch = "wasm32")]
-use crate::{userspace_error, userspace_log};
 
 pub(crate) const PICK_THRESHOLD_PX: f32 = 8.0;
 
@@ -111,12 +112,51 @@ pub(crate) struct GizmoDragState {
     pub(crate) start_delta: DVec3,
 }
 
+/// A live Rotate Collar ring drag.
+///
+/// The sweep is measured on screen, as the cursor's angle about the projected
+/// gizmo centre - the ring under the pointer is drawn as exactly that circle,
+/// so following it needs no unprojection back into the ring's world plane.
+pub(crate) struct CollarRotateDrag {
+    /// Which ring is being dragged: see `ui::state::ROTATE_GIZMO_AZIMUTH_RING`.
+    pub(crate) ring: u8,
+    /// Gizmo centre the sweep is measured about, held for the length of the
+    /// drag so a preview moving the collars cannot move the pivot under it.
+    pub(crate) center_px: (f32, f32),
+    /// Cursor angle last frame, for the step this frame is measured against.
+    pub(crate) last_angle: f64,
+    /// Total swept angle in screen radians, unwrapped, so a sweep past the
+    /// atan2 discontinuity keeps going and a multi-turn sweep is honoured.
+    pub(crate) swept: f64,
+    /// The turn standing when the drag began, so grabbing a ring again
+    /// continues the edit rather than restarting it from the originals.
+    pub(crate) start: CollarRotation,
+    /// How far the anchor hole may still be tipped either way before it would
+    /// pass vertical, bounding the accumulated dip so a drag stays reversible.
+    pub(crate) dip_room: (f64, f64),
+}
+
 /// A live Move preview belongs to the project whose objects were captured.
 /// Keeping that identity with the originals prevents a later project switch
 /// from committing or restoring the preview in a different document.
 pub(crate) struct MoveSession {
     pub(crate) project_runtime_id: u32,
     pub(crate) originals: Vec<Object>,
+}
+
+/// The same for a live Move Collar preview, which moves holes inside a loaded
+/// drillhole dataset rather than objects in the document. Where each hole
+/// stood is kept together with the [`DrillHoleRef`] naming it, so a preview is
+/// rewritten from the originals every frame instead of accumulating deltas.
+/// Only the placement is captured, never the hole: copying interval values a
+/// move cannot touch is what a drag would otherwise spend all its time on.
+pub(crate) struct CollarMoveSession {
+    pub(crate) project_runtime_id: u32,
+    pub(crate) originals: Vec<(DrillHoleRef, HolePlacement)>,
+    /// Content epoch of each dataset before the preview first wrote to it.
+    /// A preview dirties the dataset on every pointer frame; putting these
+    /// back is what stops a cancelled drag leaving the explorer starred.
+    pub(crate) epochs: Vec<(crate::model::drill_hole::DrillHoleId, u64)>,
 }
 
 /// Stable identity for one background operation. Every pending receiver owns
@@ -289,6 +329,18 @@ pub(crate) struct App<'a> {
     /// so the intersection scan only reruns when the selection or the documents change.
     intersection_availability_key: Option<u64>,
     history: crate::model::History,
+    /// Whether the pointer was still driving a widget when the last UI frame
+    /// ended. Edits that arrive while it is set belong to an unfinished
+    /// gesture: they extend one undo entry rather than pushing one each, and
+    /// report to the console once rather than once a frame.
+    ui_pointer_gesture_active: bool,
+    /// UI commands already reported to the console during the current gesture.
+    /// A colour wheel emits its command every frame it moves; the first is
+    /// worth an entry, the rest are the same edit still happening.
+    reported_during_gesture: Vec<std::mem::Discriminant<crate::ui::state::UiCommand>>,
+    /// A log line held back until the gesture that produced it ends, so a drag
+    /// writes one line carrying the value it settled on instead of one a frame.
+    deferred_gesture_log: Option<String>,
     modifiers: ModifiersState,
     drag: Option<DragState>,
     pub(crate) gizmo_drag: Option<GizmoDragState>,
@@ -304,6 +356,15 @@ pub(crate) struct App<'a> {
     slice_preview_middle_down: bool,
     pending_topology_click: Option<(SceneEntityId, DVec3)>,
     move_session_original: Option<MoveSession>,
+    /// Captured collar placements, shared by Move Collar and Rotate Collar:
+    /// both rewrite the same holes from the same originals, and only one of
+    /// the two ever previews at a time.
+    collar_move_session: Option<CollarMoveSession>,
+    /// The turn a live Rotate Collar preview is standing at, `None` when no
+    /// turn is previewed. Held beside the session rather than inside it so a
+    /// move and a turn share one capture.
+    pub(crate) collar_rotation: Option<CollarRotation>,
+    pub(crate) collar_rotate_drag: Option<CollarRotateDrag>,
     background_tasks: BackgroundTaskState,
     pending_triangulation_loads: Vec<PendingLoad<PathBuf, crate::model::triangulation::LoadedTriangulation>>,
     pending_block_model_loads: Vec<PendingLoad<BlockModelSource, crate::model::block_model::LoadedBlockModel>>,
@@ -395,6 +456,9 @@ impl<'a> Default for App<'a> {
             layer_lock_key: None,
             intersection_availability_key: None,
             history: crate::model::History::new(),
+            ui_pointer_gesture_active: false,
+            reported_during_gesture: Vec::new(),
+            deferred_gesture_log: None,
             modifiers: ModifiersState::empty(),
             drag: None,
             gizmo_drag: None,
@@ -404,6 +468,9 @@ impl<'a> Default for App<'a> {
             slice_preview_middle_down: false,
             pending_topology_click: None,
             move_session_original: None,
+            collar_move_session: None,
+            collar_rotation: None,
+            collar_rotate_drag: None,
             background_tasks: BackgroundTaskState::default(),
             pending_triangulation_loads: Vec::new(),
             pending_block_model_loads: Vec::new(),
@@ -555,6 +622,7 @@ impl<'a> App<'a> {
         // past whatever the file held.
         self.editor.delay_products = crate::ui::state::delay_products_from_stored(&config.delay_products);
         self.editor.next_delay_product_id = self.editor.delay_products.len() as u64;
+        self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
         self.configure_graphics_camera_preferences();
     }
 
@@ -682,6 +750,227 @@ impl<'a> App<'a> {
         }
     }
 
+    /// The persisted presentation fields of one project item, as the `before`
+    /// half of a style command.
+    pub(crate) fn item_style(&self, item: ItemRef) -> Option<ItemStyle> {
+        match item {
+            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(ItemStyle::of_triangulation),
+            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(ItemStyle::of_block_model),
+            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(ItemStyle::of_drill_hole),
+            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(ItemStyle::of_point_cloud),
+            ItemRef::Raster(id) => self.raster_textures.iter().find(|entry| entry.id == id).map(ItemStyle::of_raster),
+        }
+    }
+
+    /// Record a style change for one item, skipping the no-op case so an
+    /// unchanged setting never lands on the undo stack.
+    pub(crate) fn set_item_style(&mut self, item: ItemRef, after: ItemStyle) {
+        let Some(before) = self.item_style(item) else {
+            return;
+        };
+        if before == after {
+            return;
+        }
+        self.execute_edit(Command::SetItemStyle { item, before, after });
+    }
+
+    /// Build a style command for one item without executing it, so several
+    /// items can be changed as a single undo step.
+    pub(crate) fn item_style_command(&self, item: ItemRef, change: impl FnOnce(ItemStyle) -> ItemStyle) -> Option<Command> {
+        let before = self.item_style(item)?;
+        let after = change(before.clone());
+        (before != after).then_some(Command::SetItemStyle { item, before, after })
+    }
+
+    /// Delete one project item as an undo step, holding the item itself in the
+    /// history so undo can put it back where it stood.
+    ///
+    /// Callers clear their own editor and dialog references first; undo goes
+    /// through `drop_editor_references_to_missing_items` rather than trying to
+    /// restore them, so a restored item comes back unselected.
+    pub(crate) fn delete_project_item(&mut self, item: ItemRef) {
+        if self.item_style(item).is_none() {
+            return;
+        }
+        self.execute_edit(Command::DeleteItem { item, index: 0, removed: None });
+    }
+
+    /// Take the pointer state the UI frame ended in, and settle anything that
+    /// was waiting for the gesture to finish.
+    pub(crate) fn set_ui_pointer_gesture_active(&mut self, active: bool) {
+        if self.ui_pointer_gesture_active && !active {
+            self.history.end_interaction();
+            self.reported_during_gesture.clear();
+            if let Some(line) = self.deferred_gesture_log.take() {
+                userspace_log!("{line}");
+            }
+        }
+        self.ui_pointer_gesture_active = active;
+    }
+
+    /// Log `line`, or - if a pointer gesture is still running - hold it until
+    /// the gesture ends, replacing whatever it was previously going to say.
+    ///
+    /// A drag reports a new value every frame; only the one it settles on is
+    /// worth a console line, and it is not known to be the last until the
+    /// pointer comes up.
+    pub(crate) fn log_when_gesture_ends(&mut self, line: String) {
+        if self.ui_pointer_gesture_active {
+            self.deferred_gesture_log = Some(line);
+        } else {
+            userspace_log!("{line}");
+        }
+    }
+
+    /// Whether this command should open a console report, or is a repeat of
+    /// one the gesture in progress has already reported.
+    fn should_report_to_console(&mut self, command: &crate::ui::state::UiCommand) -> bool {
+        if !self.ui_pointer_gesture_active {
+            return true;
+        }
+        let kind = std::mem::discriminant(command);
+        if self.reported_during_gesture.contains(&kind) {
+            return false;
+        }
+        self.reported_during_gesture.push(kind);
+        true
+    }
+
+    /// Content epoch of the active project, for recording a command whose
+    /// effect is already applied.
+    pub(super) fn active_project_content_epoch(&self) -> u64 {
+        self.workspace.active_project().map_or(0, |project| project.content.epoch())
+    }
+
+    /// Borrow the active project's document and content epoch together with
+    /// the project items, and run `body` against the pair of that target and
+    /// the history.
+    ///
+    /// The target is assembled here rather than behind an `edit_target()`
+    /// accessor because it borrows five App fields at once: a method returning
+    /// it would borrow all of `self` and so could not coexist with
+    /// `&mut self.history`.
+    fn with_edit_target<R>(&mut self, body: impl FnOnce(&mut crate::model::History, &mut EditTarget<'_>) -> R) -> Option<(R, StepEffects)> {
+        let index = self.workspace.active_index?;
+        let project = self.workspace.projects.get_mut(index)?;
+        let mut target = EditTarget {
+            document: &mut project.project.document,
+            content: &mut project.content,
+            triangulations: &mut self.triangulations,
+            block_models: &mut self.block_models,
+            drill_holes: &mut self.drill_holes,
+            point_clouds: &mut self.point_clouds,
+            rasters: &mut self.raster_textures,
+            effects: StepEffects::default(),
+        };
+        let result = body(&mut self.history, &mut target);
+        let effects = std::mem::take(&mut target.effects);
+        Some((result, effects))
+    }
+
+    /// Apply `command` to the active project and record it as one undo step.
+    ///
+    /// Every persisted edit should come through here - or through
+    /// [`Self::record_applied_edit`] for one already committed by a live drag -
+    /// so that anything able to dirty the project can also be taken back.
+    pub(crate) fn execute_edit(&mut self, command: Command) {
+        let continuing = self.ui_pointer_gesture_active;
+        let Some(((), effects)) = self.with_edit_target(|history, target| history.execute(target, command, continuing)) else {
+            return;
+        };
+        self.apply_step_effects(effects);
+    }
+
+    /// Same, for a command produced by a project-scoped background job. The
+    /// caller has already validated the open-project runtime token.
+    pub(crate) fn execute_edit_for(&mut self, runtime_id: u32, command: Command) {
+        let Some(((), effects)) = self.with_edit_target(|history, target| history.execute_for(runtime_id, target, command)) else {
+            return;
+        };
+        self.apply_step_effects(effects);
+    }
+
+    /// Record a document command whose effect the caller has already applied,
+    /// such as an interactive drag committed on mouse release.
+    pub(crate) fn record_applied_edit(&mut self, command: Command) {
+        let epoch = self.active_project_content_epoch();
+        self.history.push_applied(epoch, command);
+    }
+
+    /// Drop editor references to items the project no longer holds.
+    ///
+    /// Undo and redo can add an item back or take one away, and unlike a
+    /// deliberate delete there is no single call site to clean up after. The
+    /// sets are keyed by scene entity, so one sweep covers every kind.
+    fn drop_editor_references_to_missing_items(&mut self) {
+        let exists = |entity: &SceneEntityId| match entity {
+            SceneEntityId::Object(id) => self.workspace.active_document().is_some_and(|document| document.get_object(*id).is_some()),
+            SceneEntityId::Triangulation(id) => self.triangulations.iter().any(|item| item.id == *id),
+            SceneEntityId::BlockModel(id) => self.block_models.iter().any(|item| item.id == *id),
+            SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id),
+            SceneEntityId::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == *id),
+        };
+        let missing: Vec<SceneEntityId> = self
+            .editor
+            .selected_handles
+            .iter()
+            .chain(self.editor.hidden_handles.iter())
+            .chain(self.editor.explicitly_frozen.iter())
+            .chain(self.editor.frozen_handles.iter())
+            .chain(self.editor.translucent_handles.iter())
+            .filter(|entity| !exists(entity))
+            .copied()
+            .collect();
+        for entity in missing {
+            self.editor.selected_handles.remove(&entity);
+            self.editor.hidden_handles.remove(&entity);
+            self.editor.explicitly_frozen.remove(&entity);
+            self.editor.frozen_handles.remove(&entity);
+            self.editor.translucent_handles.remove(&entity);
+        }
+        if self.active_triangulation.is_some_and(|id| !self.triangulations.iter().any(|item| item.id == id)) {
+            self.active_triangulation = None;
+        }
+        if self.active_block_model.is_some_and(|id| !self.block_models.iter().any(|item| item.id == id)) {
+            self.active_block_model = None;
+        }
+        if self.editor.active_drill_hole.is_some_and(|id| !self.drill_holes.iter().any(|item| item.id == id)) {
+            self.editor.active_drill_hole = None;
+        }
+        if self.editor.tie_anchor.is_some_and(|anchor| !self.drill_holes.iter().any(|item| item.id == anchor.dataset)) {
+            self.editor.end_tie_chain();
+        }
+        self.editor.selected_drill_holes.retain(|hole| self.drill_holes.iter().any(|item| item.id == hole.dataset));
+        self.editor.selected_tie_ins.retain(|tie| self.drill_holes.iter().any(|item| item.id == tie.dataset));
+        if self
+            .editor
+            .initiation_dialog
+            .as_ref()
+            .is_some_and(|dialog| !self.drill_holes.iter().any(|item| item.id == dialog.target.dataset))
+        {
+            self.editor.initiation_dialog = None;
+        }
+    }
+
+    /// Carry out the follow-up work an applied or reverted command reported:
+    /// what to invalidate, what to re-persist, what to decode again.
+    fn apply_step_effects(&mut self, effects: StepEffects) {
+        if effects.document_changed {
+            self.invalidate_geometry();
+        }
+        if effects.items_changed {
+            self.invalidate_topology_bounds_and_redraw();
+            self.invalidate_overlay();
+        }
+        if effects.membership_changed {
+            self.persist_session();
+        }
+        for id in effects.block_model_decodes {
+            self.spawn_block_model_values_decode(id);
+        }
+        self.redraw_requested = true;
+    }
+
     /// Dirty state for the complete OMF aggregate, including item revisions
     /// and collection membership as well as the Designs document. Keeping
     /// this check at the aggregate boundary ensures the title, close prompt,
@@ -715,38 +1004,38 @@ impl<'a> App<'a> {
 
     pub(super) fn project_asset_save_token(&self) -> SaveToken {
         SaveToken {
-            triangulations: self.triangulations.iter().map(|item| (item.id.0, item.state.revision())).collect(),
-            block_models: self.block_models.iter().map(|item| (item.id.0, item.state.revision())).collect(),
-            drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.revision())).collect(),
-            point_clouds: self.point_clouds.iter().map(|item| (item.id.0, item.state.revision())).collect(),
-            rasters: self.raster_textures.iter().map(|item| (item.id.0, item.state.revision())).collect(),
+            triangulations: self.triangulations.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
+            block_models: self.block_models.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
+            drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
+            point_clouds: self.point_clouds.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
+            rasters: self.raster_textures.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
         }
     }
 
     pub(super) fn mark_project_asset_snapshot_saved(&mut self, token: &SaveToken) {
-        for (id, revision) in &token.triangulations {
+        for (id, epoch) in &token.triangulations {
             if let Some(item) = self.triangulations.iter_mut().find(|item| item.id.0 == *id) {
-                item.state.mark_snapshot_saved(*revision);
+                item.state.mark_snapshot_saved(*epoch);
             }
         }
-        for (id, revision) in &token.block_models {
+        for (id, epoch) in &token.block_models {
             if let Some(item) = self.block_models.iter_mut().find(|item| item.id.0 == *id) {
-                item.state.mark_snapshot_saved(*revision);
+                item.state.mark_snapshot_saved(*epoch);
             }
         }
-        for (id, revision) in &token.drill_holes {
+        for (id, epoch) in &token.drill_holes {
             if let Some(item) = self.drill_holes.iter_mut().find(|item| item.id.0 == *id) {
-                item.state.mark_snapshot_saved(*revision);
+                item.state.mark_snapshot_saved(*epoch);
             }
         }
-        for (id, revision) in &token.point_clouds {
+        for (id, epoch) in &token.point_clouds {
             if let Some(item) = self.point_clouds.iter_mut().find(|item| item.id.0 == *id) {
-                item.state.mark_snapshot_saved(*revision);
+                item.state.mark_snapshot_saved(*epoch);
             }
         }
-        for (id, revision) in &token.rasters {
+        for (id, epoch) in &token.rasters {
             if let Some(item) = self.raster_textures.iter_mut().find(|item| item.id.0 == *id) {
-                item.state.mark_snapshot_saved(*revision);
+                item.state.mark_snapshot_saved(*epoch);
             }
         }
         self.project_asset_baseline = token.clone();
@@ -860,18 +1149,28 @@ impl<'a> App<'a> {
         // active.
         if self.has_pending_move_delta() {
             self.restore_move_session_original();
+            // And the collar session beside it: a preview standing when the
+            // project changes is written into its dataset already, so dropping
+            // it below without this leaves the holes moved and the item
+            // starred over an edit nothing can undo.
+            self.restore_collar_session();
         }
         if self.editor.text_editing_enabled {
             self.cancel_text_edit();
         }
         self.editor.clear_project_transients();
         self.pending_topology_click = None;
-        // Clear any in-progress move session so it cannot bleed into the new project.
+        // Clear any in-progress gesture so it cannot bleed into the new project.
         self.move_session_original = None;
+        self.collar_move_session = None;
+        self.collar_rotation = None;
+        self.collar_rotate_drag = None;
         self.drag = None;
         self.gizmo_drag = None;
         self.editor.gizmo_drag_axis_index = None;
         self.editor.gizmo_drag_plane_index = None;
+        self.editor.rotate_gizmo_drag_ring = None;
+        self.editor.rotate_preview_active = false;
     }
 
     fn invalidate_geometry(&mut self) {

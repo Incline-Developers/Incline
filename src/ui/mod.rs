@@ -194,6 +194,11 @@ impl Gui {
         }
 
         let pixels_per_point = full_output.pixels_per_point;
+        // Read once the frame's widgets have run. A held button is the gesture:
+        // `dragged_id` alone would miss the press before the pointer has moved
+        // far enough for egui to call it a drag, and a colour wheel reports a
+        // new value from that first frame.
+        let pointer_gesture_active = self.ctx.input(|input| input.pointer.any_down()) || self.ctx.dragged_id().is_some();
         let paint_jobs = self.ctx.tessellate(full_output.shapes, pixels_per_point);
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: screen_size,
@@ -245,6 +250,7 @@ impl Gui {
             geometry_dirty,
             commands,
             canvas_rect,
+            pointer_gesture_active,
         }
     }
 }
@@ -289,6 +295,9 @@ struct UiFrameContext<'a> {
 }
 
 fn viewport_label_text(editor: &EditorState) -> Option<String> {
+    if editor.drill_pattern_awaiting_shape_pick {
+        return Some("Click a closed polyline to use as the blast shape · Esc cancels".to_owned());
+    }
     if editor.active_tool == ActiveTool::VerticalSlice {
         return Some(
             if editor.slice_pending_start.is_none() {
@@ -338,7 +347,11 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
     }
 
     match editor.active_tool {
-        ActiveTool::Move if editor.selected_handles.is_empty() => Some(tr!(literal = "Select an item")),
+        ActiveTool::Move if !editor.move_tool_has_targets() => Some(tr!(literal = "Select an item")),
+        ActiveTool::MoveCollar if !editor.move_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
+        ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
+        ActiveTool::RotateCollar => Some(tr!(literal = "Drag a ring, or type an azimuth and dip - each hole turns about its own collar")),
+        ActiveTool::SetInitiationPoint => Some(tr!(literal = "Click a collar to add or edit an initiation point")),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some(tr!(literal = "Choose offset side")),
         ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some(tr!(literal = "Select a line or polyline")),
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some(tr!(literal = "Select designs")),
@@ -579,6 +592,8 @@ fn draw_ui(
     let canvas_rect = scene_rect;
     *canvas_rect_out = canvas_rect;
 
+    draw_initiation_cards(root_ui, editor, canvas_rect);
+
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select
         // (solid blue).
@@ -639,14 +654,18 @@ fn draw_ui(
         }
     }
 
-    // Move tool: Blender-style translate gizmo
-    if editor.active_tool == ActiveTool::Move && !editor.selected_handles.is_empty() {
+    // Either translate tool: the Blender-style gizmo and the numeric delta
+    // panel, over whichever selection the active one moves.
+    if editor.move_tool_has_targets() {
         draw_move_gizmo(root_ui, editor);
+        dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
     }
 
-    // Move tool: numeric delta panel
-    if editor.active_tool == ActiveTool::Move && !editor.selected_handles.is_empty() {
-        dialogs::editing::draw_move_panel(root_ui, editor, commands, canvas_rect);
+    // Rotate Collar: the two-ring gizmo and its angle panel, over the holes it
+    // would turn.
+    if editor.rotate_tool_has_targets() {
+        draw_rotate_gizmo(root_ui, editor);
+        dialogs::editing::draw_rotate_collar_panel(root_ui, editor, commands, canvas_rect);
     }
 
     // Chamfer tool: gizmo overlay + dock panel
@@ -877,6 +896,7 @@ fn draw_ui(
     }
 
     dialogs::products::draw_new_product_dialog(root_ui, editor, commands);
+    dialogs::products::draw_initiation_dialog(root_ui, editor, commands);
 
     // Create Layer
     if editor.new_layer_dialog_open {
@@ -1065,6 +1085,64 @@ fn draw_ui(
     geometry_dirty
 }
 
+/// How tall an initiation delay card stands in world units, measured at the
+/// collar it labels. Sized against blast pattern spacing, so a card reads as a
+/// tag on the pattern rather than as a fixture of the window.
+const INITIATION_CARD_WORLD_HEIGHT: f32 = 2.0;
+/// The card height the proportions in `draw_initiation_cards` are written at:
+/// scale 1.0 reproduces the fixed-size card exactly.
+const INITIATION_CARD_BASE_HEIGHT_POINTS: f32 = 22.0;
+/// Below this the delay is unreadable, so the card is dropped rather than
+/// drawn as a smear.
+const INITIATION_CARD_MIN_HEIGHT_POINTS: f32 = 7.0;
+/// The box keeps growing past this, but the glyphs stop, to bound how much
+/// font atlas a deep zoom can ask for.
+const INITIATION_CARD_MAX_FONT_POINTS: f32 = 96.0;
+
+/// Paint each initiation as a compact red delay card above its collar. This is
+/// egui geometry rather than scene geometry, so triangulations can never hide
+/// the number the user needs to read.
+///
+/// The card belongs to the pattern rather than to the screen, so it is sized
+/// in world units - [`INITIATION_CARD_WORLD_HEIGHT`] tall at the collar it labels - and
+/// grows and shrinks with the collars around it as the view zooms.
+fn draw_initiation_cards(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    if editor.active_workspace != state::Workspace::DrillAndBlast {
+        return;
+    }
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let fill = egui::Color32::from_rgb(205, 43, 52);
+    let stroke_color = egui::Color32::from_rgb(112, 18, 25);
+    for card in &editor.initiation_cards {
+        // How much the card is stretched from the proportions below, which are
+        // written at the size it used to be pinned to.
+        let scale = card.px_per_world / pixels_per_point * INITIATION_CARD_WORLD_HEIGHT / INITIATION_CARD_BASE_HEIGHT_POINTS;
+        if scale * INITIATION_CARD_BASE_HEIGHT_POINTS < INITIATION_CARD_MIN_HEIGHT_POINTS {
+            // Zoomed out far enough that the number could not be read anyway,
+            // and a pattern's worth of them would only be clutter.
+            continue;
+        }
+        let collar = egui::pos2(card.screen_px.0 / pixels_per_point, card.screen_px.1 / pixels_per_point);
+        let label = format!("{} ms", card.delay_ms);
+        // Quantised: egui builds a font atlas entry per distinct size, so a
+        // size that varied continuously would rebuild it throughout a zoom.
+        let font = egui::FontId::proportional((12.0 * scale).round().clamp(INITIATION_CARD_MIN_HEIGHT_POINTS, INITIATION_CARD_MAX_FONT_POINTS));
+        let galley = painter.layout_no_wrap(label, font, egui::Color32::WHITE);
+        let size = egui::vec2((galley.size().x + 14.0 * scale).max(38.0 * scale), INITIATION_CARD_BASE_HEIGHT_POINTS * scale);
+        let rect = egui::Rect::from_center_size(collar - egui::vec2(0.0, 20.0 * scale), size);
+        let stroke = egui::Stroke::new(scale.max(1.0), stroke_color);
+        let pointer = vec![
+            egui::pos2(collar.x - 4.0 * scale, rect.bottom() - stroke.width),
+            egui::pos2(collar.x + 4.0 * scale, rect.bottom() - stroke.width),
+            egui::pos2(collar.x, collar.y - 6.0 * scale),
+        ];
+        painter.add(egui::Shape::convex_polygon(pointer, fill, stroke));
+        painter.rect(rect, 3.0 * scale, fill, stroke, egui::StrokeKind::Inside);
+        painter.galley(rect.center() - galley.size() * 0.5, galley, egui::Color32::WHITE);
+    }
+}
+
 /// Draw dialogs after the workspace so modal lifecycle state is never hidden.
 /// These dialogs are global application state even when their contents refer
 /// to workspace data.
@@ -1079,6 +1157,7 @@ fn draw_global_dialogs(
 ) -> bool {
     let mut geometry_dirty = false;
     dialogs::drill_hole::draw_drill_hole_color_dialog(root_ui, editor, drill_holes, commands);
+    geometry_dirty |= dialogs::drill_pattern::draw_drill_pattern_dialog(root_ui, editor, document, commands);
 
     // Exit confirmation
     if editor.exit_confirm_open {
@@ -1222,12 +1301,13 @@ fn dashed_line_segments(start: egui::Pos2, end: egui::Pos2, dash: f32, gap: f32)
     segments
 }
 
-/// Axis colours taken from Blender's default theme, so the gizmo reads the same
-/// way: X red, Y green, Z blue.
+/// Axis colours, following the near-universal CAD convention: X red, Y green,
+/// Z blue. Each is desaturated off the primary so three saturated handles never
+/// sit against the scene at once.
 const GIZMO_AXIS_COLORS: [egui::Color32; 3] = [
-    egui::Color32::from_rgb(255, 51, 82),
-    egui::Color32::from_rgb(139, 220, 0),
-    egui::Color32::from_rgb(40, 144, 255),
+    egui::Color32::from_rgb(250, 58, 86),
+    egui::Color32::from_rgb(132, 214, 10),
+    egui::Color32::from_rgb(46, 138, 248),
 ];
 /// Opacity of an idle handle; a hovered or dragged one goes fully opaque.
 const GIZMO_IDLE_ALPHA: f32 = 0.6;
@@ -1318,6 +1398,56 @@ fn draw_move_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
             egui::Stroke::NONE,
         ));
     }
+}
+
+/// Ring colours for the Rotate Collar gizmo, azimuth then dip.
+///
+/// Azimuth takes the Z colour because it is a turn about Z, and the whole of
+/// what it changes is a bearing on the flat. Dip takes amber rather than an
+/// axis colour: the axis it turns about is not a world axis at all - it swings
+/// with the bearing - so naming it after one would be a lie.
+const ROTATE_RING_COLORS: [egui::Color32; 2] = [GIZMO_AXIS_COLORS[2], egui::Color32::from_rgb(247, 168, 34)];
+
+/// Draw the Rotate Collar gizmo: an azimuth ring lying flat and a dip ring
+/// standing in the vertical plane the holes point along, with a dot at the
+/// centre marking the collars they turn about.
+///
+/// There is no third ring. A hole is a cylinder, so a spin about its own axis
+/// is not something that can be drilled differently.
+fn draw_rotate_gizmo(root_ui: &egui::Ui, editor: &EditorState) {
+    use state::{ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING};
+    let gizmo = &editor.rotate_gizmo;
+    let Some(center_px) = gizmo.center_px else {
+        return;
+    };
+    let ppp = root_ui.ctx().pixels_per_point();
+    let to_pos = |point: (f32, f32)| egui::pos2(point.0 / ppp, point.1 / ppp);
+    let painter = root_ui.painter();
+
+    // The dip ring is drawn last so it reads as standing in front where the
+    // two cross, which is the way round they are stacked in world space from
+    // most working viewpoints.
+    for ring in [ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING] {
+        let index = usize::from(ring);
+        let fade = gizmo.ring_fade[index];
+        let points = &gizmo.ring_px[index];
+        if fade <= 0.0 || points.len() < 2 {
+            continue;
+        }
+        let is_active = editor.rotate_gizmo_hovered_ring == Some(ring) || editor.rotate_gizmo_drag_ring == Some(ring);
+        let color = if is_active { egui::Color32::WHITE } else { ROTATE_RING_COLORS[index] };
+        let alpha = if is_active { fade } else { fade * GIZMO_IDLE_ALPHA };
+        let stroke = egui::Stroke::new(if is_active { 3.0 } else { 2.0 }, gizmo_color(color, alpha));
+        let mut path: Vec<egui::Pos2> = points.iter().copied().map(to_pos).collect();
+        // Close the loop by repeating the first sample: a ring is a closed
+        // curve, and `line` draws an open one.
+        path.push(path[0]);
+        painter.add(egui::Shape::line(path, stroke));
+    }
+
+    // The collars themselves are the pivots; this only marks where the gizmo
+    // is anchored, so it stays small and stays neutral.
+    painter.circle_filled(to_pos(center_px), 3.0, gizmo_color(egui::Color32::WHITE, GIZMO_IDLE_ALPHA));
 }
 
 /// Build an `egui::Visuals` set with selection styling applied to the given theme.

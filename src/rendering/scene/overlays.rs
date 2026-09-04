@@ -28,6 +28,51 @@ pub(crate) struct OverlaySceneBuildInput<'a> {
     pub(crate) scale_factor: f32,
 }
 
+/// How many pieces a leg replacing an existing connector is broken into. Odd,
+/// so a dashed run starts and ends on a mark rather than on a gap.
+const TIE_OVERWRITE_DASHES: usize = 9;
+/// Width the previewed connectors are drawn at, a shade over the solid ties
+/// behind them so a leg reads over the one it would replace.
+const TIE_PREVIEW_WIDTH: f32 = 2.0;
+/// The tie-in a click would confirm, drawn in the colour of the product it
+/// would be laid with.
+///
+/// A leg replacing a connector that is already there is drawn broken instead
+/// of solid: overwriting is what a second tie across the same two holes does,
+/// and it should be visible before the click rather than after it.
+fn draw_tie_preview(overlay: &mut DrawContext<'_>, editor: &EditorState) {
+    let color = editor.active_product().map_or(PREVIEW_COLOR, |product| {
+        let [red, green, blue, _] = product.color.to_srgba_unmultiplied();
+        [f32::from(red) / 255.0, f32::from(green) / 255.0, f32::from(blue) / 255.0, 1.0]
+    });
+    // Paint the complete snap corridor before its captured connector legs.
+    // This is the actual 12px-per-side test used by `tie_chain_between`, so
+    // users can see why a nearby collar will or will not be included.
+    if let (Some(anchor), Some(end)) = (editor.tie_anchor_world, editor.tie_path_end_world) {
+        let corridor = [color[0], color[1], color[2], 0.07];
+        let corridor_width = crate::rendering::graphics::projections::TIE_CORRIDOR_PIXELS * 2.0 / overlay.scale_factor.max(f32::EPSILON);
+        draw_line(overlay, anchor, end, corridor_width, corridor);
+    }
+    // The hole the chain is running from, marked so an armed chain is visible
+    // with the pointer over nothing to tie it to.
+    if let Some(anchor) = editor.tie_anchor_world {
+        draw_screen_cross(overlay, anchor, 9.0, 2.0, color);
+    }
+    for leg in &editor.tie_preview {
+        // A leg replacing a connector is broken so the overwrite is visible
+        // before it is committed.
+        if !leg.overwrite {
+            draw_line(overlay, leg.start, leg.end, TIE_PREVIEW_WIDTH, color);
+            continue;
+        }
+        for dash in (0..TIE_OVERWRITE_DASHES).step_by(2) {
+            let from = dash as f64 / TIE_OVERWRITE_DASHES as f64;
+            let to = (dash + 1) as f64 / TIE_OVERWRITE_DASHES as f64;
+            draw_line(overlay, leg.start.lerp(leg.end, from), leg.start.lerp(leg.end, to), TIE_PREVIEW_WIDTH, color);
+        }
+    }
+}
+
 pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     let OverlaySceneBuildInput {
         editor,
@@ -58,6 +103,8 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     for pair in stroke_preview.windows(2) {
         draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
     }
+
+    draw_tie_preview(&mut overlay, editor);
     if editor.poly_finish_dialog {
         // Dialog is open: draw a dashed closing line from last point to first point.
         // Dash size is fixed in screen pixels so it stays visible at any zoom level.

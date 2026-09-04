@@ -49,6 +49,10 @@ const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
 const META_DRILL_HOLE: &str = "incline:drill_hole";
+/// A dataset's tie-in: its surface connectors and where the round starts,
+/// both keyed by hole name. Carried on the dataset's own element, because
+/// they are what joins its holes rather than anything one hole holds.
+const META_TIE_INS: &str = "incline:tie_ins";
 const MAX_ARRAY_ITEMS: u64 = 200_000_000;
 
 /// Owned, cheaply-cloned state captured before OMF encoding moves to a worker.
@@ -711,6 +715,10 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         "drill-holes",
     );
     put(&mut element, META_STYLE, json!({ "visible": open.visible, "color": open.color }));
+    let ties = open.dataset.stored_ties();
+    if !ties.is_empty() {
+        put(&mut element, META_TIE_INS, serde_json::to_value(&ties)?);
+    }
     Ok(Some(element))
 }
 
@@ -1034,7 +1042,17 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     }
 
     fn record_unsupported_content(&mut self, element: &omf_crate::Element) {
-        const KNOWN_METADATA: &[&str] = &[META_KIND, META_NAME, META_OBJECT, META_LAYER, META_SOURCE, META_STYLE, META_ID, META_DRILL_HOLE];
+        const KNOWN_METADATA: &[&str] = &[
+            META_KIND,
+            META_NAME,
+            META_OBJECT,
+            META_LAYER,
+            META_SOURCE,
+            META_STYLE,
+            META_ID,
+            META_DRILL_HOLE,
+            META_TIE_INS,
+        ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
             self.bundle
@@ -1640,7 +1658,20 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         if holes.is_empty() {
             return Ok(None);
         }
-        let dataset = Arc::new(DrillHoleDataset::new(holes));
+        let mut dataset = DrillHoleDataset::new(holes);
+        // Resolved after construction: it is `new` that fixes the hole order
+        // the stored names are looked up against.
+        if let Some(value) = element.metadata.get(META_TIE_INS).cloned()
+            && let Ok(stored) = serde_json::from_value::<crate::model::drill_hole::StoredTieIns>(value)
+        {
+            let dropped = dataset.apply_stored_ties(stored);
+            if dropped > 0 {
+                self.bundle
+                    .warnings
+                    .push(format!("Element '{}' has {dropped} tie-in(s) naming holes it no longer contains", element.name));
+            }
+        }
+        let dataset = Arc::new(dataset);
         let path = virtual_path(self.source_name, element_name(element), "omf");
         Ok(Some(ImportedDrillHoles {
             preferred_id: element_id(element),

@@ -464,7 +464,18 @@ impl<'a> Graphics<'a> {
         let view_proj = self.view_proj();
         let screen = self.screen_size();
         let (ray_origin, ray_direction) = self.cursor_model_ray();
-        let drill_hole = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, ray_direction, &view_proj, screen, threshold_px).map(|(hole, world)| ScenePick {
+        let drill_hole = SceneQuery::nearest_drill_hole(
+            drill_holes,
+            hidden,
+            frozen,
+            ray_origin,
+            ray_direction,
+            self.camera.forward(),
+            &view_proj,
+            screen,
+            threshold_px,
+        )
+        .map(|(hole, world)| ScenePick {
             entity: SceneEntityId::DrillHole(hole.dataset),
             world,
             hole: Some(hole),
@@ -670,6 +681,55 @@ impl<'a> Graphics<'a> {
         hits
     }
 
+    /// The tie-in connectors a Drill & Blast selection rectangle takes.
+    ///
+    /// Crossing selection accepts a connector that touches the box; window
+    /// selection requires both ends, and therefore the whole straight
+    /// connector, to be inside it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn tie_ins_in_screen_rect(
+        &self,
+        drill_holes: &[OpenDrillHoleDataset],
+        start_px: (f32, f32),
+        end_px: (f32, f32),
+        cross_select: bool,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Vec<TieInRef> {
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        let mut hits = Vec::new();
+
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+            let entity = dataset.entity_id();
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
+            for tie in &dataset.dataset.ties {
+                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.from), dataset.dataset.holes.get(tie.to)) else {
+                    continue;
+                };
+                let (Some(a), Some(b)) = (
+                    crate::rendering::pick::world_to_screen(&view_proj, from.collar_position(), screen),
+                    crate::rendering::pick::world_to_screen(&view_proj, to.collar_position(), screen),
+                ) else {
+                    continue;
+                };
+                let taken = if cross_select {
+                    segment_intersects_rect(a, b, rect.min_x, rect.max_x, rect.min_y, rect.max_y)
+                } else {
+                    rect.contains(a) && rect.contains(b)
+                };
+                if taken {
+                    hits.push(TieInRef::new(dataset.id, tie.from, tie.to));
+                }
+            }
+        }
+
+        hits
+    }
+
     /// Begin an orbit with the anchor at the surface or geometry point under the cursor.
     /// Falls back to the current-target depth when nothing is hit.
     /// Called from the app level where triangulations are available.
@@ -705,7 +765,8 @@ impl<'a> Graphics<'a> {
         } else {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
-            let drill_hole_hit = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, &view_proj, screen, 0.0).map(|(_, world)| world);
+            let drill_hole_hit =
+                SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, self.camera.forward(), &view_proj, screen, 0.0).map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected

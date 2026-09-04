@@ -21,8 +21,8 @@ use anyhow::Result;
 use crate::{
     app::{App, canvas::is_triangulation_polyline},
     i18n::{tr, tr_format},
-    model::{Object, ObjectId, SceneEntityId},
-    ui::state::{TriCreatePhase, UiCommand},
+    model::{Command, Object, ObjectId, SceneEntityId},
+    ui::state::{ActiveTool, TriCreatePhase, UiCommand},
     userspace_error, userspace_warn,
 };
 
@@ -38,16 +38,10 @@ impl<'a> App<'a> {
             .flat_map(|project| project.project.document.layers())
             .map(|layer| layer.id)
             .collect();
-        let changed = self.workspace.active_project_mut().is_some_and(|project| {
-            if undo {
-                self.history.undo(&mut project.project.document)
-            } else {
-                self.history.redo(&mut project.project.document)
-            }
-        });
-        if !changed {
+        let stepped = self.with_edit_target(|history, target| if undo { history.undo(target) } else { history.redo(target) });
+        let Some((true, effects)) = stepped else {
             return;
-        }
+        };
         if let Some(project) = self.workspace.active_project_mut() {
             let layers_after: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
             project.loaded_layers.retain(|layer_id| layers_after.contains(layer_id));
@@ -61,18 +55,31 @@ impl<'a> App<'a> {
         self.cancel_fuse();
         self.cancel_chamfer();
         self.clear_bezier_state();
+        // A step that put an item back may have restored one the editor had
+        // dropped its references to; a step that removed one leaves those
+        // references dangling. Both are settled by the same sweep.
+        self.drop_editor_references_to_missing_items();
+        self.apply_step_effects(effects);
         self.invalidate_geometry();
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
         let had_commands = !commands.is_empty();
         for command in commands {
-            if let Some(spec) = command.console_report_spec() {
-                let report_id = crate::logging::begin_command_report(spec);
-                let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
-                crate::logging::finish_command_report(report_id, result.as_ref().err());
-            } else if let Err(err) = self.handle_ui_command(command) {
-                userspace_error!("{}", tr_format!(literal = "Command failed: %error%", error = format!("{err:#}")));
+            // A widget being dragged reports the same command every frame.
+            // The first opens a console entry for the edit; the rest are that
+            // same edit still happening, and would bury the console.
+            match command.console_report_spec().filter(|_| self.should_report_to_console(&command)) {
+                Some(spec) => {
+                    let report_id = crate::logging::begin_command_report(spec);
+                    let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
+                    crate::logging::finish_command_report(report_id, result.as_ref().err());
+                }
+                None => {
+                    if let Err(err) = self.handle_ui_command(command) {
+                        userspace_error!("{}", tr_format!(literal = "Command failed: %error%", error = format!("{err:#}")));
+                    }
+                }
             }
         }
         if had_commands {
@@ -93,6 +100,9 @@ impl<'a> App<'a> {
                 | UiCommand::ChooseImportSourceFiles(_)
                 | UiCommand::ImportCsvBlockModel { .. }
                 | UiCommand::ImportDrillHole(_)
+                | UiCommand::ToggleCreateDrillPattern
+                | UiCommand::BeginDrillPatternShapePick
+                | UiCommand::CreateDrillPattern { .. }
                 | UiCommand::CreateLayer { .. }
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel(_)
@@ -106,6 +116,24 @@ impl<'a> App<'a> {
                 self.set_active_tool_from_toolbar(tool);
                 Ok(())
             }
+            UiCommand::ToggleCreateDrillPattern => {
+                if self.editor.drill_pattern_open {
+                    self.editor.close_drill_pattern();
+                } else {
+                    self.set_active_tool_from_toolbar(ActiveTool::None);
+                    self.editor.begin_drill_pattern();
+                }
+                self.invalidate_geometry();
+                Ok(())
+            }
+            UiCommand::BeginDrillPatternShapePick => {
+                self.editor.drill_pattern_awaiting_shape_pick = true;
+                self.editor.viewport_pick_hover_label = None;
+                self.editor.tool_highlight_id = None;
+                self.invalidate_geometry();
+                Ok(())
+            }
+            UiCommand::CreateDrillPattern { name, collars, depth, diameter } => self.create_drill_pattern(name, collars, depth, diameter),
             UiCommand::ClearSelection => {
                 self.editor.clear_scene_selection();
                 self.active_triangulation = None;
@@ -307,6 +335,10 @@ impl<'a> App<'a> {
             }
             UiCommand::DeleteDelayProduct(id) => {
                 self.delete_delay_product(id);
+                Ok(())
+            }
+            UiCommand::SetInitiation { target, delay_ms } => {
+                self.set_initiation(target, delay_ms);
                 Ok(())
             }
             UiCommand::RequestDeleteLayer(layer_id) => {
@@ -1027,8 +1059,22 @@ impl<'a> App<'a> {
                 self.cancel_move_delta();
                 Ok(())
             }
+            UiCommand::PreviewCollarRotation(rotation) => {
+                self.preview_collar_rotation(rotation);
+                Ok(())
+            }
+            UiCommand::ApplyCollarRotation => {
+                self.apply_pending_collar_rotation();
+                Ok(())
+            }
+            // The rollback is `cancel_move_delta`'s: it owns the collar
+            // session both gestures preview through.
+            UiCommand::CancelCollarRotation => {
+                self.cancel_move_delta();
+                Ok(())
+            }
             UiCommand::ConfirmDeleteSelection => {
-                if self.editor.active_tool == crate::ui::state::ActiveTool::Move {
+                if self.editor.active_tool.translates() || self.editor.active_tool.rotates() {
                     self.cancel_move_delta();
                 }
                 self.delete_selection();
@@ -1051,62 +1097,37 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Hide everything selected - design objects and project items alike - as
+    /// a single undo step, so one Ctrl-Z brings the whole selection back.
     fn hide_selected_elements(&mut self) {
         let selected = self.editor.selected_handles.clone();
-        let object_ids = selected
-            .iter()
-            .filter_map(|handle| match handle {
-                crate::model::SceneEntityId::Object(id) => Some(*id),
+        let mut commands = Vec::new();
+        if let Some(document) = self.workspace.active_document() {
+            commands.extend(selected.iter().filter_map(|handle| match handle {
+                crate::model::SceneEntityId::Object(id) if !document.is_object_hidden(*id) && document.get_object(*id).is_some() => Some(Command::SetObjectHidden {
+                    id: *id,
+                    before: false,
+                    after: true,
+                }),
                 _ => None,
-            })
-            .collect::<Vec<_>>();
-        let mut changed = false;
-        if let Some(document) = self.workspace.active_document_mut() {
-            for id in object_ids {
-                changed |= document.set_object_hidden(id, true);
-            }
+            }));
         }
-
-        let mut asset_changed = false;
-        for triangulation in &mut self.triangulations {
-            if selected.contains(&triangulation.entity_id()) && triangulation.visible {
-                triangulation.visible = false;
-                triangulation.state.touch();
-                asset_changed = true;
-            }
-        }
-        for model in &mut self.block_models {
-            if selected.contains(&model.entity_id()) && model.visible {
-                model.visible = false;
-                model.state.touch();
-                asset_changed = true;
-            }
-        }
-        for dataset in &mut self.drill_holes {
-            if selected.contains(&dataset.entity_id()) && dataset.visible {
-                dataset.visible = false;
-                dataset.state.touch();
-                asset_changed = true;
-            }
-        }
-        for cloud in &mut self.point_clouds {
-            if selected.contains(&cloud.entity_id()) && cloud.visible {
-                cloud.visible = false;
-                cloud.state.touch();
-                asset_changed = true;
-            }
-        }
-        if asset_changed {
-            self.touch_active_project_content();
-        }
-        changed |= asset_changed;
+        commands.extend(
+            selected
+                .iter()
+                .filter_map(|handle| crate::model::ItemRef::from_entity(*handle))
+                .filter_map(|item| self.item_style_command(item, |style| style.with_visible(false))),
+        );
 
         // Persisted visibility now owns ordinary Hide Selection. Remove any
         // matching legacy transient overrides so save/reopen has one source of
-        // truth for the same action.
+        // truth for the same action. Transient state is not part of the undo
+        // step: undo restores the persisted visibility these override.
         self.editor.hidden_handles.retain(|handle| !selected.contains(handle));
-        if changed {
-            self.invalidate_geometry();
+        if commands.is_empty() {
+            return;
         }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
     }
 }

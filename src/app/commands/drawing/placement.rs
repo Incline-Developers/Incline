@@ -8,7 +8,7 @@ use crate::{
 impl<'a> App<'a> {
     pub(crate) fn measure_distance_click(&mut self) {
         if matches!(
-            self.editor.snap_cursor_mode(),
+            self.editor.cursor_mode,
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -30,7 +30,7 @@ impl<'a> App<'a> {
 
     pub(crate) fn measure_batter_angle_click(&mut self) {
         if matches!(
-            self.editor.snap_cursor_mode(),
+            self.editor.cursor_mode,
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -52,7 +52,7 @@ impl<'a> App<'a> {
         }
         // Block if snap mode is active but cursor isn't snapped
         if matches!(
-            self.editor.snap_cursor_mode(),
+            self.editor.cursor_mode,
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -68,7 +68,7 @@ impl<'a> App<'a> {
         let created = if let Some(project) = self.workspace.active_project_mut() {
             let doc = &mut project.project.document;
             let id = doc.allocate_object_id();
-            self.history.execute(doc, Command::AddObject(Object::Point { id, layer, pos: world, color }));
+            self.execute_edit(Command::AddObject(Object::Point { id, layer, pos: world, color }));
             true
         } else {
             false
@@ -97,7 +97,7 @@ impl<'a> App<'a> {
         }
         // Block if snap mode is active but cursor isn't snapped
         if matches!(
-            self.editor.snap_cursor_mode(),
+            self.editor.cursor_mode,
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -149,7 +149,7 @@ impl<'a> App<'a> {
             return;
         }
         if matches!(
-            self.editor.snap_cursor_mode(),
+            self.editor.cursor_mode,
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -353,18 +353,15 @@ impl<'a> App<'a> {
         if let Some(project) = self.workspace.active_project_mut() {
             let doc = &mut project.project.document;
             let id = doc.allocate_object_id();
-            self.history.execute(
-                doc,
-                Command::AddObject(Object::Polyline {
-                    id,
-                    layer,
-                    verts,
-                    closed,
-                    color,
-                    fill,
-                    line_weight,
-                }),
-            );
+            self.execute_edit(Command::AddObject(Object::Polyline {
+                id,
+                layer,
+                verts,
+                closed,
+                color,
+                fill,
+                line_weight,
+            }));
             true
         } else {
             false

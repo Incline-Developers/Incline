@@ -234,7 +234,7 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr_format!(literal = "No new %operation% points were found", operation = operation));
             return;
         }
-        self.history.execute(doc, Command::Batch(commands));
+        self.execute_edit(Command::Batch(commands));
         crate::logging::report_completed_action(
             CommandReportSpec::new(
                 crate::i18n::tr!(literal = "Insert Points"),

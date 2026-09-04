@@ -26,3 +26,6 @@ rustflags = [
 
 [unstable]
 build-std = ["std", "panic_abort"]
+
+[alias]
+flame = ["flamegraph", "--profile", "profiling", "-c", "record -F 997 --call-graph fp -g"]

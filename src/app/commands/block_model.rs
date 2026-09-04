@@ -9,7 +9,7 @@ use crate::{
     app::App,
     i18n::tr_format,
     model::{
-        SceneEntityId,
+        Command, ItemRef, ItemStyle, SceneEntityId,
         block_model::{
             BlockBounds, BlockBoundsSource, BlockModelId, BlockModelSource, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RegularBlockBounds, RenderableBlockIndices,
             compute_world_bounds, is_no_data_sentinel, numeric_variable_default,
@@ -247,27 +247,46 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn toggle_block_model_visible(&mut self, id: BlockModelId) {
-        let Some(model) = self.block_models.iter_mut().find(|model| model.id == id) else {
+        let item = ItemRef::BlockModel(id);
+        let Some(style) = self.item_style(item) else {
             return;
         };
-        model.visible = !model.visible;
-        model.state.touch();
-        self.touch_active_project_content();
-        self.invalidate_topology_bounds_and_redraw();
+        let visible = !style.visible();
+        self.set_item_style(item, style.with_visible(visible));
     }
 
     pub(crate) fn set_block_model_color_variable(&mut self, id: BlockModelId, variable: String) {
-        let Some((model_data, renderable_block_indices)) = self.block_models.iter_mut().find(|model| model.id == id).and_then(|model| {
-            (model.active_color_variable.as_deref() != Some(variable.as_str())).then(|| {
-                model.active_color_variable = Some(variable.clone());
-                model.state.touch();
-                model.begin_active_values_decode(&variable);
-                (model.model.clone(), std::sync::Arc::clone(&model.renderable_block_indices))
-            })
+        let item = ItemRef::BlockModel(id);
+        let Some(before) = self.item_style(item) else {
+            return;
+        };
+        let ItemStyle::BlockModel { active_color_variable, .. } = &before else {
+            return;
+        };
+        if active_color_variable.as_deref() == Some(variable.as_str()) {
+            return;
+        }
+        let mut after = before.clone();
+        if let ItemStyle::BlockModel { active_color_variable, .. } = &mut after {
+            *active_color_variable = Some(variable);
+        }
+        // Applying the style clears the stale decode and reports the model in
+        // the step's effects, which is what queues the job below - on undo and
+        // redo as much as here.
+        self.execute_edit(Command::SetItemStyle { item, before, after });
+    }
+
+    /// Decode the values behind a block model's active colour variable off the
+    /// UI thread. Queued whenever a command leaves a model coloured by a
+    /// variable whose values are not decoded, so undo and redo restore a
+    /// renderable model rather than a blank one.
+    pub(crate) fn spawn_block_model_values_decode(&mut self, id: BlockModelId) {
+        let Some((variable, model_data, renderable_block_indices)) = self.block_models.iter().find(|model| model.id == id).and_then(|model| {
+            let variable = model.active_color_variable.clone()?;
+            (!model.active_values_available_for_render()).then(|| (variable, model.model.clone(), std::sync::Arc::clone(&model.renderable_block_indices)))
         }) else {
             return;
         };
-        self.touch_active_project_content();
         self.request_topology_redraw();
 
         let requested_variable = variable.clone();
@@ -284,9 +303,17 @@ impl<'a> App<'a> {
                     && model.active_color_variable.as_deref() == Some(decoded_variable.as_str())
                 {
                     model.install_active_values_cache(prepared);
+                    // Deriving a default ramp for a variable that has none is
+                    // the decoder finishing its own work, not a user edit, so
+                    // it is not a separate undo step. Undo and redo restore a
+                    // style that already carries its ramps, so the ensure call
+                    // is a no-op on that path and nothing is dirtied.
+                    let had_transfer = model.active_color_variable.as_deref().is_some_and(|variable| model.color_transfers.contains_key(variable));
                     model.ensure_color_transfer_for_active_variable();
-                    model.state.touch();
-                    app.touch_active_project_content();
+                    if !had_transfer {
+                        model.state.touch();
+                        app.touch_active_project_content();
+                    }
                     app.request_topology_redraw();
                 }
             }
@@ -306,22 +333,36 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn set_block_model_color_transfer(&mut self, id: BlockModelId, transfer: ColorTransferFunction) {
-        let Some(model) = self.block_models.iter_mut().find(|model| model.id == id) else {
-            return;
-        };
-        model.set_color_transfer_for_active_variable(transfer);
-        model.state.touch();
-        self.touch_active_project_content();
-        self.request_topology_redraw();
+        self.record_block_model_transfer_change(id, |model| model.set_color_transfer_for_active_variable(transfer));
     }
 
     pub(crate) fn reset_block_model_color_transfer(&mut self, id: BlockModelId) {
+        self.record_block_model_transfer_change(id, OpenBlockModel::reset_color_transfer_for_active_variable);
+    }
+
+    /// Run a ramp edit that only the model itself can compute - it needs the
+    /// decoded value range - then record the before/after pair as one undo
+    /// step, leaving the model holding the `before` state for the command to
+    /// apply. Editing in place and recording afterwards would give the history
+    /// no `before` to go back to.
+    fn record_block_model_transfer_change(&mut self, id: BlockModelId, change: impl FnOnce(&mut OpenBlockModel)) {
         let Some(model) = self.block_models.iter_mut().find(|model| model.id == id) else {
             return;
         };
-        model.reset_color_transfer_for_active_variable();
-        model.state.touch();
-        self.touch_active_project_content();
+        let before = ItemStyle::of_block_model(model);
+        change(model);
+        let after = ItemStyle::of_block_model(model);
+        if before == after {
+            return;
+        }
+        if let ItemStyle::BlockModel { color_transfers, .. } = &before {
+            model.color_transfers = color_transfers.clone();
+        }
+        self.execute_edit(Command::SetItemStyle {
+            item: ItemRef::BlockModel(id),
+            before,
+            after,
+        });
         self.request_topology_redraw();
     }
 
@@ -337,9 +378,8 @@ impl<'a> App<'a> {
             }
         }
         if model.slice != slice {
-            model.slice = slice;
-            model.state.touch();
-            self.touch_active_project_content();
+            let style = ItemStyle::of_block_model(model);
+            self.set_item_style(ItemRef::BlockModel(id), style.with_slice(slice));
             self.request_topology_redraw();
         }
     }
@@ -534,13 +574,8 @@ impl<'a> App<'a> {
     pub(crate) fn remove_block_model(&mut self, id: BlockModelId) {
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::BlockModel(id));
         self.clear_block_model_entity_state(SceneEntityId::BlockModel(id));
-        let previous_len = self.block_models.len();
-        self.block_models.retain(|model| model.id != id);
-        if self.block_models.len() != previous_len {
-            self.touch_active_project_content();
-            self.persist_session();
-            self.request_topology_redraw();
-        }
+        self.delete_project_item(ItemRef::BlockModel(id));
+        self.request_topology_redraw();
     }
 
     pub(crate) fn create_ore_triangulation(&mut self, block_model_id: BlockModelId, variable: String, mode: OreFilterMode, min: f64, max: f64, name: String) -> Result<()> {

@@ -8,7 +8,7 @@
 use crate::{
     app::App,
     i18n::tr_format,
-    model::{LayerId, SceneEntityId},
+    model::{Command, ItemRef, LayerId, SceneEntityId},
     ui::state::ExplorerSection,
     userspace_log,
 };
@@ -56,78 +56,52 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Show or hide every loaded item in one explorer section.
-    pub(crate) fn set_section_visible(&mut self, section: ExplorerSection, visible: bool) {
-        let mut changed = 0usize;
-        let mut asset_changed = false;
+    /// Loaded project items in `section`, or an empty vec for Designs, whose
+    /// content lives in the document rather than in an item collection.
+    fn loaded_section_items(&self, section: ExplorerSection) -> Vec<ItemRef> {
         match section {
-            ExplorerSection::Designs => {
-                for id in self.loaded_layer_ids() {
-                    let Some(document) = self.workspace.active_document_mut() else {
-                        break;
-                    };
-                    if document.layer(id).is_some_and(|layer| layer.visible != visible) {
-                        document.set_layer_visible(id, visible);
-                        changed += 1;
-                    }
-                }
+            ExplorerSection::Triangulations => self
+                .triangulations
+                .iter()
+                .filter(|item| item.state.loaded)
+                .map(|item| ItemRef::Triangulation(item.id))
+                .collect(),
+            ExplorerSection::Rasters => self.raster_textures.iter().filter(|item| item.state.loaded).map(|item| ItemRef::Raster(item.id)).collect(),
+            ExplorerSection::PointClouds => self.point_clouds.iter().filter(|item| item.state.loaded).map(|item| ItemRef::PointCloud(item.id)).collect(),
+            ExplorerSection::BlockModels => self.block_models.iter().filter(|item| item.state.loaded).map(|item| ItemRef::BlockModel(item.id)).collect(),
+            ExplorerSection::DrillHoles => self.drill_holes.iter().filter(|item| item.state.loaded).map(|item| ItemRef::DrillHole(item.id)).collect(),
+            ExplorerSection::Designs => Vec::new(),
+        }
+    }
+
+    /// Show or hide every loaded item in one explorer section, as a single
+    /// undo step.
+    pub(crate) fn set_section_visible(&mut self, section: ExplorerSection, visible: bool) {
+        let mut commands = Vec::new();
+        if section == ExplorerSection::Designs {
+            if let Some(document) = self.workspace.active_document() {
+                commands.extend(self.loaded_layer_ids().into_iter().filter_map(|id| {
+                    document.layer(id).filter(|layer| layer.visible != visible).map(|_| Command::SetLayerVisible {
+                        id,
+                        before: !visible,
+                        after: visible,
+                    })
+                }));
                 // Individual objects hidden from the canvas menu own no
                 // explorer row, so this is where they come back.
-                if visible && let Some(document) = self.workspace.active_document_mut() {
-                    document.reveal_all_objects();
+                if visible {
+                    commands.extend(document.hidden_object_ids().map(|id| Command::SetObjectHidden { id, before: true, after: false }));
                 }
             }
-            ExplorerSection::Triangulations => {
-                for tri in &mut self.triangulations {
-                    if tri.state.loaded && tri.visible != visible {
-                        tri.visible = visible;
-                        tri.state.touch();
-                        changed += 1;
-                        asset_changed = true;
-                    }
-                }
-            }
-            ExplorerSection::Rasters => {
-                for raster in &mut self.raster_textures {
-                    if raster.state.loaded && raster.visible != visible {
-                        raster.visible = visible;
-                        raster.state.touch();
-                        changed += 1;
-                        asset_changed = true;
-                    }
-                }
-            }
-            ExplorerSection::PointClouds => {
-                for cloud in &mut self.point_clouds {
-                    if cloud.state.loaded && cloud.visible != visible {
-                        cloud.visible = visible;
-                        cloud.state.touch();
-                        changed += 1;
-                        asset_changed = true;
-                    }
-                }
-            }
-            ExplorerSection::BlockModels => {
-                for model in &mut self.block_models {
-                    if model.state.loaded && model.visible != visible {
-                        model.visible = visible;
-                        model.state.touch();
-                        changed += 1;
-                        asset_changed = true;
-                    }
-                }
-            }
-            ExplorerSection::DrillHoles => {
-                for dataset in &mut self.drill_holes {
-                    if dataset.state.loaded && dataset.visible != visible {
-                        dataset.visible = visible;
-                        dataset.state.touch();
-                        changed += 1;
-                        asset_changed = true;
-                    }
-                }
-            }
+        } else {
+            commands.extend(
+                self.loaded_section_items(section)
+                    .into_iter()
+                    .filter_map(|item| self.item_style_command(item, |style| style.with_visible(visible))),
+            );
         }
+
+        let changed = commands.len();
         if visible {
             // A row's eye and the toolbar-era per-entity hide are two sources
             // of the same state; revealing has to clear both, the way
@@ -136,8 +110,8 @@ impl<'a> App<'a> {
                 self.editor.hidden_handles.remove(&entity);
             }
         }
-        if asset_changed {
-            self.touch_active_project_content();
+        if !commands.is_empty() {
+            self.execute_edit(Command::Batch(commands));
         }
         userspace_log!(
             "{}",

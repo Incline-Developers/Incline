@@ -14,13 +14,23 @@ use crate::{
 
 /// Persistence state shared by every project-owned dataset. The source name
 /// is informational provenance only; it is never used to reload content.
+///
+/// Two counters, deliberately: `revision` only ever climbs and is what GPU and
+/// view caches key on, while `epoch` names *which* content the item is holding.
+/// Undoing an edit puts the old epoch back (see
+/// [`Self::restore_epoch`]) while still advancing the revision, so a caches-are-
+/// stale signal and a this-matches-what-was-saved signal never have to be the
+/// same number. Without the split, undoing back to the last save would leave
+/// the item starred forever, or reusing the revision would hand a stale GPU
+/// buffer to different content.
 #[derive(Clone, Debug)]
 pub(crate) struct ProjectItemState {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: bool,
     revision: u64,
-    saved_revision: u64,
+    epoch: u64,
+    saved_epoch: u64,
 }
 
 impl ProjectItemState {
@@ -42,12 +52,31 @@ impl ProjectItemState {
             source_format,
             loaded: true,
             revision: 1,
-            saved_revision: 0,
+            epoch: 1,
+            saved_epoch: 0,
         }
     }
 
-    pub(crate) fn touch(&mut self) {
+    /// Record that the item's content changed, giving it an epoch no earlier
+    /// state can collide with. Returns the epoch it was holding, which is what
+    /// an undo step keeps so it can put the identity back.
+    pub(crate) fn touch(&mut self) -> u64 {
+        let previous = self.epoch;
         self.revision = self.revision.wrapping_add(1);
+        self.epoch = self.revision;
+        previous
+    }
+
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Put back an epoch captured by an earlier [`Self::touch`], after undo or
+    /// redo has restored the content that epoch named. The revision still
+    /// advances: the bytes changed even though the identity is an old one.
+    pub(crate) fn restore_epoch(&mut self, epoch: u64) {
+        self.revision = self.revision.wrapping_add(1);
+        self.epoch = epoch;
     }
 
     pub(crate) fn set_provenance(&mut self, source_name: Option<String>, source_format: Option<String>) {
@@ -63,19 +92,55 @@ impl ProjectItemState {
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
-        self.revision != self.saved_revision
+        self.epoch != self.saved_epoch
+    }
+
+    /// Monotonic mutation counter. Cache keys only - never compare it against
+    /// a saved baseline, because undo deliberately advances it while putting
+    /// older content back. Use [`Self::epoch`] for that.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(crate) fn mark_snapshot_saved(&mut self, epoch: u64) {
+        self.saved_epoch = epoch;
+    }
+
+    pub(crate) fn mark_saved(&mut self) {
+        self.saved_epoch = self.epoch;
+    }
+}
+
+/// The same two-counter split as [`ProjectItemState`], for the project-level
+/// content outside the design document: which items exist, and every
+/// item-owned field an OMF save writes. `revision` keys the dirty cache;
+/// `epoch` is folded into the project content hash, so putting an old epoch
+/// back is what lets undo clear the title-bar dirty marker.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ProjectContentState {
+    revision: u64,
+    epoch: u64,
+}
+
+impl ProjectContentState {
+    pub(crate) fn touch(&mut self) -> u64 {
+        let previous = self.epoch;
+        self.revision = self.revision.wrapping_add(1);
+        self.epoch = self.revision;
+        previous
+    }
+
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
 
-    pub(crate) fn mark_snapshot_saved(&mut self, revision: u64) {
-        self.saved_revision = revision;
-    }
-
-    pub(crate) fn mark_saved(&mut self) {
-        self.saved_revision = self.revision;
+    pub(crate) fn restore_epoch(&mut self, epoch: u64) {
+        self.revision = self.revision.wrapping_add(1);
+        self.epoch = epoch;
     }
 }
 
@@ -91,9 +156,11 @@ fn provenance_format(source_format: Option<String>) -> Option<String> {
     (!source_format.is_empty()).then(|| source_format.to_owned())
 }
 
-/// Revisions captured alongside an immutable whole-project OMF snapshot.
-/// Completion applies these exact revisions so edits made while encoding stay
-/// dirty instead of being accidentally acknowledged by the older save.
+/// Content epochs captured alongside an immutable whole-project OMF snapshot,
+/// paired with the id each belongs to. Completion applies these exact epochs,
+/// so edits made while encoding stay dirty instead of being accidentally
+/// acknowledged by the older save - and an undo back to the snapshotted state
+/// still reads as saved, because it restores the same epoch.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SaveToken {
     pub(crate) triangulations: Vec<(u64, u64)>,
@@ -154,10 +221,11 @@ pub(crate) struct OpenProject {
     /// Layers currently present in the shared scene. The project remains the
     /// source of truth even while a layer is unloaded.
     pub(crate) loaded_layers: HashSet<LayerId>,
-    /// Revision of project-owned content outside the design document. Every
-    /// persisted dataset/style/membership change advances this counter; load
-    /// and unload do not.
-    content_revision: u64,
+    /// Identity of project-owned content outside the design document. Every
+    /// persisted dataset/style/membership change advances it; load and unload
+    /// do not. Public so an [`crate::model::EditTarget`] can borrow it
+    /// alongside the document, which lives one field over.
+    pub(crate) content: ProjectContentState,
     /// Namespace-invariant content fingerprint of the complete project at its
     /// last successful load/save. `None` means the project has never been
     /// saved. Replaces whole-document JSON snapshots: an interactive drag
@@ -184,6 +252,7 @@ pub(crate) struct OpenProject {
 struct ProjectDirtyCache {
     revision: u64,
     content_revision: u64,
+    content_epoch: u64,
     format_version: u32,
     metadata: ProjectMetadata,
     dirty: bool,
@@ -197,7 +266,8 @@ impl OpenProject {
         let revision = self.project.document.revision();
         if let Some(cache) = self.dirty_cache.borrow().as_ref()
             && cache.revision == revision
-            && cache.content_revision == self.content_revision
+            && cache.content_revision == self.content.revision()
+            && cache.content_epoch == self.content.epoch()
             && cache.format_version == self.project.format_version
             && cache.metadata == self.project.metadata
         {
@@ -207,7 +277,8 @@ impl OpenProject {
         let dirty = self.content_hash() != saved_content_hash;
         *self.dirty_cache.borrow_mut() = Some(ProjectDirtyCache {
             revision,
-            content_revision: self.content_revision,
+            content_revision: self.content.revision(),
+            content_epoch: self.content.epoch(),
             format_version: self.project.format_version,
             metadata: self.project.metadata.clone(),
             dirty,
@@ -225,7 +296,7 @@ impl OpenProject {
         self.project.metadata.name.hash(&mut hasher);
         self.project.metadata.coordinate_reference_system.hash(&mut hasher);
         self.project.metadata.units.hash(&mut hasher);
-        self.content_revision.hash(&mut hasher);
+        self.content.epoch().hash(&mut hasher);
         self.project.document.content_hash(&mut self.content_hash_cache.borrow_mut()).hash(&mut hasher);
         hasher.finish()
     }
@@ -234,9 +305,10 @@ impl OpenProject {
         self.content_hash()
     }
 
-    pub(crate) fn touch_content(&mut self) {
-        self.content_revision = self.content_revision.wrapping_add(1);
+    pub(crate) fn touch_content(&mut self) -> u64 {
+        let previous = self.content.touch();
         *self.dirty_cache.borrow_mut() = None;
+        previous
     }
 
     /// Per-layer fingerprints of the current document state. Captured next to
@@ -657,7 +729,7 @@ pub(crate) fn open_project(path: Option<PathBuf>, mut project: ProjectFile) -> R
         lossy_save_warnings: Vec::new(),
         lossy_save_confirmed: false,
         loaded_layers: HashSet::new(),
-        content_revision: 0,
+        content: ProjectContentState::default(),
         saved_content_hash: None,
         saved_layer_hashes: None,
         savepoint_revision: 0,
@@ -686,7 +758,7 @@ pub(crate) fn open_imported_project(source_name: String, mut project: ProjectFil
         lossy_save_warnings: Vec::new(),
         lossy_save_confirmed: false,
         loaded_layers: HashSet::new(),
-        content_revision: 0,
+        content: ProjectContentState::default(),
         saved_content_hash: None,
         saved_layer_hashes: None,
         savepoint_revision: 0,

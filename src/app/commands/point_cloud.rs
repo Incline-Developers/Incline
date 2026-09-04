@@ -211,13 +211,12 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn toggle_point_cloud_visible(&mut self, id: PointCloudId) {
-        let Some(cloud) = self.point_clouds.iter_mut().find(|cloud| cloud.id == id) else {
+        let item = crate::model::ItemRef::PointCloud(id);
+        let Some(style) = self.item_style(item) else {
             return;
         };
-        cloud.visible = !cloud.visible;
-        cloud.state.touch();
-        self.touch_active_project_content();
-        self.invalidate_topology_bounds_and_redraw();
+        let visible = !style.visible();
+        self.set_item_style(item, style.with_visible(visible));
     }
 
     pub(crate) fn close_point_cloud(&mut self, id: PointCloudId) {
@@ -242,12 +241,6 @@ impl<'a> App<'a> {
         self.editor.explicitly_frozen.remove(&entity);
         self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
-        let previous_len = self.point_clouds.len();
-        self.point_clouds.retain(|cloud| cloud.id != id);
-        if self.point_clouds.len() != previous_len {
-            self.touch_active_project_content();
-            self.persist_session();
-            self.invalidate_topology_bounds_and_redraw();
-        }
+        self.delete_project_item(crate::model::ItemRef::PointCloud(id));
     }
 }

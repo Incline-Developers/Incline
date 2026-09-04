@@ -43,7 +43,7 @@ impl<'a> App<'a> {
 
     fn place_text_at_cursor(&mut self) {
         if matches!(
-            self.editor.snap_cursor_mode(),
+            self.editor.cursor_mode,
             crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
         ) && !self.editor.cursor_snapped
         {
@@ -139,9 +139,9 @@ impl<'a> App<'a> {
         if created {
             document.remove_object(object_id);
             document.insert_object(after.clone());
-            self.history.push_applied(Command::AddObject(after));
+            self.record_applied_edit(Command::AddObject(after));
         } else if changed {
-            self.history.execute(document, Command::Replace { before, after });
+            self.execute_edit(Command::Replace { before, after });
         }
         self.finish_text_edit_state();
         if created || changed {

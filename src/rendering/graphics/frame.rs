@@ -406,7 +406,7 @@ impl<'a> Graphics<'a> {
         // Keep the engineering-drawing dialog's map preview current.
         self.refresh_plot_preview(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);
 
-        self.update_tool_projections(editor, document);
+        self.update_tool_projections(editor, document, drill_holes);
 
         let orbit_marker_screen = self.orbit_marker_screen_pos();
         let camera_active = self.is_camera_active();

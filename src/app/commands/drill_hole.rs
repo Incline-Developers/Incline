@@ -4,9 +4,10 @@ use crate::{
     app::App,
     i18n::tr_format,
     model::{
-        SceneEntityId,
+        Command, ItemRef, ItemStyle, OpenItem, SceneEntityId,
         drill_hole::{
-            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset, OpenDrillHoleDataset, default_category_colors,
+            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleSource, LoadedDrillHoleDataset,
+            OpenDrillHoleDataset, TraceStation, default_category_colors,
         },
         formats::csv_drill_hole,
     },
@@ -38,6 +39,68 @@ fn parse_browser_bundle<'bytes>(source: &DrillHoleSource, bytes: impl IntoIterat
 }
 
 impl<'a> App<'a> {
+    /// Turn the pattern menu's exact preview into a normal project-owned
+    /// drillhole dataset. Generated patterns need no reload source: project
+    /// saves already embed every collar and trace in OMF.
+    pub(crate) fn create_drill_pattern(&mut self, name: String, collars: Vec<glam::DVec3>, depth: f64, diameter: f64) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("Enter a name for the drill pattern");
+        }
+        if !depth.is_finite() || depth <= 0.0 {
+            anyhow::bail!("Hole depth must be greater than zero");
+        }
+        if !diameter.is_finite() || diameter <= 0.0 {
+            anyhow::bail!("Hole diameter must be greater than zero");
+        }
+        if collars.is_empty() {
+            anyhow::bail!("The pattern contains no holes");
+        }
+        if collars.len() > crate::model::drill_hole::MAX_PATTERN_HOLES || collars.iter().any(|collar| !collar.is_finite()) {
+            anyhow::bail!("The drill pattern is too large or contains invalid collar coordinates");
+        }
+
+        let width = collars.len().to_string().len().max(3);
+        let holes = collars
+            .into_iter()
+            .enumerate()
+            .map(|(index, collar)| DrillHole {
+                dhid: format!("H{:0width$}", index + 1, width = width),
+                collar,
+                diameter: Some(diameter),
+                trace: vec![
+                    TraceStation { depth: 0.0, position: collar },
+                    TraceStation {
+                        depth,
+                        position: collar - glam::DVec3::Z * depth,
+                    },
+                ],
+                render_ranges: Vec::new(),
+                intervals: Vec::new(),
+            })
+            .collect();
+        let dataset = std::sync::Arc::new(DrillHoleDataset::new(holes));
+        let id = DrillHoleId(self.next_drill_hole_id);
+        self.next_drill_hole_id += 1;
+        let name = crate::model::project::unique_item_name(name.to_owned(), self.drill_holes.iter().map(|item| item.name.as_str()));
+        let item = OpenDrillHoleDataset {
+            id,
+            state: crate::model::project::ProjectItemState::dirty(None),
+            name,
+            dataset,
+            visible: true,
+            color: DrillColorState::default(),
+        };
+        self.execute_edit(Command::AddItem {
+            item: ItemRef::DrillHole(id),
+            index: self.drill_holes.len(),
+            added: Some(OpenItem::DrillHole(Box::new(item))),
+        });
+        self.editor.active_drill_hole = Some(id);
+        self.editor.close_drill_pattern();
+        Ok(())
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn import_web_drill_hole_source(&mut self, mut source: DrillHoleSource) -> Result<()> {
         let (_, inputs) = self.web_import_files.take().context("Choose the drillhole source files again")?;
@@ -153,47 +216,56 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn toggle_drill_hole_visible(&mut self, id: DrillHoleId) {
-        if let Some(dataset) = self.drill_holes.iter_mut().find(|item| item.id == id) {
-            dataset.visible = !dataset.visible;
-            dataset.state.touch();
-            self.touch_active_project_content();
-            self.invalidate_topology_bounds_and_redraw();
-        }
-    }
-
-    pub(crate) fn set_drill_hole_color_field(&mut self, id: DrillHoleId, field: Option<String>) {
-        let Some(dataset) = self.drill_holes.iter_mut().find(|item| item.id == id) else {
+        let item = ItemRef::DrillHole(id);
+        let Some(style) = self.item_style(item) else {
             return;
         };
-        if field.as_deref().is_some_and(|key| dataset.dataset.field(key).is_none()) {
+        let visible = !style.visible();
+        self.set_item_style(item, style.with_visible(visible));
+    }
+
+    /// Record a change to one dataset's colour state as an undo step.
+    fn set_drill_hole_color(&mut self, id: DrillHoleId, change: impl FnOnce(&OpenDrillHoleDataset, &mut DrillColorState)) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
             return;
-        }
-        dataset.color.active_field = field.clone();
-        dataset.color.preset = DrillColorPreset::Rainbow;
-        dataset.color.smooth = true;
-        dataset.color.stops = DrillColorPreset::Rainbow.stops();
-        dataset.color.categories = field
-            .as_deref()
-            .and_then(|key| dataset.dataset.field(key))
-            .and_then(|field| match &field.kind {
-                DrillFieldKind::Categorical { categories } => Some(default_category_colors(categories)),
-                DrillFieldKind::Numeric { .. } => None,
-            })
-            .unwrap_or_default();
-        dataset.state.touch();
-        self.touch_active_project_content();
+        };
+        let mut color = dataset.color.clone();
+        change(dataset, &mut color);
+        self.set_item_style(ItemRef::DrillHole(id), ItemStyle::DrillHole { visible: dataset.visible, color });
         self.request_topology_redraw();
     }
 
-    pub(crate) fn set_drill_hole_color_preset(&mut self, id: DrillHoleId, preset: DrillColorPreset) {
-        if let Some(dataset) = self.drill_holes.iter_mut().find(|item| item.id == id) {
-            dataset.color.preset = preset;
-            dataset.color.smooth = preset.smooth();
-            dataset.color.stops = preset.stops();
-            dataset.state.touch();
-            self.touch_active_project_content();
-            self.request_topology_redraw();
+    pub(crate) fn set_drill_hole_color_field(&mut self, id: DrillHoleId, field: Option<String>) {
+        if self
+            .drill_holes
+            .iter()
+            .find(|item| item.id == id)
+            .is_none_or(|dataset| field.as_deref().is_some_and(|key| dataset.dataset.field(key).is_none()))
+        {
+            return;
         }
+        self.set_drill_hole_color(id, |dataset, color| {
+            color.active_field = field.clone();
+            color.preset = DrillColorPreset::Rainbow;
+            color.smooth = true;
+            color.stops = DrillColorPreset::Rainbow.stops();
+            color.categories = field
+                .as_deref()
+                .and_then(|key| dataset.dataset.field(key))
+                .and_then(|field| match &field.kind {
+                    DrillFieldKind::Categorical { categories } => Some(default_category_colors(categories)),
+                    DrillFieldKind::Numeric { .. } => None,
+                })
+                .unwrap_or_default();
+        });
+    }
+
+    pub(crate) fn set_drill_hole_color_preset(&mut self, id: DrillHoleId, preset: DrillColorPreset) {
+        self.set_drill_hole_color(id, |_, color| {
+            color.preset = preset;
+            color.smooth = preset.smooth();
+            color.stops = preset.stops();
+        });
     }
 
     pub(crate) fn set_drill_hole_color_stops(&mut self, id: DrillHoleId, mut stops: Vec<DrillColorStop>) {
@@ -202,26 +274,17 @@ impl<'a> App<'a> {
         for stop in &mut stops {
             stop.t = stop.t.clamp(0.0, 1.0);
         }
-        if (2..=12).contains(&stops.len())
-            && let Some(dataset) = self.drill_holes.iter_mut().find(|item| item.id == id)
-        {
-            dataset.color.stops = stops;
-            dataset.state.touch();
-            self.touch_active_project_content();
-            self.request_topology_redraw();
+        if (2..=12).contains(&stops.len()) {
+            self.set_drill_hole_color(id, |_, color| color.stops = stops);
         }
     }
 
     pub(crate) fn set_drill_hole_category_colors(&mut self, id: DrillHoleId, categories: Vec<crate::model::drill_hole::DrillCategoryColor>) {
-        if let Some(dataset) = self.drill_holes.iter_mut().find(|item| item.id == id) {
-            dataset.color.categories = categories.into_iter().take(12).collect();
-            dataset.state.touch();
-            self.touch_active_project_content();
-            self.request_topology_redraw();
-        }
+        self.set_drill_hole_color(id, |_, color| color.categories = categories.into_iter().take(12).collect());
     }
 
     pub(crate) fn close_drill_hole(&mut self, id: DrillHoleId) {
+        self.cancel_collar_move_touching(id);
         if let Some(dataset) = self.drill_holes.iter_mut().find(|dataset| dataset.id == id) {
             dataset.state.loaded = false;
         }
@@ -238,11 +301,19 @@ impl<'a> App<'a> {
         if self.editor.active_drill_hole == Some(id) {
             self.editor.active_drill_hole = None;
         }
+        if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
+            self.editor.end_tie_chain();
+        }
         self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
+        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
+            self.editor.initiation_dialog = None;
+        }
         self.invalidate_topology_bounds_and_redraw();
     }
 
     pub(crate) fn remove_drill_hole(&mut self, id: DrillHoleId) {
+        self.cancel_collar_move_touching(id);
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
         let entity = SceneEntityId::DrillHole(id);
         self.editor.selected_handles.remove(&entity);
@@ -253,13 +324,15 @@ impl<'a> App<'a> {
         if self.editor.active_drill_hole == Some(id) {
             self.editor.active_drill_hole = None;
         }
-        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
-        let previous_len = self.drill_holes.len();
-        self.drill_holes.retain(|dataset| dataset.id != id);
-        if self.drill_holes.len() != previous_len {
-            self.touch_active_project_content();
-            self.persist_session();
-            self.request_topology_redraw();
+        if self.editor.tie_anchor.is_some_and(|anchor| anchor.dataset == id) {
+            self.editor.end_tie_chain();
         }
+        self.editor.selected_drill_holes.retain(|hole| hole.dataset != id);
+        self.editor.selected_tie_ins.retain(|tie| tie.dataset != id);
+        if self.editor.initiation_dialog.as_ref().is_some_and(|dialog| dialog.target.dataset == id) {
+            self.editor.initiation_dialog = None;
+        }
+        self.delete_project_item(ItemRef::DrillHole(id));
+        self.request_topology_redraw();
     }
 }

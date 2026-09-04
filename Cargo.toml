@@ -6,7 +6,7 @@ version = "0.4.0"
 edition = "2024"
 description = "Free Open Source Mine Design"
 repository = "https://github.com/Incline-Developers/Incline"
-license-file = "LICENSE.md"
+license = "MIT"
 keywords = ["mining", "cad", "design"]
 categories = ["graphics", "science"]
 exclude = [
@@ -35,7 +35,7 @@ i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.33"
 lyon = "1.0.19"
-omf = { git = "https://github.com/gmggroup/omf-rust.git", rev = "64d305790b3415618a01f00a94cd914acd0b80ba", default-features = false, features = ["image", "parquet"] }
+omf = { git = "https://github.com/leotimmins1974/omf-rust.git", rev = "5df717106c489b725aec32e97e2bf61e668cef5b", default-features = false, features = ["image", "parquet"] }
 png = "0.18.1"
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
@@ -123,7 +123,7 @@ codegen-units = 1
 inherits = "release"
 debug = true
 strip = "none"
-rustflags = ["-C", "force-frame-pointers=yes"]
+rustflags = ["-C", "force-frame-pointers=yes", "-C", "link-arg=-fuse-ld=mold"]
 
 [profile.dev]
 opt-level = 1

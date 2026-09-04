@@ -535,6 +535,14 @@ impl Default for ColorTransferFunction {
 }
 
 impl ColorTransferFunction {
+    /// Number of colours the ramp carries, for byte estimates.
+    pub(crate) fn gradient_len(&self) -> usize {
+        match self {
+            Self::Category { gradient } => gradient.len(),
+            Self::Continuous { gradient, .. } | Self::Discrete { gradient, .. } => gradient.len(),
+        }
+    }
+
     /// The default cut-off / green / yellow / red ramp spread over `min..max`.
     ///
     /// `gradient[0]` is transparent, so everything below the first boundary is
@@ -1004,6 +1012,33 @@ impl OpenBlockModel {
             range: None,
             category_code_counts: None,
         });
+    }
+
+    /// Drop any decoded values, for when the model stops colouring by a
+    /// variable at all.
+    pub(crate) fn clear_active_values_cache(&self) {
+        *self.active_values_cache.borrow_mut() = None;
+    }
+
+    /// Approximate retained size, used by the undo history's memory budget.
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let blocks = match self.blocks.as_ref() {
+            BlockBoundsSource::Explicit(blocks) => blocks.len() * size_of::<BlockBounds>(),
+            // A regular grid is described by its extents, not per block.
+            BlockBoundsSource::Regular(_) => size_of::<RegularBlockBounds>(),
+        };
+        let renderable = match self.renderable_block_indices.as_ref() {
+            RenderableBlockIndices::All(_) => 0,
+            RenderableBlockIndices::Explicit(indices) => indices.len() * size_of::<usize>(),
+        };
+        self.model.estimated_bytes()
+            + blocks
+            + renderable
+            + self
+                .color_transfers
+                .iter()
+                .map(|(name, transfer)| name.len() + size_of::<ColorTransferFunction>() + transfer.gradient_len() * size_of::<[f32; 4]>())
+                .fold(0usize, usize::saturating_add)
     }
 
     pub(crate) fn install_active_values_cache(&self, prepared: ActiveValuesCache) {

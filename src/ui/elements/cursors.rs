@@ -167,9 +167,8 @@ const CURSOR_CENTRE_GAP: f32 = 3.5;
 /// sit inside the aperture without filling it back in.
 const SNAP_DOT_RADIUS: f32 = 2.2;
 
-/// The mark drawn in place of the pointer, chosen by the active workspace's
-/// cursor rather than by the active tool: what a pick *does* is the question
-/// the cursor answers.
+/// The mark drawn in place of the pointer, chosen by the shared cursor mode
+/// rather than by the active tool.
 #[derive(Clone, Copy)]
 enum CursorGlyph {
     /// Crosshair alone - a plain pick.
@@ -179,26 +178,19 @@ enum CursorGlyph {
     Triangle,
 }
 
-/// The mark for the cursor the active workspace is holding.
+/// The mark for the shared cursor mode.
 ///
 /// A cursor wears one or the other, never both: a crosshair where the pick is
 /// plain and has only a position to report, and a bare shape where it has a
 /// target, which the shape then frames rather than covers.
 fn cursor_glyph(editor: &crate::ui::state::EditorState) -> CursorGlyph {
-    use crate::ui::state::{BlastCursor, CursorMode, Workspace};
+    use crate::ui::state::CursorMode;
 
-    match editor.active_workspace {
-        Workspace::Production => match editor.cursors.production {
-            CursorMode::Select => CursorGlyph::None,
-            CursorMode::SnapToPoint => CursorGlyph::Circle,
-            CursorMode::SnapToLine => CursorGlyph::Square,
-            CursorMode::SnapToSurface => CursorGlyph::Triangle,
-        },
-        Workspace::DrillAndBlast => match editor.cursors.blast {
-            BlastCursor::Select => CursorGlyph::None,
-            BlastCursor::TieHoles => CursorGlyph::Square,
-        },
-        Workspace::Geology => CursorGlyph::None,
+    match editor.cursor_mode {
+        CursorMode::Select => CursorGlyph::None,
+        CursorMode::SnapToPoint => CursorGlyph::Circle,
+        CursorMode::SnapToLine => CursorGlyph::Square,
+        CursorMode::SnapToSurface => CursorGlyph::Triangle,
     }
 }
 

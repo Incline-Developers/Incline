@@ -137,10 +137,10 @@ impl<'a> App<'a> {
             return false;
         };
 
-        let Some(project) = self.workspace.active_project_mut() else {
+        if !self.workspace.has_active_project() {
             return false;
-        };
-        self.history.execute(&mut project.project.document, Command::Replace { before, after });
+        }
+        self.execute_edit(Command::Replace { before, after });
         self.editor.tool_hover_vertex_px = None;
         self.editor.tool_hover_vertex_world = None;
         self.editor.selected_handles.clear();
@@ -204,10 +204,8 @@ impl<'a> App<'a> {
             })
             .collect();
         let deleted = batch.len();
-        if deleted > 0
-            && let Some(project) = self.workspace.active_project_mut()
-        {
-            self.history.execute(&mut project.project.document, Command::Batch(batch));
+        if deleted > 0 {
+            self.execute_edit(Command::Batch(batch));
         }
         if deleted > 0 {
             self.editor.selected_handles.clear();
@@ -263,7 +261,7 @@ impl<'a> App<'a> {
         let new_ids: Vec<SceneEntityId> = copies.iter().map(|o| SceneEntityId::Object(o.id())).collect();
         let count = copies.len();
         let batch = Command::Batch(copies.into_iter().map(Command::AddObject).collect());
-        self.history.execute(&mut project.project.document, batch);
+        self.execute_edit(batch);
         self.editor.selected_handles.clear();
         for id in new_ids {
             self.editor.selected_handles.insert(id);

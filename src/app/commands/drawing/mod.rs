@@ -9,5 +9,6 @@ pub(crate) mod move_tool;
 pub(crate) mod offset;
 pub(crate) mod placement;
 pub(crate) mod relimit;
+pub(crate) mod rotate_collar;
 pub(crate) mod selection;
 pub(crate) mod split;

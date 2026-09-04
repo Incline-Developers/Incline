@@ -7,8 +7,8 @@ use glam::DVec3;
 use wgpu::util::DeviceExt;
 
 use crate::model::drill_hole::{
-    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
-    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset,
+    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue, OpenDrillHoleDataset,
+    TIE_RADIUS_SCALE, render_radius_for_diameter,
 };
 
 #[repr(C)]
@@ -17,7 +17,7 @@ pub(crate) struct DrillSegmentInstance {
     pub(crate) start: [f32; 3],
     pub(crate) radius: f32,
     pub(crate) end: [f32; 3],
-    pub(crate) pixel_diameter: f32,
+    pub(crate) _pad0: f32,
     pub(crate) color: [f32; 3],
     pub(crate) _pad1: f32,
 }
@@ -30,7 +30,7 @@ pub(crate) struct DrillCollarInstance {
     pub(crate) center: [f32; 3],
     pub(crate) marker_radius: f32,
     pub(crate) outline: [f32; 3],
-    pub(crate) pixel_diameter: f32,
+    pub(crate) _pad0: f32,
     pub(crate) fill: [f32; 3],
     pub(crate) hole_radius: f32,
 }
@@ -38,6 +38,8 @@ pub(crate) struct DrillCollarInstance {
 pub(crate) struct CachedDrillHoles {
     pub(crate) buffer: Option<wgpu::Buffer>,
     pub(crate) count: u32,
+    pub(crate) tie_buffer: Option<wgpu::Buffer>,
+    pub(crate) tie_count: u32,
     pub(crate) collar_buffer: Option<wgpu::Buffer>,
     pub(crate) collar_count: u32,
     key: u64,
@@ -46,6 +48,10 @@ pub(crate) struct CachedDrillHoles {
 #[derive(Default)]
 pub(crate) struct DrillHoleGpuCache {
     entries: HashMap<DrillHoleId, CachedDrillHoles>,
+    /// Transient pattern-menu geometry, kept outside the id-keyed project
+    /// entries so it can use the normal drill shaders without pretending to
+    /// be a dataset before Create is pressed.
+    preview: Option<CachedDrillHoles>,
 }
 
 impl DrillHoleGpuCache {
@@ -68,6 +74,14 @@ impl DrillHoleGpuCache {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
+            let ties = build_tie_instances(dataset, scene_origin, &selection);
+            let tie_buffer = (!ties.is_empty()).then(|| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Drillhole Tie-In Instances"),
+                    contents: bytemuck::cast_slice(&ties),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+            });
             let collars = build_collar_instances(dataset, scene_origin, &selection);
             let collar_buffer = (!collars.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -81,19 +95,99 @@ impl DrillHoleGpuCache {
                 CachedDrillHoles {
                     buffer,
                     count: instances.len().min(u32::MAX as usize) as u32,
+                    tie_buffer,
+                    tie_count: ties.len().min(u32::MAX as usize) as u32,
                     collar_buffer,
                     collar_count: collars.len().min(u32::MAX as usize) as u32,
                     key,
                 },
             );
         }
+        self.sync_pattern_preview(device, scene_origin, editor);
+    }
+
+    fn sync_pattern_preview(&mut self, device: &wgpu::Device, scene_origin: DVec3, editor: &crate::ui::state::EditorState) {
+        if !editor.drill_pattern_open
+            || editor.drill_pattern_preview_collars.is_empty()
+            || !editor.drill_pattern_preview_depth.is_finite()
+            || editor.drill_pattern_preview_depth <= 0.0
+            || !editor.drill_pattern_preview_diameter.is_finite()
+            || editor.drill_pattern_preview_diameter <= 0.0
+        {
+            self.preview = None;
+            return;
+        }
+
+        let mut hash = DefaultHasher::new();
+        editor.drill_pattern_preview_depth.to_bits().hash(&mut hash);
+        editor.drill_pattern_preview_diameter.to_bits().hash(&mut hash);
+        for value in scene_origin.to_array() {
+            value.to_bits().hash(&mut hash);
+        }
+        for collar in &editor.drill_pattern_preview_collars {
+            for value in collar.to_array() {
+                value.to_bits().hash(&mut hash);
+            }
+        }
+        let key = hash.finish();
+        if self.preview.as_ref().is_some_and(|cached| cached.key == key) {
+            return;
+        }
+
+        let preview_radius = render_radius_for_diameter(Some(editor.drill_pattern_preview_diameter));
+        let instances: Vec<_> = editor
+            .drill_pattern_preview_collars
+            .iter()
+            .map(|&collar| DrillSegmentInstance {
+                start: (collar - scene_origin).as_vec3().to_array(),
+                radius: preview_radius as f32,
+                end: (collar - DVec3::Z * editor.drill_pattern_preview_depth - scene_origin).as_vec3().to_array(),
+                _pad0: 0.0,
+                color: [1.0; 3],
+                _pad1: 0.0,
+            })
+            .collect();
+        let collars: Vec<_> = editor
+            .drill_pattern_preview_collars
+            .iter()
+            .map(|&collar| DrillCollarInstance {
+                center: (collar - scene_origin).as_vec3().to_array(),
+                marker_radius: (preview_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
+                outline: COLLAR_MARKER_OUTLINE_COLOR,
+                _pad0: 0.0,
+                fill: COLLAR_MARKER_FILL_COLOR,
+                hole_radius: preview_radius as f32,
+            })
+            .collect();
+        let buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Drill Pattern Preview Segment Instances"),
+            contents: bytemuck::cast_slice(&instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        }));
+        let collar_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Drill Pattern Preview Collar Instances"),
+            contents: bytemuck::cast_slice(&collars),
+            usage: wgpu::BufferUsages::VERTEX,
+        }));
+        self.preview = Some(CachedDrillHoles {
+            buffer,
+            count: instances.len().min(u32::MAX as usize) as u32,
+            tie_buffer: None,
+            tie_count: 0,
+            collar_buffer,
+            collar_count: collars.len().min(u32::MAX as usize) as u32,
+            key,
+        });
     }
 
     pub(crate) fn get(&self, id: DrillHoleId) -> Option<&CachedDrillHoles> {
         self.entries.get(&id)
     }
+    pub(crate) fn preview(&self) -> Option<&CachedDrillHoles> {
+        self.preview.as_ref()
+    }
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.values().all(|entry| entry.count == 0 && entry.collar_count == 0)
+        self.preview.is_none() && self.entries.values().all(|entry| entry.count == 0 && entry.tie_count == 0 && entry.collar_count == 0)
     }
 }
 
@@ -108,15 +202,20 @@ struct HoleSelection {
     /// Indices of the individually selected holes, ascending, so the cache
     /// key below hashes the same set the same way every frame.
     holes: Vec<usize>,
+    /// Canonical hole pairs of selected tie-ins in this dataset.
+    ties: Vec<(usize, usize)>,
 }
 
 impl HoleSelection {
     fn of(dataset: &OpenDrillHoleDataset, editor: &crate::ui::state::EditorState) -> Self {
         let mut holes: Vec<usize> = editor.selected_drill_holes.iter().filter(|hole| hole.dataset == dataset.id).map(|hole| hole.hole).collect();
         holes.sort_unstable();
+        let mut ties: Vec<_> = editor.selected_tie_ins.iter().filter(|tie| tie.dataset == dataset.id).map(|tie| (tie.a, tie.b)).collect();
+        ties.sort_unstable();
         Self {
             whole: editor.selected_handles.contains(&dataset.entity_id()),
             holes,
+            ties,
         }
     }
 
@@ -129,14 +228,24 @@ impl HoleSelection {
     fn any(&self) -> bool {
         self.whole || !self.holes.is_empty()
     }
+
+    fn contains_tie(&self, from: usize, to: usize) -> bool {
+        let pair = if from <= to { (from, to) } else { (to, from) };
+        self.ties.binary_search(&pair).is_ok()
+    }
 }
 
 fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> u64 {
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
     dataset.visible.hash(&mut hash);
+    // Hole positions are not hashed one by one: an edit to the geometry - the
+    // Move Collar tool is the only one so far - bumps the item's revision, and
+    // that is what tells the cache the instances it built are stale.
+    dataset.state.revision().hash(&mut hash);
     selection.whole.hash(&mut hash);
     selection.holes.hash(&mut hash);
+    selection.ties.hash(&mut hash);
     for value in scene_origin.to_array() {
         value.to_bits().hash(&mut hash);
     }
@@ -210,18 +319,50 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
                     .and_then(|field| value.map(|value| evaluate_color(field.kind.clone(), value, &dataset.color)))
                     .unwrap_or([1.0; 3])
             };
-            let radius = hole.diameter.map_or(0.0, |diameter| (diameter * 0.5) as f32);
             instances.push(DrillSegmentInstance {
                 start: (start - scene_origin).as_vec3().to_array(),
-                radius,
+                radius: hole.render_radius() as f32,
                 end: (end - scene_origin).as_vec3().to_array(),
-                pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
+                _pad0: 0.0,
                 color,
                 _pad1: 0.0,
             });
         }
     }
     instances
+}
+
+/// The surface connectors, drawn collar to collar through the same instanced
+/// cylinder the traces use. A tie has no thickness of its own, so it takes a
+/// world radius from the holes it joins and scales with them.
+fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
+    let holes = &dataset.dataset.holes;
+    dataset
+        .dataset
+        .ties
+        .iter()
+        .filter_map(|tie| {
+            let from = holes.get(tie.from)?;
+            let to = holes.get(tie.to)?;
+            let start = from.collar_position();
+            let end = to.collar_position();
+            (start.distance_squared(end) > 1.0e-18).then_some(DrillSegmentInstance {
+                start: (start - scene_origin).as_vec3().to_array(),
+                // A run between holes of unequal diameter takes their mean, so
+                // it reads the same whichever end it was tied from.
+                radius: ((from.render_radius() + to.render_radius()) * 0.5 * TIE_RADIUS_SCALE) as f32,
+                end: (end - scene_origin).as_vec3().to_array(),
+                _pad0: 0.0,
+                color: if selection.contains_tie(tie.from, tie.to) {
+                    let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
+                    [red, green, blue]
+                } else {
+                    tie.color
+                },
+                _pad1: 0.0,
+            })
+        })
+        .collect()
 }
 
 fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
@@ -242,15 +383,13 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
                 Some(colors) if selection.contains(index) => colors,
                 _ => (COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_FILL_COLOR),
             };
-            // The trace's first station is the collar; `hole.collar` only
-            // stands in for a dataset that arrived without one.
-            let center = hole.trace.first().map_or(hole.collar, |station| station.position);
-            let hole_radius = hole.diameter.map_or(0.0, |diameter| diameter * 0.5);
+            let center = hole.collar_position();
+            let hole_radius = hole.render_radius();
             DrillCollarInstance {
                 center: (center - scene_origin).as_vec3().to_array(),
                 marker_radius: (hole_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
                 outline,
-                pixel_diameter: COLLAR_MARKER_PIXEL_DIAMETER,
+                _pad0: 0.0,
                 fill,
                 hole_radius: hole_radius as f32,
             }

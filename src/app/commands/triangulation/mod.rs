@@ -9,7 +9,7 @@ use crate::{
     app::App,
     i18n::{tr, tr_format},
     model::{
-        Layer, Object, ObjectId, formats,
+        ItemRef, ItemStyle, Layer, Object, ObjectId, SceneEntityId, formats,
         formats::mesh_data,
         triangulation::{LoadedTriangulation, OpenTriangulation, TriangulationId},
     },

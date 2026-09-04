@@ -24,6 +24,10 @@ impl App<'_> {
         // the end of it. Stable, so two on the same delay stay in the order
         // they were added.
         self.editor.delay_products.sort_by_key(|product| product.delay_ms);
+        // A product is added to be used: it becomes the one a tie-in is laid
+        // with, which is also what fills the palette's selection when the
+        // first product arrives.
+        self.editor.active_delay_product = Some(id);
         self.persist_delay_products();
     }
 
@@ -38,6 +42,11 @@ impl App<'_> {
             "{}",
             tr_format!(literal = "Deleted product %delay_ms% ms %name%", delay_ms = product.delay_ms, name = product.name.clone())
         );
+        // The selection cannot stand on a card that has gone; the palette
+        // falls back to its first, and to nothing while it is empty.
+        if self.editor.active_delay_product == Some(id) {
+            self.editor.active_delay_product = self.editor.delay_products.first().map(|product| product.id);
+        }
         self.persist_delay_products();
     }
 
