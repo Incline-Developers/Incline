@@ -51,9 +51,9 @@ impl SceneQuery {
     /// Nearest selectable drill hole under a ray, named down to the hole
     /// itself - which dataset it belongs to is [`DrillHoleRef::dataset`].
     /// The hit geometry includes both the camera-facing collar marker and the
-    /// down-hole trace. Explicit source diameters use their world-space radius;
-    /// diameter-less holes use the same minimum pixel diameter as the shader.
-    /// The additional pixel tolerance makes thin traces practical to click.
+    /// down-hole trace. Its world-space radius matches the rendered visual
+    /// floor, with an additional pixel tolerance to keep distant traces
+    /// practical to click.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn nearest_drill_hole(
         drill_holes: &[OpenDrillHoleDataset],
@@ -99,14 +99,7 @@ impl SceneQuery {
                     if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(from, to)| *from <= midpoint_depth && midpoint_depth < *to) {
                         continue;
                     }
-                    let radius = drill_segment_radius(
-                        start.position,
-                        end.position,
-                        hole.diameter.map(|diameter| diameter * 0.5).unwrap_or(0.0),
-                        view_projection,
-                        screen,
-                        threshold_px,
-                    );
+                    let radius = drill_segment_radius(start.position, end.position, hole.render_radius(), view_projection, screen, threshold_px);
                     if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, start.position, end.position, radius)
                         && distance < nearest
                     {

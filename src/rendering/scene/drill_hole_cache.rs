@@ -8,7 +8,7 @@ use wgpu::util::DeviceExt;
 
 use crate::model::drill_hole::{
     COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue, OpenDrillHoleDataset,
-    TIE_RADIUS_SCALE,
+    TIE_RADIUS_SCALE, render_radius_for_diameter,
 };
 
 #[repr(C)]
@@ -134,12 +134,13 @@ impl DrillHoleGpuCache {
             return;
         }
 
+        let preview_radius = render_radius_for_diameter(Some(editor.drill_pattern_preview_diameter));
         let instances: Vec<_> = editor
             .drill_pattern_preview_collars
             .iter()
             .map(|&collar| DrillSegmentInstance {
                 start: (collar - scene_origin).as_vec3().to_array(),
-                radius: (editor.drill_pattern_preview_diameter * 0.5) as f32,
+                radius: preview_radius as f32,
                 end: (collar - DVec3::Z * editor.drill_pattern_preview_depth - scene_origin).as_vec3().to_array(),
                 _pad0: 0.0,
                 color: [1.0; 3],
@@ -151,11 +152,11 @@ impl DrillHoleGpuCache {
             .iter()
             .map(|&collar| DrillCollarInstance {
                 center: (collar - scene_origin).as_vec3().to_array(),
-                marker_radius: (editor.drill_pattern_preview_diameter * 0.5 * COLLAR_MARKER_RADIUS_SCALE) as f32,
+                marker_radius: (preview_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
                 outline: COLLAR_MARKER_OUTLINE_COLOR,
                 _pad0: 0.0,
                 fill: COLLAR_MARKER_FILL_COLOR,
-                hole_radius: (editor.drill_pattern_preview_diameter * 0.5) as f32,
+                hole_radius: preview_radius as f32,
             })
             .collect();
         let buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

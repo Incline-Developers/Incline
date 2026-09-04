@@ -10,9 +10,9 @@ use crate::{
 
 /// How much wider than the hole itself the collar marker is drawn.
 pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 5.0;
-/// World-space collar radius for datasets that do not provide a physical hole
-/// diameter. Roughly matches a 240 mm production hole after the marker scale.
-pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;
+/// Smallest world-space diameter used to draw a drill hole. Source diameters
+/// remain untouched; this only stops narrow geometry disappearing visually.
+pub(crate) const MIN_RENDER_DIAMETER: f64 = 0.5;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
@@ -24,6 +24,13 @@ pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
 /// holes it joins. A tie has no physical thickness of its own, so it takes
 /// its weight from the pattern it belongs to rather than from the screen.
 pub(crate) const TIE_RADIUS_SCALE: f64 = 1.5;
+
+/// Convert a source diameter into the world-space radius used by visual
+/// geometry. Kept separate so transient previews use exactly the same rule as
+/// persisted holes.
+pub(crate) fn render_radius_for_diameter(diameter: Option<f64>) -> f64 {
+    diameter.unwrap_or(MIN_RENDER_DIAMETER).max(MIN_RENDER_DIAMETER) * 0.5
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
@@ -157,9 +164,8 @@ pub(crate) struct StoredInitiation {
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
     pub(crate) collar: DVec3,
-    /// Source diameter, kept distinct from a dataset that simply reports a
-    /// nominal one. Everything drawn from it goes through
-    /// [`DrillHole::render_radius`], which supplies the fallback.
+    /// Source diameter, kept distinct from the visual floor supplied by
+    /// [`DrillHole::render_radius`].
     pub(crate) diameter: Option<f64>,
     pub(crate) trace: Vec<TraceStation>,
     /// Explicit geometry coverage. Empty means the complete measured-depth
@@ -492,11 +498,11 @@ impl DrillHole {
         }
     }
 
-    /// The world radius the hole is drawn at. A dataset that arrived without
-    /// physical diameters falls back to a nominal production hole, so the
-    /// collar markers and ties that scale off it stay a sensible size.
+    /// The world radius the hole is drawn at. Missing or physically narrow
+    /// diameters use the visual floor, so traces and the geometry scaled from
+    /// them stay legible without changing the source value.
     pub(crate) fn render_radius(&self) -> f64 {
-        self.diameter.map_or(COLLAR_MARKER_FALLBACK_RADIUS / COLLAR_MARKER_RADIUS_SCALE, |diameter| diameter * 0.5)
+        render_radius_for_diameter(self.diameter)
     }
 
     /// Where the collar stands. The trace's first station is it; `collar`
@@ -977,9 +983,8 @@ fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
         if hole.trace.len() < 2 {
             continue;
         }
-        // Conservatively cover both the trace and the world-sized collar. A
-        // dataset without physical diameters uses the same fallback radius as
-        // the collar instance builder.
+        // Conservatively cover both the trace and the world-sized collar,
+        // including the same visual diameter floor as the instance builders.
         let radius = hole.render_radius() * COLLAR_MARKER_RADIUS_SCALE;
         for station in &hole.trace {
             min = min.min(station.position - DVec3::splat(radius));
