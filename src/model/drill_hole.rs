@@ -10,9 +10,14 @@ use crate::{
 
 /// How much wider than the hole itself the collar marker is drawn.
 pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 5.0;
-/// Smallest world-space diameter used to draw a drill hole. Source diameters
-/// remain untouched; this only stops narrow geometry disappearing visually.
-pub(crate) const MIN_RENDER_DIAMETER: f64 = 0.5;
+/// Smallest on-screen diameter used to draw a drill-hole trace.
+pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
+/// The collar marker keeps the same scale relative to a trace when the trace
+/// reaches its screen-space floor.
+pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = MIN_RENDER_PIXEL_DIAMETER * COLLAR_MARKER_RADIUS_SCALE as f32;
+/// World-space collar radius for datasets that do not provide a physical hole
+/// diameter. Roughly matches a 240 mm production hole after the marker scale.
+pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;
 pub(crate) const COLLAR_MARKER_OUTLINE_COLOR: [f32; 3] = [0.086, 0.376, 0.851];
 pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
@@ -21,16 +26,9 @@ pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
 /// thread while remaining comfortably above ordinary production rounds.
 pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
 /// How thick a tie-in connector is drawn, as a multiple of the radius of the
-/// holes it joins. A tie has no physical thickness of its own, so it takes
-/// its weight from the pattern it belongs to rather than from the screen.
+/// holes it joins. Its physical width follows the pattern, while the renderer
+/// applies the same screen-space floor as a drill-hole trace.
 pub(crate) const TIE_RADIUS_SCALE: f64 = 1.5;
-
-/// Convert a source diameter into the world-space radius used by visual
-/// geometry. Kept separate so transient previews use exactly the same rule as
-/// persisted holes.
-pub(crate) fn render_radius_for_diameter(diameter: Option<f64>) -> f64 {
-    diameter.unwrap_or(MIN_RENDER_DIAMETER).max(MIN_RENDER_DIAMETER) * 0.5
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
@@ -164,8 +162,8 @@ pub(crate) struct StoredInitiation {
 pub(crate) struct DrillHole {
     pub(crate) dhid: String,
     pub(crate) collar: DVec3,
-    /// Source diameter, kept distinct from the visual floor supplied by
-    /// [`DrillHole::render_radius`].
+    /// Source diameter. The 2 px visual floor is applied by the trace shader,
+    /// without changing this physical value.
     pub(crate) diameter: Option<f64>,
     pub(crate) trace: Vec<TraceStation>,
     /// Explicit geometry coverage. Empty means the complete measured-depth
@@ -502,11 +500,11 @@ impl DrillHole {
         }
     }
 
-    /// The world radius the hole is drawn at. Missing or physically narrow
-    /// diameters use the visual floor, so traces and the geometry scaled from
-    /// them stay legible without changing the source value.
+    /// The physical world radius of the hole. A dataset without diameters uses
+    /// a nominal radius for collars and ties; traces receive their independent
+    /// screen-space floor in the renderer.
     pub(crate) fn render_radius(&self) -> f64 {
-        render_radius_for_diameter(self.diameter)
+        self.diameter.map_or(COLLAR_MARKER_FALLBACK_RADIUS / COLLAR_MARKER_RADIUS_SCALE, |diameter| diameter * 0.5)
     }
 
     /// Where the collar stands. The trace's first station is it; `collar`
@@ -987,8 +985,8 @@ fn drill_bounds(holes: &[DrillHole]) -> Option<(DVec3, DVec3)> {
         if hole.trace.len() < 2 {
             continue;
         }
-        // Conservatively cover both the trace and the world-sized collar,
-        // including the same visual diameter floor as the instance builders.
+        // Conservatively cover both the trace and the world-sized collar. The
+        // trace's pixel floor has no stable world radius to add here.
         let radius = hole.render_radius() * COLLAR_MARKER_RADIUS_SCALE;
         for station in &hole.trace {
             min = min.min(station.position - DVec3::splat(radius));

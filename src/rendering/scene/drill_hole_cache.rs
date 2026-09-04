@@ -7,8 +7,8 @@ use glam::DVec3;
 use wgpu::util::DeviceExt;
 
 use crate::model::drill_hole::{
-    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue, OpenDrillHoleDataset,
-    TIE_RADIUS_SCALE, render_radius_for_diameter,
+    COLLAR_MARKER_FILL_COLOR, COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_OUTLINE_COLOR, COLLAR_MARKER_RADIUS_SCALE, DrillColorState, DrillFieldKind, DrillHoleId, DrillValue,
+    MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset, TIE_RADIUS_SCALE,
 };
 
 #[repr(C)]
@@ -17,7 +17,7 @@ pub(crate) struct DrillSegmentInstance {
     pub(crate) start: [f32; 3],
     pub(crate) radius: f32,
     pub(crate) end: [f32; 3],
-    pub(crate) _pad0: f32,
+    pub(crate) pixel_diameter: f32,
     pub(crate) color: [f32; 3],
     pub(crate) _pad1: f32,
 }
@@ -30,7 +30,7 @@ pub(crate) struct DrillCollarInstance {
     pub(crate) center: [f32; 3],
     pub(crate) marker_radius: f32,
     pub(crate) outline: [f32; 3],
-    pub(crate) _pad0: f32,
+    pub(crate) pixel_diameter: f32,
     pub(crate) fill: [f32; 3],
     pub(crate) hole_radius: f32,
 }
@@ -134,7 +134,7 @@ impl DrillHoleGpuCache {
             return;
         }
 
-        let preview_radius = render_radius_for_diameter(Some(editor.drill_pattern_preview_diameter));
+        let preview_radius = editor.drill_pattern_preview_diameter * 0.5;
         let instances: Vec<_> = editor
             .drill_pattern_preview_collars
             .iter()
@@ -142,7 +142,7 @@ impl DrillHoleGpuCache {
                 start: (collar - scene_origin).as_vec3().to_array(),
                 radius: preview_radius as f32,
                 end: (collar - DVec3::Z * editor.drill_pattern_preview_depth - scene_origin).as_vec3().to_array(),
-                _pad0: 0.0,
+                pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color: [1.0; 3],
                 _pad1: 0.0,
             })
@@ -154,7 +154,7 @@ impl DrillHoleGpuCache {
                 center: (collar - scene_origin).as_vec3().to_array(),
                 marker_radius: (preview_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
                 outline: COLLAR_MARKER_OUTLINE_COLOR,
-                _pad0: 0.0,
+                pixel_diameter: COLLAR_MARKER_MIN_PIXEL_DIAMETER,
                 fill: COLLAR_MARKER_FILL_COLOR,
                 hole_radius: preview_radius as f32,
             })
@@ -321,9 +321,9 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
             };
             instances.push(DrillSegmentInstance {
                 start: (start - scene_origin).as_vec3().to_array(),
-                radius: hole.render_radius() as f32,
+                radius: hole.diameter.map_or(0.0, |diameter| (diameter * 0.5) as f32),
                 end: (end - scene_origin).as_vec3().to_array(),
-                _pad0: 0.0,
+                pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color,
                 _pad1: 0.0,
             });
@@ -334,7 +334,8 @@ fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selectio
 
 /// The surface connectors, drawn collar to collar through the same instanced
 /// cylinder the traces use. A tie has no thickness of its own, so it takes a
-/// world radius from the holes it joins and scales with them.
+/// world radius from the holes it joins and scales with them until reaching
+/// the shared two-pixel screen floor.
 fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
     let holes = &dataset.dataset.holes;
     dataset
@@ -352,7 +353,7 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, sele
                 // it reads the same whichever end it was tied from.
                 radius: ((from.render_radius() + to.render_radius()) * 0.5 * TIE_RADIUS_SCALE) as f32,
                 end: (end - scene_origin).as_vec3().to_array(),
-                _pad0: 0.0,
+                pixel_diameter: MIN_RENDER_PIXEL_DIAMETER,
                 color: if selection.contains_tie(tie.from, tie.to) {
                     let [red, green, blue, _] = crate::ui::SELECTION_COLOR_F32;
                     [red, green, blue]
@@ -389,7 +390,7 @@ fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, s
                 center: (center - scene_origin).as_vec3().to_array(),
                 marker_radius: (hole_radius * COLLAR_MARKER_RADIUS_SCALE) as f32,
                 outline,
-                _pad0: 0.0,
+                pixel_diameter: COLLAR_MARKER_MIN_PIXEL_DIAMETER,
                 fill,
                 hole_radius: hole_radius as f32,
             }

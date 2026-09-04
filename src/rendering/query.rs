@@ -8,20 +8,13 @@ use crate::{
     Size,
     model::{
         Document, SceneEntityId,
-        drill_hole::{COLLAR_MARKER_RADIUS_SCALE, DrillHoleRef, OpenDrillHoleDataset},
+        drill_hole::{COLLAR_MARKER_MIN_PIXEL_DIAMETER, COLLAR_MARKER_RADIUS_SCALE, DrillHoleRef, MIN_RENDER_PIXEL_DIAMETER, OpenDrillHoleDataset},
         spatial::ObjectSnapIndex,
         triangulation::OpenTriangulation,
     },
     rendering::snap,
     ui::state::CursorMode,
 };
-
-/// Holes are drawn at their physical width and nothing floors it on screen, so
-/// a narrow or distant one can cover less than a pixel. Picking keeps a
-/// corridor of its own: under the pointer a hole is never treated as thinner
-/// than this, or it would stop being clickable long before it stopped being
-/// visible.
-const PICK_MIN_PIXEL_DIAMETER: f64 = 2.0;
 
 pub(crate) struct SceneQuery;
 
@@ -51,9 +44,9 @@ impl SceneQuery {
     /// Nearest selectable drill hole under a ray, named down to the hole
     /// itself - which dataset it belongs to is [`DrillHoleRef::dataset`].
     /// The hit geometry includes both the camera-facing collar marker and the
-    /// down-hole trace. Its world-space radius matches the rendered visual
-    /// floor, with an additional pixel tolerance to keep distant traces
-    /// practical to click.
+    /// down-hole trace. The trace uses the same two-pixel visual floor as the
+    /// shader, with an additional pixel tolerance to keep it practical to
+    /// click.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn nearest_drill_hole(
         drill_holes: &[OpenDrillHoleDataset],
@@ -81,8 +74,17 @@ impl SceneQuery {
                 // depth ordering agrees with what is on screen.
                 let hole_radius = hole.render_radius();
                 let collar = hole.collar_position();
-                let collar_radius = drill_collar_radius(collar, hole_radius * COLLAR_MARKER_RADIUS_SCALE, view_direction, view_projection, screen, threshold_px);
-                let lifted_collar = collar - view_direction * hole_radius * 1.5;
+                let rendered_hole_radius = screen_floored_radius(collar, hole_radius, view_direction, view_projection, screen, f64::from(MIN_RENDER_PIXEL_DIAMETER), 0.0);
+                let collar_radius = screen_floored_radius(
+                    collar,
+                    hole_radius * COLLAR_MARKER_RADIUS_SCALE,
+                    view_direction,
+                    view_projection,
+                    screen,
+                    f64::from(COLLAR_MARKER_MIN_PIXEL_DIAMETER),
+                    threshold_px,
+                );
+                let lifted_collar = collar - view_direction * rendered_hole_radius * 1.5;
                 if let Some(distance) = ray_disc_distance(ray_origin, ray_direction, lifted_collar, view_direction, collar_radius)
                     && distance < nearest
                 {
@@ -99,7 +101,14 @@ impl SceneQuery {
                     if !hole.render_ranges.is_empty() && !hole.render_ranges.iter().any(|(from, to)| *from <= midpoint_depth && midpoint_depth < *to) {
                         continue;
                     }
-                    let radius = drill_segment_radius(start.position, end.position, hole.render_radius(), view_projection, screen, threshold_px);
+                    let radius = drill_segment_radius(
+                        start.position,
+                        end.position,
+                        hole.diameter.map(|diameter| diameter * 0.5).unwrap_or(0.0),
+                        view_projection,
+                        screen,
+                        threshold_px,
+                    );
                     if let Some(distance) = ray_capped_cylinder_distance(ray_origin, ray_direction, start.position, end.position, radius)
                         && distance < nearest
                     {
@@ -158,7 +167,7 @@ impl SceneQuery {
     }
 }
 
-fn drill_collar_radius(center: DVec3, source_radius: f64, view_direction: DVec3, view_projection: &DMat4, screen: Size, threshold_px: f32) -> f64 {
+fn screen_floored_radius(center: DVec3, source_radius: f64, view_direction: DVec3, view_projection: &DMat4, screen: Size, minimum_pixel_diameter: f64, threshold_px: f32) -> f64 {
     let Some(view_direction) = view_direction.try_normalize() else {
         return source_radius;
     };
@@ -176,7 +185,7 @@ fn drill_collar_radius(center: DVec3, source_radius: f64, view_direction: DVec3,
             (ndc_per_world * viewport * 0.5).length()
         })
         .fold(0.0_f64, f64::max);
-    let minimum_radius = (PICK_MIN_PIXEL_DIAMETER * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
+    let minimum_radius = (minimum_pixel_diameter * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
     source_radius.max(minimum_radius)
 }
 
@@ -203,7 +212,7 @@ fn drill_segment_radius(start: DVec3, end: DVec3, source_radius: f64, view_proje
                 .fold(0.0_f64, f64::max)
         })
         .fold(f64::INFINITY, f64::min);
-    let minimum_radius = (PICK_MIN_PIXEL_DIAMETER * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
+    let minimum_radius = (f64::from(MIN_RENDER_PIXEL_DIAMETER) * 0.5 + f64::from(threshold_px)) / pixels_per_world.max(1.0e-6);
     source_radius.max(minimum_radius)
 }
 

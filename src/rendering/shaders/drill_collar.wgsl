@@ -11,8 +11,8 @@ struct CollarInstance {
     // xyz: collar position, relative to the scene origin. w: marker radius in
     // world units.
     @location(0) center_radius: vec4<f32>,
-    // xyz: outline colour. w: unused alignment padding.
-    @location(1) outline_pad: vec4<f32>,
+    // xyz: outline colour. w: minimum marker diameter in physical pixels.
+    @location(1) outline_pixels: vec4<f32>,
     // xyz: fill colour. w: the hole's own rendered radius, used to lift the
     // marker clear of the cylinder it caps.
     @location(2) fill_hole_radius: vec4<f32>,
@@ -58,26 +58,28 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
         1.0e-6,
     );
 
-    // The marker is physical world geometry, with no screen-space floor: it
-    // shrinks with distance like everything else in the scene. The projected
-    // scale is still needed, because the fragment shader measures its ring
-    // and edge widths in pixels.
-    let radius_world = max(instance.center_radius.w, 1.0e-6);
-    let radius_pixels = radius_world * pixels_per_world;
+    // The marker's floor is the trace's two-pixel floor multiplied by the
+    // collar scale, so their apparent size ratio stays fixed at any zoom.
+    let source_marker_radius = max(instance.center_radius.w, 1.0e-6);
+    let source_hole_radius = max(instance.fill_hole_radius.w, 1.0e-6);
+    let radius_pixels = max(source_marker_radius * pixels_per_world, instance.outline_pixels.w * 0.5);
     // The cylinder starts at the collar and bulges toward the camera by its
     // own rendered radius, so a marker left in the collar plane would be
     // sliced open by it in any side-on view. Lifting the marker clear along
     // the view direction moves it nearer the camera by the same amount under
     // either projection.
-    let hole_radius = max(instance.fill_hole_radius.w, 0.0);
+    let marker_scale = max(source_marker_radius / source_hole_radius, 1.0);
+    let hole_radius = radius_pixels / (pixels_per_world * marker_scale);
     let lifted = center - view_direction * hole_radius * 1.5;
 
-    let world = lifted + right * corner.x * radius_world + up * corner.y * radius_world;
+    var clip = camera.view_proj * vec4<f32>(lifted, 1.0);
+    let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);
+    clip = vec4<f32>(clip.xy + corner * radius_pixels * pixel_to_ndc * clip.w, clip.zw);
 
     var out: VertexOutput;
-    out.position = camera.view_proj * vec4<f32>(world, 1.0);
+    out.position = clip;
     out.offset = corner;
-    out.outline = instance.outline_pad.xyz;
+    out.outline = instance.outline_pixels.xyz;
     out.fill = instance.fill_hole_radius.xyz;
     out.radius_pixels = radius_pixels;
     return out;
