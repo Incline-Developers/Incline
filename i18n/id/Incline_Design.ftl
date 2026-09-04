@@ -1241,7 +1241,7 @@ literal-1-scale-covers-width-height-m-c6d6046af29b2f17 = 1:%scale% · mencakup %
 literal-size-width-height-mm-3b309605c72e220c = %size% (%width% × %height% mm)
 literal-dots-per-inch-this-paper-size-can-be-rasterised-up-to-max-dpi-dpi-300-dpi-is-a-normal-print-quality-38badc61bbc2f43a = Titik per inci. Ukuran kertas ini dapat diraster hingga %max_dpi% dpi; 300 dpi adalah kualitas cetak normal.
 literal-the-png-is-written-at-the-sheet-s-exact-paper-size-and-records-its-dpi-so-it-prints-at-true-scale-5151a1cfa3ba92cf = PNG ditulis dengan ukuran fisik lembar yang tepat dan merekam DPI agar dicetak pada skala sebenarnya.
-literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = Menjaga permukaan %relation% topologi dalam cakupan XY-nya.
+literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = Mempertahankan permukaan %relation% topografi dalam cakupan XY-nya.
 literal-once-the-merge-succeeds-unload-the-source-topology-and-solid-so-only-the-merged-result-stays-in-the-scene-2cbe06b559c2c57e = Setelah penggabungan berhasil, bongkar topologi dan solid sumber agar hanya hasil gabungan yang tersisa dalam adegan.
 literal-minor-controls-ordinary-contours-major-controls-emphasized-contours-and-must-use-an-interval-at-least-as-large-as-minor-80284c0e8dd7170c = Minor mengontrol kontur biasa. Mayor mengontrol kontur yang ditegaskan dan intervalnya harus sedikitnya sebesar Minor.
 literal-when-enabled-generate-contours-only-between-the-specified-minimum-and-maximum-elevations-1f14ee5f24b2730c = Jika diaktifkan, buat kontur hanya di antara elevasi minimum dan maksimum yang ditentukan.
@@ -1339,9 +1339,9 @@ literal-could-not-write-the-engineering-drawing-error-e342c8bddb63196a = Tidak d
 literal-create-offset-01d61c273826dbbc = Buat offset
 literal-created-2-open-polylines-2d2fbf951b1dd062 = 2 poligaris terbuka dibuat
 literal-created-line-segment-with-2-vertices-aa1069e69133878b = Segmen garis dengan 2 verteks dibuat
-literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = Topologi '%name%' dipotong ke selubung pit
+literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = Topografi '%name%' dipotong oleh selubung pit
 literal-cut-triangulation-name-by-z-band-min-max-226590d8d6e87e99 = Triangulasi '%name%' dipotong menurut rentang Z [%min%, %max%]
-literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = Memotong topologi menurut selubung pit…
+literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = Memotong topografi dengan selubung pit…
 literal-cutting-triangulation-by-z-cbdc5d020b1ab375 = Memotong triangulasi menurut Z…
 literal-dxf-insert-references-unknown-block-name-8daabcccfa7674d6 = DXF INSERT merujuk blok yang tidak dikenal '%name%'
 literal-dxf-block-nesting-exceeds-maximum-depth-depth-skipping-name-f895c57051b84c18 = Penumpukan blok DXF melampaui kedalaman maksimum (%depth%); melewati '%name%'
@@ -1409,8 +1409,8 @@ literal-triangulation-name-has-count-vertices-u32-max-cannot-chunk-for-gpu-14dcd
 literal-triangulation-name-uploaded-in-chunks-spatial-chunks-faces-faces-daae347cfb39ced1 = Triangulasi '%name%' diunggah dalam %chunks% potongan spasial (%faces% muka)
 literal-triangulation-gpu-chunk-rejected-before-allocation-vertices-vertices-bytes-indices-indices-bytes-limit-limit-bytes-e835462421900f90 = Potongan triangulasi GPU ditolak sebelum alokasi: verteks=%vertices% byte, indeks=%indices% byte, batas=%limit% byte
 literal-triangulation-edge-chunk-rejected-before-gpu-allocation-instances-instances-bytes-limit-limit-bytes-5b17c29c130e9dbb = Potongan tepi triangulasi ditolak sebelum alokasi GPU: instans=%instances% byte, batas=%limit% byte
-literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = Permukaan '%surface%' dirapikan ke topologi '%topology%' (%mode%)
-literal-trimming-surface-to-topology-9b4a13db96090def = Merapikan permukaan ke topologi…
+literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = Permukaan '%surface%' dipangkas menurut topografi '%topology%' (%mode%)
+literal-trimming-surface-to-topology-9b4a13db96090def = Memangkas permukaan menurut topografi…
 literal-vertices-first-to-last-9f33f0b0d1b012f5 = Verteks %first% hingga %last%
 literal-viewport-image-download-failed-error-2990bb54c2241e01 = Pengunduhan gambar area pandang gagal: %error%
 literal-applied-move-delta-delta-to-count-object-s-4ba96c09eb0411cd = Delta perpindahan (%delta%) diterapkan ke %count% objek

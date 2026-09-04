@@ -1241,7 +1241,7 @@ literal-1-scale-covers-width-height-m-c6d6046af29b2f17 = 1:%scale% · 覆盖 %wi
 literal-size-width-height-mm-3b309605c72e220c = %size%（%width% × %height% 毫米）
 literal-dots-per-inch-this-paper-size-can-be-rasterised-up-to-max-dpi-dpi-300-dpi-is-a-normal-print-quality-38badc61bbc2f43a = 每英寸点数。此纸张尺寸最高可栅格化为 %max_dpi% dpi；300 dpi 是常规打印质量。
 literal-the-png-is-written-at-the-sheet-s-exact-paper-size-and-records-its-dpi-so-it-prints-at-true-scale-5151a1cfa3ba92cf = PNG 按纸张精确物理尺寸写入并记录 DPI，因此能按真实比例打印。
-literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = 使曲面在拓扑的 XY 覆盖范围内保持 %relation% 关系。
+literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = 使曲面在地形表面的 XY 覆盖范围内保持 %relation% 关系。
 literal-once-the-merge-succeeds-unload-the-source-topology-and-solid-so-only-the-merged-result-stays-in-the-scene-2cbe06b559c2c57e = 合并成功后卸载源拓扑和实体，使场景中仅保留合并结果。
 literal-minor-controls-ordinary-contours-major-controls-emphasized-contours-and-must-use-an-interval-at-least-as-large-as-minor-80284c0e8dd7170c = 次等高距控制普通等高线；主等高距控制强调等高线，且不得小于次等高距。
 literal-when-enabled-generate-contours-only-between-the-specified-minimum-and-maximum-elevations-1f14ee5f24b2730c = 启用后，仅在指定的最低与最高高程之间生成等高线。
@@ -1339,9 +1339,9 @@ literal-could-not-write-the-engineering-drawing-error-e342c8bddb63196a = 无法�
 literal-create-offset-01d61c273826dbbc = 创建偏移
 literal-created-2-open-polylines-2d2fbf951b1dd062 = 已创建 2 条开放折线
 literal-created-line-segment-with-2-vertices-aa1069e69133878b = 已创建含 2 个顶点的线段
-literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = 已按采坑壳体切割拓扑“%name%”
+literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = 已按采坑壳体切割地形表面“%name%”
 literal-cut-triangulation-name-by-z-band-min-max-226590d8d6e87e99 = 已按 Z 范围 [%min%, %max%] 切割三角网“%name%”
-literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = 正在按采坑壳体切割拓扑…
+literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = 正在按采坑壳体切割地形表面…
 literal-cutting-triangulation-by-z-cbdc5d020b1ab375 = 正在按 Z 切割三角网…
 literal-dxf-insert-references-unknown-block-name-8daabcccfa7674d6 = DXF INSERT 引用了未知块“%name%”
 literal-dxf-block-nesting-exceeds-maximum-depth-depth-skipping-name-f895c57051b84c18 = DXF 块嵌套超过最大深度（%depth%），跳过“%name%”
@@ -1409,8 +1409,8 @@ literal-triangulation-name-has-count-vertices-u32-max-cannot-chunk-for-gpu-14dcd
 literal-triangulation-name-uploaded-in-chunks-spatial-chunks-faces-faces-daae347cfb39ced1 = 三角网“%name%”已上传为 %chunks% 个空间分块（%faces% 个面）
 literal-triangulation-gpu-chunk-rejected-before-allocation-vertices-vertices-bytes-indices-indices-bytes-limit-limit-bytes-e835462421900f90 = 三角网 GPU 分块在分配前被拒绝：顶点=%vertices% 字节，索引=%indices% 字节，限制=%limit% 字节
 literal-triangulation-edge-chunk-rejected-before-gpu-allocation-instances-instances-bytes-limit-limit-bytes-5b17c29c130e9dbb = 三角网边分块在 GPU 分配前被拒绝：实例=%instances% 字节，限制=%limit% 字节
-literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = 已按拓扑“%topology%”修剪表面“%surface%”（%mode%）
-literal-trimming-surface-to-topology-9b4a13db96090def = 正在按拓扑修剪表面…
+literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = 已按地形表面“%topology%”修剪表面“%surface%”（%mode%）
+literal-trimming-surface-to-topology-9b4a13db96090def = 正在按地形表面修剪表面…
 literal-vertices-first-to-last-9f33f0b0d1b012f5 = 顶点 %first% 到 %last%
 literal-viewport-image-download-failed-error-2990bb54c2241e01 = 视口图像下载失败：%error%
 literal-applied-move-delta-delta-to-count-object-s-4ba96c09eb0411cd = 已将移动量（%delta%）应用于 %count% 个对象

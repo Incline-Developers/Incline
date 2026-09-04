@@ -35,7 +35,7 @@ about-website = Sitio web
 
 menu-file-show-in-explorer = Mostrar en el Explorador
 menu-file-show-in-folder = Abrir carpeta contenedora
-menu-file-export-viewport-image = Exportar imagen del puerto de vista...
+menu-file-export-viewport-image = Exportar imagen del área de visualización...
 menu-file-export-engineering-drawing = Exportar dibujo de ingeniería...
 ws-menubar-design = Diseño
 ws-menubar-triangulation = Triangulación
@@ -50,7 +50,7 @@ ws-menubar-design-insert-point-at-elevation = En la elevación
 ws-menubar-design-move-to = Mover a
 ws-menubar-design-create-triangulation = Crear triangulación
 tri-create-title = Crear triangulación
-tri-create-help = Haga clic en objetos en el puerto de vista para seleccionar/deseleccionar. Arrastre para seleccionar mediante un cuadro.
+tri-create-help = Haga clic en objetos en el área de visualización para seleccionarlos o deseleccionarlos. Arrastre para seleccionar mediante un cuadro.
 tri-create-type-label = Tipo de triangulación
 tri-create-type-help = La superficie abierta crea una hoja de estilo de terreno. El sólido crea una malla completamente cerrada y requiere una entrada que puede formar un límite impermeable.
 tri-create-output-name = Nombre de salida

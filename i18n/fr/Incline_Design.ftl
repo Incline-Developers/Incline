@@ -1242,7 +1242,7 @@ literal-1-scale-covers-width-height-m-c6d6046af29b2f17 = 1:%scale% · couvre %wi
 literal-size-width-height-mm-3b309605c72e220c = %size% (%width% × %height% mm)
 literal-dots-per-inch-this-paper-size-can-be-rasterised-up-to-max-dpi-dpi-300-dpi-is-a-normal-print-quality-38badc61bbc2f43a = Points par pouce. Ce format peut être rastérisé jusqu’à %max_dpi% ppp ; 300 ppp correspond à une qualité d’impression normale.
 literal-the-png-is-written-at-the-sheet-s-exact-paper-size-and-records-its-dpi-so-it-prints-at-true-scale-5151a1cfa3ba92cf = Le PNG est écrit aux dimensions physiques exactes de la feuille et enregistre sa résolution pour une impression à l’échelle réelle.
-literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = Maintient la surface %relation% la topologie dans son emprise XY.
+literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = Maintient la surface %relation% la topographie dans son emprise XY.
 literal-once-the-merge-succeeds-unload-the-source-topology-and-solid-so-only-the-merged-result-stays-in-the-scene-2cbe06b559c2c57e = Après la fusion, déchargez la topologie et le solide sources afin de ne conserver que le résultat fusionné dans la scène.
 literal-minor-controls-ordinary-contours-major-controls-emphasized-contours-and-must-use-an-interval-at-least-as-large-as-minor-80284c0e8dd7170c = Mineur contrôle les courbes ordinaires. Majeur contrôle les courbes accentuées et son intervalle doit être au moins égal à Mineur.
 literal-when-enabled-generate-contours-only-between-the-specified-minimum-and-maximum-elevations-1f14ee5f24b2730c = Si activé, génère les courbes uniquement entre les altitudes minimale et maximale indiquées.
@@ -1340,9 +1340,9 @@ literal-could-not-write-the-engineering-drawing-error-e342c8bddb63196a = Impossi
 literal-create-offset-01d61c273826dbbc = Créer un décalage
 literal-created-2-open-polylines-2d2fbf951b1dd062 = 2 polylignes ouvertes créées
 literal-created-line-segment-with-2-vertices-aa1069e69133878b = Segment de ligne à 2 sommets créé
-literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = Topologie « %name% » découpée selon l’enveloppe de fosse
+literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = Topographie « %name% » découpée selon l’enveloppe de fosse
 literal-cut-triangulation-name-by-z-band-min-max-226590d8d6e87e99 = Triangulation « %name% » découpée selon la bande Z [%min%, %max%]
-literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = Découpage de la topologie selon l’enveloppe de fosse…
+literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = Découpage de la topographie selon l’enveloppe de fosse…
 literal-cutting-triangulation-by-z-cbdc5d020b1ab375 = Découpage de la triangulation selon Z…
 literal-dxf-insert-references-unknown-block-name-8daabcccfa7674d6 = DXF INSERT référence le bloc inconnu « %name% »
 literal-dxf-block-nesting-exceeds-maximum-depth-depth-skipping-name-f895c57051b84c18 = L’imbrication des blocs DXF dépasse la profondeur maximale (%depth%) ; « %name% » est ignoré
@@ -1410,8 +1410,8 @@ literal-triangulation-name-has-count-vertices-u32-max-cannot-chunk-for-gpu-14dcd
 literal-triangulation-name-uploaded-in-chunks-spatial-chunks-faces-faces-daae347cfb39ced1 = La triangulation « %name% » a été téléversée en %chunks% segments spatiaux (%faces% faces)
 literal-triangulation-gpu-chunk-rejected-before-allocation-vertices-vertices-bytes-indices-indices-bytes-limit-limit-bytes-e835462421900f90 = Le segment GPU de triangulation a été rejeté avant allocation : sommets=%vertices% octets, indices=%indices% octets, limite=%limit% octets
 literal-triangulation-edge-chunk-rejected-before-gpu-allocation-instances-instances-bytes-limit-limit-bytes-5b17c29c130e9dbb = Le segment d’arêtes de triangulation a été rejeté avant allocation GPU : instances=%instances% octets, limite=%limit% octets
-literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = Surface « %surface% » rognée selon la topologie « %topology% » (%mode%)
-literal-trimming-surface-to-topology-9b4a13db96090def = Rognage de la surface selon la topologie…
+literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = Surface « %surface% » rognée selon la topographie « %topology% » (%mode%)
+literal-trimming-surface-to-topology-9b4a13db96090def = Rognage de la surface selon la topographie…
 literal-vertices-first-to-last-9f33f0b0d1b012f5 = Sommets %first% à %last%
 literal-viewport-image-download-failed-error-2990bb54c2241e01 = Échec du téléchargement de l’image de la vue : %error%
 literal-applied-move-delta-delta-to-count-object-s-4ba96c09eb0411cd = Déplacement (%delta%) appliqué à %count% objet(s)

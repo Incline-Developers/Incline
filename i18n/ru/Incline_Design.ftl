@@ -1288,7 +1288,7 @@ literal-1-scale-covers-width-height-m-c6d6046af29b2f17 = 1:%scale% · охват
 literal-size-width-height-mm-3b309605c72e220c = %size% (%width% × %height% мм)
 literal-dots-per-inch-this-paper-size-can-be-rasterised-up-to-max-dpi-dpi-300-dpi-is-a-normal-print-quality-38badc61bbc2f43a = Точек на дюйм. Этот размер бумаги можно растрировать с разрешением до %max_dpi% dpi; 300 dpi — обычное качество печати.
 literal-the-png-is-written-at-the-sheet-s-exact-paper-size-and-records-its-dpi-so-it-prints-at-true-scale-5151a1cfa3ba92cf = PNG записывается с точным физическим размером листа и содержит значение DPI, поэтому печатается в истинном масштабе.
-literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = Удерживает поверхность %relation% топологии в пределах её охвата по XY.
+literal-keeps-the-surface-relation-the-topology-within-its-xy-coverage-b8d94cee2f820a27 = Сохраняет поверхность %relation% топографической поверхности в пределах её охвата по XY.
 literal-once-the-merge-succeeds-unload-the-source-topology-and-solid-so-only-the-merged-result-stays-in-the-scene-2cbe06b559c2c57e = После успешного объединения выгрузить исходную топологию и тело, чтобы в сцене остался только объединённый результат.
 literal-minor-controls-ordinary-contours-major-controls-emphasized-contours-and-must-use-an-interval-at-least-as-large-as-minor-80284c0e8dd7170c = Малый интервал управляет обычными горизонталями. Большой — выделенными и должен быть не меньше малого.
 literal-when-enabled-generate-contours-only-between-the-specified-minimum-and-maximum-elevations-1f14ee5f24b2730c = Если включено, горизонтали создаются только между указанными минимальной и максимальной отметками.
@@ -1386,9 +1386,9 @@ literal-could-not-write-the-engineering-drawing-error-e342c8bddb63196a = Не у
 literal-create-offset-01d61c273826dbbc = Создать смещение
 literal-created-2-open-polylines-2d2fbf951b1dd062 = Созданы 2 разомкнутые полилинии
 literal-created-line-segment-with-2-vertices-aa1069e69133878b = Создан отрезок с 2 вершинами
-literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = Топология «%name%» вырезана по оболочке карьера
+literal-cut-topology-name-to-pit-shell-f11a85d3d0d8638f = Топографическая поверхность «%name%» вырезана по оболочке карьера
 literal-cut-triangulation-name-by-z-band-min-max-226590d8d6e87e99 = Триангуляция «%name%» обрезана по диапазону Z [%min%, %max%]
-literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = Вырезание топологии по оболочке карьера…
+literal-cutting-topology-by-pit-shell-6d1ecd4d3f719c12 = Вырезание топографической поверхности по оболочке карьера…
 literal-cutting-triangulation-by-z-cbdc5d020b1ab375 = Обрезка триангуляции по Z…
 literal-dxf-insert-references-unknown-block-name-8daabcccfa7674d6 = DXF INSERT ссылается на неизвестный блок «%name%»
 literal-dxf-block-nesting-exceeds-maximum-depth-depth-skipping-name-f895c57051b84c18 = Вложенность блоков DXF превышает максимальную глубину (%depth%); «%name%» пропущен
@@ -1456,8 +1456,8 @@ literal-triangulation-name-has-count-vertices-u32-max-cannot-chunk-for-gpu-14dcd
 literal-triangulation-name-uploaded-in-chunks-spatial-chunks-faces-faces-daae347cfb39ced1 = Триангуляция «%name%» загружена в %chunks% пространственных фрагментах (граней: %faces%)
 literal-triangulation-gpu-chunk-rejected-before-allocation-vertices-vertices-bytes-indices-indices-bytes-limit-limit-bytes-e835462421900f90 = Фрагмент триангуляции GPU отклонён до выделения памяти: вершины=%vertices% байт, индексы=%indices% байт, предел=%limit% байт
 literal-triangulation-edge-chunk-rejected-before-gpu-allocation-instances-instances-bytes-limit-limit-bytes-5b17c29c130e9dbb = Фрагмент рёбер триангуляции отклонён до выделения памяти GPU: экземпляры=%instances% байт, предел=%limit% байт
-literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = Поверхность «%surface%» подрезана по топологии «%topology%» (%mode%)
-literal-trimming-surface-to-topology-9b4a13db96090def = Подрезка поверхности по топологии…
+literal-trimmed-surface-surface-to-topology-topology-mode-6681e62e2a3f4dfa = Поверхность «%surface%» подрезана по топографической поверхности «%topology%» (%mode%)
+literal-trimming-surface-to-topology-9b4a13db96090def = Подрезка поверхности по топографической поверхности…
 literal-vertices-first-to-last-9f33f0b0d1b012f5 = Вершины с %first% по %last%
 literal-viewport-image-download-failed-error-2990bb54c2241e01 = Не удалось загрузить изображение области просмотра: %error%
 literal-applied-move-delta-delta-to-count-object-s-4ba96c09eb0411cd = Смещение (%delta%) применено к %count% объектам
