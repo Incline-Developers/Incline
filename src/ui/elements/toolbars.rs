@@ -120,7 +120,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             // Move Collar's counterpart: the same holes, turned instead of
             // shifted, so it sits directly beside it in the run.
             icon: egui::Image::new(themed_icon!(ui, "rotate_element.svg")),
-            tooltip: "Rotate Collar",
+            tooltip: tr!(literal = "Rotate Collar"),
             action: LeftToolAction::Tool(ActiveTool::RotateCollar),
             enabled: has_active_dataset,
         },

@@ -71,7 +71,7 @@ pub(crate) fn draw_initiation_dialog(ui: &mut egui::Ui, editor: &mut EditorState
     let target = dialog.target;
     let existing = dialog.existing;
     let title = format!("Initiation · {}", dialog.hole_name);
-    DragableMenu::new(title).open(&mut open).min_width(300.0).show(ui.ctx(), |ui| {
+    DragableMenu::new("initiation_dialog", title).open(&mut open).min_width(300.0).show(ui.ctx(), |ui| {
         MenuFieldU32::new("Delay", &mut dialog.delay_ms, 0..=MAX_DELAY_MS)
             .suffix(" ms")
             .help_text("How long after the shot is fired this collar initiates the round.")

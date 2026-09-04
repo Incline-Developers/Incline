@@ -1223,45 +1223,43 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
     } else {
         tr!(literal = "Move Design")
     };
-    ViewportDockPanel::new("move_panel", title, viewport_rect)
-        .min_width(210.0)
-        .show(ui.ctx(), |ui| {
-            let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world X axis."))
-                .speed(0.1)
-                .show(ui);
-            let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world Y axis."))
-                .speed(0.1)
-                .show(ui);
-            let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world Z axis."))
-                .speed(0.1)
-                .show(ui);
-            if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
-                commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
+    ViewportDockPanel::new("move_panel", title, viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
+        let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world X axis."))
+            .speed(0.1)
+            .show(ui);
+        let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world Y axis."))
+            .speed(0.1)
+            .show(ui);
+        let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world Z axis."))
+            .speed(0.1)
+            .show(ui);
+        if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
+            commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
+                editor.move_panel_delta[0],
+                editor.move_panel_delta[1],
+                editor.move_panel_delta[2],
+            )));
+        }
+
+        ui.add_space(4.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
+                commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
                     editor.move_panel_delta[0],
                     editor.move_panel_delta[1],
                     editor.move_panel_delta[2],
                 )));
+                editor.active_tool = ActiveTool::None;
             }
-
-            ui.add_space(4.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
-                    commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
-                        editor.move_panel_delta[0],
-                        editor.move_panel_delta[1],
-                        editor.move_panel_delta[2],
-                    )));
-                    editor.active_tool = ActiveTool::None;
-                }
-                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
-                    commands.push(UiCommand::CancelMoveDelta);
-                    editor.active_tool = ActiveTool::None;
-                }
-            });
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
+                commands.push(UiCommand::CancelMoveDelta);
+                editor.active_tool = ActiveTool::None;
+            }
         });
+    });
 }
 
 /// Draw the floating Rotate Collar panel: the two angles a drill plan is

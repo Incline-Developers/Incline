@@ -1,6 +1,7 @@
 //! Interactive Drill & Blast pattern creation.
 
 use crate::{
+    i18n::tr,
     model::{Document, Object, geometry::tessellate_polyline_bulges},
     ui::{
         state::{EditorState, UiCommand},
@@ -77,7 +78,7 @@ pub(crate) fn draw_drill_pattern_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     };
     let layout_label = editor.drill_pattern_layout.label();
 
-    DragableMenu::new("Create Drill Pattern")
+    DragableMenu::new("drill_pattern_dialog", tr!(literal = "Create Drill Pattern"))
         .open(&mut open)
         .min_width(DIALOG_MIN_WIDTH)
         .max_width(440.0)
