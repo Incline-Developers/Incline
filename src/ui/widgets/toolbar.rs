@@ -262,11 +262,7 @@ impl<'a> ColorSquarePicker<'a> {
             ui.spacing_mut().interact_size = self.size;
             ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
 
-            // egui's colour button paints a square swatch and caps its own
-            // rounding at two pixels, so it is drawn inset far enough
-            // ([`SWATCH_INSET`] covers the one pixel it insets by itself) to
-            // disappear under the swatch painted here, which rounds with the
-            // rest of the window.
+            // Hide the shared button's border under the rounded toolbar swatch.
             let widgets = &mut ui.style_mut().visuals.widgets;
             for widget in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
                 widget.corner_radius = egui::CornerRadius::ZERO;
@@ -278,7 +274,7 @@ impl<'a> ColorSquarePicker<'a> {
             ui.allocate_ui_with_layout(egui::vec2(self.size.x, self.size.y + 1.0), egui::Layout::top_down(egui::Align::Center), |ui| {
                 ui.add_space(2.0);
 
-                let response = egui::color_picker::color_edit_button_srgba(ui, self.color, egui::color_picker::Alpha::Opaque);
+                let response = super::color::edit_srgba(ui, self.color, egui::color_picker::Alpha::Opaque);
 
                 let painter = ui.painter();
                 painter.rect_filled(response.rect, SWATCH_CORNER_RADIUS, *self.color);

@@ -73,7 +73,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     let can_remove = stops.len() > 2;
                     for (index, stop) in stops.iter_mut().enumerate() {
                         MenuField::new(tr!("drill-hole-colour-stop", index = ((index + 1) as u32))).show(ui, |ui, _, _| {
-                            changed |= egui::color_picker::color_edit_button_rgb(ui, &mut stop.color).changed();
+                            changed |= crate::ui::widgets::color::edit_rgb(ui, &mut stop.color).changed();
                             let actual = if (*max - *min).abs() <= f64::EPSILON {
                                 *min
                             } else {
@@ -122,7 +122,7 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
                     let mut changed = false;
                     for category in &mut categories {
                         MenuField::new(&category.value).show(ui, |ui, _, _| {
-                            changed |= egui::color_picker::color_edit_button_rgb(ui, &mut category.color).changed();
+                            changed |= crate::ui::widgets::color::edit_rgb(ui, &mut category.color).changed();
                         });
                     }
                     if changed {

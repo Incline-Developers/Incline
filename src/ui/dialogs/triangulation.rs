@@ -1199,7 +1199,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                                     .prefix(tr!(literal = "Minor "))
                                     .max_decimals(3),
                             );
-                            ui.color_edit_button_srgba(&mut minor_color);
+                            crate::ui::widgets::color::edit_srgba(ui, &mut minor_color, egui::color_picker::Alpha::OnlyBlend);
                             ui.add_sized(
                                 [value_width, row_height],
                                 egui::DragValue::new(&mut editor.tri_contour_major_interval_input)
@@ -1208,7 +1208,7 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
                                     .prefix(tr!(literal = "Major "))
                                     .max_decimals(3),
                             );
-                            ui.color_edit_button_srgba(&mut major_color);
+                            crate::ui::widgets::color::edit_srgba(ui, &mut major_color, egui::color_picker::Alpha::OnlyBlend);
                         },
                     )
                     .response

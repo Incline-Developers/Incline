@@ -1233,7 +1233,7 @@ impl<'value> MenuFieldColor32<'value> {
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, _, _| ui.color_edit_button_srgba(value))
+        menu_field_row(ui, label, help_text, |ui, _, _| super::color::edit_srgba(ui, value, egui::color_picker::Alpha::OnlyBlend))
     }
 }
 
@@ -1260,7 +1260,7 @@ impl<'value> MenuFieldRgba<'value> {
 
     pub(crate) fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let Self { label, help_text, value } = self;
-        menu_field_row(ui, label, help_text, |ui, _, _| ui.color_edit_button_rgba_premultiplied(value))
+        menu_field_row(ui, label, help_text, |ui, _, _| super::color::edit_rgba_premultiplied(ui, value))
     }
 }
 

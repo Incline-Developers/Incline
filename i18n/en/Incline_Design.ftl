@@ -1571,3 +1571,12 @@ literal-update-8b0432eecbd8b034 = Update
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Vertical depth below each collar.
 literal-x-offset-cf30a60198d81e4a = X offset
 literal-y-offset-ffb673aa94de0fa7 = Y offset
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = Index
+color-rgb = RGB
+color-opacity = Opacity
+color-edit = Click to edit colour
+color-saturation-value = Saturation and brightness
+color-hue = Hue

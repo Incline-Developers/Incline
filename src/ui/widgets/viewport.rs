@@ -345,29 +345,6 @@ fn insert_stop_sorted(ramp: &mut UiRamp, id: u64, t: f32, min: f64, max: f64) ->
     index
 }
 
-/// Chequerboard behind the gradient bar, so a band with alpha reads as
-/// transparent rather than as the panel background - including the stretch
-/// under the first boundary, which is always fully transparent.
-fn paint_alpha_checker(painter: &egui::Painter, rect: egui::Rect) {
-    const SQUARE: f32 = 4.0;
-    let dark = egui::Color32::from_gray(90);
-    painter.rect_filled(rect, 2.0, egui::Color32::from_gray(130));
-    let mut y = rect.top();
-    let mut row = 0;
-    while y < rect.bottom() {
-        let mut x = rect.left() + if row % 2 == 0 { 0.0 } else { SQUARE };
-        while x < rect.right() {
-            let square = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(SQUARE, SQUARE)).intersect(rect);
-            if square.is_positive() {
-                painter.rect_filled(square, 0.0, dark);
-            }
-            x += SQUARE * 2.0;
-        }
-        y += SQUARE;
-        row += 1;
-    }
-}
-
 fn color32_from_straight(c: [f32; 4]) -> egui::Color32 {
     let [r, g, b, a] = straight_to_unmultiplied_srgba(c);
     egui::Color32::from_rgba_unmultiplied(r, g, b, a)
@@ -393,44 +370,6 @@ fn unmultiplied_srgba_to_straight(c: [u8; 4]) -> [f32; 4] {
     let mut straight = crate::rendering::color::rgb_bytes_to_linear_rgba([c[0], c[1], c[2]]);
     straight[3] = f32::from(c[3]) / 255.0;
     straight
-}
-
-#[derive(Clone, Copy)]
-struct UnmultipliedColorPickerState {
-    srgba: [u8; 4],
-    hsva: egui::ecolor::Hsva,
-}
-
-fn hsva_from_unmultiplied_srgba([r, g, b, a]: [u8; 4]) -> egui::ecolor::Hsva {
-    // `Hsva::from_srgba_unmultiplied` first constructs a premultiplied
-    // `Color32`, which discards RGB precision as alpha approaches zero (and
-    // discards RGB completely at zero). Build the opaque colour first so RGB
-    // remains independent of alpha.
-    let mut hsva = egui::ecolor::Hsva::from_srgb([r, g, b]);
-    hsva.a = a as f32 / 255.0;
-    hsva
-}
-
-/// An unmultiplied sRGBA picker that keeps the RGB channels independent from
-/// alpha, including at very low opacity.
-fn color_edit_button_srgba_unmultiplied(ui: &mut egui::Ui, srgba: &mut [u8; 4]) -> egui::Response {
-    // egui's convenience method routes through its premultiplied `Rgba` and
-    // `Color32` types. At low alpha that quantizes the premultiplied channels,
-    // so merely dragging the opacity slider can visibly change the colour.
-    // Drive the HSVA picker directly instead.
-    let state_id = ui.auto_id_with("unmultiplied_color_picker_state");
-    let cached = ui.ctx().data_mut(|data| data.get_temp::<UnmultipliedColorPickerState>(state_id));
-    let mut hsva = cached
-        .filter(|state| state.srgba == *srgba)
-        .map(|state| state.hsva)
-        .unwrap_or_else(|| hsva_from_unmultiplied_srgba(*srgba));
-
-    let response = egui::color_picker::color_edit_button_hsva(ui, &mut hsva, egui::color_picker::Alpha::OnlyBlend);
-    if response.changed() {
-        *srgba = hsva.to_srgba_unmultiplied();
-    }
-    ui.ctx().data_mut(|data| data.insert_temp(state_id, UnmultipliedColorPickerState { srgba: *srgba, hsva }));
-    response
 }
 
 fn trim_decimal_zeros(mut value: String) -> String {
@@ -684,7 +623,7 @@ impl<'a> BlockModelProperties<'a> {
                         );
                         if !is_default || !model.hide_empty_color_values {
                             let mut srgba = straight_to_unmultiplied_srgba(color);
-                            if color_edit_button_srgba_unmultiplied(ui, &mut srgba)
+                            if super::color::edit_srgba_unmultiplied(ui, &mut srgba)
                                 .on_hover_text(if is_default {
                                     tr!(literal = "Edit the colour used for empty values")
                                 } else {
@@ -796,7 +735,7 @@ impl<'a> BlockModelProperties<'a> {
 
         {
             let painter = ui.painter();
-            paint_alpha_checker(painter, bar_rect);
+            super::color::paint_alpha_checker(painter, bar_rect);
             const STRIPS: usize = 96;
             let strip_height = bar_rect.height() / STRIPS as f32;
             for i in 0..STRIPS {
@@ -1006,7 +945,7 @@ impl<'a> BlockModelProperties<'a> {
             let response = ui
                 .scope_builder(egui::UiBuilder::new().id_salt("color_stop_color_picker").max_rect(swatch_rect), |ui| {
                     ui.spacing_mut().interact_size = egui::vec2(COLOR_PICKER_BUTTON_WIDTH, COLOR_PICKER_BUTTON_HEIGHT);
-                    color_edit_button_srgba_unmultiplied(ui, &mut srgba)
+                    super::color::edit_srgba_unmultiplied(ui, &mut srgba)
                 })
                 .inner
                 .on_hover_text(tr!(literal = "Click to edit color; right-click to remove"));
