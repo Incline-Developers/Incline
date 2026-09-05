@@ -476,14 +476,15 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     // heading. The box presents its entries as one full-width
                     // scrolling list and keeps two rows visible at once.
                     let list_width = PANEL_SIZE - 60.0;
-                    if !recent.is_empty() {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                            ui.add_space(30.0);
-                            select_project_action_column(ui, tr!(literal = "Recent"), list_width, |ui| {
-                                draw_recent_projects(ui, &recent, list_width, RECENT_HEIGHT, ROW_HEIGHT, commands);
-                            });
+                    // Drawn even with nothing remembered: the splash keeps one
+                    // shape on every launch, and the empty box says where
+                    // projects will show up rather than leaving a hole.
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                        ui.add_space(30.0);
+                        select_project_action_column(ui, tr!(literal = "Recent"), list_width, |ui| {
+                            draw_recent_projects(ui, &recent, list_width, RECENT_HEIGHT, ROW_HEIGHT, commands);
                         });
-                    }
+                    });
                 });
 
             #[cfg(target_arch = "wasm32")]
