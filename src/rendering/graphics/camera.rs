@@ -5,6 +5,19 @@ use winit::keyboard::PhysicalKey;
 use super::{frustum::Frustum, *};
 use crate::rendering::pick::{clamped_range, triangle_weights};
 
+/// Ground distance a view with nothing to frame spans across the viewport, in
+/// metres. Mine design starts at pit scale, so an empty scene opens on a few
+/// hundred metres rather than the couple of metres a unit zoom would give.
+const DEFAULT_VIEW_WIDTH: f64 = 200.0;
+
+/// Ortho half-height that puts [`DEFAULT_VIEW_WIDTH`] across the viewport at
+/// this aspect ratio - the fallback zoom whenever there are no extents to fit.
+fn default_zoom(aspect: f64) -> f64 {
+    // A degenerate surface (zero width, a minimised window) would otherwise
+    // turn a near-zero aspect into an astronomical half-height.
+    DEFAULT_VIEW_WIDTH / (2.0 * aspect.clamp(0.1, 10.0))
+}
+
 /// Merge per-object AABBs into a single scene AABB, or `None` when empty.
 fn merge_aabbs(aabbs: &[(DVec3, DVec3)]) -> Option<(DVec3, DVec3)> {
     aabbs.iter().copied().reduce(|(acc_min, acc_max), (min, max)| (acc_min.min(min), acc_max.max(max)))
@@ -862,7 +875,7 @@ impl<'a> Graphics<'a> {
                 let size = max - min;
                 // Degenerate (single point or all collinear on one axis): unit zoom.
                 if size.length() < 1e-6 {
-                    (center, 1.0_f64)
+                    (center, default_zoom(aspect))
                 } else {
                     // Plan view: right == X, up == Y.
                     let zoom_h = size.y / 2.0;
@@ -871,7 +884,7 @@ impl<'a> Graphics<'a> {
                     (center, zoom_h.max(zoom_w) * 1.1)
                 }
             }
-            None => (DVec3::ZERO, 1.0_f64),
+            None => (DVec3::ZERO, default_zoom(aspect)),
         };
 
         let zoom = zoom.max(1e-4);
@@ -956,7 +969,7 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
         let zoom = if half_w <= 1e-9 && half_h <= 1e-9 {
-            1.0
+            default_zoom(aspect)
         } else {
             // 10 % padding, matching fit_to_extents.
             (half_h.max(half_w / aspect) * 1.1).max(1e-4)

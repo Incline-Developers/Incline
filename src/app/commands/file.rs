@@ -433,6 +433,7 @@ impl<'a> App<'a> {
                 project_file.metadata.name = sanitize_project_name(&name);
                 let project = project::open_project(None, project_file)?;
                 self.set_active_project(project);
+                self.fit_view_to_extents();
                 userspace_log!("{}", tr!(literal = "Created new browser project"));
                 Ok(())
             }
@@ -1086,6 +1087,10 @@ impl<'a> App<'a> {
         // prompt. Save still reaches it through `project_needs_first_save`.
         project.mark_saved();
         self.set_active_project(project);
+        // The outgoing project's camera frames coordinates the empty one does
+        // not share, so an untouched view would leave the user somewhere far
+        // from where the first line is drawn: start on the default plan view.
+        self.fit_view_to_extents();
         Ok(())
     }
 
