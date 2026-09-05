@@ -143,8 +143,6 @@ ui-selection-spans = Выбор простирается от { $min } до { $m
 confirm-delete-count = Вы уверены, что хотите удалить выбранные элементы ({ $count })?
 confirm-delete-layer = Удалить слой «{ $name }» и все объекты в нём?
     Это действие нельзя отменить.
-update-available = Доступна Incline Design { $version }
-update-current = Установленная версия: { $version }
 plot-preview-pixels = { $width } × { $height } пикселей при { $dpi } dpi
 tri-estimated-memory = Пиковое потребление памяти: около { $estimate }. { $detail }
 block-grid-summary = Сетка: { $x } × { $y } × { $z } = { $count } блоков

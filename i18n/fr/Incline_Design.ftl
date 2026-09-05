@@ -73,8 +73,6 @@ ui-selection-spans = La sélection s'étend de { $min } à { $max }.
 confirm-delete-count = Voulez-vous vraiment supprimer les { $count } élément(s) sélectionné(s) ?
 confirm-delete-layer = Supprimer la couche « { $name } » et tous les objets qu'elle contient ?
     Cette action est irréversible.
-update-available = Incline Design { $version } est disponible
-update-current = Actuellement installé: { $version }
 plot-preview-pixels = { $width } × { $height } px à { $dpi } dpi
 tri-estimated-memory = La mémoire maximale estimée est ~{ $estimate }. { $detail }
 block-grid-summary = Grille : { $x } × { $y } × { $z } = { $count } blocs

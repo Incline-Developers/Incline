@@ -137,8 +137,6 @@ ui-selection-spans = Uteuzi unaanzia { $min } hadi { $max }.
 confirm-delete-count = Una uhakika unataka kufuta vitu { $count } vilivyochaguliwa?
 confirm-delete-layer = Futa tabaka '{ $name }' na vitu vyote vilivyomo?
     Hatua hii haiwezi kutenduliwa.
-update-available = Incline Design { $version } inapatikana
-update-current = Iliyosakinishwa sasa: { $version }
 plot-preview-pixels = { $width } × { $height } px kwa { $dpi } dpi
 tri-estimated-memory = Kumbukumbu ya juu inayokadiriwa ~{ $estimate }. { $detail }
 block-grid-summary = Gridi: { $x } × { $y } × { $z } = vitalu { $count }

@@ -2,7 +2,7 @@ cargo-features = ["profile-rustflags"]
 
 [package]
 name = "Incline-Design"
-version = "0.4.0"
+version = "0.3.1"
 edition = "2024"
 description = "Free Open Source Mine Design"
 repository = "https://github.com/Incline-Developers/Incline"
@@ -61,14 +61,12 @@ egui-winit = "0.35.0"
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"
-semver = "1.0.28"
 sys-locale = "0.3.2"
 tempfile = "3.27.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
-ureq = "3.4.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"

@@ -72,8 +72,6 @@ ui-invalid-axis-value = یک مقدار { $axis } معتبر را وارد کن�
 ui-selection-spans = انتخاب از { $min } تا { $max } می باشد.
 confirm-delete-count = آیا مطمئن هستید که می خواهید آیتم های انتخاب شده { $count } را حذف کنید؟
 confirm-delete-layer = لایه «{ $name }» و تمام اشیای روی آن حذف شود؟ این کار قابل بازگشت نیست.
-update-available = Incline Design { $version } در دسترس است
-update-current = در حال حاضر نصب شده: { $version }
 plot-preview-pixels = { $width } × { $height } px در { $dpi } dpi
 tri-estimated-memory = حداکثر حافظه تخمین زده شده ~{ $estimate }. { $detail }
 block-grid-summary = شبکه: { $x } × { $y } × { $z } = { $count } بلوک

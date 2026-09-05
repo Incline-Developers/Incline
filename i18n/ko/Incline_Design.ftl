@@ -139,8 +139,6 @@ confirm-delete-count = 선택한 항목 { $count }개를 삭제하시겠습니�
 confirm-delete-layer =
     레이어 '{ $name }' 및 그 안의 모든 객체를 삭제하시겠습니까?
     이 작업은 되돌릴 수 없습니다.
-update-available = Incline Design { $version }을(를) 사용할 수 있습니다
-update-current = 현재 설치된 버전: { $version }
 plot-preview-pixels = { $width } × { $height } px, { $dpi } dpi
 tri-estimated-memory = 예상 최대 메모리 사용량 ~{ $estimate }. { $detail }
 block-grid-summary = 그리드: { $x } × { $y } × { $z } = 블록 { $count }개

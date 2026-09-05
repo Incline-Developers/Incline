@@ -352,7 +352,7 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 /// A project is already open behind it - startup lands on an empty, never-saved
 /// one - so the splash is an offer, not a gate: Escape, a click on the backdrop,
 /// or `New project` all simply dismiss it and leave that project in place.
-pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
@@ -366,10 +366,6 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
     // among these: the splash is only up when nothing but the startup project
     // is open.
     let recent: Vec<&crate::ui::state::UiTrackedProjectEntry> = project.recent_projects().collect();
-
-    // Only the update notice below reads the editor, and that is native-only.
-    #[cfg(target_arch = "wasm32")]
-    let _ = editor;
 
     // The splash floats over a live window, so something has to catch the
     // clicks that dismiss it, or they would fall through to the viewport and
@@ -509,37 +505,6 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                                 app = crate::APP_NAME
                             )));
                             ui.hyperlink_to(tr!(literal = "Download the free native version at our website ↗"), "https://inclinedesign.net");
-                        });
-                    });
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(newest_release) = editor.newer_release.as_deref() {
-                let notice_color = if ui.visuals().dark_mode {
-                    egui::Color32::from_rgb(125, 190, 255)
-                } else {
-                    egui::Color32::from_rgb(25, 95, 165)
-                };
-
-                ui.add_space(8.0);
-                egui::Frame::new()
-                    .fill(ui.visuals().window_fill())
-                    .stroke(egui::Stroke::new(1.0, notice_color))
-                    .corner_radius(3.0)
-                    .inner_margin(egui::Margin::symmetric(12, 9))
-                    .show(ui, |ui| {
-                        ui.set_width(PANEL_SIZE - 24.0);
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(egui::RichText::new(tr!("update-available", version = newest_release)).strong());
-                                ui.label(egui::RichText::new(tr!("update-current", version = crate::APP_RELEASE)).color(ui.visuals().weak_text_color()));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(MenuButton::new(tr!(literal = "Download")).primary().min_width(92.0)).clicked() {
-                                    ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net/downloads/"));
-                                }
-                            });
                         });
                     });
             }

@@ -140,8 +140,6 @@ impl<'a> App<'a> {
                     self.poll_raster_loads();
                     self.poll_saves();
                     self.poll_jobs();
-                    #[cfg(not(target_arch = "wasm32"))]
-                    self.poll_release_check();
                     self.refresh_status_message();
                     let now = Instant::now();
                     let frame_interval = if self.pending_resize.is_some() {

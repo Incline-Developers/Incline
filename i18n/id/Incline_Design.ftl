@@ -72,8 +72,6 @@ ui-invalid-axis-value = Masukkan nilai { $axis } yang valid.
 ui-selection-spans = Seleksi mencakup { $min } hingga { $max }.
 confirm-delete-count = Apakah Anda yakin ingin menghapus { $count } item yang dipilih?
 confirm-delete-layer = Hapus lapisan '{ $name }' dan semua benda di atasnya? Ini tidak bisa dibalikkan.
-update-available = Incline Design { $version } tersedia
-update-current = Saat ini dipasang: { $version }
 plot-preview-pixels = { $width } × { $height } px pada { $dpi } dpi
 tri-estimated-memory = Diperkirakan memori puncak ~{ $estimate }. { $detail }
 block-grid-summary = Jaringan: { $x } × { $y } × { $z } = { $count } blok

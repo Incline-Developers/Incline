@@ -4,8 +4,6 @@ pub(crate) mod events; // Handles window events
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod release_check; // Checks the website for a newer published release
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -389,10 +387,6 @@ pub(crate) struct App<'a> {
     /// Heavy compute jobs (include/cut/create) running on background threads;
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
-    /// One-shot website release check. Failures are logged and otherwise
-    /// ignored so starting Incline Design never depends on network availability.
-    #[cfg(not(target_arch = "wasm32"))]
-    pending_release_check: Option<mpsc::Receiver<Result<Option<String>>>>,
     #[cfg(target_arch = "wasm32")]
     web_import_files: Option<(crate::ui::state::DataMenu, Vec<crate::model::input::InputFile>)>,
     window_focused: bool,
@@ -487,8 +481,6 @@ impl<'a> Default for App<'a> {
             project_asset_baseline: SaveToken::default(),
             pending_saves: Vec::new(),
             pending_jobs: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            pending_release_check: None,
             #[cfg(target_arch = "wasm32")]
             web_import_files: None,
             window_focused: true,
@@ -1822,7 +1814,6 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 self.graphics = Some(graphics);
                 self.redraw_requested = true;
                 self.fit_view_to_extents();
-                self.start_release_check();
             }
             Err(e) => {
                 log::error!("{}", crate::i18n::tr_format!(literal = "Failed to initialize graphics: %error%", error = format!("{e:?}")));

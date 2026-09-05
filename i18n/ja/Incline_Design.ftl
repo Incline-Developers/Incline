@@ -141,8 +141,6 @@ ui-selection-spans = 選択範囲: { $min } ～ { $max }
 confirm-delete-count = 選択した { $count } 件のアイテムを削除しますか？
 confirm-delete-layer = レイヤー「{ $name }」とその中のすべてのオブジェクトを削除しますか？
     この操作は元に戻せません。
-update-available = Incline Design { $version } が利用可能です
-update-current = 現在インストールされているバージョン: { $version }
 plot-preview-pixels = { $width } × { $height } px（{ $dpi } dpi）
 tri-estimated-memory = 推定ピークメモリ使用量 ~{ $estimate }。{ $detail }
 block-grid-summary = グリッド: { $x } × { $y } × { $z } = { $count } ブロック

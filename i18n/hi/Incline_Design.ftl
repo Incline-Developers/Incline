@@ -72,8 +72,6 @@ ui-invalid-axis-value = एक वैध { $axis } मान दर्ज कर
 ui-selection-spans = चयन { $min } से { $max } तक होता है।
 confirm-delete-count = क्या आप सुनिश्चित हैं कि आप { $count } चयनित आइटम को हटाना चाहते हैं?
 confirm-delete-layer = '{ $name }' परत और उस पर सभी वस्तुओं को हटाना? ऐसा नहीं किया जा सकता।
-update-available = Incline Design { $version } उपलब्ध है
-update-current = वर्तमान में स्थापितः { $version }
 plot-preview-pixels = { $width } × { $height } px { $dpi } dpi पर
 tri-estimated-memory = अनुमानित पीक मेमोरी ~{ $estimate }. { $detail }
 block-grid-summary = ग्रिडः { $x } × { $y } × { $z } = { $count } ब्लॉक

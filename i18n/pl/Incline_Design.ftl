@@ -149,8 +149,6 @@ ui-selection-spans = Zaznaczenie obejmuje zakres od { $min } do { $max }.
 confirm-delete-count = Czy na pewno usunąć zaznaczone elementy ({ $count })?
 confirm-delete-layer = Usunąć warstwę „{ $name }” wraz ze wszystkimi znajdującymi się na niej obiektami?
     Tej operacji nie można cofnąć.
-update-available = Dostępna jest wersja Incline Design { $version }
-update-current = Obecnie zainstalowana wersja: { $version }
 plot-preview-pixels = { $width } × { $height } px przy { $dpi } dpi
 tri-estimated-memory = Szacowane szczytowe zużycie pamięci ~{ $estimate }. { $detail }
 block-grid-summary = Siatka: { $x } × { $y } × { $z } = { $count } bloków

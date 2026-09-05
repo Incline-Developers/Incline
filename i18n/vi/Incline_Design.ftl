@@ -139,8 +139,6 @@ ui-selection-spans = Vùng chọn kéo dài từ { $min } đến { $max }.
 confirm-delete-count = Bạn có chắc muốn xóa { $count } mục đã chọn không?
 confirm-delete-layer = Xóa lớp '{ $name }' cùng tất cả đối tượng trên đó?
     Không thể hoàn tác thao tác này.
-update-available = Đã có phiên bản Incline Design { $version }
-update-current = Phiên bản đang cài đặt: { $version }
 plot-preview-pixels = { $width } × { $height } px ở { $dpi } dpi
 tri-estimated-memory = Bộ nhớ đỉnh ước tính ~{ $estimate }. { $detail }
 block-grid-summary = Lưới: { $x } × { $y } × { $z } = { $count } khối

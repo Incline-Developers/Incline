@@ -145,8 +145,6 @@ ui-selection-spans = Seçim { $min } ile { $max } arasında.
 confirm-delete-count = Seçili { $count } öğeyi silmek istediğinizden emin misiniz?
 confirm-delete-layer = '{ $name }' katmanı ve üzerindeki tüm nesneler silinsin mi?
     Bu işlem geri alınamaz.
-update-available = Incline Design { $version } sürümü kullanılabilir
-update-current = Şu anda kurulu: { $version }
 plot-preview-pixels = { $dpi } dpi'de { $width } × { $height } piksel
 tri-estimated-memory = Tahmini tepe bellek kullanımı ~{ $estimate }. { $detail }
 block-grid-summary = Izgara: { $x } × { $y } × { $z } = { $count } blok

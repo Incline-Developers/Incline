@@ -72,8 +72,6 @@ ui-invalid-axis-value = 请输入有效的{ $axis }值。
 ui-selection-spans = 选择范围为{ $min }到{ $max }。
 confirm-delete-count = 确定要删除已选择的{ $count }项吗？
 confirm-delete-layer = 删除图层“{ $name }”及其上的所有对象？
-update-available = Incline Design { $version } 可用
-update-current = 当前已安装：{ $version }
 plot-preview-pixels = { $width } × { $height } px，{ $dpi } dpi
 tri-estimated-memory = 估计峰值内存约为{ $estimate }。{ $detail }
 block-grid-summary = 网格：{ $x } × { $y } × { $z } = { $count }个块

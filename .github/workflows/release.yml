@@ -1,0 +1,271 @@
+name: Release
+
+# A merge of staging into main is just a push to main, so that is the trigger.
+# Only the FIRST push under a given Cargo.toml version builds, signs and
+# releases; later pushes at the same version stop after the version check.
+# Bump the version in Cargo.toml to ship again — a released version is never
+# rebuilt in place, because the in-app update check compares semver strictly
+# and would never offer a replacement build of the same version to users.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the tag and the release
+  actions: read # SignPath reads job details and downloads the build artifact
+
+# Never cancel in flight: a superseded run could be waiting on a SignPath
+# approval, and killing it would strand the signing request.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+# Every tool version is pinned here rather than resolved at build time:
+# SignPath origin verification requires the build to be fully determined by
+# files under source control.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PACKAGER_VERSION: "0.11.8"
+  TRUNK_VERSION: "0.21.14"
+  WASM_BINDGEN_VERSION: "0.2.127" # must match wasm-bindgen in Cargo.lock
+
+jobs:
+  version:
+    name: Read version
+    # workflow_dispatch can be started from any branch; signing policies only
+    # accept main, so refuse anything else up front.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+      release: ${{ steps.read.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # tags, so we can tell whether this version shipped already
+
+      - id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk -F' *= *' '
+            /^\[package\]/ { in_pkg = 1; next }
+            /^\[/          { in_pkg = 0 }
+            in_pkg && $1 == "version" { gsub(/"/, "", $2); print $2; exit }
+          ' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error::no version found in the [package] table of Cargo.toml"
+            exit 1
+          fi
+          tag="v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$tag has already shipped — nothing to do. Bump the version in Cargo.toml to release again."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::First push under $tag — building, signing and releasing."
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+          - name: macos-aarch64
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang mold libgtk-3-dev libxkbcommon-dev
+
+      # rust-toolchain.toml pins nightly and lists the components (rust-src for
+      # build-std) and targets; `rustup show` is what makes rustup honour it.
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      # No build cache anywhere in this workflow: origin verification rejects
+      # artifacts built with state carried over from earlier, unverified builds.
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package (Linux)
+        if: matrix.name == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          tar -czf "out/Incline-Design-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz" \
+            -C target/release Incline-Design
+
+      - name: Package (macOS)
+        if: matrix.name == 'macos-aarch64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+          # Uses [package.metadata.packager]; writes the .app and .dmg into dist/.
+          cargo packager --release
+          mkdir -p out
+          dmg=$(ls dist/*.dmg | head -1)
+          mv "$dmg" "out/Incline-Design-${{ needs.version.outputs.version }}-macos-aarch64.dmg"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error
+
+  windows:
+    name: Build windows-x86_64
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Stage the unsigned binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p unsigned
+          cp target/release/Incline-Design.exe unsigned/
+
+      # SignPath signs the bare .exe, not an archive around it, so the raw
+      # binary is what gets uploaded and submitted. upload-artifact zips it in
+      # transit, so the SignPath artifact configuration's root element must be
+      # <zip-file>.
+      - name: Upload the unsigned binary
+        id: unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-unsigned
+          path: unsigned/Incline-Design.exe
+          if-no-files-found: error
+
+      # Set the SIGNPATH_* repository variables and the SIGNPATH_API_TOKEN
+      # secret to turn signing on. Until then the workflow ships unsigned
+      # builds rather than failing.
+      #
+      # This runs once per version, so exactly one binary is ever signed under
+      # a given version string — SignPath requires that consistency.
+      - name: Sign with SignPath
+        if: vars.SIGNPATH_ENABLED == 'true'
+        uses: SignPath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # SignPath Foundation requires a human to approve every release, so
+          # this step blocks until someone does.
+          wait-for-completion-timeout-in-seconds: "3600"
+          output-artifact-directory: signed
+
+      - name: Skip signing
+        if: vars.SIGNPATH_ENABLED != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p signed
+          cp unsigned/Incline-Design.exe signed/
+          echo "::warning::SIGNPATH_ENABLED is not set — publishing an unsigned Windows binary."
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          7z a "out/Incline-Design-${{ needs.version.outputs.version }}-windows-x86_64.zip" \
+            ./signed/Incline-Design.exe
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows-x86_64
+          path: out/*
+          if-no-files-found: error
+
+  web:
+    name: Build web
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      # Installed from crates.io at a pinned version rather than fetched as a
+      # prebuilt binary. wasm-bindgen-cli must match the wasm-bindgen version
+      # in Cargo.lock, otherwise trunk downloads its own copy mid-build.
+      - name: Install the pinned build tools
+        run: |
+          set -euo pipefail
+          cargo install trunk --locked --version "$TRUNK_VERSION"
+          cargo install wasm-bindgen-cli --locked --version "$WASM_BINDGEN_VERSION"
+
+      - run: trunk build --release
+
+      - shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          (cd dist && zip -r "../out/Incline-Design-${{ needs.version.outputs.version }}-web.zip" .)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-web
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [version, build, windows, web]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Only the release-* artifacts; the unsigned Windows binary submitted to
+      # SignPath is deliberately left behind.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The tag does not exist — the version job would have stopped the run
+          # otherwise — so this creates it at the commit that was built.
+          gh release create "${{ needs.version.outputs.tag }}" artifacts/* \
+            --target "$GITHUB_SHA" \
+            --title "Incline Design ${{ needs.version.outputs.version }}" \
+            --generate-notes

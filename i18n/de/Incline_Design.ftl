@@ -146,8 +146,6 @@ ui-selection-spans = Auswahl reicht von { $min } bis { $max }.
 confirm-delete-count = Möchten Sie die { $count } ausgewählten Elemente wirklich löschen?
 confirm-delete-layer = Ebene '{ $name }' und alle darauf befindlichen Objekte löschen?
     Dies kann nicht rückgängig gemacht werden.
-update-available = Incline Design { $version } ist verfügbar
-update-current = Derzeit installiert: { $version }
 plot-preview-pixels = { $width } × { $height } px bei { $dpi } dpi
 tri-estimated-memory = Geschätzter Spitzenspeicherbedarf ~{ $estimate }. { $detail }
 block-grid-summary = Raster: { $x } × { $y } × { $z } = { $count } Blöcke

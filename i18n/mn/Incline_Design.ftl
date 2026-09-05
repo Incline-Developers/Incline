@@ -146,8 +146,6 @@ ui-selection-spans = Сонголт { $min }-с { $max } хүртэл үргэл
 confirm-delete-count = Сонгосон { $count } зүйлийг устгахдаа итгэлтэй байна уу?
 confirm-delete-layer = «{ $name }» давхаргыг түүн дээрх бүх объектын хамт устгах уу?
     Энэ үйлдлийг буцаах боломжгүй.
-update-available = Incline Design { $version } хувилбар гарлаа
-update-current = Одоо суулгасан: { $version }
 plot-preview-pixels = { $width } × { $height } px, { $dpi } dpi
 tri-estimated-memory = Тооцоолсон дээд санах ой ~{ $estimate }. { $detail }
 block-grid-summary = Тор: { $x } × { $y } × { $z } = { $count } блок

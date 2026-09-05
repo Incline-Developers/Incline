@@ -72,8 +72,6 @@ ui-invalid-axis-value = أدخل قيمة { $axis } صالحة.
 ui-selection-spans = يمتد اختيار { $min } إلى { $max }.
 confirm-delete-count = هل أنت متأكد من رغبتك في حذف { $count } من العناصر المحددة؟
 confirm-delete-layer = حذف الطبقة «{ $name }» وجميع الأشياء الموجودة عليها؟ لا يمكن التراجع عن هذا الإجراء.
-update-available = Incline Design { $version } متاح
-update-current = المثبتة حاليا: { $version }
 plot-preview-pixels = { $width } × { $height } px عند { $dpi } dpi
 tri-estimated-memory = ذروة الذاكرة المقدَّرة ~{ $estimate }. { $detail }
 block-grid-summary = الشبكة: { $x } × { $y } × { $z } = كتلة { $count }

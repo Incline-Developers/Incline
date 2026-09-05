@@ -147,8 +147,6 @@ ui-selection-spans = La selezione va da { $min } a { $max }.
 confirm-delete-count = Eliminare { $count } elemento/i selezionato/i?
 confirm-delete-layer = Eliminare il livello '{ $name }' e tutti gli oggetti che contiene?
     Questa azione non può essere annullata.
-update-available = Incline Design { $version } è disponibile
-update-current = Attualmente installata: { $version }
 plot-preview-pixels = { $width } × { $height } px a { $dpi } dpi
 tri-estimated-memory = Memoria di picco stimata ~{ $estimate }. { $detail }
 block-grid-summary = Griglia: { $x } × { $y } × { $z } = { $count } blocchi

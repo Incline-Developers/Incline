@@ -146,8 +146,6 @@ ui-selection-spans = Selection spans { $min } to { $max }.
 confirm-delete-count = Are you sure you want to delete { $count } selected item(s)?
 confirm-delete-layer = Delete layer '{ $name }' and all objects on it?
     This cannot be undone.
-update-available = Incline Design { $version } is available
-update-current = Currently installed: { $version }
 plot-preview-pixels = { $width } × { $height } px at { $dpi } dpi
 tri-estimated-memory = Estimated peak memory ~{ $estimate }. { $detail }
 block-grid-summary = Grid: { $x } × { $y } × { $z } = { $count } blocks

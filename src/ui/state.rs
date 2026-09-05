@@ -924,10 +924,6 @@ pub(crate) struct EditorState {
     pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     pub(crate) show_scale_bar: bool,
-    /// Newest published desktop release, when it is newer than this build.
-    /// This is transient UI state populated by the startup website check.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) newer_release: Option<String>,
     /// Linear RGBA clear colour used behind the rendered scene.
     pub(crate) renderer_background_color: [f32; 4],
     /// Values the properties panel's settings tabs are editing.
@@ -1952,8 +1948,6 @@ impl EditorState {
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
             show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
-            #[cfg(not(target_arch = "wasm32"))]
-            newer_release: None,
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             preferences_draft: None,
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
