@@ -6,7 +6,6 @@
 
 # Ai Agents
 .claude/
-/CLAUDE.md
 .cursor/
 .agents/
 .codex/
