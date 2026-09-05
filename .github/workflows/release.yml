@@ -27,8 +27,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_PACKAGER_VERSION: "0.11.8"
-  TRUNK_VERSION: "0.21.14"
-  WASM_BINDGEN_VERSION: "0.2.127" # must match wasm-bindgen in Cargo.lock
 
 jobs:
   version:
@@ -207,43 +205,9 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  web:
-    name: Build web
-    needs: version
-    if: needs.version.outputs.release == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install the pinned toolchain
-        run: rustup show
-
-      # Installed from crates.io at a pinned version rather than fetched as a
-      # prebuilt binary. wasm-bindgen-cli must match the wasm-bindgen version
-      # in Cargo.lock, otherwise trunk downloads its own copy mid-build.
-      - name: Install the pinned build tools
-        run: |
-          set -euo pipefail
-          cargo install trunk --locked --version "$TRUNK_VERSION"
-          cargo install wasm-bindgen-cli --locked --version "$WASM_BINDGEN_VERSION"
-
-      - run: trunk build --release
-
-      - shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p out
-          (cd dist && zip -r "../out/Incline-Design-${{ needs.version.outputs.version }}-web.zip" .)
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-web
-          path: out/*
-          if-no-files-found: error
-
   release:
     name: Publish release
-    needs: [version, build, windows, web]
+    needs: [version, build, windows]
     if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-24.04
     steps:
