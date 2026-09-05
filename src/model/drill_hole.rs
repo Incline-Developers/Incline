@@ -273,18 +273,97 @@ pub(crate) fn generate_pattern_collars(
     // values cheap while preserving their exact pattern phase.
     let first_x = base_x + grid_offset.x + ((min_x - base_x - grid_offset.x) / spacing).ceil() * spacing;
     let first_y = base_y + grid_offset.y + ((min_y - base_y - grid_offset.y) / burden).ceil() * burden;
+    // Rows run in ascending Y, so a sweep keeps only the edges a row can
+    // touch: the ones it crosses, plus any close enough to fall under the
+    // on-boundary tolerance. A dense ring - a tessellated circle, say - then
+    // costs one edge pass per row instead of one per candidate hole.
+    struct BoundaryEdge {
+        start: DVec2,
+        end: DVec2,
+        min_y: f64,
+        max_y: f64,
+    }
+    const ON_EDGE_TOLERANCE: f64 = 1.0e-8;
+    let mut edges = grid_boundary
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let start = point.truncate();
+            let end = grid_boundary[(index + 1) % grid_boundary.len()].truncate();
+            BoundaryEdge {
+                start,
+                end,
+                min_y: start.y.min(end.y),
+                max_y: start.y.max(end.y),
+            }
+        })
+        .collect::<Vec<_>>();
+    edges.sort_unstable_by(|left, right| left.min_y.total_cmp(&right.min_y));
+
+    let mut pending_edge = 0_usize;
+    let mut active_edges: Vec<usize> = Vec::new();
+    let mut crossings: Vec<f64> = Vec::new();
+    let mut on_boundary: Vec<usize> = Vec::new();
     for row in 0..rows {
         let y = first_y + row as f64 * burden;
         if y >= max_y {
             break;
         }
         let stagger = if layout == DrillPatternLayout::Staggered && row % 2 == 1 { spacing * 0.5 } else { 0.0 };
+
+        while pending_edge < edges.len() && edges[pending_edge].min_y <= y + ON_EDGE_TOLERANCE {
+            active_edges.push(pending_edge);
+            pending_edge += 1;
+        }
+        active_edges.retain(|&index| edges[index].max_y >= y - ON_EDGE_TOLERANCE);
+
+        crossings.clear();
+        on_boundary.clear();
+        for &index in &active_edges {
+            let BoundaryEdge { start, end, .. } = edges[index];
+            if (start.y > y) != (end.y > y) {
+                crossings.push((end.x - start.x) * (y - start.y) / (end.y - start.y) + start.x);
+            }
+            // The tolerance is a hair over an exact hit, so an edge can only
+            // put a handful of columns on the boundary - walk those instead of
+            // testing every column against every edge.
+            let span = end - start;
+            let length_squared = span.length_squared();
+            if length_squared > 0.0 {
+                let low = start.x.min(end.x) - ON_EDGE_TOLERANCE;
+                let high = start.x.max(end.x) + ON_EDGE_TOLERANCE;
+                let first_column = (((low - first_x - stagger) / spacing).ceil()).max(0.0) as usize;
+                let last_column = (((high - first_x - stagger) / spacing).floor()).max(0.0) as usize;
+                for column in first_column..=last_column.min(columns.saturating_sub(1)) {
+                    let point = DVec2::new(first_x + column as f64 * spacing + stagger, y);
+                    let along = ((point - start).dot(span) / length_squared).clamp(0.0, 1.0);
+                    if point.distance_squared(start + span * along) <= ON_EDGE_TOLERANCE * ON_EDGE_TOLERANCE {
+                        on_boundary.push(column);
+                    }
+                }
+            }
+        }
+        crossings.sort_unstable_by(f64::total_cmp);
+        on_boundary.sort_unstable();
+        on_boundary.dedup();
+
+        // Even-odd fill: a column is inside when an odd number of crossings
+        // lie to its right, which one pointer walk resolves for the whole row.
+        let mut crossing_index = 0_usize;
+        let mut boundary_index = 0_usize;
         for column in 0..columns {
             let x = first_x + column as f64 * spacing + stagger;
             if x >= max_x {
                 break;
             }
-            if point_in_polygon_xy(x, y, &grid_boundary) {
+            while crossing_index < crossings.len() && crossings[crossing_index] <= x {
+                crossing_index += 1;
+            }
+            while boundary_index < on_boundary.len() && on_boundary[boundary_index] < column {
+                boundary_index += 1;
+            }
+            let on_edge = on_boundary.get(boundary_index).is_some_and(|&hit| hit == column);
+            if on_edge || (crossings.len() - crossing_index) % 2 == 1 {
                 let world_x = centroid.x + x * cos_rotation - y * sin_rotation;
                 let world_y = centroid.y + x * sin_rotation + y * cos_rotation;
                 collars.push(DVec3::new(world_x, world_y, elevation(world_x, world_y)));
@@ -301,30 +380,6 @@ pub(crate) fn generate_pattern_collars(
         return Err(tr!(literal = "No holes fit inside this boundary at the current burden and spacing"));
     }
     Ok(collars)
-}
-
-fn point_in_polygon_xy(x: f64, y: f64, boundary: &[DVec3]) -> bool {
-    let point = glam::DVec2::new(x, y);
-    let mut inside = false;
-    for index in 0..boundary.len() {
-        let a = boundary[index].truncate();
-        let b = boundary[(index + 1) % boundary.len()].truncate();
-        let edge = b - a;
-        let length_squared = edge.length_squared();
-        if length_squared > 0.0 {
-            let t = ((point - a).dot(edge) / length_squared).clamp(0.0, 1.0);
-            if point.distance_squared(a + edge * t) <= 1.0e-16 {
-                return true;
-            }
-        }
-        if (a.y > y) != (b.y > y) {
-            let crossing_x = (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x;
-            if x < crossing_x {
-                inside = !inside;
-            }
-        }
-    }
-    inside
 }
 
 /// Everything a move rewrites in a hole: its collar and its trace. Nothing

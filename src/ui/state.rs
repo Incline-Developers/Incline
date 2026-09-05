@@ -1018,6 +1018,10 @@ pub(crate) struct EditorState {
     pub(crate) drill_pattern_preview_depth: f64,
     pub(crate) drill_pattern_preview_diameter: f64,
     pub(crate) drill_pattern_preview_error: Option<String>,
+    /// Inputs the cached preview collars were generated from. The dialog is
+    /// redrawn every frame but the pattern only changes when one of these
+    /// does, and filling a dense boundary is far too costly to redo blind.
+    pub(crate) drill_pattern_preview_key: Option<crate::ui::dialogs::drill_pattern::PatternPreviewKey>,
     /// Live world coordinate under the cursor (z on the active pick plane).
     pub(crate) cursor_world: Option<DVec3>,
     /// Browser-only viewport prompt shown before creating a named project.
@@ -1692,6 +1696,7 @@ impl EditorState {
         self.drill_pattern_preview_depth = self.drill_pattern_depth;
         self.drill_pattern_preview_diameter = self.drill_pattern_diameter_mm / 1_000.0;
         self.drill_pattern_preview_error = None;
+        self.drill_pattern_preview_key = None;
         self.drill_pattern_awaiting_shape_pick = false;
         // The dialog owns the tool highlight while it is open, so start it clear
         // rather than inheriting whatever the previous tool left standing.
@@ -1711,6 +1716,7 @@ impl EditorState {
         self.drill_pattern_preview_depth = self.drill_pattern_depth;
         self.drill_pattern_preview_diameter = self.drill_pattern_diameter_mm / 1_000.0;
         self.drill_pattern_preview_error = None;
+        self.drill_pattern_preview_key = None;
         self.viewport_pick_hover_label = None;
         self.tool_highlight_id = None;
     }
@@ -2000,6 +2006,7 @@ impl EditorState {
             drill_pattern_preview_depth: 10.0,
             drill_pattern_preview_diameter: 0.165,
             drill_pattern_preview_error: None,
+            drill_pattern_preview_key: None,
             cursor_world: None,
             #[cfg(target_arch = "wasm32")]
             new_project_dialog_open: false,

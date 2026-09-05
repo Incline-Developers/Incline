@@ -2,7 +2,7 @@
 
 use crate::{
     i18n::{tr, tr_format},
-    model::{Document, Object, geometry::tessellate_polyline_bulges},
+    model::{Document, Object, ObjectId, drill_hole::DrillPatternLayout, geometry::tessellate_polyline_bulges},
     ui::{
         state::{EditorState, UiCommand},
         widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldCombo, MenuFieldF64, MenuFieldText},
@@ -11,6 +11,21 @@ use crate::{
 
 const DIALOG_MIN_WIDTH: f32 = 410.0;
 const PICK_BUTTON_WIDTH: f32 = 64.0;
+
+/// Everything the generated collars depend on. Compared each frame so the
+/// pattern is rebuilt on a real change rather than on every repaint - filling
+/// a densely tessellated boundary is far too expensive to redo blind.
+#[derive(Clone, PartialEq)]
+pub(crate) struct PatternPreviewKey {
+    boundary: ObjectId,
+    boundary_revision: u64,
+    burden: f64,
+    spacing: f64,
+    rotation_deg: f64,
+    offset_x: f64,
+    offset_y: f64,
+    layout: DrillPatternLayout,
+}
 
 fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
     if let Some(id) = editor.drill_pattern_boundary_id
@@ -26,38 +41,52 @@ fn refresh_preview(editor: &mut EditorState, document: &Document) -> bool {
         editor.drill_pattern_boundary_name.clear();
         editor.tool_highlight_id = None;
     }
-    let result = editor
-        .drill_pattern_boundary_id
-        .and_then(|id| document.get_object(id))
-        .and_then(|object| match object {
-            Object::Polyline { verts, closed: true, .. } if verts.len() >= 2 => Some(tessellate_polyline_bulges(verts, true)),
-            _ => None,
-        })
-        .ok_or_else(|| "Pick a closed polyline to define the blast shape".to_owned())
-        .and_then(|boundary| {
-            crate::model::drill_hole::generate_pattern_collars(
-                &boundary,
-                editor.drill_pattern_burden,
-                editor.drill_pattern_spacing,
-                editor.drill_pattern_rotation_deg,
-                glam::DVec2::new(editor.drill_pattern_offset_x, editor.drill_pattern_offset_y),
-                editor.drill_pattern_layout,
-            )
-        });
 
-    let (collars, error) = match result {
-        Ok(collars) => (collars, None),
-        Err(error) => (Vec::new(), Some(error)),
-    };
+    let key = editor.drill_pattern_boundary_id.map(|boundary| PatternPreviewKey {
+        boundary,
+        boundary_revision: document.object_revision(boundary),
+        burden: editor.drill_pattern_burden,
+        spacing: editor.drill_pattern_spacing,
+        rotation_deg: editor.drill_pattern_rotation_deg,
+        offset_x: editor.drill_pattern_offset_x,
+        offset_y: editor.drill_pattern_offset_y,
+        layout: editor.drill_pattern_layout,
+    });
+    let mut changed = false;
+    if key.is_none() || editor.drill_pattern_preview_key != key {
+        let result = editor
+            .drill_pattern_boundary_id
+            .and_then(|id| document.get_object(id))
+            .and_then(|object| match object {
+                Object::Polyline { verts, closed: true, .. } if verts.len() >= 2 => Some(tessellate_polyline_bulges(verts, true)),
+                _ => None,
+            })
+            .ok_or_else(|| "Pick a closed polyline to define the blast shape".to_owned())
+            .and_then(|boundary| {
+                crate::model::drill_hole::generate_pattern_collars(
+                    &boundary,
+                    editor.drill_pattern_burden,
+                    editor.drill_pattern_spacing,
+                    editor.drill_pattern_rotation_deg,
+                    glam::DVec2::new(editor.drill_pattern_offset_x, editor.drill_pattern_offset_y),
+                    editor.drill_pattern_layout,
+                )
+            });
+
+        let (collars, error) = match result {
+            Ok(collars) => (collars, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        changed = editor.drill_pattern_preview_collars != collars || editor.drill_pattern_preview_error != error;
+        editor.drill_pattern_preview_collars = collars;
+        editor.drill_pattern_preview_error = error;
+        editor.drill_pattern_preview_key = key;
+    }
+
     let diameter = editor.drill_pattern_diameter_mm / 1_000.0;
-    let changed = editor.drill_pattern_preview_collars != collars
-        || editor.drill_pattern_preview_error != error
-        || editor.drill_pattern_preview_depth != editor.drill_pattern_depth
-        || editor.drill_pattern_preview_diameter != diameter;
-    editor.drill_pattern_preview_collars = collars;
+    changed |= editor.drill_pattern_preview_depth != editor.drill_pattern_depth || editor.drill_pattern_preview_diameter != diameter;
     editor.drill_pattern_preview_depth = editor.drill_pattern_depth;
     editor.drill_pattern_preview_diameter = diameter;
-    editor.drill_pattern_preview_error = error;
     changed
 }
 
