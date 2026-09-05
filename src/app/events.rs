@@ -276,6 +276,7 @@ impl<'a> App<'a> {
                                     && self.editor.offset_target_ids.is_empty()
                                     && self.editor.batter_berm_target_id.is_none()
                                     && !self.editor.tri_cut_poly_open
+                                    && !self.editor.drill_pattern_open
                                 {
                                     self.editor.tool_highlight_id = None;
                                     self.invalidate_geometry();

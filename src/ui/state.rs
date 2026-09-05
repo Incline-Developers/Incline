@@ -1693,6 +1693,9 @@ impl EditorState {
         self.drill_pattern_preview_diameter = self.drill_pattern_diameter_mm / 1_000.0;
         self.drill_pattern_preview_error = None;
         self.drill_pattern_awaiting_shape_pick = false;
+        // The dialog owns the tool highlight while it is open, so start it clear
+        // rather than inheriting whatever the previous tool left standing.
+        self.tool_highlight_id = None;
         if self.drill_pattern_name.trim().is_empty() {
             self.drill_pattern_name = tr!(literal = "Drill Pattern");
         }
