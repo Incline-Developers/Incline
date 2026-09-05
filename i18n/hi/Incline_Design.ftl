@@ -1524,3 +1524,12 @@ literal-update-8b0432eecbd8b034 = अद्यतन
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = प्रत्येक कॉलर के नीचे ऊर्ध्वाधर गहराई।
 literal-x-offset-cf30a60198d81e4a = X ऑफ़सेट
 literal-y-offset-ffb673aa94de0fa7 = Y ऑफ़सेट
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = इंडेक्स
+color-rgb = RGB
+color-opacity = अपारदर्शिता
+color-edit = रंग संपादित करने के लिए क्लिक करें
+color-saturation-value = संतृप्ति और चमक
+color-hue = ह्यू

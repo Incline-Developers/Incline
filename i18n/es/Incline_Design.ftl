@@ -1527,3 +1527,12 @@ literal-update-8b0432eecbd8b034 = Actualizar
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Profundidad vertical bajo cada brocal.
 literal-x-offset-cf30a60198d81e4a = Desplazamiento X
 literal-y-offset-ffb673aa94de0fa7 = Desplazamiento Y
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = Índice
+color-rgb = RGB
+color-opacity = Opacidad
+color-edit = Haga clic para editar el color
+color-saturation-value = Saturación y brillo
+color-hue = Tono

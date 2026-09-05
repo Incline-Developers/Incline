@@ -1571,3 +1571,12 @@ literal-update-8b0432eecbd8b034 = Обновить
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Вертикальная глубина от каждого устья.
 literal-x-offset-cf30a60198d81e4a = Смещение X
 literal-y-offset-ffb673aa94de0fa7 = Смещение Y
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = Индекс
+color-rgb = RGB
+color-opacity = Непрозрачность
+color-edit = Нажмите, чтобы изменить цвет
+color-saturation-value = Насыщенность и яркость
+color-hue = Оттенок

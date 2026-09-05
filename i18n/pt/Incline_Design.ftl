@@ -1524,3 +1524,12 @@ literal-update-8b0432eecbd8b034 = Atualizar
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Profundidade vertical abaixo de cada boca.
 literal-x-offset-cf30a60198d81e4a = Deslocamento X
 literal-y-offset-ffb673aa94de0fa7 = Deslocamento Y
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = Índice
+color-rgb = RGB
+color-opacity = Opacidade
+color-edit = Clique para editar a cor
+color-saturation-value = Saturação e brilho
+color-hue = Matiz

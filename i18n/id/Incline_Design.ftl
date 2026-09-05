@@ -1524,3 +1524,12 @@ literal-update-8b0432eecbd8b034 = Perbarui
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Kedalaman vertikal di bawah setiap kerah.
 literal-x-offset-cf30a60198d81e4a = Offset X
 literal-y-offset-ffb673aa94de0fa7 = Offset Y
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = Indeks
+color-rgb = RGB
+color-opacity = Opasitas
+color-edit = Klik untuk mengedit warna
+color-saturation-value = Saturasi dan kecerahan
+color-hue = Corak

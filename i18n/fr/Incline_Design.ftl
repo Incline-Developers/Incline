@@ -1525,3 +1525,12 @@ literal-update-8b0432eecbd8b034 = Mettre à jour
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Profondeur verticale sous chaque collet.
 literal-x-offset-cf30a60198d81e4a = Décalage X
 literal-y-offset-ffb673aa94de0fa7 = Décalage Y
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = Index
+color-rgb = RVB
+color-opacity = Opacité
+color-edit = Cliquer pour modifier la couleur
+color-saturation-value = Saturation et luminosité
+color-hue = Teinte

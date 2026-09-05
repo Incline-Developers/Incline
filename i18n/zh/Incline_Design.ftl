@@ -1524,3 +1524,12 @@ literal-update-8b0432eecbd8b034 = 更新
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = 每个孔口下方的垂直深度。
 literal-x-offset-cf30a60198d81e4a = X 偏移
 literal-y-offset-ffb673aa94de0fa7 = Y 偏移
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = 索引
+color-rgb = RGB
+color-opacity = 不透明度
+color-edit = 点击以编辑颜色
+color-saturation-value = 饱和度与明度
+color-hue = 色相

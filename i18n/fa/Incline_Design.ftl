@@ -1524,3 +1524,12 @@ literal-update-8b0432eecbd8b034 = به‌روزرسانی
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = عمق عمودی زیر هر یقه.
 literal-x-offset-cf30a60198d81e4a = جابجایی X
 literal-y-offset-ffb673aa94de0fa7 = جابجایی Y
+
+color-aci = ACI
+color-aci-value = ACI { $index }
+color-index = نمایه
+color-rgb = RGB
+color-opacity = کدری
+color-edit = برای ویرایش رنگ کلیک کنید
+color-saturation-value = اشباع و روشنایی
+color-hue = فام

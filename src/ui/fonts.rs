@@ -1,6 +1,6 @@
 //! Noto Sans setup and bold text helpers.
 
-use crate::fonts::{NOTO_SANS, NOTO_SANS_ARABIC, NOTO_SANS_DEVANAGARI, NOTO_SANS_MONO, NOTO_SANS_SC, NOTO_SANS_SYMBOLS, NOTO_SANS_SYMBOLS_2};
+use crate::fonts::{NOTO_SANS, NOTO_SANS_ARABIC, NOTO_SANS_DEVANAGARI, NOTO_SANS_KR, NOTO_SANS_MONO, NOTO_SANS_SC, NOTO_SANS_SYMBOLS, NOTO_SANS_SYMBOLS_2};
 
 const REGULAR_WEIGHT: f32 = 400.0;
 const BOLD_WEIGHT: f32 = 700.0;
@@ -15,8 +15,8 @@ fn variable_font(font: &'static [u8], weight: f32) -> egui::FontData {
 /// Install the bundled Noto Sans fonts into the egui context.
 ///
 /// The base and mono faces cover Latin and Cyrillic. Script-specific faces are
-/// fallbacks for Simplified Chinese, Arabic/Persian, Devanagari, and UI
-/// symbols. The text faces are variable, so regular and bold share files.
+/// fallbacks for Simplified Chinese, Korean, Arabic/Persian, Devanagari, and
+/// UI symbols. The text faces are variable, so regular and bold share files.
 pub(crate) fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::empty();
     for (name, data) in [
@@ -25,12 +25,14 @@ pub(crate) fn setup_custom_fonts(ctx: &egui::Context) {
         ("noto_sans_arabic_regular", variable_font(NOTO_SANS_ARABIC, REGULAR_WEIGHT)),
         ("noto_sans_devanagari_regular", variable_font(NOTO_SANS_DEVANAGARI, REGULAR_WEIGHT)),
         ("noto_sans_sc_regular", variable_font(NOTO_SANS_SC, REGULAR_WEIGHT)),
+        ("noto_sans_kr_regular", variable_font(NOTO_SANS_KR, REGULAR_WEIGHT)),
         ("noto_sans_symbols_regular", variable_font(NOTO_SANS_SYMBOLS, REGULAR_WEIGHT)),
         ("noto_sans_symbols_2", egui::FontData::from_static(NOTO_SANS_SYMBOLS_2)),
         ("noto_sans_bold", variable_font(NOTO_SANS, BOLD_WEIGHT)),
         ("noto_sans_arabic_bold", variable_font(NOTO_SANS_ARABIC, BOLD_WEIGHT)),
         ("noto_sans_devanagari_bold", variable_font(NOTO_SANS_DEVANAGARI, BOLD_WEIGHT)),
         ("noto_sans_sc_bold", variable_font(NOTO_SANS_SC, BOLD_WEIGHT)),
+        ("noto_sans_kr_bold", variable_font(NOTO_SANS_KR, BOLD_WEIGHT)),
         ("noto_sans_symbols_bold", variable_font(NOTO_SANS_SYMBOLS, BOLD_WEIGHT)),
     ] {
         fonts.font_data.insert(name.to_owned(), data.into());
@@ -41,6 +43,7 @@ pub(crate) fn setup_custom_fonts(ctx: &egui::Context) {
         "noto_sans_arabic_regular",
         "noto_sans_devanagari_regular",
         "noto_sans_sc_regular",
+        "noto_sans_kr_regular",
         "noto_sans_symbols_regular",
         "noto_sans_symbols_2",
     ];
@@ -54,6 +57,7 @@ pub(crate) fn setup_custom_fonts(ctx: &egui::Context) {
             "noto_sans_arabic_regular",
             "noto_sans_devanagari_regular",
             "noto_sans_sc_regular",
+            "noto_sans_kr_regular",
             "noto_sans_symbols_regular",
             "noto_sans_symbols_2",
         ]
@@ -68,6 +72,7 @@ pub(crate) fn setup_custom_fonts(ctx: &egui::Context) {
             "noto_sans_arabic_bold",
             "noto_sans_devanagari_bold",
             "noto_sans_sc_bold",
+            "noto_sans_kr_bold",
             "noto_sans_symbols_bold",
             "noto_sans_symbols_2",
         ]
