@@ -130,46 +130,24 @@ pub(crate) fn draw_screen_point_marker_sized(ctx: &mut DrawContext, center: DVec
 }
 
 pub(crate) fn draw_screen_cross(ctx: &mut DrawContext, center: DVec3, half_size_px: f32, line_width: f32, color: [f32; 4]) {
-    draw_screen_segment(ctx, center, DVec3::X, half_size_px, line_width, color);
-    draw_screen_segment(ctx, center, DVec3::Y, half_size_px, line_width, color);
-}
-
-fn draw_screen_segment(ctx: &mut DrawContext, center: DVec3, direction: DVec3, half_size_px: f32, line_width: f32, color: [f32; 4]) {
-    let index = ctx.stroke_vertex_buf.len() as u32;
+    // Both arms use pixel offsets from a single world anchor. Projecting world
+    // X/Y directions makes the cross skew or collapse at shallow camera dips.
     let position = local(center, ctx.scene_origin);
-    let other = local(center + direction, ctx.scene_origin);
+    let half_size = half_size_px * ctx.scale_factor;
     let half_width = (line_width * ctx.scale_factor).max(1.0) * 0.5;
-    ctx.stroke_vertex_buf.extend_from_slice(&[
-        StrokeVertex {
-            pos: position,
-            color,
-            other_pos: other,
-            offset_px: [-half_width, -half_size_px],
-            screen_space: 0.0,
-        },
-        StrokeVertex {
-            pos: position,
-            color,
-            other_pos: other,
-            offset_px: [half_width, -half_size_px],
-            screen_space: 0.0,
-        },
-        StrokeVertex {
-            pos: position,
-            color,
-            other_pos: other,
-            offset_px: [-half_width, half_size_px],
-            screen_space: 0.0,
-        },
-        StrokeVertex {
-            pos: position,
-            color,
-            other_pos: other,
-            offset_px: [half_width, half_size_px],
-            screen_space: 0.0,
-        },
-    ]);
-    ctx.stroke_index_buf.extend_from_slice(&[index + 1, index, index + 3, index, index + 2, index + 3]);
+    for [half_x, half_y] in [[half_size, half_width], [half_width, half_size]] {
+        let index = ctx.stroke_vertex_buf.len() as u32;
+        for offset_px in [[-half_x, -half_y], [half_x, -half_y], [-half_x, half_y], [half_x, half_y]] {
+            ctx.stroke_vertex_buf.push(StrokeVertex {
+                pos: position,
+                color,
+                other_pos: position,
+                offset_px,
+                screen_space: 1.0,
+            });
+        }
+        ctx.stroke_index_buf.extend_from_slice(&[index + 1, index, index + 3, index, index + 2, index + 3]);
+    }
 }
 
 /// Add a camera-independent round join in pixel space at a world position.
