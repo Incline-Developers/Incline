@@ -27,7 +27,7 @@ Toolchain is pinned **nightly**; `.cargo/config.toml` sets `build-std`, so a col
 
 ```bash
 cargo check                 # fast loop
-cargo clippy                # some pre-existing warnings; keep touched files clean
+cargo clippy
 cargo run                   # desktop app
 cargo fmt
 cargo test

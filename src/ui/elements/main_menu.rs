@@ -454,7 +454,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
             context_submenu(ui, &tr!("ws-menubar-design-insert-point"), has_selection, |ui| {
                 // Needs two or more crossing polylines to insert anything.
-                if ContextMenuAction::new(&tr!("ws-menubar-design-insert-point-at-intersection"))
+                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-intersection"))
                     .enabled(editor.selection_has_intersections)
                     .show(ui)
                     .clicked()
@@ -462,7 +462,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::InsertPointsAtIntersections);
                     ui.close();
                 }
-                if ContextMenuAction::new(&tr!("ws-menubar-design-insert-point-at-elevation")).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-elevation")).show(ui).clicked() {
                     commands.push(UiCommand::OpenInsertPointAtElevationDialog);
                     ui.close();
                 }
@@ -480,7 +480,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             // Unlike the entries above this one runs with nothing
             // selected: the dialog seeds from the selection when there
             // is one, and otherwise you pick in the viewport with it open.
-            if ContextMenuAction::new(&tr!("ws-menubar-design-create-triangulation")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("ws-menubar-design-create-triangulation")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCreateTriangulation);
                 ui.close();
             }
