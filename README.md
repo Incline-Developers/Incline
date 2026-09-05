@@ -12,12 +12,37 @@ Check out the [releases page](https://inclinedesign.net/downloads/) and grab the
 
 ## Features
 
-- Design-strings editing for points, circles, poly-lines, and text.
-- Design tools including offset, auto-bench, chamfer, relimit, fuse, polyline explosion, and bezier.
-- Triangulation loading, viewing, and editing.
-- Block model generation, viewing and filtering.
-- Cross-platform desktop target: Web Assembly, Windows, Linux, and macOS.
-- DXF and OMF compatibility for exchanging design-strings with other CAD and mine planning tools.
+### Designs
+
+Points, lines, polylines, circles and text, organised on layers. Offset, chamfer, bezier, relimit, fuse, explode, split and drape them. Generate pit and stockpile shells. Snap to points, lines and surfaces, and measure distance, strike and dip. Support for OMF and DXF.
+
+### Triangulations
+
+Import, create, view, and edit surfaces and solids. Build them from designs or point clouds. Clip, trim, cut and merge them against polylines, RLs, topographies and shells. Contour them.
+
+### Block models
+
+Create them from drillholes by ordinary kriging. View, colour, slice and switch variables. Generate grade shells. Reads and writes CSV.
+
+### Point clouds
+
+Load LAS/LAZ surveys, view them, and build terrain surfaces from them.
+
+### Drillholes
+
+Import from CSV or OMF and colour by any field. Generate blast patterns, move and rotate collars, and tie up rounds with delays and initiation points.
+
+### Rasters
+
+Load GeoTIFFs and drape them over topography as orthophotos.
+
+### Localisation
+
+We support the following languages: English, Español, Português, Français, 简体中文, Bahasa Indonesia, Русский, العربية, فارسی, हिन्दी, Deutsch, Italiano, Polski, Türkçe, Tiếng Việt, Монгол, Kiswahili, 日本語, 한국어 and Українська.
+
+### Platforms
+
+Incline supports Windows, macOS, Linux and WebAssembly.
 
 ## Example data
 
