@@ -1073,7 +1073,6 @@ literal-delete-points-3ee0ec328718e259 = 删除点
 literal-create-drill-pattern-placeholder-e23fcdb56e93e5cb = 创建钻孔布置 [占位功能]
 literal-move-drill-hole-placeholder-f6170dcbd945bb58 = 移动钻孔 [占位功能]
 literal-set-initiation-point-placeholder-2214394ec4406334 = 设置起爆点 [占位功能]
-literal-design-ba3b9677ad68f9af = 设计
 literal-measure-distance-d6f2d83436e72f2a = 测量距离
 literal-strike-and-dip-75a0255668019c7b = 走向与倾角
 literal-cursor-regular-9554725fa4d3bc4f = 光标：常规

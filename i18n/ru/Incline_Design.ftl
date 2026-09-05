@@ -1120,7 +1120,6 @@ literal-delete-points-3ee0ec328718e259 = Удалить точки
 literal-create-drill-pattern-placeholder-e23fcdb56e93e5cb = Создать схему бурения [ЗАГЛУШКА]
 literal-move-drill-hole-placeholder-f6170dcbd945bb58 = Переместить скважину [ЗАГЛУШКА]
 literal-set-initiation-point-placeholder-2214394ec4406334 = Задать точку инициирования [ЗАГЛУШКА]
-literal-design-ba3b9677ad68f9af = проектирование
 literal-measure-distance-d6f2d83436e72f2a = Измерить расстояние
 literal-strike-and-dip-75a0255668019c7b = Простирание и падение
 literal-cursor-regular-9554725fa4d3bc4f = Курсор: обычный

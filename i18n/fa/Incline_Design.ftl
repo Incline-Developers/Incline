@@ -1073,7 +1073,6 @@ literal-delete-points-3ee0ec328718e259 = حذف نقاط
 literal-create-drill-pattern-placeholder-e23fcdb56e93e5cb = ایجاد الگوی حفاری [جای‌نگهدار]
 literal-move-drill-hole-placeholder-f6170dcbd945bb58 = جابه‌جایی گمانه [جای‌نگهدار]
 literal-set-initiation-point-placeholder-2214394ec4406334 = تنظیم نقطه آغاز [جای‌نگهدار]
-literal-design-ba3b9677ad68f9af = طراحی
 literal-measure-distance-d6f2d83436e72f2a = اندازه‌گیری فاصله
 literal-strike-and-dip-75a0255668019c7b = امتداد و شیب
 literal-cursor-regular-9554725fa4d3bc4f = نشانگر: عادی

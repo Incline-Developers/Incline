@@ -160,7 +160,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
         LeftToolAction::NewLayer => {
             editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
             if editor.new_layer_dialog_open {
-                editor.new_layer_name = tr!(literal = "design");
+                editor.new_layer_name = tr!(literal = "Design");
                 commands.push(UiCommand::SetActiveTool(ActiveTool::None));
             }
         }

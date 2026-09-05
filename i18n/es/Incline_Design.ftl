@@ -1076,7 +1076,6 @@ literal-delete-points-3ee0ec328718e259 = Eliminar puntos
 literal-create-drill-pattern-placeholder-e23fcdb56e93e5cb = Crear patrón de perforación [PROVISIONAL]
 literal-move-drill-hole-placeholder-f6170dcbd945bb58 = Mover sondaje [PROVISIONAL]
 literal-set-initiation-point-placeholder-2214394ec4406334 = Establecer punto de iniciación [PROVISIONAL]
-literal-design-ba3b9677ad68f9af = diseño
 literal-measure-distance-d6f2d83436e72f2a = Medir distancia
 literal-strike-and-dip-75a0255668019c7b = Rumbo y buzamiento
 literal-cursor-regular-9554725fa4d3bc4f = Cursor: normal

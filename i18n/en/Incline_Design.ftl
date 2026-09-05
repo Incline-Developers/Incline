@@ -1113,7 +1113,6 @@ literal-delete-points-3ee0ec328718e259 = Delete Points
 literal-create-drill-pattern-placeholder-e23fcdb56e93e5cb = Create Drill Pattern [PLACEHOLDER]
 literal-move-drill-hole-placeholder-f6170dcbd945bb58 = Move Drill Hole [PLACEHOLDER]
 literal-set-initiation-point-placeholder-2214394ec4406334 = Set Initiation Point [PLACEHOLDER]
-literal-design-ba3b9677ad68f9af = design
 literal-measure-distance-d6f2d83436e72f2a = Measure Distance
 literal-strike-and-dip-75a0255668019c7b = Strike and Dip
 literal-cursor-regular-9554725fa4d3bc4f = Cursor: Regular

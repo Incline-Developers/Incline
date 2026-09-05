@@ -1073,7 +1073,6 @@ literal-delete-points-3ee0ec328718e259 = बिंदु हटाएँ
 literal-create-drill-pattern-placeholder-e23fcdb56e93e5cb = ड्रिल पैटर्न बनाएँ [प्लेसहोल्डर]
 literal-move-drill-hole-placeholder-f6170dcbd945bb58 = ड्रिल होल खिसकाएँ [प्लेसहोल्डर]
 literal-set-initiation-point-placeholder-2214394ec4406334 = आरंभ बिंदु सेट करें [प्लेसहोल्डर]
-literal-design-ba3b9677ad68f9af = डिज़ाइन
 literal-measure-distance-d6f2d83436e72f2a = दूरी मापें
 literal-strike-and-dip-75a0255668019c7b = स्ट्राइक और नति
 literal-cursor-regular-9554725fa4d3bc4f = कर्सर: सामान्य
