@@ -233,24 +233,39 @@ pub(crate) fn triangulate_polyline_fill(verts: &[PolyVertex]) -> Option<Polyline
         cdt.add_constraint(from, to);
     }
 
+    // Boundary constraints separate the polygon interior from the exterior.
+    // Flood inward from unconstrained hull edges, never crossing the boundary.
+    // Testing each triangle's centroid against the full ring would instead
+    // take quadratic work on densely sampled arcs (up to 8,192 circle points).
+    let mut exterior = vec![false; cdt.num_all_faces()];
+    let mut pending = Vec::new();
+    for edge in cdt.convex_hull() {
+        if !edge.is_constraint_edge()
+            && let Some(face) = edge.rev().face().as_inner()
+            && !exterior[face.index()]
+        {
+            exterior[face.index()] = true;
+            pending.push(face.fix());
+        }
+    }
+    while let Some(face) = pending.pop() {
+        for edge in cdt.face(face).adjacent_edges() {
+            if !edge.is_constraint_edge()
+                && let Some(neighbor) = edge.rev().face().as_inner()
+                && !exterior[neighbor.index()]
+            {
+                exterior[neighbor.index()] = true;
+                pending.push(neighbor.fix());
+            }
+        }
+    }
+
     let mut indices = Vec::with_capacity(vertices.len().saturating_sub(2) * 3);
     for face in cdt.inner_faces() {
-        let corners = face.vertices();
-        let center = corners
-            .iter()
-            .map(|corner| {
-                let point = corner.position();
-                DVec2::new(point.x, point.y)
-            })
-            .sum::<DVec2>()
-            / 3.0;
-        if matches!(
-            crate::model::kernel::point_in_polyline(center, projected.iter().copied()),
-            crate::model::kernel::PolyContainment::Outside
-        ) {
+        if exterior[face.index()] {
             continue;
         }
-        for corner in corners {
+        for corner in face.vertices() {
             let input_index = input_index_by_handle.get(corner.fix().index()).copied().flatten()?;
             indices.push(input_index as u32);
         }

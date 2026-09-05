@@ -1524,6 +1524,7 @@ impl<'a> Graphics<'a> {
             last_text_cache_trim_frame: 0,
             last_interaction: None,
             geometry_dirty: true,
+            polyline_fill_cache: Default::default(),
             cached_document_revision: u64::MAX,
             cached_render_style_key: None,
             cached_bounds_document_revision: u64::MAX,

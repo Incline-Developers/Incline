@@ -1,12 +1,15 @@
 //! Document/editor scene assembly entry points.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use glam::{DVec3, Mat4, Vec3};
 use lyon::tessellation::VertexBuffers;
 
 use crate::{
-    model::{Document, Object, ObjectId, SceneEntityId, geometry::triangulate_polyline_fill},
+    model::{
+        Document, FillStyle, Object, ObjectId, PolyVertex, SceneEntityId,
+        geometry::{PolylineFillMesh, triangulate_polyline_fill},
+    },
     rendering::{
         StrokeVertex, Vertex,
         geometry::{DrawContext, draw_line, draw_screen_cross, tessellate_polyline_stroke},
@@ -23,6 +26,7 @@ pub(crate) struct DocumentSceneBuildInput<'a> {
     pub(crate) document: &'a Document,
     /// Objects owned by the static stroke chunk cache; skipped here.
     pub(crate) static_ids: &'a HashSet<ObjectId>,
+    pub(crate) fill_cache: &'a mut PolylineFillCache,
     pub(crate) text_system: &'a mut TextSystem,
     pub(crate) lyon_buffer: &'a mut VertexBuffers<Vertex, u32>,
     pub(crate) stroke_vertex_buf: &'a mut Vec<StrokeVertex>,
@@ -35,6 +39,38 @@ pub(crate) struct DocumentSceneBuildInput<'a> {
     pub(crate) document_draw_batches: &'a mut Vec<DocumentDrawBatch>,
     pub(crate) scene_origin: DVec3,
     pub(crate) scale_factor: f32,
+}
+
+/// World-space fill meshes survive selection, style changes and scene rebasing.
+/// Compare source geometry so a color-only object revision does not triangulate
+/// again, while edits, undo and replacement documents still invalidate it.
+#[derive(Default)]
+pub(crate) struct PolylineFillCache {
+    entries: HashMap<ObjectId, CachedPolylineFill>,
+}
+
+struct CachedPolylineFill {
+    verts: Vec<PolyVertex>,
+    mesh: Option<PolylineFillMesh>,
+}
+
+impl PolylineFillCache {
+    fn retain_document(&mut self, document: &Document) {
+        self.entries
+            .retain(|id, _| matches!(document.get_object(*id), Some(Object::Polyline { closed: true, fill, .. }) if *fill != FillStyle::Clear));
+    }
+
+    fn mesh(&mut self, id: ObjectId, verts: &[PolyVertex]) -> Option<&PolylineFillMesh> {
+        let entry = self.entries.entry(id).or_insert_with(|| CachedPolylineFill {
+            verts: verts.to_vec(),
+            mesh: triangulate_polyline_fill(verts),
+        });
+        if entry.verts != verts {
+            entry.verts = verts.to_vec();
+            entry.mesh = triangulate_polyline_fill(verts);
+        }
+        entry.mesh.as_ref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +126,7 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
         editor,
         document,
         static_ids,
+        fill_cache,
         text_system,
         lyon_buffer,
         stroke_vertex_buf,
@@ -104,6 +141,7 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
         scale_factor,
     } = input;
 
+    fill_cache.retain_document(document);
     lyon_buffer.indices.clear();
     lyon_buffer.vertices.clear();
     stroke_index_buf.clear();
@@ -164,18 +202,18 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                     if *closed
                         && verts.len() >= 2
                         && *fill != crate::model::FillStyle::Clear
-                        && let Some(fill_mesh) = triangulate_polyline_fill(verts)
+                        && let Some(fill_mesh) = fill_cache.mesh(object.id(), verts)
                     {
                         match fill {
                             crate::model::FillStyle::Solid => {
                                 fill_opaque = fill_rgba[3] >= 1.0 - f32::EPSILON;
-                                fill_polyline_solid(draw_ctx.fill_vertex_buf, draw_ctx.fill_index_buf, &fill_mesh, fill_rgba, draw_ctx.scene_origin);
+                                fill_polyline_solid(draw_ctx.fill_vertex_buf, draw_ctx.fill_index_buf, fill_mesh, fill_rgba, draw_ctx.scene_origin);
                             }
                             crate::model::FillStyle::Slashes | crate::model::FillStyle::Crosses => {
-                                let hatch_spacing = polyline_hatch_spacing(&fill_mesh, 15.0);
-                                fill_polyline_hatch(&mut draw_ctx, &fill_mesh, fill_rgba, 45.0, hatch_spacing, *line_weight);
+                                let hatch_spacing = polyline_hatch_spacing(fill_mesh, 15.0);
+                                fill_polyline_hatch(&mut draw_ctx, fill_mesh, fill_rgba, 45.0, hatch_spacing, *line_weight);
                                 if *fill == crate::model::FillStyle::Crosses {
-                                    fill_polyline_hatch(&mut draw_ctx, &fill_mesh, fill_rgba, 135.0, hatch_spacing, *line_weight);
+                                    fill_polyline_hatch(&mut draw_ctx, fill_mesh, fill_rgba, 135.0, hatch_spacing, *line_weight);
                                 }
                             }
                             crate::model::FillStyle::Clear => {}

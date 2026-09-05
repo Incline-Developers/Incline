@@ -196,6 +196,7 @@ impl<'a> Graphics<'a> {
                 editor,
                 document,
                 static_ids: self.static_strokes.claimed(),
+                fill_cache: &mut self.polyline_fill_cache,
                 text_system: &mut self.text_system,
                 lyon_buffer: &mut self.lyon_buffer,
                 stroke_vertex_buf: &mut self.stroke_vertex_buf,
