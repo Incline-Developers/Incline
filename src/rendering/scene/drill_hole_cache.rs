@@ -238,7 +238,7 @@ impl HoleSelection {
 fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> u64 {
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
-    dataset.visible.hash(&mut hash);
+    dataset.state.loaded.hash(&mut hash);
     // Hole positions are not hashed one by one: an edit to the geometry - the
     // Move Collar tool is the only one so far - bumps the item's revision, and
     // that is what tells the cache the instances it built are stale.
@@ -268,7 +268,7 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
 }
 
 fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
-    if !dataset.state.loaded || !dataset.visible {
+    if !dataset.state.loaded {
         return Vec::new();
     }
     let mut instances = Vec::new();
@@ -367,7 +367,7 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, sele
 }
 
 fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
-    if !dataset.state.loaded || !dataset.visible {
+    if !dataset.state.loaded {
         return Vec::new();
     }
     let selected_colors = selection.any().then(|| {

@@ -102,7 +102,8 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedTriangulation,
-    pub(crate) visible: bool,
+    pub(crate) is_loaded: bool,
+    pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: [f32; 4],
     pub(crate) line_color: [f32; 4],
     pub(crate) line_weight: Option<f32>,
@@ -115,7 +116,8 @@ pub(crate) struct ImportedBlockModel {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedBlockModel,
-    pub(crate) visible: bool,
+    pub(crate) is_loaded: bool,
+    pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: [f32; 4],
     pub(crate) slice: Option<crate::model::block_model::BlockModelSlice>,
     /// Ramps keyed by variable name, resolved from Incline Design's own style
@@ -131,7 +133,8 @@ pub(crate) struct ImportedPointCloud {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedPointCloud,
-    pub(crate) visible: bool,
+    pub(crate) is_loaded: bool,
+    pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: [f32; 4],
     pub(crate) point_size: f32,
 }
@@ -141,7 +144,8 @@ pub(crate) struct ImportedDrillHoles {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedDrillHoleDataset,
-    pub(crate) visible: bool,
+    pub(crate) is_loaded: bool,
+    pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
     pub(crate) color: crate::model::drill_hole::DrillColorState,
 }
 
@@ -150,7 +154,8 @@ pub(crate) struct ImportedRaster {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: LoadedRasterTexture,
-    pub(crate) visible: bool,
+    pub(crate) is_loaded: bool,
+    pub(crate) deferred: Option<(DeferredAsset, crate::model::asset_residency::AssetSummary)>,
 }
 
 #[derive(Default)]
@@ -209,16 +214,40 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         progress.set_items(complete, total);
     }
     for triangulation in &snapshot.triangulations {
+        let restored;
+        let triangulation = if triangulation.state.deferred.is_some() {
+            restored = crate::model::OpenItem::Triangulation(Box::new(triangulation.clone())).materialize()?;
+            let crate::model::OpenItem::Triangulation(item) = &restored else { unreachable!() };
+            item.as_ref()
+        } else {
+            triangulation
+        };
         elements.push(write_triangulation(&mut writer, triangulation)?);
         complete += 1;
         progress.set_items(complete, total);
     }
     for block_model in &snapshot.block_models {
+        let restored;
+        let block_model = if block_model.state.deferred.is_some() {
+            restored = crate::model::OpenItem::BlockModel(Box::new(block_model.clone())).materialize()?;
+            let crate::model::OpenItem::BlockModel(item) = &restored else { unreachable!() };
+            item.as_ref()
+        } else {
+            block_model
+        };
         elements.push(write_block_model(&mut writer, block_model)?);
         complete += 1;
         progress.set_items(complete, total);
     }
     for drill_holes in &snapshot.drill_holes {
+        let restored;
+        let drill_holes = if drill_holes.state.deferred.is_some() {
+            restored = crate::model::OpenItem::DrillHole(Box::new(drill_holes.clone())).materialize()?;
+            let crate::model::OpenItem::DrillHole(item) = &restored else { unreachable!() };
+            item.as_ref()
+        } else {
+            drill_holes
+        };
         if let Some(element) = write_drill_holes(&mut writer, drill_holes)? {
             elements.push(element);
         }
@@ -226,11 +255,27 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, progre
         progress.set_items(complete, total);
     }
     for point_cloud in &snapshot.point_clouds {
+        let restored;
+        let point_cloud = if point_cloud.state.deferred.is_some() {
+            restored = crate::model::OpenItem::PointCloud(Box::new(point_cloud.clone())).materialize()?;
+            let crate::model::OpenItem::PointCloud(item) = &restored else { unreachable!() };
+            item.as_ref()
+        } else {
+            point_cloud
+        };
         elements.push(write_point_cloud(&mut writer, point_cloud)?);
         complete += 1;
         progress.set_items(complete, total);
     }
     for raster in &snapshot.rasters {
+        let restored;
+        let raster = if raster.state.deferred.is_some() {
+            restored = crate::model::OpenItem::Raster(Box::new(raster.clone())).materialize()?;
+            let crate::model::OpenItem::Raster(item) = &restored else { unreachable!() };
+            item.as_ref()
+        } else {
+            raster
+        };
         elements.push(write_raster(&mut writer, raster)?);
         complete += 1;
         progress.set_items(complete, total);
@@ -347,6 +392,17 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     let document = &design.document;
     let mut layers = Vec::with_capacity(document.layers().len());
     for layer in document.layers() {
+        let restored;
+        let document = if let Some(stored) = document.deferred_layers.get(&layer.id) {
+            let mut resident = Document::new();
+            resident.append_layer_snapshot(layer, std::iter::empty());
+            resident.restore_layer_payload(layer.id, stored.read(layer.id)?);
+            restored = resident;
+            &restored
+        } else {
+            document
+        };
+
         let mut objects = Vec::new();
         for object in document.objects().iter().filter(|object| object.layer() == layer.id) {
             objects.push(write_design_object(writer, document, object)?);
@@ -423,7 +479,7 @@ fn write_triangulation<W: Write + Seek + Send>(writer: &mut omf_crate::file::Wri
         &mut element,
         META_STYLE,
         json!({
-            "visible": triangulation.visible,
+            "loaded": triangulation.state.loaded,
             "color": triangulation.color,
             "line_color": triangulation.line_color,
             "line_weight": triangulation.line_weight,
@@ -458,7 +514,7 @@ fn write_point_cloud<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     put(
         &mut element,
         META_STYLE,
-        json!({ "visible": cloud.visible, "color": cloud.color, "point_size": cloud.point_size }),
+        json!({ "loaded": cloud.state.loaded, "color": cloud.color, "point_size": cloud.point_size }),
     );
     Ok(element)
 }
@@ -685,7 +741,7 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         &mut element,
         META_STYLE,
         json!({
-            "visible": open.visible,
+            "loaded": open.state.loaded,
             "color": open.color,
             "slice": open.slice,
             "active_color_variable": open.active_color_variable,
@@ -714,7 +770,7 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         open.state.source_format.as_deref(),
         "drill-holes",
     );
-    put(&mut element, META_STYLE, json!({ "visible": open.visible, "color": open.color }));
+    put(&mut element, META_STYLE, json!({ "loaded": open.state.loaded, "color": open.color }));
     let ties = open.dataset.stored_ties();
     if !ties.is_empty() {
         put(&mut element, META_TIE_INS, serde_json::to_value(&ties)?);
@@ -874,7 +930,7 @@ fn write_raster<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         &mut element,
         META_STYLE,
         json!({
-            "visible": raster.visible,
+            "loaded": raster.state.loaded,
             "world_to_uv": raster.world_to_uv,
             "source_size": raster.source_size,
             "preview_size": raster.preview_size,
@@ -901,17 +957,61 @@ fn encode_png(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Read an OMF 2 container.
-pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) -> Result<ImportBundle> {
-    progress.set_fraction(0.0);
-    reject_omf1(&bytes).with_context(|| format!("read OMF container {source_name}"))?;
-    let mut reader = omf_crate::file::Reader::new(bytes).context("open OMF archive")?;
-    reader.set_limits(omf_crate::file::Limits {
+/// A locator into a temporary, immutable OMF archive. No geometry or image
+/// bytes are retained by an unloaded explorer entry.
+#[derive(Clone, Debug)]
+pub(crate) struct DeferredAsset {
+    pub(crate) backing: crate::model::asset_storage::Backing,
+    pub(crate) element_path: Vec<usize>,
+}
+
+impl DeferredAsset {
+    pub(crate) fn read(&self) -> Result<ImportBundle> {
+        let mut reader = omf_crate::file::Reader::new(self.backing.read()?)?;
+        reader.set_limits(reader_limits());
+        let (project, _) = reader.project()?;
+        let mut elements = project.elements.as_slice();
+        let mut selected = None;
+        for &index in &self.element_path {
+            let element = elements.get(index).context("unloaded asset is missing from its backing archive")?;
+            selected = Some(element);
+            elements = match &element.geometry {
+                omf_crate::Geometry::Composite(group) => &group.elements,
+                _ => &[],
+            };
+        }
+        let mut decoder = Decoder {
+            reader: &reader,
+            project_origin: DVec3::from_array(project.origin),
+            project_crs: project.coordinate_reference_system,
+            project_units: project.units,
+            source_name: "asset.omf",
+            bundle: ImportBundle::default(),
+            generic_design: Document::new(),
+            backing: None,
+            element_path: Vec::new(),
+        };
+        decoder.walk(selected.context("unloaded asset has no locator")?)?;
+        decoder.finish()
+    }
+}
+
+fn reader_limits() -> omf_crate::file::Limits {
+    omf_crate::file::Limits {
         json_bytes: Some(64 * 1024 * 1024),
         image_bytes: Some(4 * 1024 * 1024 * 1024),
         image_dim: Some(65_536),
         validation: Some(1_000),
-    });
+    }
+}
+
+/// Read an OMF 2 container.
+pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) -> Result<ImportBundle> {
+    progress.set_fraction(0.0);
+    reject_omf1(&bytes).with_context(|| format!("read OMF container {source_name}"))?;
+    let backing = crate::model::asset_storage::Backing::write(&bytes)?;
+    let mut reader = omf_crate::file::Reader::new(bytes).context("open OMF archive")?;
+    reader.set_limits(reader_limits());
     let (project, problems) = reader.project().context("read project index")?;
     let mut bundle = ImportBundle {
         project_name: project.name.clone(),
@@ -952,9 +1052,13 @@ pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) ->
         source_name,
         bundle,
         generic_design: Document::new(),
+        backing: None,
+        element_path: Vec::new(),
     };
+    decoder.backing = Some(backing);
     let total = project.elements.len().max(1) as u64;
     for (index, element) in project.elements.iter().enumerate() {
+        decoder.element_path = vec![index];
         decoder.walk(element)?;
         progress.set_items(index as u64 + 1, total);
     }
@@ -983,6 +1087,8 @@ struct Decoder<'a, R: omf_crate::file::ReadAt> {
     source_name: &'a str,
     bundle: ImportBundle,
     generic_design: Document,
+    backing: Option<crate::model::asset_storage::Backing>,
+    element_path: Vec<usize>,
 }
 
 impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
@@ -1004,6 +1110,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     fn walk(&mut self, element: &omf_crate::Element) -> Result<()> {
         self.record_unsupported_content(element);
+        if self.backing.is_some() && !style_loaded(element.metadata.get(META_STYLE)) && self.defer_element(element)? {
+            return Ok(());
+        }
         match kind(element) {
             Some("designs" | "design_database") => {
                 let design = self.read_design(element)?;
@@ -1030,8 +1139,10 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             omf_crate::Geometry::LineSet(lines) => self.read_generic_lines(element, lines)?,
             omf_crate::Geometry::BlockModel(model) => self.read_block_model(element, model)?,
             omf_crate::Geometry::Composite(composite) => {
-                for child in &composite.elements {
+                for (index, child) in composite.elements.iter().enumerate() {
+                    self.element_path.push(index);
                     self.walk(child)?;
+                    self.element_path.pop();
                 }
             }
         }
@@ -1039,6 +1150,198 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             self.read_textures(element)?;
         }
         Ok(())
+    }
+
+    /// Construct only explorer metadata. In particular, do not read any
+    /// Parquet arrays, mesh accelerators, drill traces or raster pixels here.
+    fn defer_element(&mut self, element: &omf_crate::Element) -> Result<bool> {
+        use crate::model::{
+            asset_residency::AssetSummary,
+            block_model::{BlockBoundsSource, BlockModelSource},
+            formats::block_model_data::{BlockModelMetadata, BlockVariable},
+        };
+        let style = element.metadata.get(META_STYLE);
+        let name = element_name(element).to_owned();
+        let preferred_id = element_id(element);
+        let source_name = element_source_name(element);
+        let source_format = element_source_format(element);
+        let locator = DeferredAsset {
+            backing: self.backing.clone().context("missing asset backing")?,
+            element_path: self.element_path.clone(),
+        };
+        let path = virtual_path(self.source_name, &name, "omf");
+        if kind(element) == Some("raster") {
+            self.bundle.rasters.push(ImportedRaster {
+                preferred_id,
+                source_name,
+                source_format,
+                is_loaded: false,
+                deferred: Some((locator, AssetSummary::default())),
+                loaded: LoadedRasterTexture {
+                    name,
+                    path,
+                    source_size: style_value(style, "source_size").unwrap_or([0; 2]),
+                    preview_size: style_value(style, "preview_size").unwrap_or([0; 2]),
+                    full_rgba: Arc::new(Vec::new()),
+                    rgba: Arc::new(Vec::new()),
+                    world_to_uv: style_value(style, "world_to_uv").unwrap_or([0.0; 6]),
+                    projection: style_value(style, "projection").unwrap_or_else(|| self.project_crs.clone()),
+                    driver_name: tr!(literal = "OMF texture"),
+                },
+            });
+            return Ok(true);
+        }
+        if kind(element) == Some("drillhole_dataset") {
+            let count = match &element.geometry {
+                omf_crate::Geometry::Composite(group) => group.elements.len(),
+                _ => return Ok(false),
+            };
+            self.bundle.drill_holes.push(ImportedDrillHoles {
+                preferred_id,
+                source_name,
+                source_format,
+                is_loaded: false,
+                deferred: Some((
+                    locator,
+                    AssetSummary {
+                        primary_count: count,
+                        ..Default::default()
+                    },
+                )),
+                loaded: LoadedDrillHoleDataset {
+                    source: DrillHoleSource::Omf { name: name.clone(), path },
+                    name,
+                    dataset: Arc::new(DrillHoleDataset::new(Vec::new())),
+                },
+                color: style_value(style, "color").unwrap_or_default(),
+            });
+            return Ok(true);
+        }
+        match &element.geometry {
+            omf_crate::Geometry::Surface(_) | omf_crate::Geometry::GridSurface(_) => {
+                let (vertices, faces) = match &element.geometry {
+                    omf_crate::Geometry::Surface(surface) => (surface.vertices.item_count() as usize, surface.triangles.item_count() as usize),
+                    _ => (0, 0),
+                };
+                let mesh = Arc::new(Triangulation::empty());
+                let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
+                self.bundle.triangulations.push(ImportedTriangulation {
+                    preferred_id,
+                    source_name,
+                    source_format,
+                    is_loaded: false,
+                    deferred: Some((
+                        locator,
+                        AssetSummary {
+                            primary_count: vertices,
+                            secondary_count: faces,
+                            bounds: None,
+                        },
+                    )),
+                    loaded: LoadedTriangulation {
+                        name,
+                        path,
+                        mesh,
+                        spatial,
+                        edges: Vec::new(),
+                        surface_face_order: Arc::new(Vec::new()),
+                    },
+                    color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0])),
+                    line_color: style_value(style, "line_color").unwrap_or([0.05, 0.08, 0.10, 1.0]),
+                    line_weight: style_value(style, "line_weight").unwrap_or(Some(1.0)),
+                    raster_opacity: style_f32(style, "raster_opacity").unwrap_or(1.0),
+                    raster_texture_id: style_value(style, "raster_texture_id"),
+                });
+            }
+            omf_crate::Geometry::PointSet(points) => {
+                let bounds = (DVec3::ZERO, DVec3::ZERO);
+                self.bundle.point_clouds.push(ImportedPointCloud {
+                    preferred_id,
+                    source_name,
+                    source_format,
+                    is_loaded: false,
+                    deferred: Some((
+                        locator,
+                        AssetSummary {
+                            primary_count: points.vertices.item_count() as usize,
+                            ..Default::default()
+                        },
+                    )),
+                    loaded: LoadedPointCloud {
+                        name,
+                        path,
+                        points: Arc::new(Vec::new()),
+                        colors: None,
+                        prepared: Arc::new(prepare_for_render(&[], None, bounds)),
+                        bounds,
+                    },
+                    color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
+                    point_size: style_f32(style, "point_size").unwrap_or(0.1),
+                });
+            }
+            omf_crate::Geometry::BlockModel(geometry) => {
+                let count = match &geometry.subblocks {
+                    Some(omf_crate::Subblocks::Freeform { subblocks }) => subblocks.item_count() as usize,
+                    Some(omf_crate::Subblocks::Regular { subblocks, .. }) => subblocks.item_count() as usize,
+                    None => geometry
+                        .grid
+                        .count()
+                        .into_iter()
+                        .try_fold(1usize, |n, axis| n.checked_mul(axis as usize))
+                        .context("block count overflow")?,
+                };
+                let variables: Vec<_> = element
+                    .attributes
+                    .iter()
+                    .filter(|attribute| matches!(attribute.data, omf_crate::AttributeData::Number { .. } | omf_crate::AttributeData::Category { .. }))
+                    .map(|attribute| BlockVariable {
+                        name: attribute.name.clone(),
+                        ..Default::default()
+                    })
+                    .collect();
+                let variable_count = variables.len();
+                let active_color_variable = style_value::<Option<String>>(style, "active_color_variable")
+                    .flatten()
+                    .or_else(|| variables.first().map(|variable| variable.name.clone()));
+                self.bundle.block_models.push(ImportedBlockModel {
+                    preferred_id,
+                    source_name,
+                    source_format,
+                    is_loaded: false,
+                    deferred: Some((
+                        locator,
+                        AssetSummary {
+                            primary_count: count,
+                            secondary_count: variable_count,
+                            bounds: None,
+                        },
+                    )),
+                    loaded: LoadedBlockModel {
+                        name,
+                        source: BlockModelSource { path, csv_columns: None },
+                        model: BlockModelData::unloaded(BlockModelMetadata {
+                            n_blocks: count,
+                            variables,
+                            dims: geometry.grid.count().map(|n| n as usize),
+                            ..Default::default()
+                        }),
+                        blocks: Arc::new(BlockBoundsSource::Explicit(Vec::new())),
+                        renderable_block_indices: Arc::new(RenderableBlockIndices::All(0)),
+                        uniform_grid: None,
+                        opaque_surface_blocks: None,
+                        world_bounds: None,
+                        active_color_variable,
+                        active_values_cache: Default::default(),
+                    },
+                    color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.72, 0.72, 0.75, 1.0])),
+                    slice: style_value(style, "slice"),
+                    color_transfers: BTreeMap::new(),
+                    hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
+                });
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
     }
 
     fn record_unsupported_content(&mut self, element: &omf_crate::Element) {
@@ -1135,7 +1438,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         .unwrap_or_else(|| element_name(layer_element).to_owned()),
                     layer_template.as_ref().and_then(|layer| layer.color_index),
                     color,
-                    layer_template.as_ref().is_none_or(|layer| layer.visible),
+                    layer_template.as_ref().is_none_or(|layer| layer.loaded),
                     layer_template.as_ref().map_or(0.0, |layer| layer.elevation),
                 )
             };
@@ -1173,6 +1476,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             }
         }
         document.validate().with_context(|| format!("validate designs '{}'", element.name))?;
+        let unloaded: Vec<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();
+        for id in unloaded {
+            if self.backing.is_some() {
+                let stored = document.layer_payload(id).store()?;
+                document.install_deferred_layer(id, stored);
+            }
+        }
+
         Ok(ProjectFile {
             format_version: project::PROJECT_FORMAT_VERSION,
             document,
@@ -1319,7 +1630,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 edges,
                 surface_face_order,
             },
-            visible: style_bool(style, "visible").unwrap_or(true),
+            deferred: None,
+            is_loaded: style_loaded(style),
             color,
             line_color: style_value(style, "line_color").unwrap_or([0.05, 0.08, 0.10, 1.0]),
             line_weight: style
@@ -1366,7 +1678,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 prepared: Arc::new(prepared),
                 bounds,
             },
-            visible: style_bool(style, "visible").unwrap_or(true),
+            deferred: None,
+            is_loaded: style_loaded(style),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.85, 0.87, 0.9, 1.0])),
             point_size: style_f32(style, "point_size").unwrap_or(0.1),
         });
@@ -1482,7 +1795,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 active_color_variable,
                 active_values_cache,
             },
-            visible: style_bool(style, "visible").unwrap_or(true),
+            deferred: None,
+            is_loaded: style_loaded(style),
             color: style_value(style, "color").unwrap_or_else(|| element_color(element, [0.72, 0.72, 0.75, 1.0])),
             slice: style_value(style, "slice"),
             color_transfers,
@@ -1687,7 +2001,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 },
                 dataset,
             },
-            visible: style_bool(element.metadata.get(META_STYLE), "visible").unwrap_or(true),
+            deferred: None,
+            is_loaded: style_loaded(element.metadata.get(META_STYLE)),
             color: style_value(element.metadata.get(META_STYLE), "color").unwrap_or_default(),
         }))
     }
@@ -1816,7 +2131,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 preferred_id: element_id(element),
                 source_name: element_source_name(element),
                 source_format: element_source_format(element),
-                visible: style_bool(style, "visible").unwrap_or(true),
+                deferred: None,
+                is_loaded: style_loaded(style),
                 loaded: LoadedRasterTexture {
                     name: if attribute.name == "Raster" {
                         element_name(element).to_owned()
@@ -2044,4 +2360,9 @@ fn virtual_path(source: &str, element: &str, extension: &str) -> PathBuf {
     PathBuf::from("omf")
         .join(safe_component(&file_stem(source)))
         .join(format!("{}.{}", safe_component(element), extension))
+}
+
+/// Older Incline OMF files stored this choice as visibility.
+fn style_loaded(style: Option<&Value>) -> bool {
+    style_bool(style, "loaded").or_else(|| style_bool(style, "visible")).unwrap_or(true)
 }

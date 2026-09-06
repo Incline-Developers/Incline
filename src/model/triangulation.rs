@@ -48,7 +48,6 @@ pub(crate) struct OpenTriangulation {
     /// precomputed off-thread so GPU surface chunking never sorts on the render
     /// thread. `Arc` so cloning an `OpenTriangulation` stays cheap.
     pub(crate) surface_face_order: Arc<Vec<u32>>,
-    pub(crate) visible: bool,
     pub(crate) color: [f32; 4],
     pub(crate) line_color: [f32; 4],
     pub(crate) line_weight: Option<f32>,

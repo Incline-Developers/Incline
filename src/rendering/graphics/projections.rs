@@ -399,7 +399,7 @@ impl<'a> Graphics<'a> {
             let probe_offset = forward.cross(self.camera.up()).normalize_or_zero() * CARD_SCALE_PROBE_WORLD;
             editor.initiation_cards = drill_holes
                 .iter()
-                .filter(|dataset| dataset.state.loaded && dataset.visible && !editor.hidden_handles.contains(&dataset.entity_id()))
+                .filter(|dataset| dataset.state.loaded && !editor.hidden_handles.contains(&dataset.entity_id()))
                 .flat_map(|dataset| {
                     dataset.dataset.initiations.iter().filter_map(|initiation| {
                         let hole = dataset.dataset.holes.get(initiation.hole)?;

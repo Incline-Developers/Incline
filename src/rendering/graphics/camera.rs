@@ -660,7 +660,7 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let mut hits = Vec::new();
 
-        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
             let entity = dataset.entity_id();
             if hidden.contains(&entity) || frozen.contains(&entity) {
                 continue;
@@ -714,7 +714,7 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let mut hits = Vec::new();
 
-        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
             let entity = dataset.entity_id();
             if hidden.contains(&entity) || frozen.contains(&entity) {
                 continue;

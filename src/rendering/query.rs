@@ -30,7 +30,7 @@ impl SceneQuery {
             .iter()
             .filter(|triangulation| {
                 let entity = triangulation.entity_id();
-                triangulation.state.loaded && triangulation.visible && !hidden.contains(&entity) && frozen.is_none_or(|set| !set.contains(&entity))
+                triangulation.state.loaded && !hidden.contains(&entity) && frozen.is_none_or(|set| !set.contains(&entity))
             })
             .filter_map(|triangulation| {
                 triangulation
@@ -61,7 +61,7 @@ impl SceneQuery {
     ) -> Option<(DrillHoleRef, DVec3)> {
         let mut nearest = f64::INFINITY;
         let mut nearest_hole = None;
-        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
             let entity = dataset.entity_id();
             if hidden.contains(&entity) || frozen.contains(&entity) {
                 continue;
@@ -282,7 +282,7 @@ fn nearest_opaque_document_fill(document: &Document, snap_index: &ObjectSnapInde
             return false;
         };
         let entity = SceneEntityId::Object(object.id());
-        !hidden.contains(&entity) && document.layer(object.layer()).is_none_or(|layer| layer.visible) && document.object_fill_rgba(object)[3] >= 1.0 - f32::EPSILON
+        !hidden.contains(&entity) && document.layer(object.layer()).is_none_or(|layer| layer.loaded) && document.object_fill_rgba(object)[3] >= 1.0 - f32::EPSILON
     })
 }
 

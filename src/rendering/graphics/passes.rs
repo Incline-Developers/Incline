@@ -206,7 +206,7 @@ impl<'a> Graphics<'a> {
                 &self.drill_hole_render_pipeline
             });
             for dataset in drill_holes {
-                if !dataset.state.loaded || !dataset.visible || editor.hidden_handles.contains(&dataset.entity_id()) {
+                if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                     continue;
                 }
                 let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
@@ -243,7 +243,7 @@ impl<'a> Graphics<'a> {
                 &self.drill_hole_render_pipeline
             });
             for dataset in drill_holes {
-                if !dataset.state.loaded || !dataset.visible || editor.hidden_handles.contains(&dataset.entity_id()) {
+                if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                     continue;
                 }
                 let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
@@ -264,7 +264,7 @@ impl<'a> Graphics<'a> {
             &self.drill_collar_render_pipeline
         });
         for dataset in drill_holes {
-            if !dataset.state.loaded || !dataset.visible || editor.hidden_handles.contains(&dataset.entity_id()) {
+            if !dataset.state.loaded || editor.hidden_handles.contains(&dataset.entity_id()) {
                 continue;
             }
             let Some(cached) = self.drill_hole_gpu.get(dataset.id) else {
@@ -505,7 +505,7 @@ impl<'a> Graphics<'a> {
             let draped: std::collections::HashSet<_> = triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
             let mut pipeline_bound = false;
             for raster in rasters {
-                if draped.contains(&raster.id) || !raster.visible {
+                if draped.contains(&raster.id) || !raster.state.loaded {
                     continue;
                 }
                 let Some((bind_group, vertex_buffer)) = self.raster_gpu.plane(raster.id) else {
@@ -540,7 +540,7 @@ impl<'a> Graphics<'a> {
             let display_now = Instant::now();
             let mut colored_pipeline_active = None;
             for point_cloud in point_clouds {
-                if !point_cloud.state.loaded || !point_cloud.visible || editor.hidden_handles.contains(&point_cloud.entity_id()) {
+                if !point_cloud.state.loaded || editor.hidden_handles.contains(&point_cloud.entity_id()) {
                     continue;
                 }
                 let Some(cached) = self.point_cloud_gpu.get(point_cloud.id) else {
@@ -641,7 +641,7 @@ impl<'a> Graphics<'a> {
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             for triangulation in triangulations {
                 let entity = triangulation.entity_id();
-                if !triangulation.state.loaded || !triangulation.visible || editor.hidden_handles.contains(&entity) {
+                if !triangulation.state.loaded || editor.hidden_handles.contains(&entity) {
                     continue;
                 }
                 let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
@@ -678,11 +678,7 @@ impl<'a> Graphics<'a> {
             }
             for block_model in block_models {
                 let entity = block_model.entity_id();
-                if !block_model.state.loaded
-                    || !block_model.visible
-                    || editor.hidden_handles.contains(&entity)
-                    || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum)
-                {
+                if !block_model.state.loaded || editor.hidden_handles.contains(&entity) || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum) {
                     continue;
                 }
                 let Some(cached) = self.block_model_gpu.get(block_model.id) else {
@@ -732,7 +728,9 @@ impl<'a> Graphics<'a> {
                 .iter()
                 .filter(|triangulation| {
                     let entity = triangulation.entity_id();
-                    triangulation.visible && !editor.hidden_handles.contains(&entity) && self.triangulation_gpu.get(triangulation.id).is_some_and(|cached| cached.color[3] < 0.999)
+                    triangulation.state.loaded
+                        && !editor.hidden_handles.contains(&entity)
+                        && self.triangulation_gpu.get(triangulation.id).is_some_and(|cached| cached.color[3] < 0.999)
                 })
                 .collect();
             let forward = self.camera.forward();
@@ -785,7 +783,7 @@ impl<'a> Graphics<'a> {
         }
         let needs_volume_target = block_models.iter().any(|block_model| {
             let entity = block_model.entity_id();
-            block_model.visible
+            block_model.state.loaded
                 && !editor.hidden_handles.contains(&entity)
                 && block_model_intersects_frustum(block_model, self.scene_origin, &frustum)
                 && self
@@ -796,7 +794,7 @@ impl<'a> Graphics<'a> {
         let needs_transparency_target = needs_volume_target
             || block_models.iter().any(|block_model| {
                 let entity = block_model.entity_id();
-                block_model.visible
+                block_model.state.loaded
                     && !editor.hidden_handles.contains(&entity)
                     && block_model_intersects_frustum(block_model, self.scene_origin, &frustum)
                     && self.block_model_gpu.get(block_model.id).is_some_and(|cached| {
@@ -876,7 +874,7 @@ impl<'a> Graphics<'a> {
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         for triangulation in triangulations {
             let entity = triangulation.entity_id();
-            if !triangulation.state.loaded || !triangulation.visible || editor.hidden_handles.contains(&entity) {
+            if !triangulation.state.loaded || editor.hidden_handles.contains(&entity) {
                 continue;
             }
             let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
@@ -893,11 +891,7 @@ impl<'a> Graphics<'a> {
         }
         for block_model in block_models {
             let entity = block_model.entity_id();
-            if !block_model.state.loaded
-                || !block_model.visible
-                || editor.hidden_handles.contains(&entity)
-                || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum)
-            {
+            if !block_model.state.loaded || editor.hidden_handles.contains(&entity) || !block_model_intersects_frustum(block_model, self.scene_origin, &frustum) {
                 continue;
             }
             let Some(cached) = self.block_model_gpu.get(block_model.id) else {
@@ -959,7 +953,7 @@ impl<'a> Graphics<'a> {
             .iter()
             .filter(|block_model| {
                 let entity = block_model.entity_id();
-                block_model.visible
+                block_model.state.loaded
                     && !editor.hidden_handles.contains(&entity)
                     && block_model_intersects_frustum(block_model, self.scene_origin, frustum)
                     && self
@@ -1173,7 +1167,7 @@ impl<'a> Graphics<'a> {
             .iter()
             .filter(|block_model| {
                 let entity = block_model.entity_id();
-                block_model.visible
+                block_model.state.loaded
                     && !editor.hidden_handles.contains(&entity)
                     && block_model_intersects_frustum(block_model, self.scene_origin, frustum)
                     && self.block_model_gpu.get(block_model.id).is_some_and(|cached| {

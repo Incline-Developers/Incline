@@ -907,7 +907,6 @@ pub(crate) struct OpenBlockModel {
     /// See [`UniformBlockGrid`]; detected once on the loader worker.
     pub(crate) uniform_grid: Option<UniformBlockGrid>,
     pub(crate) opaque_surface_blocks: Option<usize>,
-    pub(crate) visible: bool,
     pub(crate) color: [f32; 4],
     /// Active crop in local grid coordinates, or `None` for the full model.
     pub(crate) slice: Option<BlockModelSlice>,

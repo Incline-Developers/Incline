@@ -215,25 +215,17 @@ impl<'a> App<'a> {
         let mut entries: Vec<LegendEntry> = self
             .triangulations
             .iter()
-            .filter(|tri| tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()))
+            .filter(|tri| tri.state.loaded && !self.editor.hidden_handles.contains(&tri.entity_id()))
             .map(|tri| LegendEntry {
                 label: tri.name.clone(),
                 color: tri.color,
             })
             .collect();
         if let Some(project) = self.workspace.active_project() {
-            entries.extend(
-                project
-                    .project
-                    .document
-                    .layers()
-                    .iter()
-                    .filter(|layer| layer.visible && project.loaded_layers.contains(&layer.id))
-                    .map(|layer| LegendEntry {
-                        label: layer.name.clone(),
-                        color: layer.color,
-                    }),
-            );
+            entries.extend(project.project.document.layers().iter().filter(|layer| layer.loaded).map(|layer| LegendEntry {
+                label: layer.name.clone(),
+                color: layer.color,
+            }));
         }
         entries.truncate(MAX_LEGEND_ENTRIES);
         entries

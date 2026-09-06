@@ -598,7 +598,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("object:{}", id.0),
                 layer: layer.map(|layer| layer.name.clone()),
                 source: None,
-                visible: layer.is_some_and(|layer| layer.visible) && !document.is_object_hidden(id) && !editor.hidden_handles.contains(&entity),
+                visible: layer.is_some_and(|layer| layer.loaded) && !document.is_object_hidden(id) && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: object.world_bounds(),
             })
@@ -611,7 +611,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("triangulation:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
-                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                visible: item.is_loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.bounds,
             })
@@ -626,7 +626,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("block-model:{}", id.0),
                 layer: None,
                 source,
-                visible: model.visible && !editor.hidden_handles.contains(&entity),
+                visible: model.state.loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.and_then(|item| item.bounds).or_else(|| model.world_bounds()),
             })
@@ -639,7 +639,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("point-cloud:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
-                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                visible: item.is_loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.bounds,
             })
@@ -652,7 +652,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("drill-hole:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
-                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                visible: item.is_loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.bounds,
             })

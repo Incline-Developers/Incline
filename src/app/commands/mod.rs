@@ -10,6 +10,7 @@ pub(crate) mod products; // Handles the Drill & Blast workspace's stored product
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
 pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
+pub(crate) mod residency;
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod text; // Handles text editing commands
@@ -28,25 +29,29 @@ use crate::{
 
 impl<'a> App<'a> {
     pub(crate) fn apply_history_step(&mut self, undo: bool) {
+        if self.restore_history_step(undo) {
+            return;
+        }
         if self.has_pending_move_delta() {
             self.cancel_move_delta();
         }
-        let layers_before: std::collections::HashSet<_> = self
+        let layers = self
             .workspace
-            .active_project()
-            .into_iter()
-            .flat_map(|project| project.project.document.layers())
-            .map(|layer| layer.id)
-            .collect();
+            .active_document()
+            .map(|document| self.history.required_layers(undo, document))
+            .unwrap_or_default();
+        if self.restore_layers_for(layers, move |app| app.apply_history_step(undo)) {
+            return;
+        }
+        let needed = self.history.required_items(undo);
+        if self.restore_items_for(needed, move |app| app.apply_history_step(undo)) {
+            return;
+        }
         let stepped = self.with_edit_target(|history, target| if undo { history.undo(target) } else { history.redo(target) });
         let Some((true, effects)) = stepped else {
             return;
         };
-        if let Some(project) = self.workspace.active_project_mut() {
-            let layers_after: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
-            project.loaded_layers.retain(|layer_id| layers_after.contains(layer_id));
-            project.loaded_layers.extend(layers_after.difference(&layers_before).copied());
-        }
+
         if self.editor.active_layer.is_some_and(|layer_id| self.active_layer() != Some(layer_id)) {
             self.editor.active_layer = None;
         }
@@ -217,20 +222,11 @@ impl<'a> App<'a> {
                 self.execute_file_dialog_action(file::FileDialogAction::ImportRaster(paths))
             }
             UiCommand::LoadRaster(id) => {
-                if let Some(raster) = self.raster_textures.iter_mut().find(|raster| raster.id == id) {
-                    raster.state.loaded = true;
-                    self.redraw_requested = true;
-                } else {
-                    userspace_warn!("{}", tr!(literal = "That raster no longer belongs to the active project"));
-                }
+                self.set_item_loaded(crate::model::ItemRef::Raster(id), true);
                 Ok(())
             }
             UiCommand::UnloadRaster(id) => {
                 self.unload_raster(id);
-                Ok(())
-            }
-            UiCommand::ToggleRasterVisible(id) => {
-                self.toggle_raster_visible(id);
                 Ok(())
             }
             UiCommand::ToggleRasterLocked(id) => {
@@ -255,20 +251,11 @@ impl<'a> App<'a> {
             }
             UiCommand::ClearActiveTriangulationRaster => self.clear_active_triangulation_raster(),
             UiCommand::LoadPointCloud(id) => {
-                if let Some(cloud) = self.point_clouds.iter_mut().find(|cloud| cloud.id == id) {
-                    cloud.state.loaded = true;
-                    self.invalidate_topology_bounds_and_redraw();
-                } else {
-                    userspace_warn!("{}", tr!(literal = "That point cloud no longer belongs to the active project"));
-                }
+                self.set_item_loaded(crate::model::ItemRef::PointCloud(id), true);
                 Ok(())
             }
             UiCommand::ClosePointCloud(id) => {
                 self.close_point_cloud(id);
-                Ok(())
-            }
-            UiCommand::TogglePointCloudVisible(id) => {
-                self.toggle_point_cloud_visible(id);
                 Ok(())
             }
             UiCommand::RemovePointCloud(id) => {
@@ -392,10 +379,6 @@ impl<'a> App<'a> {
                 self.unload_layer(layer);
                 Ok(())
             }
-            UiCommand::ToggleLayerVisible(layer) => {
-                self.toggle_layer_visible(layer);
-                Ok(())
-            }
             UiCommand::ToggleLayerLocked(layer) => {
                 self.toggle_layer_locked(layer);
                 Ok(())
@@ -464,21 +447,11 @@ impl<'a> App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::DiscardLayerChanges(layer_id) => self.discard_layer_changes(layer_id),
             UiCommand::LoadTriangulation(id) => {
-                if let Some(triangulation) = self.triangulations.iter_mut().find(|triangulation| triangulation.id == id) {
-                    triangulation.state.loaded = true;
-                    self.invalidate_topology_bounds_and_redraw();
-                } else {
-                    userspace_warn!("{}", tr!(literal = "That triangulation no longer belongs to the active project"));
-                }
+                self.set_item_loaded(crate::model::ItemRef::Triangulation(id), true);
                 Ok(())
             }
             UiCommand::LoadBlockModel(id) => {
-                if let Some(model) = self.block_models.iter_mut().find(|model| model.id == id) {
-                    model.state.loaded = true;
-                    self.invalidate_topology_bounds_and_redraw();
-                } else {
-                    userspace_warn!("{}", tr!(literal = "That block model no longer belongs to the active project"));
-                }
+                self.set_item_loaded(crate::model::ItemRef::BlockModel(id), true);
                 Ok(())
             }
             UiCommand::CloseBlockModel(id) => {
@@ -487,10 +460,6 @@ impl<'a> App<'a> {
             }
             UiCommand::RemoveBlockModel(id) => {
                 self.remove_block_model(id);
-                Ok(())
-            }
-            UiCommand::ToggleBlockModelVisible(id) => {
-                self.toggle_block_model_visible(id);
                 Ok(())
             }
             UiCommand::SetBlockModelColorVariable { id, variable } => {
@@ -520,12 +489,7 @@ impl<'a> App<'a> {
                 }
             }
             UiCommand::LoadDrillHole(id) => {
-                if let Some(dataset) = self.drill_holes.iter_mut().find(|dataset| dataset.id == id) {
-                    dataset.state.loaded = true;
-                    self.invalidate_topology_bounds_and_redraw();
-                } else {
-                    userspace_warn!("{}", tr!(literal = "That drillhole dataset no longer belongs to the active project"));
-                }
+                self.set_item_loaded(crate::model::ItemRef::DrillHole(id), true);
                 Ok(())
             }
             UiCommand::CloseDrillHole(id) => {
@@ -534,10 +498,6 @@ impl<'a> App<'a> {
             }
             UiCommand::RemoveDrillHole(id) => {
                 self.remove_drill_hole(id);
-                Ok(())
-            }
-            UiCommand::ToggleDrillHoleVisible(id) => {
-                self.toggle_drill_hole_visible(id);
                 Ok(())
             }
             UiCommand::OpenDrillHoleColorDialog(id) => {
@@ -678,10 +638,6 @@ impl<'a> App<'a> {
             }
             UiCommand::ActivateTriangulation(id) => {
                 self.activate_triangulation(id);
-                Ok(())
-            }
-            UiCommand::ToggleTriangulationVisible(id) => {
-                self.toggle_triangulation_visible(id);
                 Ok(())
             }
             UiCommand::CloseTriangulation(id) => {
@@ -1116,7 +1072,7 @@ impl<'a> App<'a> {
             selected
                 .iter()
                 .filter_map(|handle| crate::model::ItemRef::from_entity(*handle))
-                .filter_map(|item| self.item_style_command(item, |style| style.with_visible(false))),
+                .filter_map(|item| self.item_style_command(item, |style| style.with_loaded(false))),
         );
 
         // Persisted visibility now owns ordinary Hide Selection. Remove any

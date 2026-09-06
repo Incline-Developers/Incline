@@ -1,6 +1,52 @@
 use super::*;
 
 impl<'a> Graphics<'a> {
+    /// Shared streams are rebuilt from the remaining loaded layers. Release
+    /// their old allocations now instead of keeping the unloaded geometry's
+    /// high-water capacity for the rest of the session.
+    pub(crate) fn release_design_memory(&mut self, document: &Document, layers: &[crate::model::LayerId]) {
+        self.static_strokes.release_layers(layers);
+        self.polyline_fill_cache.release_layers(document, layers);
+        self.design_point_gpu.clear();
+        self.text_system.text_cache = Default::default();
+        self.cached_object_aabbs = Vec::new();
+        self.pick_records = Vec::new();
+        self.text_pick_records = Vec::new();
+        self.document_draw_batches = Vec::new();
+        self.text_draw_batches = Vec::new();
+        self.lyon_buffer.vertices = Vec::new();
+        self.lyon_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.lyon_vertex_capacity = 0;
+        self.lyon_buffer.indices = Vec::new();
+        self.lyon_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
+        self.lyon_index_capacity = 0;
+        self.stroke_vertex_buf = Vec::new();
+        self.stroke_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.stroke_vertex_capacity = 0;
+        self.stroke_index_buf = Vec::new();
+        self.stroke_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
+        self.stroke_index_capacity = 0;
+        self.text_vertex_buf = Vec::new();
+        self.text_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.text_vertex_capacity = 0;
+        self.text_index_buf = Vec::new();
+        self.text_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
+        self.text_index_capacity = 0;
+        self.overlay_vertex_buf = Vec::new();
+        self.overlay_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.overlay_vertex_capacity = 0;
+        self.overlay_index_buf = Vec::new();
+        self.overlay_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
+        self.overlay_index_capacity = 0;
+        self.dynamic_vertex_buf = Vec::new();
+        self.dynamic_vertex_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::VERTEX);
+        self.dynamic_vertex_capacity = 0;
+        self.dynamic_index_buf = Vec::new();
+        self.dynamic_index_gpu = Self::create_stream_buffer(&self.device, "Released Design Stream", 4, wgpu::BufferUsages::INDEX);
+        self.dynamic_index_capacity = 0;
+        self.invalidate_geometry();
+    }
+
     pub(super) fn create_stream_buffer(device: &wgpu::Device, label: &'static str, size_bytes: usize, usage: wgpu::BufferUsages) -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),

@@ -449,7 +449,7 @@ fn pick_nearest_vertex_from_indices(
         if hidden.contains(&entity) || frozen.contains(&entity) {
             continue;
         }
-        if !doc.layer(object.layer()).map(|l| l.visible).unwrap_or(true) {
+        if !doc.layer(object.layer()).map(|l| l.loaded).unwrap_or(true) {
             continue;
         }
         match object {

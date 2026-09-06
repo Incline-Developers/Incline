@@ -198,7 +198,7 @@ fn design_point_content_key(document: &Document) -> u64 {
     document.layers().len().hash(&mut hasher);
     for layer in document.layers() {
         layer.id.hash(&mut hasher);
-        layer.visible.hash(&mut hasher);
+        layer.loaded.hash(&mut hasher);
     }
     document.objects().len().hash(&mut hasher);
     for object in document.objects() {
@@ -213,7 +213,7 @@ fn collect_design_point_positions(document: &Document, hidden: &HashSet<SceneEnt
     let mut positions = Vec::new();
     for object in document.objects() {
         let entity = SceneEntityId::Object(object.id());
-        let visible = !hidden.contains(&entity) && document.layer(object.layer()).is_none_or(|layer| layer.visible);
+        let visible = !hidden.contains(&entity) && document.layer(object.layer()).is_none_or(|layer| layer.loaded);
         if !visible {
             continue;
         }

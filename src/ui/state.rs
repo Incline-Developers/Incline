@@ -2645,7 +2645,6 @@ pub(crate) enum UiCommand {
     ImportRasterPaths(Vec<PathBuf>),
     LoadRaster(RasterTextureId),
     UnloadRaster(RasterTextureId),
-    ToggleRasterVisible(RasterTextureId),
     /// Lock/unlock a raster against draping, undraping and deletion.
     ToggleRasterLocked(RasterTextureId),
     RemoveRaster(RasterTextureId),
@@ -2656,7 +2655,6 @@ pub(crate) enum UiCommand {
     ClearActiveTriangulationRaster,
     LoadPointCloud(PointCloudId),
     ClosePointCloud(PointCloudId),
-    TogglePointCloudVisible(PointCloudId),
     RemovePointCloud(PointCloudId),
     ChooseImportSourceFiles(DataMenu),
     #[cfg(target_arch = "wasm32")]
@@ -2757,8 +2755,6 @@ pub(crate) enum UiCommand {
     CancelCollarRotation,
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
-    /// Show/hide a design layer without unloading it.
-    ToggleLayerVisible(LayerId),
     /// Lock/unlock every object on a design layer against selection and editing.
     ToggleLayerLocked(LayerId),
     /// Lock/unlock one scene entity against selection and editing.
@@ -2769,7 +2765,6 @@ pub(crate) enum UiCommand {
     SetSectionLocked(ExplorerSection, bool),
     SelectAllObjectsInLayer(LayerId),
     ActivateTriangulation(TriangulationId),
-    ToggleTriangulationVisible(TriangulationId),
     CloseTriangulation(TriangulationId),
     /// Batch variants - produce a single history entry for multi-select changes.
     BatchSetObjectColor(Vec<ObjectId>, ObjectColor),
@@ -2790,7 +2785,6 @@ pub(crate) enum UiCommand {
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
     RemoveBlockModel(BlockModelId),
-    ToggleBlockModelVisible(BlockModelId),
     SetBlockModelColorVariable {
         id: BlockModelId,
         variable: String,
@@ -2814,7 +2808,6 @@ pub(crate) enum UiCommand {
     LoadDrillHole(DrillHoleId),
     CloseDrillHole(DrillHoleId),
     RemoveDrillHole(DrillHoleId),
-    ToggleDrillHoleVisible(DrillHoleId),
     OpenDrillHoleColorDialog(DrillHoleId),
     SetDrillHoleColorField {
         id: DrillHoleId,
@@ -3102,7 +3095,6 @@ impl UiCommand {
             Self::ImportRasterPaths(paths) => report(tr!(literal = "Import Raster"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::LoadRaster(id) => report(tr!(literal = "Load Raster"), format!("{id:?}")),
             Self::UnloadRaster(id) => report(tr!(literal = "Unload Raster"), format!("{id:?}")),
-            Self::ToggleRasterVisible(id) => report(tr!(literal = "Set Raster Visibility"), format!("{id:?}")),
             Self::ToggleRasterLocked(id) => report(tr!(literal = "Set Raster Lock"), format!("{id:?}")),
             Self::RemoveRaster(id) => report(tr!(literal = "Remove Raster"), format!("{id:?}")),
             Self::DrapeRaster(id) => report(tr!(literal = "Drape Raster"), format!("{id:?}")),
@@ -3110,8 +3102,7 @@ impl UiCommand {
             Self::UndrapeAllRasters => report(tr!(literal = "Undrape Rasters"), tr!(literal = "Removed from every triangulation")),
             Self::ClearActiveTriangulationRaster => report(tr!(literal = "Clear Raster"), tr!(literal = "Removed from active triangulation")),
             Self::LoadPointCloud(id) => report(tr!(literal = "Load Point Cloud"), format!("{id:?}")),
-            Self::ClosePointCloud(id) => report(tr!(literal = "Close Point Cloud"), format!("{id:?}")),
-            Self::TogglePointCloudVisible(id) => report(tr!(literal = "Set Point Cloud Visibility"), format!("{id:?}")),
+            Self::ClosePointCloud(id) => report(tr!(literal = "Unload Point Cloud"), format!("{id:?}")),
             Self::RemovePointCloud(id) => report(tr!(literal = "Remove Point Cloud"), format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report(tr!(literal = "Import CSV Block Model"), path.display().to_string()),
             Self::ExportOmf => report(tr!(literal = "Export OMF"), tr!(literal = "All open Incline Design data")),
@@ -3161,9 +3152,8 @@ impl UiCommand {
             Self::ApplyBezier => report(tr!(literal = "Create Bezier Curve"), tr!(literal = "Apply to selection")),
             Self::ApplyMoveDelta(delta) => report(tr!(literal = "Move Selection"), format!("{delta}")),
             Self::ApplyCollarRotation => report(tr!(literal = "Rotate Collar"), tr!(literal = "Apply to selection")),
-            Self::LoadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} shown")),
-            Self::UnloadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} hidden")),
-            Self::ToggleLayerVisible(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?}")),
+            Self::LoadLayer(id) => report(tr!(literal = "Load Layer"), format!("{id:?}")),
+            Self::UnloadLayer(id) => report(tr!(literal = "Unload Layer"), format!("{id:?}")),
             Self::ToggleLayerLocked(id) => report(tr!(literal = "Set Layer Lock"), format!("{id:?}")),
             Self::ToggleEntityLocked(handle) => report(tr!(literal = "Set Entity Lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
@@ -3176,7 +3166,6 @@ impl UiCommand {
             ),
             Self::SelectAllObjectsInLayer(id) => report(tr!(literal = "Select Layer Objects"), format!("{id:?}")),
             Self::ActivateTriangulation(id) => report(tr!(literal = "Set Current Triangulation"), format!("{id:?}")),
-            Self::ToggleTriangulationVisible(id) => report(tr!(literal = "Set Triangulation Visibility"), format!("{id:?}")),
             Self::CloseTriangulation(id) => report(tr!(literal = "Unload Triangulation"), format!("{id:?}")),
             Self::BatchSetObjectColor(ids, _) => report(tr!(literal = "Set Object Colour"), tr_format!(literal = "%count% object(s)", count = ids.len())),
             Self::BatchSetPolylineClosed(ids, closed) => report(
@@ -3206,7 +3195,6 @@ impl UiCommand {
             Self::LoadBlockModel(id) => report(tr!(literal = "Load Block Model"), format!("{id:?}")),
             Self::CloseBlockModel(id) => report(tr!(literal = "Unload Block Model"), format!("{id:?}")),
             Self::RemoveBlockModel(id) => report(tr!(literal = "Remove Block Model"), format!("{id:?}")),
-            Self::ToggleBlockModelVisible(id) => report(tr!(literal = "Set Block Model Visibility"), format!("{id:?}")),
             Self::SetBlockModelColorVariable { variable, .. } => report(tr!(literal = "Set Block Model Variable"), variable.clone()),
             Self::ImportDrillHole(source) => report(tr!(literal = "Import Drillholes"), source.display_name()),
             Self::CreateDrillPattern { name, collars, .. } => report(
@@ -3214,9 +3202,8 @@ impl UiCommand {
                 tr_format!(literal = "%name% · %count% holes", name = name, count = collars.len()),
             ),
             Self::LoadDrillHole(id) => report(tr!(literal = "Load Drillholes"), format!("{id:?}")),
-            Self::CloseDrillHole(id) => report(tr!(literal = "Close Drillholes"), format!("{id:?}")),
+            Self::CloseDrillHole(id) => report(tr!(literal = "Unload Drillholes"), format!("{id:?}")),
             Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
-            Self::ToggleDrillHoleVisible(id) => report(tr!(literal = "Set Drillhole Visibility"), format!("{id:?}")),
             Self::SetDrillHoleColorField { field, .. } => report(tr!(literal = "Colour Drillholes"), field.clone().unwrap_or_else(|| tr!(literal = "Uniform white"))),
             Self::SetDrillHoleColorPreset { preset, .. } => report(tr!(literal = "Set Drillhole Colour Preset"), preset.label()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!(literal = "Create Block Model"), name.clone()),
@@ -3302,14 +3289,12 @@ pub(crate) struct UiFrameOutput {
     pub(crate) pointer_gesture_active: bool,
 }
 
-/// One loaded layer shown in the explorer tree.
+/// One project layer shown in the explorer tree.
 #[derive(Clone, Debug)]
 pub(crate) struct UiLayerEntry {
     pub(crate) id: LayerId,
     pub(crate) name: String,
-    /// Drawn in the viewport. Independent of loading: an unloaded layer keeps
-    /// the visibility it will come back with.
-    pub(crate) visible: bool,
+    /// Whether the layer is loaded and drawn in the viewport.
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
 }
@@ -3399,7 +3384,6 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) id: PointCloudId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
@@ -3411,7 +3395,6 @@ pub(crate) struct UiRasterTextureEntry {
     pub(crate) id: RasterTextureId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     /// Currently draped over at least one triangulation.
@@ -3426,7 +3409,6 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) id: TriangulationId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
@@ -3442,7 +3424,6 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) id: BlockModelId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
@@ -3455,7 +3436,6 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) id: crate::model::drill_hole::DrillHoleId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,

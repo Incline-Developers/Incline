@@ -31,7 +31,6 @@ pub(crate) struct OpenPointCloud {
     pub(crate) colors: Option<Arc<Vec<u32>>>,
     pub(crate) prepared: Arc<PreparedPointCloud>,
     pub(crate) bounds: (DVec3, DVec3),
-    pub(crate) visible: bool,
     /// Uniform colour used when the file carries no per-point colours.
     pub(crate) color: [f32; 4],
     /// Screen-facing splat width in source/world metres.

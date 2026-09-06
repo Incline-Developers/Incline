@@ -41,8 +41,6 @@ pub(crate) struct OpenRasterTexture {
     pub(crate) id: RasterTextureId,
     pub(crate) state: ProjectItemState,
     pub(crate) name: String,
-    /// Hidden rasters stay loaded and keep their drape; they just stop drawing.
-    pub(crate) visible: bool,
     pub(crate) source_size: [u32; 2],
     pub(crate) preview_size: [u32; 2],
     pub(crate) full_rgba: Arc<Vec<u8>>,

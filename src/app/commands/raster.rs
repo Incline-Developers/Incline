@@ -154,7 +154,6 @@ impl<'a> App<'a> {
             id,
             state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
             name,
-            visible: true,
             source_size: loaded.source_size,
             preview_size: loaded.preview_size,
             full_rgba: loaded.full_rgba,
@@ -196,22 +195,12 @@ impl<'a> App<'a> {
         changed
     }
 
-    pub(crate) fn toggle_raster_visible(&mut self, id: RasterTextureId) {
-        let item = ItemRef::Raster(id);
-        let Some(style) = self.item_style(item) else {
-            return;
-        };
-        let visible = !style.visible();
-        self.set_item_style(item, style.with_visible(visible));
+    /// Unload raster pixels while retaining its project entry and drape assignments.
+    pub(crate) fn unload_raster(&mut self, id: RasterTextureId) {
+        self.set_item_loaded(crate::model::ItemRef::Raster(id), false);
     }
 
-    /// Drop runtime use of the raster while retaining its project-owned pixels.
-    pub(crate) fn unload_raster(&mut self, id: RasterTextureId) {
-        for raster in &mut self.raster_textures {
-            if raster.id == id {
-                raster.state.loaded = false;
-            }
-        }
+    pub(crate) fn release_raster_runtime(&mut self, _id: RasterTextureId) {
         self.redraw_requested = true;
     }
 

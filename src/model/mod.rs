@@ -1,5 +1,10 @@
 //! Editable mine-design document model and source of truth for the editor.
 
+pub(crate) mod asset_residency;
+pub(crate) mod asset_storage;
+pub(crate) mod history_storage;
+pub(crate) mod layer_residency;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod atomic_file;
 pub(crate) mod block_model;
@@ -66,7 +71,8 @@ pub(crate) struct Layer {
     pub(crate) color_index: Option<u8>,
     /// Resolved RGBA used for rendering objects with `ObjectColor::ByLayer`.
     pub(crate) color: [f32; 4],
-    pub(crate) visible: bool,
+    #[serde(alias = "visible")]
+    pub(crate) loaded: bool,
     pub(crate) elevation: f32,
 }
 
@@ -195,13 +201,11 @@ impl Object {
         }
     }
 
-    /// Content fingerprint for dirty tracking. Ids are masked to their local
-    /// 32-bit half so the hash is stable across runtime namespacing; floats
-    /// hash by bit pattern so a reverted edit hashes back to the saved value.
-    pub(crate) fn content_hash(&self) -> u64 {
+    /// Geometry/style fingerprint for layer dirty tracking. Object order is
+    /// hashed by the caller, and IDs do not change geometry when a backed layer
+    /// is merged or namespaced. Floats hash by bit pattern for exact undo.
+    pub(crate) fn geometry_hash(&self) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
-        const LOCAL_MASK: u64 = u32::MAX as u64;
-
         fn hash_color(hasher: &mut DefaultHasher, color: ObjectColor) {
             match color {
                 ObjectColor::ByLayer => 0u8.hash(hasher),
@@ -227,8 +231,6 @@ impl Object {
         }
 
         let mut hasher = DefaultHasher::new();
-        (self.id().0 & LOCAL_MASK).hash(&mut hasher);
-        (self.layer().0 & LOCAL_MASK).hash(&mut hasher);
         match self {
             Object::Point { pos, color, .. } => {
                 0u8.hash(&mut hasher);
@@ -412,8 +414,10 @@ impl Object {
 pub(crate) struct Document {
     layers: Vec<Layer>,
     objects: Vec<Object>,
+    #[serde(skip)]
+    pub(crate) deferred_layers: HashMap<LayerId, layer_residency::DeferredLayer>,
     /// Project-persistent visibility overrides for individual design objects.
-    /// Layers have their own visibility flag; this set covers object-level
+    /// Layers have their own loaded flag; this set covers object-level
     /// Hide Selection without changing the object's geometry or styling.
     #[serde(default)]
     hidden_objects: std::collections::HashSet<ObjectId>,
@@ -539,6 +543,9 @@ impl Document {
         let max_object = self.objects.iter().map(|object| object.id().0).max();
         self.next_layer_id = max_layer.map_or(0, |id| id.saturating_add(1));
         self.next_object_id = max_object.map_or(0, |id| id.saturating_add(1));
+        self.next_object_id = self
+            .next_object_id
+            .max(self.deferred_layers.values().map(|stored| stored.max_object_id + 1).max().unwrap_or(0));
     }
 
     pub(crate) fn rebuild_object_index(&mut self) {
@@ -553,7 +560,7 @@ impl Document {
             .or_else(|| self.objects.iter().position(|object| object.id() == id))
     }
 
-    pub(crate) fn add_layer(&mut self, name: String, color_index: Option<u8>, color: [f32; 4], visible: bool, elevation: f32) -> LayerId {
+    pub(crate) fn add_layer(&mut self, name: String, color_index: Option<u8>, color: [f32; 4], loaded: bool, elevation: f32) -> LayerId {
         let id = LayerId(self.next_layer_id);
         self.next_layer_id += 1;
         self.layers.push(Layer {
@@ -561,7 +568,7 @@ impl Document {
             name,
             color_index,
             color,
-            visible,
+            loaded,
             elevation,
         });
         self.touch();
@@ -734,6 +741,7 @@ impl Document {
     pub(crate) fn delete_layer(&mut self, id: LayerId) -> bool {
         let before = self.layers.len();
         self.layers.retain(|l| l.id != id);
+        self.deferred_layers.remove(&id);
         let removed = self.layers.len() < before;
         if removed {
             self.touch();
@@ -746,6 +754,7 @@ impl Document {
     /// reloaded from disk but other layers still contain unsaved edits.
     #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn replace_layer_snapshot(&mut self, layer_index: usize, layer: Layer, objects: Vec<(usize, Object)>) {
+        self.deferred_layers.remove(&layer.id);
         let old_object_ids = self
             .objects
             .iter()
@@ -780,13 +789,13 @@ impl Document {
 
     /// Set a layer's viewport visibility. Returns the new state, or `None`
     /// when the layer no longer exists.
-    pub(crate) fn set_layer_visible(&mut self, id: LayerId, visible: bool) -> Option<bool> {
+    pub(crate) fn set_layer_loaded(&mut self, id: LayerId, loaded: bool) -> Option<bool> {
         let layer = self.layers.iter_mut().find(|layer| layer.id == id)?;
-        if layer.visible != visible {
-            layer.visible = visible;
+        if layer.loaded != loaded {
+            layer.loaded = loaded;
             self.touch();
         }
-        Some(visible)
+        Some(loaded)
     }
 
     pub(crate) fn layer_id_by_name(&self, name: &str) -> Option<LayerId> {
@@ -810,6 +819,10 @@ impl Document {
     }
 
     fn apply_runtime_namespace_inner(&mut self, namespace: u32) {
+        self.deferred_layers = std::mem::take(&mut self.deferred_layers)
+            .into_iter()
+            .map(|(id, stored)| (LayerId((u64::from(namespace) << 32) | (id.0 & u64::from(u32::MAX))), stored))
+            .collect();
         const LOCAL_MASK: u64 = u32::MAX as u64;
         let prefix = u64::from(namespace) << 32;
         let runtime_id = |id: u64| prefix | (id & LOCAL_MASK);
@@ -920,82 +933,36 @@ impl Document {
     /// fingerprint is identical before and after runtime namespacing.
     pub(crate) fn content_hash(&self, cache: &mut HashMap<ObjectId, (u64, u64)>) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
-        const LOCAL_MASK: u64 = u32::MAX as u64;
-
+        let hashes = self.layer_content_hashes(cache);
         let mut hasher = DefaultHasher::new();
-        // Allocation counters are derived from retained IDs when an OMF opens
-        // and are not user-visible project content. Excluding them lets undo
-        // back to an identical design clear the dirty star.
-        self.layers.len().hash(&mut hasher);
         for layer in &self.layers {
-            (layer.id.0 & LOCAL_MASK).hash(&mut hasher);
-            layer.name.hash(&mut hasher);
-            layer.color_index.hash(&mut hasher);
-            for channel in layer.color {
-                channel.to_bits().hash(&mut hasher);
-            }
-            layer.visible.hash(&mut hasher);
-            layer.elevation.to_bits().hash(&mut hasher);
-        }
-        self.objects.len().hash(&mut hasher);
-        for object in &self.objects {
-            let id = object.id();
-            let object_revision = self.object_revision(id);
-            let object_hash = match cache.get(&id) {
-                Some(&(revision, hash)) if revision == object_revision => hash,
-                _ => {
-                    let hash = object.content_hash();
-                    cache.insert(id, (object_revision, hash));
-                    hash
-                }
-            };
-            object_hash.hash(&mut hasher);
-            self.hidden_objects.contains(&id).hash(&mut hasher);
-        }
-        // Prune deleted objects once stale entries dominate the cache.
-        if cache.len() > self.objects.len().saturating_mul(2).max(64) {
-            cache.retain(|id, _| self.object_index.contains_key(id));
+            let id = layer.id.0 & u64::from(u32::MAX);
+            id.hash(&mut hasher);
+            hashes.get(&id).hash(&mut hasher);
         }
         hasher.finish()
     }
 
-    /// Namespace-invariant per-layer fingerprints for layer-level dirty
-    /// tracking, keyed by each layer id's 32-bit local half. A layer's hash
-    /// covers its own fields plus its objects' content in draw order. Shares
-    /// the per-object hash `cache` with [`Self::content_hash`].
+    /// Hash logical layer contents identically whether its payload is resident
+    /// or backed by a file. Residency cannot change the saved-content baseline.
     pub(crate) fn layer_content_hashes(&self, cache: &mut HashMap<ObjectId, (u64, u64)>) -> HashMap<u64, u64> {
         use std::hash::{DefaultHasher, Hash, Hasher};
-        const LOCAL_MASK: u64 = u32::MAX as u64;
-
-        let mut hashers: HashMap<u64, DefaultHasher> = HashMap::with_capacity(self.layers.len());
-        for layer in &self.layers {
-            let mut hasher = DefaultHasher::new();
-            layer.name.hash(&mut hasher);
-            layer.color_index.hash(&mut hasher);
-            for channel in layer.color {
-                channel.to_bits().hash(&mut hasher);
-            }
-            layer.visible.hash(&mut hasher);
-            layer.elevation.to_bits().hash(&mut hasher);
-            hashers.insert(layer.id.0 & LOCAL_MASK, hasher);
-        }
-        for object in &self.objects {
-            let id = object.id();
-            let object_revision = self.object_revision(id);
-            let object_hash = match cache.get(&id) {
-                Some(&(revision, hash)) if revision == object_revision => hash,
-                _ => {
-                    let hash = object.content_hash();
-                    cache.insert(id, (object_revision, hash));
-                    hash
+        let payloads = self.payload_hashes(cache);
+        self.layers
+            .iter()
+            .map(|layer| {
+                let mut hasher = DefaultHasher::new();
+                layer.name.hash(&mut hasher);
+                layer.color_index.hash(&mut hasher);
+                for channel in layer.color {
+                    channel.to_bits().hash(&mut hasher);
                 }
-            };
-            if let Some(hasher) = hashers.get_mut(&(object.layer().0 & LOCAL_MASK)) {
-                object_hash.hash(hasher);
-                self.hidden_objects.contains(&id).hash(hasher);
-            }
-        }
-        hashers.into_iter().map(|(id, hasher)| (id, hasher.finish())).collect()
+                layer.loaded.hash(&mut hasher);
+                layer.elevation.to_bits().hash(&mut hasher);
+                payloads.get(&layer.id).hash(&mut hasher);
+                (layer.id.0 & u64::from(u32::MAX), hasher.finish())
+            })
+            .collect()
     }
 }
 
@@ -1036,7 +1003,7 @@ impl ItemRef {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ItemStyle {
     Triangulation {
-        visible: bool,
+        loaded: bool,
         color: [f32; 4],
         line_color: [f32; 4],
         line_weight: Option<f32>,
@@ -1044,7 +1011,7 @@ pub(crate) enum ItemStyle {
         raster_opacity: f32,
     },
     BlockModel {
-        visible: bool,
+        loaded: bool,
         color: [f32; 4],
         slice: Option<block_model::BlockModelSlice>,
         active_color_variable: Option<String>,
@@ -1052,23 +1019,23 @@ pub(crate) enum ItemStyle {
         hide_empty_color_values: bool,
     },
     DrillHole {
-        visible: bool,
+        loaded: bool,
         color: drill_hole::DrillColorState,
     },
     PointCloud {
-        visible: bool,
+        loaded: bool,
         color: [f32; 4],
         point_size: f32,
     },
     Raster {
-        visible: bool,
+        loaded: bool,
     },
 }
 
 impl ItemStyle {
     pub(crate) fn of_triangulation(item: &triangulation::OpenTriangulation) -> Self {
         Self::Triangulation {
-            visible: item.visible,
+            loaded: item.state.loaded,
             color: item.color,
             line_color: item.line_color,
             line_weight: item.line_weight,
@@ -1079,7 +1046,7 @@ impl ItemStyle {
 
     pub(crate) fn of_block_model(item: &block_model::OpenBlockModel) -> Self {
         Self::BlockModel {
-            visible: item.visible,
+            loaded: item.state.loaded,
             color: item.color,
             slice: item.slice,
             active_color_variable: item.active_color_variable.clone(),
@@ -1090,42 +1057,38 @@ impl ItemStyle {
 
     pub(crate) fn of_drill_hole(item: &drill_hole::OpenDrillHoleDataset) -> Self {
         Self::DrillHole {
-            visible: item.visible,
+            loaded: item.state.loaded,
             color: item.color.clone(),
         }
     }
 
     pub(crate) fn of_point_cloud(item: &point_cloud::OpenPointCloud) -> Self {
         Self::PointCloud {
-            visible: item.visible,
+            loaded: item.state.loaded,
             color: item.color,
             point_size: item.point_size,
         }
     }
 
     pub(crate) fn of_raster(item: &raster::OpenRasterTexture) -> Self {
-        Self::Raster { visible: item.visible }
+        Self::Raster { loaded: item.state.loaded }
     }
 
-    pub(crate) fn visible(&self) -> bool {
+    pub(crate) fn loaded(&self) -> bool {
         match self {
-            Self::Triangulation { visible, .. }
-            | Self::BlockModel { visible, .. }
-            | Self::DrillHole { visible, .. }
-            | Self::PointCloud { visible, .. }
-            | Self::Raster { visible } => *visible,
+            Self::Triangulation { loaded, .. } | Self::BlockModel { loaded, .. } | Self::DrillHole { loaded, .. } | Self::PointCloud { loaded, .. } | Self::Raster { loaded } => {
+                *loaded
+            }
         }
     }
 
     /// The same style with only its visibility changed - how every show/hide
     /// action builds the `after` half of its command.
-    pub(crate) fn with_visible(mut self, value: bool) -> Self {
+    pub(crate) fn with_loaded(mut self, value: bool) -> Self {
         match &mut self {
-            Self::Triangulation { visible, .. }
-            | Self::BlockModel { visible, .. }
-            | Self::DrillHole { visible, .. }
-            | Self::PointCloud { visible, .. }
-            | Self::Raster { visible } => *visible = value,
+            Self::Triangulation { loaded, .. } | Self::BlockModel { loaded, .. } | Self::DrillHole { loaded, .. } | Self::PointCloud { loaded, .. } | Self::Raster { loaded } => {
+                *loaded = value
+            }
         }
         self
     }
@@ -1188,6 +1151,7 @@ impl ItemStyle {
 /// A whole project item, lifted out of the app while a deletion of it sits in
 /// the undo stack. Boxed because a block model's metadata dwarfs every other
 /// [`Command`] variant, and `Command`'s size is paid by every entry.
+#[derive(Clone)]
 pub(crate) enum OpenItem {
     Triangulation(Box<triangulation::OpenTriangulation>),
     BlockModel(Box<block_model::OpenBlockModel>),
@@ -1251,6 +1215,7 @@ pub(crate) struct StepEffects {
     pub(crate) document_changed: bool,
     /// A project item changed: refresh topology bounds and redraw.
     pub(crate) items_changed: bool,
+    pub(crate) unloaded_items: Vec<ItemRef>,
     /// Items were added or removed: the session file no longer matches.
     pub(crate) membership_changed: bool,
     /// Block models whose active colour variable changed and whose values
@@ -1316,12 +1281,13 @@ impl EditTarget<'_> {
     /// model style handed a triangulation id) is ignored rather than partially
     /// applied, so a malformed command cannot leave an item half-styled.
     fn set_item_style(&mut self, item: ItemRef, style: &ItemStyle) {
+        let was_loaded = self.item_state_mut(item).is_some_and(|state| state.loaded);
         let mut changed = false;
         match (item, style) {
             (
                 ItemRef::Triangulation(id),
                 ItemStyle::Triangulation {
-                    visible,
+                    loaded,
                     color,
                     line_color,
                     line_weight,
@@ -1330,7 +1296,7 @@ impl EditTarget<'_> {
                 },
             ) => {
                 if let Some(entry) = self.triangulations.iter_mut().find(|entry| entry.id == id) {
-                    entry.visible = *visible;
+                    entry.state.loaded = *loaded;
                     entry.color = *color;
                     entry.line_color = *line_color;
                     entry.line_weight = *line_weight;
@@ -1342,7 +1308,7 @@ impl EditTarget<'_> {
             (
                 ItemRef::BlockModel(id),
                 ItemStyle::BlockModel {
-                    visible,
+                    loaded,
                     color,
                     slice,
                     active_color_variable,
@@ -1352,7 +1318,7 @@ impl EditTarget<'_> {
             ) => {
                 if let Some(entry) = self.block_models.iter_mut().find(|entry| entry.id == id) {
                     let variable_changed = entry.active_color_variable != *active_color_variable;
-                    entry.visible = *visible;
+                    entry.state.loaded = *loaded;
                     entry.color = *color;
                     entry.slice = *slice;
                     entry.active_color_variable = active_color_variable.clone();
@@ -1371,30 +1337,33 @@ impl EditTarget<'_> {
                     changed = true;
                 }
             }
-            (ItemRef::DrillHole(id), ItemStyle::DrillHole { visible, color }) => {
+            (ItemRef::DrillHole(id), ItemStyle::DrillHole { loaded, color }) => {
                 if let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == id) {
-                    entry.visible = *visible;
+                    entry.state.loaded = *loaded;
                     entry.color = color.clone();
                     changed = true;
                 }
             }
-            (ItemRef::PointCloud(id), ItemStyle::PointCloud { visible, color, point_size }) => {
+            (ItemRef::PointCloud(id), ItemStyle::PointCloud { loaded, color, point_size }) => {
                 if let Some(entry) = self.point_clouds.iter_mut().find(|entry| entry.id == id) {
-                    entry.visible = *visible;
+                    entry.state.loaded = *loaded;
                     entry.color = *color;
                     entry.point_size = *point_size;
                     changed = true;
                 }
             }
-            (ItemRef::Raster(id), ItemStyle::Raster { visible }) => {
+            (ItemRef::Raster(id), ItemStyle::Raster { loaded }) => {
                 if let Some(entry) = self.rasters.iter_mut().find(|entry| entry.id == id) {
-                    entry.visible = *visible;
+                    entry.state.loaded = *loaded;
                     changed = true;
                 }
             }
             _ => {}
         }
         if changed {
+            if was_loaded && !style.loaded() {
+                self.effects.unloaded_items.push(item);
+            }
             self.touch_item(item);
         }
     }
@@ -1552,8 +1521,14 @@ impl EditTarget<'_> {
 
 /// A reversible edit to the project: the design document, the project items
 /// beside it, or both in one step.
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum Command {
+    #[serde(skip)]
+    Archived {
+        backing: asset_storage::Backing,
+        layers: Vec<LayerId>,
+        items: Vec<ItemRef>,
+    },
     AddObject(Object),
     DeleteObject {
         object: Object,
@@ -1588,7 +1563,7 @@ pub(crate) enum Command {
         objects: Vec<(usize, Object)>,
     },
     /// Show or hide a design layer.
-    SetLayerVisible {
+    SetLayerLoaded {
         id: LayerId,
         before: bool,
         after: bool,
@@ -1602,6 +1577,7 @@ pub(crate) enum Command {
     /// Replace every persisted presentation field of one project item. This
     /// is what makes showing, hiding, colouring, ramping and draping an item
     /// undoable, all through one variant.
+    #[serde(skip)]
     SetItemStyle {
         item: ItemRef,
         before: ItemStyle,
@@ -1609,6 +1585,7 @@ pub(crate) enum Command {
     },
     /// Rename a project item. Layers have [`Command::RenameLayer`]; they live
     /// in the document rather than in the item collections.
+    #[serde(skip)]
     RenameItem {
         item: ItemRef,
         before: String,
@@ -1660,6 +1637,7 @@ pub(crate) enum Command {
     /// Add a complete project item. While the item is present, `added` is
     /// `None`; undo lifts it back into the command so redo can restore the
     /// exact same data and explorer position without cloning it.
+    #[serde(skip)]
     AddItem {
         item: ItemRef,
         index: usize,
@@ -1668,6 +1646,7 @@ pub(crate) enum Command {
     /// Delete a project item. The item itself is moved into the command when
     /// it is applied and moved back out when it is reverted, so a deletion
     /// sitting in the undo stack never holds a second copy of a mesh.
+    #[serde(skip)]
     DeleteItem {
         item: ItemRef,
         /// Explorer position captured on apply, so undo restores the order.
@@ -1705,7 +1684,7 @@ impl Command {
                 Command::DeleteLayerSnapshot { layer, objects, .. } => {
                     layer_bytes(layer).saturating_add(objects.iter().map(|(_, object)| object_bytes(object)).fold(0usize, usize::saturating_add))
                 }
-                Command::SetLayerVisible { .. } | Command::SetObjectHidden { .. } => 0,
+                Command::SetLayerLoaded { .. } | Command::SetObjectHidden { .. } | Command::Archived { .. } => 0,
                 Command::SetItemStyle { before, after, .. } => before.estimated_bytes().saturating_add(after.estimated_bytes()),
                 Command::RenameItem { before, after, .. } => before.len().saturating_add(after.len()),
                 Command::SetTieIns { before, after, .. } => before
@@ -1764,10 +1743,50 @@ impl Command {
         }
     }
 
+    pub(crate) fn required_layers(&self, undo: bool, document: &Document, into: &mut Vec<LayerId>) {
+        match self {
+            Self::Archived { layers, .. } => into.extend(layers.iter().copied()),
+            Self::SetLayerLoaded { id, before, after } if if undo { *before } else { *after } => into.push(*id),
+            Self::AddObject(object) | Self::DeleteObject { object, .. } => into.push(object.layer()),
+            Self::Replace { before, .. } => into.push(before.layer()),
+            Self::DeleteLayerSnapshot { layer, .. } => into.push(layer.id),
+            Self::SetObjectHidden { id, .. } => {
+                if let Some(object) = document.get_object(*id) {
+                    into.push(object.layer());
+                } else {
+                    into.extend(document.deferred_layers.keys().copied());
+                }
+            }
+            Self::Batch(commands) => {
+                for command in commands {
+                    command.required_layers(undo, document, into);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn required_items(&self, undo: bool, into: &mut Vec<ItemRef>) {
+        match self {
+            Self::Archived { items, .. } => into.extend(items.iter().copied()),
+            Self::SetItemStyle { item, before, after } if (if undo { before } else { after }).loaded() => into.push(*item),
+            Self::MoveCollars { dataset, .. } | Self::RotateCollars { dataset, .. } | Self::SetTieIns { dataset, .. } | Self::SetInitiation { dataset, .. } => {
+                into.push(ItemRef::DrillHole(*dataset))
+            }
+            Self::Batch(commands) => {
+                for command in commands {
+                    command.required_items(undo, into);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Every project item this command touches, so the history can capture and
     /// restore their content epochs around an apply or a revert.
     fn touched_items(&self, into: &mut Vec<ItemRef>) {
         match self {
+            Command::Archived { items, .. } => into.extend(items.iter().copied()),
             Command::SetItemStyle { item, .. } | Command::RenameItem { item, .. } | Command::AddItem { item, .. } | Command::DeleteItem { item, .. } => {
                 if !into.contains(item) {
                     into.push(*item);
@@ -1790,13 +1809,14 @@ impl Command {
             | Command::RenameLayer { .. }
             | Command::AddLayerSnapshot { .. }
             | Command::DeleteLayerSnapshot { .. }
-            | Command::SetLayerVisible { .. }
+            | Command::SetLayerLoaded { .. }
             | Command::SetObjectHidden { .. } => {}
         }
     }
 
     fn apply(&mut self, target: &mut EditTarget<'_>) {
         match self {
+            Command::Archived { .. } => unreachable!("restore archived history before applying a step"),
             Command::AddObject(object) => {
                 target.document.insert_object(object.clone());
                 target.effects.document_changed = true;
@@ -1846,8 +1866,8 @@ impl Command {
                 target.document.delete_layer(layer.id);
                 target.effects.document_changed = true;
             }
-            Command::SetLayerVisible { id, after, .. } => {
-                target.document.set_layer_visible(*id, *after);
+            Command::SetLayerLoaded { id, after, .. } => {
+                target.document.set_layer_loaded(*id, *after);
                 target.effects.document_changed = true;
             }
             Command::SetObjectHidden { id, after, .. } => {
@@ -1877,6 +1897,7 @@ impl Command {
 
     fn revert(&mut self, target: &mut EditTarget<'_>) {
         match self {
+            Command::Archived { .. } => unreachable!("restore archived history before applying a step"),
             Command::AddObject(object) => {
                 target.document.remove_object(object.id());
                 target.effects.document_changed = true;
@@ -1925,8 +1946,8 @@ impl Command {
                 target.document.restore_objects_bulk(objects.clone());
                 target.effects.document_changed = true;
             }
-            Command::SetLayerVisible { id, before, .. } => {
-                target.document.set_layer_visible(*id, *before);
+            Command::SetLayerLoaded { id, before, .. } => {
+                target.document.set_layer_loaded(*id, *before);
                 target.effects.document_changed = true;
             }
             Command::SetObjectHidden { id, before, .. } => {
@@ -2026,6 +2047,7 @@ struct ProjectHistory {
 
 /// Undo/redo history for the one open project.
 pub(crate) struct History {
+    archive_revision: u64,
     project: ProjectHistory,
     retained_bytes: usize,
     next_sequence: u64,
@@ -2040,6 +2062,7 @@ pub(crate) struct History {
 impl Default for History {
     fn default() -> Self {
         Self {
+            archive_revision: 0,
             project: ProjectHistory::default(),
             retained_bytes: 0,
             next_sequence: 0,
@@ -2056,6 +2079,22 @@ impl History {
         Self::default()
     }
 
+    pub(crate) fn required_layers(&self, undo: bool, document: &Document) -> Vec<LayerId> {
+        let mut layers = Vec::new();
+        if let Some(entry) = (if undo { &self.project.undo } else { &self.project.redo }).last() {
+            entry.command.required_layers(undo, document, &mut layers);
+        }
+        layers
+    }
+
+    pub(crate) fn required_items(&self, undo: bool) -> Vec<ItemRef> {
+        let mut items = Vec::new();
+        if let Some(entry) = (if undo { &self.project.undo } else { &self.project.redo }).last() {
+            entry.command.required_items(undo, &mut items);
+        }
+        items
+    }
+
     pub(crate) fn activate(&mut self, _runtime_id: u32) {}
 
     pub(crate) fn deactivate(&mut self) {}
@@ -2065,6 +2104,7 @@ impl History {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.archive_revision = self.archive_revision.wrapping_add(1);
         self.retained_bytes = 0;
         self.open_run = false;
         self.project.undo.clear();
@@ -2123,6 +2163,7 @@ impl History {
     }
 
     fn push_entry(&mut self, command: Command, before: EpochSnapshot, after: EpochSnapshot, continuing: bool) {
+        self.archive_revision = self.archive_revision.wrapping_add(1);
         self.retained_bytes = self
             .retained_bytes
             .saturating_sub(self.project.redo.iter().map(|entry| entry.estimated_bytes).sum::<usize>());
@@ -2162,6 +2203,7 @@ impl History {
 
     /// Revert the most recent command. Returns `true` if something was undone.
     pub(crate) fn undo(&mut self, target: &mut EditTarget<'_>) -> bool {
+        self.archive_revision = self.archive_revision.wrapping_add(1);
         // Whatever gesture was running, the entry it was extending is no
         // longer the newest one.
         self.open_run = false;
@@ -2194,6 +2236,7 @@ impl History {
 
     /// Re-apply the most recently undone command. Returns `true` on success.
     pub(crate) fn redo(&mut self, target: &mut EditTarget<'_>) -> bool {
+        self.archive_revision = self.archive_revision.wrapping_add(1);
         self.open_run = false;
         match self.project.redo.pop() {
             Some(mut entry) => {

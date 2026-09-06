@@ -157,7 +157,7 @@ impl<'a> App<'a> {
                     name: layer_name.clone(),
                     color_index: None,
                     color: [1.0, 1.0, 1.0, 1.0],
-                    visible: true,
+                    loaded: true,
                     elevation: 0.0,
                 };
                 crate::model::Command::AddLayerSnapshot { layer, objects }
@@ -165,9 +165,6 @@ impl<'a> App<'a> {
                 crate::model::Command::Batch(objects.into_iter().map(crate::model::Command::AddObject).collect())
             };
             app.execute_edit_for(project_runtime_id, command);
-            if let Some(project) = app.workspace.active_project_mut() {
-                project.loaded_layers.insert(layer_id);
-            }
             if project_is_active {
                 app.editor.active_layer = Some(layer_id);
             }

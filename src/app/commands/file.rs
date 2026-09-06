@@ -247,6 +247,40 @@ fn save_label(kind: &PendingSaveKind, path: &Path) -> String {
 type LayerSnapshot = (usize, Layer, Vec<(usize, Object)>);
 
 impl<'a> App<'a> {
+    /// Restore matching unloaded layers before merging into them, so incoming
+    /// objects cannot shadow or bypass a layer's backed payload.
+    fn apply_dxf_imports(&mut self, runtime_id: u32, parsed: Vec<(String, crate::model::Document)>) {
+        let Some(index) = self.workspace.project_index_for_runtime_id(runtime_id) else {
+            return;
+        };
+        let document = &self.workspace.projects[index].project.document;
+        let needed: Vec<_> = parsed
+            .iter()
+            .flat_map(|(_, imported)| imported.layers())
+            .filter_map(|layer| document.layer_id_by_name(&layer.name))
+            .filter(|id| document.deferred_layers.contains_key(id))
+            .collect();
+        if !needed.is_empty() {
+            self.restore_layers_for(needed, move |app| app.apply_dxf_imports(runtime_id, parsed));
+            return;
+        }
+        let project = &mut self.workspace.projects[index];
+        let existing: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
+        let mut total = 0;
+        for (name, document) in parsed {
+            let added = project::merge_document(&mut project.project.document, &document);
+            total += added;
+            userspace_log!("{}", tr_format!(literal = "Imported %added% object(s) from %name%", added = added, name = name));
+        }
+        if let Some(layer) = project.project.document.layers().iter().find(|layer| layer.loaded && !existing.contains(&layer.id)) {
+            self.editor.active_layer = Some(layer.id);
+        }
+        self.evict_unloaded_layers();
+        self.invalidate_geometry();
+        self.fit_view_to_extents();
+        userspace_log!("{}", tr_format!(literal = "Imported %total% DXF object(s)", total = total));
+    }
+
     /// Register an async file dialog that was created on the main thread. The
     /// app polls completion in `poll_file_dialogs`.
     pub(super) fn spawn_file_dialog<F>(&mut self, future: F)
@@ -442,7 +476,6 @@ impl<'a> App<'a> {
                 let project = self.workspace.active_project().context("No active .omf to import into")?;
                 let runtime_id = project.runtime_id;
                 let document_revision = project.project.document.revision();
-                let import_count = paths.len();
                 let compute = move |cancel: &crate::app::jobs::CancelFlag| {
                     let mut parsed = Vec::with_capacity(paths.len());
                     for path in paths {
@@ -462,41 +495,7 @@ impl<'a> App<'a> {
                             return;
                         }
                     };
-                    let Some(project_index) = app.workspace.project_index_for_runtime_id(runtime_id) else {
-                        return;
-                    };
-                    let project = &mut app.workspace.projects[project_index];
-                    let existing: std::collections::HashSet<LayerId> = project.project.document.layers().iter().map(|layer| layer.id).collect();
-                    let mut total_added = 0usize;
-                    for (path, imported) in parsed {
-                        let added = project::merge_document(&mut project.project.document, &imported);
-                        userspace_log!("{}", tr_format!(literal = "Imported %added% object(s) from %path%", added = added, path = path.display()));
-                        total_added += added;
-                    }
-                    let new_ids: Vec<LayerId> = project
-                        .project
-                        .document
-                        .layers()
-                        .iter()
-                        .filter(|layer| !existing.contains(&layer.id))
-                        .map(|layer| layer.id)
-                        .collect();
-                    project.loaded_layers.extend(new_ids.iter().copied());
-                    if app.workspace.active_index == Some(project_index)
-                        && let Some(&id) = new_ids.first()
-                    {
-                        app.editor.active_layer = Some(id);
-                    }
-                    app.invalidate_geometry();
-                    app.fit_view_to_extents();
-                    userspace_log!(
-                        "{}",
-                        tr_format!(
-                            literal = "Imported %import_count% DXF(s) into the project: %total_added% object(s)",
-                            import_count = import_count,
-                            total_added = total_added
-                        )
-                    );
+                    app.apply_dxf_imports(runtime_id, parsed.into_iter().map(|(path, document)| (path.display().to_string(), document)).collect());
                 };
                 self.spawn_job(
                     tr!(literal = "Parsing DXF import…"),
@@ -657,10 +656,10 @@ impl<'a> App<'a> {
                     anyhow::bail!("A save to {} is already in progress", path.display());
                 }
                 let triangulation = self.triangulations.iter().find(|t| t.id == id).context("The selected triangulation is no longer loaded")?;
-                let mesh = std::sync::Arc::clone(&triangulation.mesh);
+                let snapshot = triangulation.clone();
                 let name = triangulation.name.clone();
                 userspace_log!("{}", tr_format!(literal = "Exporting triangulation '%name%' to %path%", name = name, path = path.display()));
-                self.spawn_triangulation_write(PendingSaveKind::Export { name }, mesh, path);
+                self.spawn_triangulation_write(PendingSaveKind::Export { name }, snapshot, path);
                 Ok(())
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -763,7 +762,7 @@ impl<'a> App<'a> {
                     .iter()
                     .find(|triangulation| triangulation.id == id)
                     .context("The selected triangulation is no longer loaded")?;
-                let mesh = std::sync::Arc::clone(&triangulation.mesh);
+                let snapshot = triangulation.clone();
                 self.spawn_job(
                     tr!(literal = "Encoding triangulation download…"),
                     vec![crate::app::jobs::JobKey::Anonymous],
@@ -771,7 +770,10 @@ impl<'a> App<'a> {
                         if cancel.is_cancelled() {
                             anyhow::bail!("Cancelled");
                         }
-                        formats::write_mesh_bytes(&mesh, format).map_err(|error| anyhow::anyhow!("Could not encode triangulation: {error}"))
+                        let crate::model::OpenItem::Triangulation(item) = crate::model::OpenItem::Triangulation(Box::new(snapshot)).materialize()? else {
+                            unreachable!()
+                        };
+                        formats::write_mesh_bytes(&item.mesh, format).map_err(|error| anyhow::anyhow!("Could not encode triangulation: {error}"))
                     },
                     move |app, result| match result {
                         Ok(bytes) => {
@@ -794,9 +796,7 @@ impl<'a> App<'a> {
                     .iter()
                     .find(|model| model.id == id)
                     .context("The selected block model is no longer loaded")?;
-                let model = block_model.model.clone();
-                let blocks = std::sync::Arc::clone(&block_model.blocks);
-                let renderable = std::sync::Arc::clone(&block_model.renderable_block_indices);
+                let snapshot = block_model.clone();
                 self.spawn_job(
                     tr!(literal = "Encoding block-model CSV download…"),
                     vec![crate::app::jobs::JobKey::Anonymous],
@@ -804,7 +804,10 @@ impl<'a> App<'a> {
                         if cancel.is_cancelled() {
                             anyhow::bail!("Cancelled");
                         }
-                        crate::model::formats::csv_block_model::to_bytes(&model, &blocks, &renderable).map_err(anyhow::Error::new)
+                        let crate::model::OpenItem::BlockModel(item) = crate::model::OpenItem::BlockModel(Box::new(snapshot)).materialize()? else {
+                            unreachable!()
+                        };
+                        crate::model::formats::csv_block_model::to_bytes(&item.model, &item.blocks, &item.renderable_block_indices).map_err(anyhow::Error::new)
                     },
                     move |app, result| match result {
                         Ok(bytes) => {
@@ -851,7 +854,7 @@ impl<'a> App<'a> {
     /// Spawn a worker thread that writes `mesh` to `path`, streaming progress
     /// back for the status bar. Completion is handled in `poll_saves`.
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_triangulation_write(&mut self, kind: PendingSaveKind, mesh: std::sync::Arc<formats::mesh_data::Triangulation>, path: PathBuf) {
+    fn spawn_triangulation_write(&mut self, kind: PendingSaveKind, snapshot: crate::model::triangulation::OpenTriangulation, path: PathBuf) {
         let (ticket, progress) = self.begin_reported_task(save_label(&kind, &path));
         let (result_tx, result_rx) = mpsc::channel();
         self.pending_saves.push(PendingSave {
@@ -865,7 +868,10 @@ impl<'a> App<'a> {
         crate::app::jobs::spawn_io_task(move || {
             let mut last_redraw: Option<web_time::Instant> = None;
             let result = crate::app::jobs::run_compute_catching_panic(|| {
-                formats::write_mesh_with_progress(&mesh, &path, &mut |written, total| {
+                let crate::model::OpenItem::Triangulation(item) = crate::model::OpenItem::Triangulation(Box::new(snapshot)).materialize()? else {
+                    unreachable!()
+                };
+                formats::write_mesh_with_progress(&item.mesh, &path, &mut |written, total| {
                     progress.set_items(written, total);
                     // Reporting is a plain atomic store, but waking the event
                     // loop is not: throttle the redraws so a fast write doesn't
@@ -1290,34 +1296,7 @@ impl<'a> App<'a> {
                         return;
                     }
                 };
-                let Some(index) = app.workspace.project_index_for_runtime_id(runtime_id) else {
-                    return;
-                };
-                let project = &mut app.workspace.projects[index];
-                let existing: std::collections::HashSet<_> = project.project.document.layers().iter().map(|layer| layer.id).collect();
-                let mut total = 0usize;
-                for (name, document) in parsed {
-                    let added = project::merge_document(&mut project.project.document, &document);
-                    total += added;
-                    userspace_log!("{}", tr_format!(literal = "Imported %added% object(s) from %name%", added = added, name = name));
-                }
-                let new_layers: Vec<_> = project
-                    .project
-                    .document
-                    .layers()
-                    .iter()
-                    .filter(|layer| !existing.contains(&layer.id))
-                    .map(|layer| layer.id)
-                    .collect();
-                project.loaded_layers.extend(new_layers.iter().copied());
-                if app.workspace.active_index == Some(index)
-                    && let Some(&layer) = new_layers.first()
-                {
-                    app.editor.active_layer = Some(layer);
-                }
-                app.invalidate_geometry();
-                app.fit_view_to_extents();
-                userspace_log!("{}", tr_format!(literal = "Imported %total% DXF object(s)", total = total));
+                app.apply_dxf_imports(runtime_id, parsed);
             };
             self.spawn_job(
                 tr!(literal = "Parsing browser DXF import…"),
@@ -1525,9 +1504,7 @@ impl<'a> App<'a> {
             .iter()
             .find(|model| model.id == id)
             .context("The selected block model is no longer loaded")?;
-        let model = block_model.model.clone();
-        let blocks = std::sync::Arc::clone(&block_model.blocks);
-        let renderable = std::sync::Arc::clone(&block_model.renderable_block_indices);
+        let snapshot = block_model.clone();
         let display_path = path.clone();
         self.spawn_job(
             tr_format!(literal = "Exporting %name%…", name = file_name(&path)),
@@ -1536,8 +1513,11 @@ impl<'a> App<'a> {
                 if cancel.is_cancelled() {
                     anyhow::bail!("Cancelled");
                 }
+                let crate::model::OpenItem::BlockModel(item) = crate::model::OpenItem::BlockModel(Box::new(snapshot)).materialize()? else {
+                    unreachable!()
+                };
                 crate::model::atomic_file::write_atomic(&path, |file| {
-                    crate::model::formats::csv_block_model::write(&model, &blocks, &renderable, file).map_err(anyhow::Error::new)
+                    crate::model::formats::csv_block_model::write(&item.model, &item.blocks, &item.renderable_block_indices, file).map_err(anyhow::Error::new)
                 })
             },
             move |_app, result| match result {
@@ -2332,6 +2312,7 @@ impl<'a> App<'a> {
             .collect::<std::collections::HashSet<_>>();
         let mut portable_current = project.project.clone();
         portable_current.document.apply_runtime_namespace(0);
+        let preserved_deferred = portable_current.document.deferred_layers.clone();
         let preserved_layers: Vec<LayerSnapshot> = portable_current
             .document
             .layers()
@@ -2392,7 +2373,11 @@ impl<'a> App<'a> {
                 }
             };
             for (layer_index, layer, objects) in preserved_layers {
+                let id = layer.id;
                 replacement.project.document.replace_layer_snapshot(layer_index, layer, objects);
+                if let Some(stored) = preserved_deferred.get(&id) {
+                    replacement.project.document.deferred_layers.insert(id, stored.clone());
+                }
             }
 
             let was_active = app.workspace.active_index == Some(index);

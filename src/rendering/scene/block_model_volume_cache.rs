@@ -1092,7 +1092,10 @@ fn validate_volume_metadata_budget(brick_count: usize) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<Option<BlockVolumeAsset>, String> {
+pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel, cancel: &crate::app::jobs::CancelFlag) -> Result<Option<BlockVolumeAsset>, String> {
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
     let Some((x_planes, y_planes, z_planes)) = block_volume_planes(block_model) else {
         return Ok(None);
     };
@@ -1125,6 +1128,9 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
     // first in parallel to discover occupied bricks, then in model order to
     // populate their cells and preserve last-block-wins overlap behaviour.
     let placement = |block_index| -> Result<Option<BlockPlacement>, ()> {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
         let Some(block) = blocks.get(block_index) else {
             return Ok(None);
         };
@@ -1178,6 +1184,9 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
         }
         Ok(None) => {}
     });
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
     let unplaced_blocks = unplaced_blocks.into_inner();
     if unplaced_blocks > 0 {
         crate::userspace_warn!(
@@ -1218,6 +1227,9 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
     let mut occupied_brick_indices = Vec::with_capacity(occupied_count);
     let mut next_ordinal = 0u32;
     for (bindex, &occ) in brick_occupied.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
         if !occ {
             continue;
         }
@@ -1243,10 +1255,16 @@ pub(crate) fn build_block_volume_asset(block_model: &OpenBlockModel) -> Result<O
     {
         let cells = builder.as_mut_slice();
         for block_index in block_model.renderable_block_indices.iter() {
+            if cancel.is_cancelled() {
+                return Ok(None);
+            }
             let Ok(Some((payload, [[ix0, ix1], [iy0, iy1], [iz0, iz1]]))) = placement(block_index) else {
                 continue;
             };
             for k in iz0..iz1 {
+                if cancel.is_cancelled() {
+                    return Ok(None);
+                }
                 for j in iy0..iy1 {
                     for i in ix0..ix1 {
                         let bindex = brick_index(brick_dims_usize, i / BRICK_SIZE, j / BRICK_SIZE, k / BRICK_SIZE);

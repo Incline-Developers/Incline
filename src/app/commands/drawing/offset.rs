@@ -144,7 +144,7 @@ impl<'a> App<'a> {
                 let mut nearest: Option<(f64, glam::DVec3)> = None;
 
                 for triangulation in &self.triangulations {
-                    if !triangulation.visible || self.editor.hidden_handles.contains(&SceneEntityId::Triangulation(triangulation.id)) {
+                    if !triangulation.state.loaded || self.editor.hidden_handles.contains(&SceneEntityId::Triangulation(triangulation.id)) {
                         continue;
                     }
 

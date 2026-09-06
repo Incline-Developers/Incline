@@ -45,7 +45,7 @@ impl<'a> App<'a> {
                 .project
                 .document
                 .layer(layer_id)
-                .map(|layer| (layer.name.clone(), project.loaded_layers.contains(&layer_id)))
+                .map(|layer| (layer.name.clone(), project.project.document.layer(layer_id).is_some_and(|layer| layer.loaded)))
         }) else {
             return;
         };
@@ -54,20 +54,12 @@ impl<'a> App<'a> {
         }
         if is_loaded {
             self.editor.active_layer = Some(layer_id);
-            self.execute_edit(Command::RenameLayer {
-                id: layer_id,
-                before,
-                after: new_name,
-            });
-        } else {
-            self.history.clear();
-            if self.editor.active_layer == Some(layer_id) {
-                self.editor.active_layer = None;
-            }
-            if let Some(project) = self.workspace.active_project_mut() {
-                project.project.document.rename_layer(layer_id, new_name);
-            }
         }
+        self.execute_edit(Command::RenameLayer {
+            id: layer_id,
+            before,
+            after: new_name,
+        });
     }
 
     /// Rename a triangulation, raster, point cloud, block model, or drill hole

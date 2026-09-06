@@ -21,6 +21,7 @@ Paths below are relative to `src/`:
 | Change state | `app/mod.rs` owns durable state; `ui/state.rs` owns transient `EditorState`; `model/project.rs` manages projects. |
 | Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry/cache), `rendering/shaders/` (WGSL). |
 | Add background work | Reuse `app/jobs.rs`: compute on workers, apply on the UI thread; preserve `JobKey` dependencies and poll cancellation in long loops. |
+| Change asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, and `history_storage.rs` move payloads to temporary backing in `asset_storage.rs`. |
 | Change persistence | `model/formats/`, `model/atomic_file.rs` (native writes), `app/web_storage.rs` (browser storage). |
 
 Search the relevant subtree first, e.g. `rg -n 'draw_screen_cross' src/rendering`. Read matching functions and nearby callers before whole files. Exclude generated `target/` and `dist/` from code searches. Run checks appropriate to the change; repeat only after edits or unresolved failures. Keep these pointers current when moving code.

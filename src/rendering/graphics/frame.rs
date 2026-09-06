@@ -22,7 +22,7 @@ fn main_scene_cache_key(
     slice_preview::slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters).hash(&mut hasher);
     for dataset in drill_holes {
         dataset.id.hash(&mut hasher);
-        dataset.visible.hash(&mut hasher);
+        dataset.state.loaded.hash(&mut hasher);
         dataset.color.active_field.hash(&mut hasher);
         dataset.color.smooth.hash(&mut hasher);
         for stop in &dataset.color.stops {

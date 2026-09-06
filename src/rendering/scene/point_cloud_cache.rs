@@ -82,7 +82,7 @@ pub(crate) struct CachedPointCloudGpu {
 #[derive(Default)]
 pub(crate) struct PointCloudGpuCache {
     clouds: HashMap<PointCloudId, CachedPointCloudGpu>,
-    arena: PointBufferArena,
+    arenas: HashMap<PointCloudId, PointBufferArena>,
     pending_uploads: bool,
     rejected_chunks: HashSet<ChunkKey>,
 }
@@ -236,25 +236,10 @@ impl PointCloudGpuCache {
         style_layout: &wgpu::BindGroupLayout,
     ) {
         let loaded: HashSet<_> = point_clouds.iter().filter(|cloud| cloud.state.loaded).map(|cloud| cloud.id).collect();
-        // Return the slots of any unloaded cloud to the arena before dropping
-        // its cache entry, so their regions can back future clouds.
-        {
-            let Self { clouds, arena, .. } = &mut *self;
-            clouds.retain(|id, cloud| {
-                let keep = loaded.contains(id);
-                if !keep {
-                    for chunk in cloud.chunks.iter_mut().filter_map(Option::take) {
-                        arena.free(chunk.slot);
-                    }
-                }
-                keep
-            });
-        }
-        // With every cloud unloaded no slots are outstanding, so release the
-        // arena's GPU blocks rather than holding the high-water mark forever.
-        if self.clouds.is_empty() {
-            self.arena.clear();
-        }
+        // Each cloud owns its allocation pools, so unloading one releases its
+        // GPU buffers even while other clouds remain resident.
+        self.clouds.retain(|id, _| loaded.contains(id));
+        self.arenas.retain(|id, _| loaded.contains(id));
         self.rejected_chunks.retain(|key| loaded.contains(&key.cloud));
 
         for cloud in point_clouds {
@@ -269,13 +254,13 @@ impl PointCloudGpuCache {
                 // the reallocation leaks them for the arena's lifetime.
                 if let Some(stale) = self.clouds.remove(&cloud.id) {
                     for chunk in stale.chunks.into_iter().flatten() {
-                        self.arena.free(chunk.slot);
+                        self.arenas.entry(cloud.id).or_default().free(chunk.slot);
                     }
                 }
             }
 
             if let Some(cached) = self.clouds.get_mut(&cloud.id) {
-                cached.visible = cloud.visible;
+                cached.visible = cloud.state.loaded;
                 if cached.color != cloud.color || cached.point_size != point_size || cached.scene_origin != scene_origin || cached.selected != selected {
                     let style = style_uniform(cloud, point_size, scene_origin, selected);
                     queue.write_buffer(&cached.style_buffer, 0, bytemuck::bytes_of(&style));
@@ -314,7 +299,7 @@ impl PointCloudGpuCache {
                     scene_origin,
                     prepared: Arc::clone(&cloud.prepared),
                     chunks: std::iter::repeat_with(|| None).take(cloud.prepared.chunks.len()).collect(),
-                    visible: cloud.visible,
+                    visible: cloud.state.loaded,
                     selected,
                 },
             );
@@ -400,8 +385,9 @@ impl PointCloudGpuCache {
         // Residency follows visibility only. Visible chunks are all admitted;
         // the upload scheduler controls their current prefix detail. Evicted
         // slots return to the arena for reuse rather than freeing GPU memory.
-        let Self { clouds, arena, .. } = &mut *self;
+        let Self { clouds, arenas, .. } = &mut *self;
         for (&cloud_id, cloud) in clouds.iter_mut() {
+            let arena = arenas.entry(cloud_id).or_default();
             for (chunk_index, slot) in cloud.chunks.iter_mut().enumerate() {
                 let key = ChunkKey {
                     cloud: cloud_id,
@@ -417,6 +403,7 @@ impl PointCloudGpuCache {
 
         let mut upload_budget = UPLOAD_BUDGET_BYTES;
         for candidate in &candidates {
+            let arena = arenas.entry(candidate.key.cloud).or_default();
             if candidate.upload_bytes > upload_budget {
                 continue;
             }

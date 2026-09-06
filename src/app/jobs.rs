@@ -43,6 +43,23 @@ use crate::{
 /// cancelled when their source changes or is removed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum JobKey {
+    HistoryResidency {
+        runtime_id: u32,
+        revision: u64,
+        restoring: bool,
+    },
+    LayerResidency {
+        layer: crate::model::LayerId,
+        runtime_id: u32,
+        content_hash: u64,
+        restoring: bool,
+    },
+    Residency {
+        item: crate::model::ItemRef,
+        runtime_id: u32,
+        revision: u64,
+        restoring: bool,
+    },
     Triangulation(TriangulationId),
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
@@ -184,6 +201,17 @@ impl<'a> App<'a> {
                 .iter()
                 .find(|project| project.runtime_id == runtime_id)
                 .is_some_and(|project| project.project.document.revision() == document_revision),
+            JobKey::HistoryResidency { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
+            JobKey::LayerResidency {
+                layer, runtime_id, content_hash, ..
+            } => self
+                .workspace
+                .active_project()
+                .is_some_and(|project| project.runtime_id == runtime_id && project.current_layer_hashes().get(&(layer.0 & u64::from(u32::MAX))) == Some(&content_hash)),
+            JobKey::Residency { item, runtime_id, revision, .. } => {
+                self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id)
+                    && self.project_item_state(item).is_some_and(|state| state.revision() == revision)
+            }
             JobKey::Anonymous => true,
         })
     }
@@ -295,13 +323,20 @@ impl<'a> App<'a> {
     /// Drain finished background jobs, running their apply closures on the UI
     /// thread. Call once per frame alongside the other polls.
     pub(crate) fn poll_jobs(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        crate::model::asset_storage::poll_browser();
         if self.pending_jobs.is_empty() {
             return;
         }
 
+        let mut residency_settled = false;
         let mut still_pending = Vec::with_capacity(self.pending_jobs.len());
         for mut job in std::mem::take(&mut self.pending_jobs) {
             if (job.poll)(self) {
+                residency_settled |= job
+                    .keys
+                    .iter()
+                    .any(|key| matches!(key, JobKey::Residency { .. } | JobKey::LayerResidency { .. } | JobKey::HistoryResidency { .. }));
                 // Settled: balance the begin_topology_load() from spawn_job.
                 self.finish_background_task(job.ticket, false);
                 self.redraw_requested = true;
@@ -313,6 +348,12 @@ impl<'a> App<'a> {
         // (currently in self.pending_jobs) after the ones still running.
         still_pending.append(&mut self.pending_jobs);
         self.pending_jobs = still_pending;
+        // A rename/edit can invalidate a pending eviction. Reconcile the
+        // remaining payloads after stale workers settle as well as on edits.
+        if residency_settled {
+            self.evict_unloaded_items();
+            self.evict_unloaded_layers();
+        }
         // The status bar is driven from the ticket registry (see
         // `App::refresh_status_message`), which each job joined when it began.
     }

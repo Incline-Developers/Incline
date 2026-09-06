@@ -30,7 +30,7 @@ pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
 /// applies the same screen-space floor as a drill-hole trace.
 pub(crate) const TIE_RADIUS_SCALE: f64 = 1.5;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -386,7 +386,7 @@ pub(crate) fn generate_pattern_collars(
 /// else is touched - the intervals above all, whose per-interval value maps
 /// are what makes a whole [`DrillHole`] expensive to copy - so a live preview
 /// captures and rewrites only this.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct HolePlacement {
     pub(crate) collar: DVec3,
     pub(crate) trace: Vec<TraceStation>,
@@ -397,7 +397,7 @@ pub(crate) struct HolePlacement {
 /// negative. This is the convention [`project_tangent`] resolves a survey in,
 /// so a hole read out of a file and a hole turned here describe themselves the
 /// same way.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct HoleOrientation {
     pub(crate) azimuth: f64,
     pub(crate) dip: f64,
@@ -409,7 +409,7 @@ pub(crate) struct HoleOrientation {
 pub(crate) const MAX_HOLE_DIP: f64 = 90.0;
 
 /// How a Rotate Collar edit turns the holes it was handed.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum CollarRotation {
     /// Point every hole the same way, whatever each was pointing before - what
     /// the panel applies, a round being drilled at one angle.
@@ -886,7 +886,6 @@ pub(crate) struct OpenDrillHoleDataset {
     pub(crate) state: ProjectItemState,
     pub(crate) name: String,
     pub(crate) dataset: Arc<DrillHoleDataset>,
-    pub(crate) visible: bool,
     pub(crate) color: DrillColorState,
 }
 

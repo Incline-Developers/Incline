@@ -28,9 +28,9 @@ impl App<'_> {
     fn tie_target(&self) -> Option<&OpenDrillHoleDataset> {
         let id = self.editor.active_drill_hole?;
         let entity = crate::model::SceneEntityId::DrillHole(id);
-        self.drill_holes.iter().find(|dataset| {
-            dataset.id == id && dataset.state.loaded && dataset.visible && !self.editor.hidden_handles.contains(&entity) && !self.editor.frozen_handles.contains(&entity)
-        })
+        self.drill_holes
+            .iter()
+            .find(|dataset| dataset.id == id && dataset.state.loaded && !self.editor.hidden_handles.contains(&entity) && !self.editor.frozen_handles.contains(&entity))
     }
 
     fn pick_hole_at_cursor(&self) -> Option<DrillHoleRef> {
@@ -40,7 +40,7 @@ impl App<'_> {
         let mut best: Option<(f32, DrillHoleRef)> = None;
         for dataset in self.selectable_drill_holes() {
             let entity = dataset.entity_id();
-            if !dataset.state.loaded || !dataset.visible || self.editor.hidden_handles.contains(&entity) || self.editor.frozen_handles.contains(&entity) {
+            if !dataset.state.loaded || self.editor.hidden_handles.contains(&entity) || self.editor.frozen_handles.contains(&entity) {
                 continue;
             }
             for (index, hole) in dataset.dataset.holes.iter().enumerate() {
@@ -304,7 +304,7 @@ impl App<'_> {
         let mut best: Option<(f32, TieInRef)> = None;
         for dataset in self.selectable_drill_holes() {
             let entity = dataset.entity_id();
-            if !dataset.state.loaded || !dataset.visible || self.editor.hidden_handles.contains(&entity) || self.editor.frozen_handles.contains(&entity) {
+            if !dataset.state.loaded || self.editor.hidden_handles.contains(&entity) || self.editor.frozen_handles.contains(&entity) {
                 continue;
             }
             for tie in &dataset.dataset.ties {
