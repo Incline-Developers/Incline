@@ -816,3 +816,30 @@ pub(crate) fn screen_to_world_on_plane(camera: &Camera, zoom: f64, aspect: f64, 
     let t = (plane_z - focal.z) / forward.z;
     Some(focal + forward * t)
 }
+
+/// Unproject a screen pixel to a world point on the plane through the camera
+/// position, perpendicular to `forward`.
+///
+/// This is the plane a point picked in the vertical slice view must land on.
+/// `update_slice_camera` places the camera *on* the section plane so the
+/// symmetric znear/zfar slab is centred there, which makes the plane through
+/// `camera.position` the section itself. [`screen_to_world_on_plane`] cannot
+/// serve here: a section camera looks horizontally, so its view ray never meets
+/// a `z = plane_z` plane.
+///
+/// The projection is orthographic, so the pixel maps to the plane by offsetting
+/// along the screen axes alone - no ray march, and nothing along `forward`,
+/// which is what keeps the result exactly coplanar with the section rather than
+/// a zoom-dependent step in front of it.
+pub(crate) fn screen_to_world_on_view_plane(camera: &Camera, zoom: f64, aspect: f64, screen: Size, mouse_px: (f32, f32)) -> DVec3 {
+    let rel = point(mouse_px.0, mouse_px.1, screen);
+    let forward = camera.forward();
+    let right = forward.cross(camera.up()).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    // A section camera is built from a horizontal strike and world Z, so the
+    // basis is never degenerate. If it ever were, every pixel would map to the
+    // camera position and the whole stroke would pile up on one point without
+    // anything looking wrong on screen.
+    debug_assert!(right != DVec3::ZERO && up != DVec3::ZERO, "degenerate slice camera basis");
+    camera.position + right * rel.x * aspect * zoom + up * rel.y * zoom
+}
