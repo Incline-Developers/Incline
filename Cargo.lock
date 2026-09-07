@@ -1691,6 +1691,7 @@ dependencies = [
  "log",
  "lyon",
  "memmap2",
+ "mineflow",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -2076,6 +2077,14 @@ checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "mineflow"
+version = "0.1.0"
+source = "git+https://github.com/Incline-Developers/MineFlow-rs.git?rev=466910e3a7e3d2e06a62186b4dd77ed45c8a8818#466910e3a7e3d2e06a62186b4dd77ed45c8a8818"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
