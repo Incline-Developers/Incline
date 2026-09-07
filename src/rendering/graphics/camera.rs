@@ -345,17 +345,34 @@ impl<'a> Graphics<'a> {
         (near, (far - near).normalize())
     }
 
-    /// World coordinate under the current cursor on the plane `z = plane_z`,
-    /// using the last cursor position tracked by the camera controller.
+    /// World coordinate under the current cursor, using the last cursor
+    /// position tracked by the camera controller. In plan and 3D views the
+    /// point lies on the plane `z = plane_z`; in the vertical slice view it
+    /// lies on the section plane and `plane_z` is ignored.
     pub(crate) fn cursor_world(&self, plane_z: f64) -> Option<DVec3> {
-        // A slice camera looks horizontally, so it never intersects a
-        // horizontal Z plane. In that view the useful drawing surface is the
-        // vertical slice plane at the camera target depth.
-        if self.slice_view.is_some() {
-            return Some(self.unexaggerate_point(self.cursor_world_at_target_depth()));
-        }
         let screen = self.screen_size();
         let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
+        // A slice camera looks horizontally, so it never intersects a
+        // horizontal Z plane. The point wanted there is on the section itself,
+        // which is the plane through `camera.position`: `update_slice_camera`
+        // parks the camera on the section so the symmetric znear/zfar slab is
+        // centred there. `cursor_world_at_target_depth` cannot serve, because
+        // it builds the point at the camera target instead - `zoom.max(1.0)`
+        // metres in front of the section, by a distance that changes with
+        // zoom. Two measurement picks at the same zoom carried the same offset
+        // and it cancelled, but a scroll between the picks put them on
+        // different parallel planes and the distance came out wrong, and any
+        // point placed on the section would have landed off it, where the
+        // half-slab-width projection clips.
+        if self.slice_view.is_some() {
+            let on_section = screen_to_world_on_view_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc);
+            // This point feeds the coordinate readout and the measure tools, and
+            // any tool that places geometry on the section, so it can end up in
+            // the document and in a saved file. A degenerate viewport would make
+            // it non-finite; report no cursor instead, the way the plan view's
+            // `screen_to_world_on_plane` reports a view it cannot solve.
+            return on_section.is_finite().then(|| self.unexaggerate_point(on_section));
+        }
         let displayed_plane_z = self.scene_origin.z + (plane_z - self.scene_origin.z) * self.vertical_exaggeration;
         screen_to_world_on_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc, displayed_plane_z)
             .map(|point| self.unexaggerate_point(point))
