@@ -160,7 +160,7 @@ impl MacMenuAction {
         if tag >= RECENT_TAG_BASE {
             return Some(Self::OpenRecent(usize::try_from(tag - RECENT_TAG_BASE).ok()?));
         }
-        if tag >= VIEW_TAG_BASE && tag < RECENT_SUBMENU_TAG {
+        if (VIEW_TAG_BASE..RECENT_SUBMENU_TAG).contains(&tag) {
             let index = usize::try_from(tag - VIEW_TAG_BASE).ok()?;
             return (index < VIEW_TOGGLES.len()).then_some(Self::ToggleView(index));
         }
