@@ -1,8 +1,8 @@
 cargo-features = ["profile-rustflags"]
 
 [package]
-name = "Incline-Design"
-version = "0.3.1"
+name = "incline-design"
+version = "0.3.2"
 edition = "2024"
 description = "Free Open Source Mine Design"
 repository = "https://github.com/Incline-Developers/Incline"
@@ -35,7 +35,7 @@ i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.33"
 lyon = "1.0.19"
-omf = { git = "https://github.com/leotimmins1974/omf-rust.git", rev = "5df717106c489b725aec32e97e2bf61e668cef5b", default-features = false, features = ["image", "parquet"] }
+omf = { git = "https://github.com/Incline-Developers/omf-rust.git", rev = "5df717106c489b725aec32e97e2bf61e668cef5b", default-features = false, features = ["image", "parquet"] }
 png = "0.18.1"
 rayon = "1.12.0"
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
@@ -47,7 +47,7 @@ spade = "2.15.1"
 strum = { version = "0.28.0", features = ["derive"] }
 thousands = "0.2.0"
 tiff = { version = "0.11.3", features = ["deflate", "fax", "jpeg", "lzw"], default-features = false }
-toml = "1.1.4"
+toml = "1.1.5"
 twox-hash = "2.1.4"
 unic-langid = { version = "0.9.6", features = ["macros"] }
 uuid = { version = "1.26.0", features = ["js", "serde", "v4"] }
@@ -73,8 +73,8 @@ console_error_panic_hook = "0.1.7"
 console_log = "1.1.0"
 egui-winit = { version = "0.35.0", default-features = false, features = ["links"] }
 getrandom = { version = "0.4.3", features = ["wasm_js"] }
-js-sys = "0.3.104"
-wasm-bindgen = "0.2.127"
+js-sys = "0.3.105"
+wasm-bindgen = "0.2.128"
 wasm-bindgen-futures = "0.4.77"
 wasm-bindgen-rayon = { version = "1.3.0", features = ["no-bundler"] }
 web-sys = { version = "0.3.103", features = [

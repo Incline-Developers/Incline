@@ -1,5 +1,7 @@
 // Disable console window on Windows in release builds
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+// Allow trait evaluation through wgpu's deeply nested buffer types.
+#![recursion_limit = "256"]
 
 mod app;
 mod fonts;

@@ -22,7 +22,7 @@ use crate::{
     },
     rendering::{
         BlockInstance, StrokeVertex, SurfaceVertex, Vertex,
-        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, screen_to_world_on_plane},
+        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, screen_to_world_on_plane, screen_to_world_on_view_plane},
         pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{

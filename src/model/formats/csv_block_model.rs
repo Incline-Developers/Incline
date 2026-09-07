@@ -115,15 +115,15 @@ pub(crate) fn preview(bytes: &[u8]) -> Result<CsvPreview, CsvBlockModelError> {
     // Text columns are overwhelmingly likely to be categories. Infer those
     // from the preview while leaving numeric-looking category codes as Value;
     // users can explicitly select Category for that ambiguous case.
-    for column in 0..headers.len() {
-        if mapping.roles[column] == CsvColumnRole::Value
+    for (column, role) in mapping.roles.iter_mut().enumerate() {
+        if *role == CsvColumnRole::Value
             && rows
                 .iter()
                 .filter_map(|row| row.get(column))
                 .map(|field| field.trim())
                 .any(|field| !field.is_empty() && field.parse::<f64>().is_err())
         {
-            mapping.roles[column] = CsvColumnRole::Category;
+            *role = CsvColumnRole::Category;
         }
     }
     Ok(CsvPreview { headers, rows, mapping })
