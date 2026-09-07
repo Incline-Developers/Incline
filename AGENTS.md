@@ -53,7 +53,7 @@ Route UI changes through `UiCommand` and application handlers. Preserve revision
 
 ## UI, Translation & Logging Conventions
 
-- Use `tr!("message-id")` for user-facing text; add keys to `i18n/en/Incline_Design.ftl`. Pass named values with `tr!("greeting", name = who)`. Existing literal-style code supports `tr!(literal = "Apply")` and `tr_format!` for placeholders; see `src/i18n.rs`.
+- Use `tr!("message-id")` for user-facing text; add keys to `i18n/en/incline_design.ftl`. Pass named values with `tr!("greeting", name = who)`. Existing literal-style code supports `tr!(literal = "Apply")` and `tr_format!` for placeholders; see `src/i18n.rs`.
 - Use `userspace_log!`, `userspace_warn!`, and `userspace_error!` for activity-console messages, e.g. `userspace_log!("{}", tr!(literal = "Completed"))`. Reserve `log::` macros for diagnostic logging.
 - Use `themed_icon!(ui, "name.svg")` or `unthemed_icon!("name.svg")` for embedded icons, and `widgets::toolbar::GROUP_CORNER_RADIUS` for rounded UI elements.
 - Keep egui menus, context menus, and native macOS menus synchronized when changing actions.

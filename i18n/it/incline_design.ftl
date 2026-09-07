@@ -1,7 +1,7 @@
 # Incline — catalogo dei messaggi in italiano.
 #
 # Questo file può essere incompleto: le voci mancanti ricadono sul catalogo
-# inglese canonico (`i18n/en/Incline_Design.ftl`).
+# inglese canonico (`i18n/en/incline_design.ftl`).
 #
 # Non modificare gli id a sinistra di ogni `=` né i nomi delle variabili
 # `{ $... }`: sono controllati dal codice a compile time e un id sconosciuto

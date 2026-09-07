@@ -1,7 +1,7 @@
 # Incline — polski katalog komunikatów.
 #
 # Może być niekompletny: brakujące komunikaty są pobierane z pliku angielskiego
-# (`i18n/en/Incline_Design.ftl`). Identyfikatorów po lewej stronie znaku `=`
+# (`i18n/en/incline_design.ftl`). Identyfikatorów po lewej stronie znaku `=`
 # ani nazw argumentów ({ $... }) nie wolno zmieniać — tłumaczy się wyłącznie
 # tekst po prawej stronie.
 

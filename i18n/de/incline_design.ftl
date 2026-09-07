@@ -1,7 +1,7 @@
 # Incline — deutscher Nachrichtenkatalog.
 #
 # Kann unvollständig sein: fehlende Nachrichten werden aus dem englischen
-# Katalog (`i18n/en/Incline_Design.ftl`) übernommen. Die Bezeichner links
+# Katalog (`i18n/en/incline_design.ftl`) übernommen. Die Bezeichner links
 # von `=` und die Argumentnamen ({ $... }) dürfen nicht geändert werden —
 # übersetzt wird nur der Text rechts davon.
 

@@ -1,7 +1,7 @@
 # Incline — Türkçe mesaj kataloğu.
 #
 # Bu dosya eksik olabilir; eksik girdilerde İngilizce kaynak katalog
-# (`i18n/en/Incline_Design.ftl`) yedek olarak kullanılır.
+# (`i18n/en/incline_design.ftl`) yedek olarak kullanılır.
 #
 # `=` işaretinin solundaki kimlikleri ve `{ $... }` biçimindeki değişken
 # adlarını değiştirmeyin — yalnızca sağdaki metni çevirin.
