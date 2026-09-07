@@ -2,7 +2,7 @@
 #
 # Every `tr!(...)` call in the code is checked against THIS file at compile time:
 # an unknown id or a missing argument fails the build. Other languages
-# (`i18n/<lang>/Incline_Design.ftl`) may be incomplete and fall back here.
+# (`i18n/<lang>/incline_design.ftl`) may be incomplete and fall back here.
 #
 # Ids are kebab-case, grouped by area with a prefix (`menu-`, `settings-`,
 # `tri-`, `common-`, ...). Keep this file grouped and roughly sorted.

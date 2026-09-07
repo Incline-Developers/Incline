@@ -1,7 +1,7 @@
 # Incline — Danh mục thông báo tiếng Việt.
 #
 # Tệp này có thể chưa đầy đủ; các id còn thiếu sẽ dùng bản tiếng Anh
-# (`i18n/en/Incline_Design.ftl`) làm phương án dự phòng.
+# (`i18n/en/incline_design.ftl`) làm phương án dự phòng.
 #
 # Không thay đổi id (phần bên trái dấu `=`) hoặc tên tham số bên trong
 # `{ $... }` — chỉ dịch phần giá trị bên phải dấu `=`.

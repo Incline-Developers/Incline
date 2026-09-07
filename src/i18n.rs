@@ -3,7 +3,7 @@
 //!
 //! # How it fits together
 //!
-//! - Strings live in `i18n/<lang>/Incline_Design.ftl` — the file is named after
+//! - Strings live in `i18n/<lang>/incline_design.ftl` — the file is named after
 //!   the cargo package (`CARGO_PKG_NAME`), so renaming the package means renaming
 //!   these files. **English (`i18n/en`) is canonical** — every message id and
 //!   every argument the code uses is checked against it at compile time by
@@ -25,7 +25,7 @@
 //!
 //! # Adding a string
 //!
-//! Add `my-message = English text` to `i18n/en/Incline_Design.ftl` (and ideally
+//! Add `my-message = English text` to `i18n/en/incline_design.ftl` (and ideally
 //! the other languages), then call `tr!("my-message")` where the literal was.
 //! For interpolated values: `greeting = Hello, { $name }` → `tr!("greeting", name = who)`.
 //! For a short UI literal that has not yet received a hand-written id, use
@@ -45,7 +45,7 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use unic_langid::{LanguageIdentifier, langid};
 
-/// The embedded `i18n/` tree (`<lang>/Incline_Design.ftl`).
+/// The embedded `i18n/` tree (`<lang>/incline_design.ftl`).
 #[derive(RustEmbed)]
 #[folder = "i18n/"]
 struct Localizations;
@@ -325,7 +325,7 @@ fn literal_id(source: &str) -> String {
 }
 
 /// Thin wrapper over [`i18n_embed_fl::fl!`], which checks hand-written ids and
-/// their arguments against `i18n/en/Incline_Design.ftl` at compile time.
+/// their arguments against `i18n/en/incline_design.ftl` at compile time.
 macro_rules! tr {
     (literal = $source:literal) => {
         $crate::i18n::tr_literal($source)

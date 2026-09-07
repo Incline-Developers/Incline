@@ -17,7 +17,7 @@ Paths relative to `src/`.
 | Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry + caches), `rendering/shaders/` (WGSL) |
 | Background work | `app/jobs.rs` |
 | Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
-| Translations | `src/i18n.rs`, `i18n/en/Incline_Design.ftl` |
+| Translations | `src/i18n.rs`, `i18n/en/incline_design.ftl` |
 
 `examples/` holds an import-ready project with real data for manual validation; format fixtures live in `src/model/formats/fixtures/`.
 
@@ -85,7 +85,7 @@ wasm is `panic = "abort"` (the job queue's panic recovery does *not* apply), nee
 
 ## Conventions
 
-- **Translate user-facing text.** `tr!("message-id")`, `tr!("greeting", name = who)`, or the literal forms `tr!(literal = "Apply")` / `tr_format!` (see `src/i18n.rs`). New keys go in `i18n/en/Incline_Design.ftl`.
+- **Translate user-facing text.** `tr!("message-id")`, `tr!("greeting", name = who)`, or the literal forms `tr!(literal = "Apply")` / `tr_format!` (see `src/i18n.rs`). New keys go in `i18n/en/incline_design.ftl`.
 - `userspace_log!` / `userspace_warn!` / `userspace_error!` (`src/logging.rs`) surface messages in the in-app activity console; plain `log::` macros only reach the log file.
 - `themed_icon!(ui, "name.svg")` / `unthemed_icon!("name.svg")` embed SVGs from `res/ui/` at compile time; `themed_icon!` picks between `icons_dark/` and `icons_light/`.
 - **One corner radius for the whole window.** Panel regions (`chrome::REGION_RADIUS`), floating tiles, toolbar buttons, anything new — all use `widgets::toolbar::GROUP_CORNER_RADIUS`. Never pick a radius by eye.
