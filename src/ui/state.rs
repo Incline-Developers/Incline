@@ -589,8 +589,8 @@ pub(crate) struct BatterAngleMeasurement {
     /// clockwise from grid north, by the right-hand rule - the dip falls 90°
     /// clockwise of it. `None` for a horizontal plane, which has no strike.
     pub(crate) strike_degrees: Option<f64>,
-    /// Where the third point sits against the line through the first two, in
-    /// plan. The overlay draws the measurement out to here.
+    /// Closest point on the infinite 3D line through the first two picks.
+    /// The overlay draws the perpendicular connector out to here.
     pub(crate) projection: DVec3,
 }
 
@@ -598,20 +598,17 @@ pub(crate) fn batter_angle_measurement(points: &[DVec3]) -> Option<BatterAngleMe
     let [a, b, c] = points.get(..3)? else {
         return None;
     };
-    let ab_xy = b.truncate() - a.truncate();
-    let ab_len_sq = ab_xy.length_squared();
+    let ab = *b - *a;
+    let ab_len_sq = ab.length_squared();
     if ab_len_sq <= 1.0e-12 {
         return None;
     }
 
-    let ac_xy = c.truncate() - a.truncate();
-    let t = ac_xy.dot(ab_xy) / ab_len_sq;
-    let projection_xy = a.truncate() + ab_xy * t;
-    let projection_z = a.z + (b.z - a.z) * t;
-    let projection = DVec3::new(projection_xy.x, projection_xy.y, projection_z);
-    let horizontal = c.truncate().distance(projection_xy);
-    let vertical = (c.z - projection_z).abs();
-    if horizontal <= 1.0e-9 && vertical <= 1.0e-9 {
+    // Project in 3D so sloping and vertical baselines get the shortest
+    // connector, just as level crest/toe lines do.
+    let t = (*c - *a).dot(ab) / ab_len_sq;
+    let projection = *a + ab * t;
+    if c.distance_squared(projection) <= 1.0e-18 {
         return None;
     }
 

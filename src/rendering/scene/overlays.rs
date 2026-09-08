@@ -182,21 +182,27 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             points.push(cursor);
         }
 
-        if let Some(&first) = points.first() {
-            draw_screen_cross(&mut overlay, first, 8.0, 2.0, MEASUREMENT_COLOR);
-        }
         if points.len() >= 2 {
             draw_line(&mut overlay, points[0], points[1], 2.0, MEASUREMENT_COLOR);
-            draw_screen_cross(&mut overlay, points[1], 8.0, 2.0, MEASUREMENT_COLOR);
         }
         if points.len() >= 3 {
             if let Some(measurement) = crate::ui::state::batter_angle_measurement(points.as_slice()) {
+                let baseline = points[1] - points[0];
+                let along = (measurement.projection - points[0]).dot(baseline);
+                let extension_start = if along < 0.0 {
+                    Some(points[0])
+                } else if along > baseline.length_squared() {
+                    Some(points[1])
+                } else {
+                    None
+                };
+                if let Some(start) = extension_start {
+                    draw_line(&mut overlay, start, measurement.projection, 1.0, MEASUREMENT_COLOR);
+                }
                 draw_line(&mut overlay, measurement.projection, points[2], 2.0, MEASUREMENT_COLOR);
-                draw_screen_cross(&mut overlay, measurement.projection, 6.0, 1.5, MEASUREMENT_COLOR);
             } else {
                 draw_line(&mut overlay, points[1], points[2], 2.0, MEASUREMENT_COLOR);
             }
-            draw_screen_cross(&mut overlay, points[2], 8.0, 2.0, MEASUREMENT_COLOR);
         }
     }
 
