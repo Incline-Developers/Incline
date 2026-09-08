@@ -1472,6 +1472,13 @@ impl<'a> App<'a> {
         }
 
         self.editor.active_tool = next_tool;
+        // Arming or dropping a tool can change the scene on its own, with no
+        // geometry touched: Tie Holes lifts drill traces above the topology
+        // and draws the surface connectors (see `Graphics::draw_drill_holes`).
+        // Nothing else here repaints for that, so the switch has to.
+        if next_tool != previous_tool {
+            self.redraw_requested = true;
+        }
         if next_tool == ActiveTool::DrapeToTopology && previous_tool != ActiveTool::DrapeToTopology {
             self.editor.drape_phase = crate::ui::state::DrapePhase::Designs;
             self.editor.drape_object_ids.clear();

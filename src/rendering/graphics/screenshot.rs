@@ -88,6 +88,10 @@ impl<'a> Graphics<'a> {
             rasters,
             true,
         );
+        // The export is the viewport as the user sees it, so it carries the
+        // live overlay too. The scene was just rendered into the multisample
+        // target, so there is nothing to restore from the cache first.
+        self.render_editor_overlay_pass(encoder, &view, self.viewport_rect, editor, false);
 
         let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         // On wasm `wgpu::Buffer` is not Send+Sync; the Arc never crosses threads

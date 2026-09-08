@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    i18n::{tr, tr_format},
-    userspace_log,
-};
+use crate::{i18n::tr_format, userspace_log};
 
 impl<'a> Graphics<'a> {
     pub(crate) async fn new(window: Arc<Window>) -> Result<Graphics<'a>> {
@@ -160,17 +157,8 @@ impl<'a> Graphics<'a> {
         let scene_format = surface_format.add_srgb_suffix();
         let gui_format = surface_format.remove_srgb_suffix();
         let view_formats = vec![if surface_format.is_srgb() { gui_format } else { scene_format }];
-        let supports_scene_cache = surface_caps.usages.contains(wgpu::TextureUsages::COPY_DST);
-        if !supports_scene_cache {
-            log::warn!("{}", tr!(literal = "Surface does not support COPY_DST; main-scene caching is disabled on this adapter"));
-        }
-        let surface_usage = if supports_scene_cache {
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST
-        } else {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-        };
         let config = wgpu::SurfaceConfiguration {
-            usage: surface_usage,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width,
             height: size.height,
@@ -181,7 +169,8 @@ impl<'a> Graphics<'a> {
         };
         let sample_count = MSAA_SAMPLE_COUNT;
         let (msaa_color, msaa_view) = Self::create_msaa_target(&device, &config, sample_count);
-        let scene_cache = supports_scene_cache.then(|| Self::create_scene_cache_target(&device, &config));
+        let (scene_cache_blit_layout, scene_cache_blit_pipeline) = Self::create_scene_cache_blit(&device, scene_format, sample_count);
+        let scene_cache = Self::create_scene_cache_target(&device, &config, &scene_cache_blit_layout);
         let (depth_texture, depth_view) = Self::create_depth_target(&device, &config, sample_count);
 
         surface.configure(&device, &config);
@@ -1474,6 +1463,8 @@ impl<'a> Graphics<'a> {
             msaa_color,
             msaa_view,
             scene_cache,
+            scene_cache_blit_layout,
+            scene_cache_blit_pipeline,
             scene_cache_key: None,
             depth_texture,
             depth_view,
@@ -1572,11 +1563,7 @@ impl<'a> Graphics<'a> {
             let (msaa_color, msaa_view) = Self::create_msaa_target(&self.device, &self.config, self.sample_count);
             self.msaa_color = msaa_color;
             self.msaa_view = msaa_view;
-            self.scene_cache = self
-                .config
-                .usage
-                .contains(wgpu::TextureUsages::COPY_DST)
-                .then(|| Self::create_scene_cache_target(&self.device, &self.config));
+            self.scene_cache = Self::create_scene_cache_target(&self.device, &self.config, &self.scene_cache_blit_layout);
             self.scene_cache_key = None;
             let (depth_texture, depth_view) = Self::create_depth_target(&self.device, &self.config, self.sample_count);
             self.depth_texture = depth_texture;

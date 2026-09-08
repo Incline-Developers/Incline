@@ -38,15 +38,50 @@ fn main_scene_cache_key(
             }
         }
     }
-    editor.z_level.to_bits().hash(&mut hasher);
-    editor.show_xy_grid.hash(&mut hasher);
-    editor.fly_mode_enabled.hash(&mut hasher);
+    EditorSceneState::of(editor).hash(&mut hasher);
     hasher.write(bytemuck::bytes_of(camera_uniform));
     hasher.finish()
 }
 
-fn scene_cache_needs_render(cache_exists: bool, cached_key: Option<u64>, next_key: u64, content_changed: bool, gpu_work_pending: bool) -> bool {
-    !cache_exists || cached_key != Some(next_key) || content_changed || gpu_work_pending
+/// The editor state a cached scene image is only valid for.
+///
+/// Most editor state reaches the renderer by being pushed: hiding an object,
+/// changing a selection and the other ~90 callers of `App::invalidate_geometry`
+/// all mark the scene dirty, and the cache is rebuilt on the next frame. What
+/// cannot work that way is state [`Graphics::render_scene_pass`] reads for
+/// itself at draw time - the renderer decides from `editor` how to draw, so
+/// nothing upstream knows the scene changed. **Every such read belongs in this
+/// struct**, which is the whole of the scene pass's editor dependency.
+///
+/// Arming Tie Holes is the case that proved it: it lifts drill traces above the
+/// topology and draws the surface connectors purely by being armed, and while
+/// it was missing here the switch showed nothing until the camera next moved.
+#[derive(Hash)]
+struct EditorSceneState {
+    /// Bit pattern: the level the design plane and z-cut draw at.
+    z_level: u64,
+    show_xy_grid: bool,
+    fly_mode_enabled: bool,
+    /// Tie Holes draws drill traces without the depth test (`draw_drill_holes`).
+    tying_holes: bool,
+    /// Drill & Blast alone draws the surface tie-in connectors.
+    shows_tie_ins: bool,
+}
+
+impl EditorSceneState {
+    fn of(editor: &EditorState) -> Self {
+        Self {
+            z_level: editor.z_level.to_bits(),
+            show_xy_grid: editor.show_xy_grid,
+            fly_mode_enabled: editor.fly_mode_enabled,
+            tying_holes: editor.tying_holes(),
+            shows_tie_ins: editor.shows_tie_ins(),
+        }
+    }
+}
+
+fn scene_cache_needs_render(cached_key: Option<u64>, next_key: u64, content_changed: bool, gpu_work_pending: bool) -> bool {
+    cached_key != Some(next_key) || content_changed || gpu_work_pending
 }
 
 pub(crate) struct RenderInput<'frame> {
@@ -72,7 +107,12 @@ impl<'a> Graphics<'a> {
             rasters,
             project,
         } = input;
-        let mut scene_content_changed = self.geometry_dirty || self.overlay_dirty;
+        // Only scene content forces the cached scene to be re-rendered. The
+        // editor overlay is drawn over the cache every frame by
+        // `render_editor_overlay_pass`, so `overlay_dirty` deliberately does
+        // not appear here - that is what keeps a cursor-following tool preview
+        // off the critical path of a full scene render.
+        let mut scene_content_changed = self.geometry_dirty;
         self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
         if let Some(slice) = self.slice_view.as_mut() {
@@ -223,7 +263,6 @@ impl<'a> Graphics<'a> {
         // once more after it deactivates (to clear the buffers).
         let dynamic_active = editor.batter_berm_dialog_open;
         if dynamic_active || !self.dynamic_vertex_buf.is_empty() {
-            scene_content_changed = true;
             rebuild_dynamic_scene(DynamicSceneBuildInput {
                 editor,
                 dynamic_vertex_buf: &mut self.dynamic_vertex_buf,
@@ -270,16 +309,13 @@ impl<'a> Graphics<'a> {
         if measurement_state != self.cached_measurement_state {
             self.cached_measurement_state = measurement_state;
             self.overlay_dirty = true;
-            scene_content_changed = true;
         }
         if editor.poly_finish_dialog != self.cached_poly_finish_dialog {
             self.cached_poly_finish_dialog = editor.poly_finish_dialog;
             self.overlay_dirty = true;
-            scene_content_changed = true;
         }
 
         if self.overlay_dirty {
-            scene_content_changed = true;
             let overlay_vp = self.view_proj();
             let overlay_screen = self.screen_size();
             rebuild_editor_overlay(OverlaySceneBuildInput {
@@ -332,7 +368,7 @@ impl<'a> Graphics<'a> {
             || self.point_cloud_gpu.has_pending_uploads()
             || self.block_model_gpu.has_pending_builds()
             || self.block_model_gpu.has_visible_pending_streaming(&primary_frustum, &editor.hidden_handles);
-        let render_scene = scene_cache_needs_render(self.scene_cache.is_some(), self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
+        let render_scene = scene_cache_needs_render(self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
         let sample_volume_feedback = render_scene && self.frame_index.is_multiple_of(VOLUME_FEEDBACK_INTERVAL_FRAMES);
         if sample_volume_feedback {
             let phase = (self.frame_index / VOLUME_FEEDBACK_INTERVAL_FRAMES) % 64;
@@ -340,46 +376,15 @@ impl<'a> Graphics<'a> {
                 .clear_visible_volume_feedback(&self.queue, &mut encoder, phase as u32, &primary_frustum, &editor.hidden_handles);
         }
 
-        if let Some(cache_view) = self.scene_cache.as_ref().map(|cache| cache.view.clone()) {
-            if render_scene {
-                self.render_scene_pass(
-                    &mut encoder,
-                    &cache_view,
-                    self.viewport_rect,
-                    editor,
-                    triangulations,
-                    block_models,
-                    drill_holes,
-                    point_clouds,
-                    rasters,
-                    true,
-                );
-                self.scene_cache_key = Some(scene_key);
-            }
-            let cache_texture = self.scene_cache.as_ref().expect("cache view came from a cache target").texture.clone();
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &cache_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &output.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: self.size.width,
-                    height: self.size.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        } else {
+        // The scene renders into its own cache texture and is reused for as
+        // long as its key holds; the overlay pass then puts this frame's
+        // editor content over it and resolves the result to the surface. On a
+        // cache hit that is the whole of the scene's cost.
+        if render_scene {
+            let cache_view = self.scene_cache.view.clone();
             self.render_scene_pass(
                 &mut encoder,
-                &view,
+                &cache_view,
                 self.viewport_rect,
                 editor,
                 triangulations,
@@ -389,7 +394,9 @@ impl<'a> Graphics<'a> {
                 rasters,
                 true,
             );
+            self.scene_cache_key = Some(scene_key);
         }
+        self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene);
 
         // One-shot viewport export: re-render the scene (without the egui
         // chrome) into an offscreen texture and queue a readback on this

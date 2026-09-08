@@ -435,6 +435,19 @@ impl<'a> Graphics<'a> {
         (x, y, width, height)
     }
 
+    /// Draw the scene itself: everything whose image holds still between
+    /// frames, and nothing that follows the cursor.
+    ///
+    /// The result is cached (`frame::render`), so any `editor` state read here
+    /// to decide *how* to draw must be declared in `frame::EditorSceneState` -
+    /// otherwise a cached image outlives the state that produced it. Editor
+    /// content that changes every frame belongs in
+    /// [`Self::render_editor_overlay_pass`] instead, which runs over the cache.
+    ///
+    /// `include_editor_overlays` marks the interactive viewport: the plot,
+    /// slice-preview and screenshot paths share this pass but not the grid,
+    /// the drill-pattern preview, the chunk statistics or volume residency
+    /// streaming, all of which belong to the viewport the user is driving.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_scene_pass(
         &mut self,
@@ -858,18 +871,6 @@ impl<'a> Graphics<'a> {
             }
         }
 
-        if include_editor_overlays && !self.dynamic_vertex_buf.is_empty() && !self.dynamic_index_buf.is_empty() {
-            render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
-                &self.overlay_render_pipeline
-            } else {
-                &self.stroke_render_pipeline
-            });
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.dynamic_vertex_gpu.slice(..));
-            render_pass.set_index_buffer(self.dynamic_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..self.dynamic_index_buf.len() as u32, 0, 0..1);
-        }
-
         render_pass.set_pipeline(&self.edge_render_pipeline);
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         for triangulation in triangulations {
@@ -921,14 +922,6 @@ impl<'a> Graphics<'a> {
             }
         }
 
-        if include_editor_overlays && !self.overlay_vertex_buf.is_empty() && !self.overlay_index_buf.is_empty() {
-            render_pass.set_pipeline(&self.overlay_render_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.overlay_vertex_gpu.slice(..));
-            render_pass.set_index_buffer(self.overlay_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..self.overlay_index_buf.len() as u32, 0, 0..1);
-        }
-
         // Active text editing is a true editor overlay: draw the label after
         // scene edges and tool previews, then its box last. In global x-ray
         // mode every text batch follows this same final always-visible path.
@@ -936,6 +929,86 @@ impl<'a> Graphics<'a> {
             self.draw_text_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, editor.xray_enabled);
         }
         self.draw_document_batches(&mut render_pass, DocumentRenderStage::AlwaysVisible, false, None);
+    }
+
+    /// The editor content that changes on its own every frame - the live tool
+    /// preview and the selection/snap overlay - drawn over the scene rather
+    /// than inside it.
+    ///
+    /// Keeping these two out of [`Self::render_scene_pass`] is what lets the
+    /// scene be cached across frames: a tie-in chain following the cursor, a
+    /// marquee, a snap marker, all of them repaint at the cost of an overlay
+    /// pass instead of re-rendering every triangulation and block model behind
+    /// them. Both draw with depth writes off (`overlay_render_pipeline` never
+    /// tests depth, `stroke_render_pipeline` tests but does not write), so the
+    /// scene depth buffer this pass loads stays valid for the next frame that
+    /// hits the cache.
+    ///
+    /// `restore_cached_scene` re-fills the multisample target from the scene
+    /// cache first, for frames where the scene pass did not run and the target
+    /// still holds the previous frame's overlay.
+    pub(super) fn render_editor_overlay_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        viewport: ViewportRect,
+        editor: &EditorState,
+        restore_cached_scene: bool,
+    ) {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Editor Overlay Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.msaa_view,
+                resolve_target: Some(view),
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        // The restore covers the whole attachment, background included, so it
+        // runs before the viewport is narrowed to the canvas.
+        if restore_cached_scene {
+            render_pass.set_pipeline(&self.scene_cache_blit_pipeline);
+            render_pass.set_bind_group(0, &self.scene_cache.bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        let (vp_x, vp_y, vp_width, vp_height) = self.clamp_viewport_rect(viewport);
+        render_pass.set_viewport(vp_x as f32, vp_y as f32, vp_width as f32, vp_height as f32, 0.0, 1.0);
+
+        if !self.dynamic_vertex_buf.is_empty() && !self.dynamic_index_buf.is_empty() {
+            render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
+                &self.overlay_render_pipeline
+            } else {
+                &self.stroke_render_pipeline
+            });
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.dynamic_vertex_gpu.slice(..));
+            render_pass.set_index_buffer(self.dynamic_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..self.dynamic_index_buf.len() as u32, 0, 0..1);
+        }
+
+        if !self.overlay_vertex_buf.is_empty() && !self.overlay_index_buf.is_empty() {
+            render_pass.set_pipeline(&self.overlay_render_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.overlay_vertex_gpu.slice(..));
+            render_pass.set_index_buffer(self.overlay_index_gpu.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..self.overlay_index_buf.len() as u32, 0, 0..1);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

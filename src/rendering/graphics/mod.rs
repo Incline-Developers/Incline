@@ -129,8 +129,10 @@ pub(crate) enum RenderSurfaceError {
 /// to the swapchain and paint fresh egui shapes over it, avoiding another
 /// block-model volume raycast.
 pub(super) struct SceneCacheTarget {
-    pub(super) texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
+    /// The cache bound for reading, for the blit that restores it into the
+    /// multisample target at the start of an overlay-only frame.
+    pub(super) bind_group: wgpu::BindGroup,
 }
 
 /// Per-frame style and placement for the viewport's procedural world XY grid.
@@ -259,8 +261,10 @@ pub(crate) struct Graphics<'a> {
     pub(super) grid_bind_group: wgpu::BindGroup,
     pub(super) msaa_color: wgpu::Texture,
     pub(super) msaa_view: wgpu::TextureView,
-    pub(super) scene_cache: Option<SceneCacheTarget>,
+    pub(super) scene_cache: SceneCacheTarget,
     pub(super) scene_cache_key: Option<u64>,
+    pub(super) scene_cache_blit_layout: wgpu::BindGroupLayout,
+    pub(super) scene_cache_blit_pipeline: wgpu::RenderPipeline,
     pub(super) depth_texture: wgpu::Texture,
     pub(super) depth_view: wgpu::TextureView,
     pub(super) block_model_transparency_targets: Option<BlockModelTransparencyTargets>,
