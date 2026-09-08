@@ -42,7 +42,7 @@ use crate::{
     ui::{
         fonts::setup_custom_fonts,
         state::{ActiveTool, EditorState, UiCommand, UiFrameOutput, UiProjectView, UiTriangulationEntry, ViewportRect},
-        widgets::viewport::ViewportLabel,
+        widgets::viewport::{ViewportLabel, ViewportMessage},
     },
 };
 
@@ -294,91 +294,101 @@ struct UiFrameContext<'a> {
     console_snapshot: &'a crate::logging::ConsoleSnapshot,
 }
 
-fn viewport_label_text(editor: &EditorState) -> Option<String> {
+/// The prompt the viewport banner shows for the current tool and state, if any.
+///
+/// Each prompt names what to do; anything qualifying it - the keys it answers
+/// to, the way out, why it is being asked - goes in `minor` rather than being
+/// punctuated onto the end, so the banner can dim it. See [`ViewportMessage`].
+fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     if editor.drill_pattern_awaiting_shape_pick {
-        return Some(tr!(literal = "Click a closed polyline to use as the blast shape · Esc cancels"));
+        return Some(ViewportMessage::text(tr!(literal = "Click a closed polyline to use as the blast shape")).minor(tr!(literal = "Esc cancels")));
     }
     if editor.active_tool == ActiveTool::VerticalSlice {
-        return Some(
-            if editor.slice_pending_start.is_none() {
-                tr!(literal = "Click the first point of the slice line")
-            } else {
-                tr!(literal = "Click the second point of the slice line")
-            }
-            .to_string(),
-        );
+        return Some(ViewportMessage::text(if editor.slice_pending_start.is_none() {
+            tr!(literal = "Click the first point of the slice line")
+        } else {
+            tr!(literal = "Click the second point of the slice line")
+        }));
     }
 
     if editor.active_tool == ActiveTool::MeasureDistance
         && let (Some(start), Some(end)) = (editor.measurement_start, editor.measurement_end)
     {
-        return Some(tr_format!(literal = "%distance% meters", distance = format!("{:.3}", start.distance(end))));
+        return Some(ViewportMessage::text(tr_format!(
+            literal = "%distance% meters",
+            distance = format!("{:.3}", start.distance(end))
+        )));
     }
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {
         if let Some(measurement) = state::batter_angle_measurement(editor.batter_angle_points.as_slice()) {
+            // A reading, not an instruction: both figures are the answer, so
+            // the strike leads and the dip follows it rather than either being
+            // dimmed as an aside.
             let dip = tr_format!(literal = "%value%° dip", value = format!("{:.2}", measurement.dip_degrees));
             return Some(match measurement.strike_degrees {
-                Some(strike) => tr_format!(literal = "%strike%° strike · %dip%", strike = format!("{strike:06.2}"), dip = dip),
-                None => tr_format!(literal = "%dip% (horizontal, no strike)", dip = dip),
+                Some(strike) => ViewportMessage::text(tr_format!(literal = "%strike%° strike · %dip%", strike = format!("{strike:06.2}"), dip = dip)),
+                None => ViewportMessage::text(tr_format!(literal = "%dip% (horizontal, no strike)", dip = dip)),
             });
         }
-        return Some(
-            match editor.batter_angle_points.len() {
-                0 => tr!(literal = "Select first crest/toe point"),
-                1 => tr!(literal = "Select second crest/toe point"),
-                _ => tr!(literal = "Select opposite berm point"),
-            }
-            .to_string(),
-        );
+        return Some(ViewportMessage::text(match editor.batter_angle_points.len() {
+            0 => tr!(literal = "Select first crest/toe point"),
+            1 => tr!(literal = "Select second crest/toe point"),
+            _ => tr!(literal = "Select opposite berm point"),
+        }));
     }
 
     if editor.slice_mode_enabled {
-        return Some(tr!(literal = "Slice view: middle-drag pan · W/S move slab · Q/E rotate · Esc exit"));
+        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!(literal = "middle-drag pan · W/S move slab · Q/E rotate · Esc exit")));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
         return Some(match editor.circle_draft.as_ref() {
-            None => tr!(literal = "Click the circle centre"),
-            Some(draft) if draft.radius_text.is_empty() => tr!(literal = "Click a perimeter point or type a radius"),
-            Some(draft) if draft.typed_radius().is_some() => tr!(literal = "Press Enter to use the typed radius, or click to use the pointer radius"),
-            Some(_) => tr!(literal = "Enter a positive decimal radius"),
+            None => ViewportMessage::text(tr!(literal = "Click the circle centre")),
+            Some(draft) if draft.radius_text.is_empty() => ViewportMessage::text(tr!(literal = "Click a perimeter point or type a radius")),
+            Some(draft) if draft.typed_radius().is_some() => {
+                ViewportMessage::text(tr!(literal = "Press Enter to use the typed radius")).minor(tr!(literal = "or click to use the pointer radius"))
+            }
+            Some(_) => ViewportMessage::text(tr!(literal = "Enter a positive decimal radius")),
         });
     }
 
-    match editor.active_tool {
-        ActiveTool::Move if !editor.move_tool_has_targets() => Some(tr!(literal = "Select an item")),
-        ActiveTool::MoveCollar if !editor.move_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
-        ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
-        ActiveTool::RotateCollar => Some(tr!(literal = "Drag a ring, or type an azimuth and dip - each hole turns about its own collar")),
-        ActiveTool::SetInitiationPoint => Some(tr!(literal = "Click a collar to add or edit an initiation point")),
+    let message = match editor.active_tool {
+        ActiveTool::Move if !editor.move_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select an item")),
+        ActiveTool::MoveCollar if !editor.move_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
+        ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
+        ActiveTool::RotateCollar => ViewportMessage::text(tr!(literal = "Drag a ring, or type an azimuth and dip")).minor(tr!(literal = "each hole turns about its own collar")),
+        ActiveTool::SetInitiationPoint => ViewportMessage::text(tr!(literal = "Click a collar to add or edit an initiation point")),
         // The palette selects its first product for you, so the only way to
         // reach the tool with nothing to tie with is to have deleted them
         // all. Say so up front rather than only in the console warning the
         // first click would earn - see `App::tie_holes_click`.
-        ActiveTool::TieHoles if editor.active_product().is_none() => Some(tr!(literal = "No delay product to tie with · right-click the Delay Palette heading to add one")),
-        ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some(tr!(literal = "Choose offset side")),
-        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some(tr!(literal = "Select a line or polyline")),
-        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some(tr!(literal = "Select designs")),
-        ActiveTool::DrapeToTopology => Some(tr!(literal = "Select topologies")),
-        ActiveTool::RelimitLine if editor.relimit_confirming_end => Some(tr!(literal = "Choose relimit side")),
-        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => Some(tr!(literal = "Select line to relimit to")),
-        ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => Some(tr!(literal = "Select line to relimit")),
-        ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => Some(tr!(literal = "Select the endpoint to join")),
-        ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => Some(tr!(literal = "Select the next line to fuse")),
-        ActiveTool::FuseIntoPolyline => Some(tr!(literal = "Select a line to fuse")),
-        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => Some(tr!(literal = "Select a polyline or open line")),
-        ActiveTool::SplitAtPoints if editor.split_selected_verts[0].is_none() => Some(tr!(literal = "Select a split point")),
-        ActiveTool::SplitAtPoints if editor.split_selected_verts[1].is_none() => Some(tr!(literal = "Select second split point")),
-        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => Some(tr!(literal = "Select a polyline vertex")),
-        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => Some(tr!(literal = "Select a polyline")),
-        ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => Some(tr!(literal = "Click first vertex")),
-        ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => Some(tr!(literal = "Click second vertex")),
-        ActiveTool::ExplodePolyline => Some(tr!(literal = "Select a polyline")),
-        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => Some(tr!(literal = "Select a polyline")),
-        ActiveTool::DeletePoints => Some(tr!(literal = "Select a point")),
-        _ => None,
-    }
+        ActiveTool::TieHoles if editor.active_product().is_none() => {
+            ViewportMessage::text(tr!(literal = "No delay product to tie with")).minor(tr!(literal = "right-click the Delay Palette heading to add one"))
+        }
+        ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => ViewportMessage::text(tr!(literal = "Choose offset side")),
+        ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => ViewportMessage::text(tr!(literal = "Select a line or polyline")),
+        ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => ViewportMessage::text(tr!(literal = "Select designs")),
+        ActiveTool::DrapeToTopology => ViewportMessage::text(tr!(literal = "Select topologies")),
+        ActiveTool::RelimitLine if editor.relimit_confirming_end => ViewportMessage::text(tr!(literal = "Choose relimit side")),
+        ActiveTool::RelimitLine if editor.relimit_waiting_for_pick => ViewportMessage::text(tr!(literal = "Select line to relimit to")),
+        ActiveTool::RelimitLine if editor.relimit_source_id.is_none() || editor.relimit_awaiting_source_pick => ViewportMessage::text(tr!(literal = "Select line to relimit")),
+        ActiveTool::FuseIntoPolyline if editor.fuse_awaiting_endpoint.is_some() => ViewportMessage::text(tr!(literal = "Select the endpoint to join")),
+        ActiveTool::FuseIntoPolyline if !editor.fuse_segments.is_empty() => ViewportMessage::text(tr!(literal = "Select the next line to fuse")),
+        ActiveTool::FuseIntoPolyline => ViewportMessage::text(tr!(literal = "Select a line to fuse")),
+        ActiveTool::SplitAtPoints if editor.split_poly_id.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline or open line")),
+        ActiveTool::SplitAtPoints if editor.split_selected_verts[0].is_none() => ViewportMessage::text(tr!(literal = "Select a split point")),
+        ActiveTool::SplitAtPoints if editor.split_selected_verts[1].is_none() => ViewportMessage::text(tr!(literal = "Select second split point")),
+        ActiveTool::Chamfer if editor.chamfer_corner_index.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline vertex")),
+        ActiveTool::Bezier if editor.bezier_poly_id.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline")),
+        ActiveTool::Bezier if editor.bezier_selected_verts[0].is_none() => ViewportMessage::text(tr!(literal = "Click first vertex")),
+        ActiveTool::Bezier if editor.bezier_selected_verts[1].is_none() => ViewportMessage::text(tr!(literal = "Click second vertex")),
+        ActiveTool::ExplodePolyline => ViewportMessage::text(tr!(literal = "Select a polyline")),
+        ActiveTool::BatterBermOffset if editor.batter_berm_target_id.is_none() => ViewportMessage::text(tr!(literal = "Select a polyline")),
+        ActiveTool::DeletePoints => ViewportMessage::text(tr!(literal = "Select a point")),
+        _ => return None,
+    };
+    Some(message)
 }
 
 /// Draw the compact MakeCircle radius editor beside (but never under) the cursor.
@@ -966,8 +976,8 @@ fn draw_ui(
         }
     }
 
-    if let Some(label) = viewport_label_text(editor) {
-        ViewportLabel::new("viewport_tool_label", label, canvas_rect).show(root_ui.ctx());
+    if let Some(message) = viewport_message(editor) {
+        ViewportLabel::new("viewport_tool_label", message, canvas_rect).show(root_ui.ctx());
     }
     // Slice view: config dock + top-down minimap
     if editor.slice_mode_enabled {
