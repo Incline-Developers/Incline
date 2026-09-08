@@ -442,29 +442,11 @@ impl<'a> Graphics<'a> {
         };
         let surface_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction);
 
-        let hit = match (document_hit, surface_hit) {
-            (Some(document), Some(surface)) => {
-                // In x-ray mode visible lines render through surfaces, so a document
-                // hit always takes precedence over the surface beneath it.
-                if xray_enabled {
-                    Some((document.entity, document.world))
-                } else {
-                    // Compare camera-ray depths: prefer whichever hit is closer.
-                    // `pick_nearest` returns the nearest 2D vertex which may not be
-                    // exactly under the cursor, but for geometry placed above a surface
-                    // the vertex depth is still smaller than the surface hit below it.
-                    let doc_depth = (document.world - ray_origin).dot(direction);
-                    let surf_depth = (surface.1 - ray_origin).dot(direction);
-                    if doc_depth <= surf_depth {
-                        Some((document.entity, document.world))
-                    } else {
-                        Some(surface)
-                    }
-                }
-            }
-            (Some(document), None) => Some((document.entity, document.world)),
-            (None, surface) => surface,
-        };
+        // A hit within the pick radius can be several pixels from the cursor.
+        // Test its visibility at the line itself: comparing against the surface
+        // under the cursor shifts the clickable region on sloping triangles.
+        let document_hit = document_hit.filter(|hit| xray_enabled || !SceneQuery::surface_occludes_pick(triangulations, hidden, &view_proj, self.scene_origin, hit.world));
+        let hit = document_hit.map(|hit| (hit.entity, hit.world)).or(surface_hit);
         if xray_enabled {
             return hit;
         }
