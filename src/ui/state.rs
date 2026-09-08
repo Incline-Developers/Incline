@@ -3490,29 +3490,32 @@ impl UiProjectView {
 ///
 /// The tab decides what the viewport bar carries, the way Blender's workspace
 /// tabs decide what its editors show. Production, Drill & Blast and Geology are
-/// built out.
+/// built out; Planning carries what every workspace does and is where the
+/// scheduling tools will go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
+    Planning,
 }
 
 impl Workspace {
     /// Every workspace, in the order the tabs are drawn.
-    pub(crate) const ALL: [Self; 3] = [Self::Production, Self::DrillAndBlast, Self::Geology];
+    pub(crate) const ALL: [Self; 4] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning];
 
     pub(crate) fn label(self) -> String {
         match self {
             Self::Production => tr!("ws-production"),
             Self::DrillAndBlast => tr!("ws-drill-and-blast"),
             Self::Geology => tr!("ws-geology"),
+            Self::Planning => tr!("ws-planning"),
         }
     }
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology)
+        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning)
     }
 
     /// Whether this workspace carries the mine production tools.

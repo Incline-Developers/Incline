@@ -238,7 +238,7 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
             centre_part(ui);
             draw_z_setting(ui, editor);
         }
-        Workspace::Geology => {
+        Workspace::Geology | Workspace::Planning => {
             ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
             draw_z_setting(ui, editor);
         }

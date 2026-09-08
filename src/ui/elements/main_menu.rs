@@ -419,15 +419,14 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         spacing.button_padding = egui::vec2(MENU_LABEL_PADDING, 0.0);
         spacing.item_spacing.x = MENU_LABEL_GAP;
 
-        if editor.active_workspace == Workspace::DrillAndBlast {
-            MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |_| {});
-            MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |_| {});
+        // Drill & Blast and Planning carry no discipline menus of their own
+        // yet, and the run is what the workspace has rather than a fixed set of
+        // titles: a menu that opens on nothing is left off it.
+        if matches!(editor.active_workspace, Workspace::DrillAndBlast | Workspace::Planning) {
             return;
         }
 
         if editor.active_workspace == Workspace::Geology {
-            MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |_| {});
-
             MenuBarMenu::new(&tr!("ws-menubar-triangulation")).show(ui, |ui| {
                 if ContextMenuAction::new(tr!(literal = "Create Ore Triangulation..."))
                     .enabled(!project.block_models.is_empty())
@@ -534,10 +533,5 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                 ui.close();
             }
         });
-
-        // Keep the Production menu run stable after these actions move to
-        // Geology. Both placeholders open empty menus.
-        MenuBarMenu::new(&tr!("ws-menubar-block-model")).show(ui, |_| {});
-        MenuBarMenu::new(&tr!("ws-menubar-drillholes")).show(ui, |_| {});
     });
 }

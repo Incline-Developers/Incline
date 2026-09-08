@@ -48,6 +48,7 @@ menu-view = View
 ws-production = Production
 ws-drill-and-blast = Drill & Blast
 ws-geology = Geology
+ws-planning = Planning
 
 ## Menubars
 

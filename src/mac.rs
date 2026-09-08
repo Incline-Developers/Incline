@@ -91,14 +91,11 @@ pub(crate) enum MacMenuAction {
 /// the same three - see [`crate::ui::elements::main_menu`].
 pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid];
 
-/// Tags distinguish the live and empty root items, which deliberately share a
-/// title and trade places as the workspace changes.
+/// Tags name the discipline root items that come and go with the workspace, so
+/// [`set_workspace_menus`] finds them without matching on a translated title.
 const TRIANGULATION_MENU_TAG: isize = -1;
-const TRIANGULATION_PLACEHOLDER_TAG: isize = -2;
 const BLOCK_MODEL_MENU_TAG: isize = -3;
-const BLOCK_MODEL_PLACEHOLDER_TAG: isize = -4;
 const DRILL_HOLES_MENU_TAG: isize = -5;
-const DRILL_HOLES_PLACEHOLDER_TAG: isize = -6;
 
 /// Tags at or above this carry a recent-project index rather than naming a
 /// fixed action, leaving room for the fixed list to grow.
@@ -435,9 +432,6 @@ pub(crate) fn install_menu_bar() {
     );
     let triangulation_item = add_submenu(&root, &tr!("ws-menubar-triangulation"), &triangulation_menu, mtm);
     triangulation_item.setTag(TRIANGULATION_MENU_TAG);
-    let empty_triangulation_menu = menu(&tr!("ws-menubar-triangulation"), mtm);
-    let empty_triangulation_item = add_submenu(&root, &tr!("ws-menubar-triangulation"), &empty_triangulation_menu, mtm);
-    empty_triangulation_item.setTag(TRIANGULATION_PLACEHOLDER_TAG);
 
     let raster_menu = menu(&tr!("ws-menubar-raster"), mtm);
     raster_menu.setAutoenablesItems(false);
@@ -468,9 +462,6 @@ pub(crate) fn install_menu_bar() {
     );
     let block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &block_model_menu, mtm);
     block_model_item.setTag(BLOCK_MODEL_MENU_TAG);
-    let empty_block_model_menu = menu(&tr!("ws-menubar-block-model"), mtm);
-    let empty_block_model_item = add_submenu(&root, &tr!("ws-menubar-block-model"), &empty_block_model_menu, mtm);
-    empty_block_model_item.setTag(BLOCK_MODEL_PLACEHOLDER_TAG);
 
     let drill_hole_menu = menu(&tr!("ws-menubar-drillholes"), mtm);
     drill_hole_menu.setAutoenablesItems(false);
@@ -484,10 +475,6 @@ pub(crate) fn install_menu_bar() {
     );
     let drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &drill_hole_menu, mtm);
     drill_hole_item.setTag(DRILL_HOLES_MENU_TAG);
-
-    let empty_drill_hole_menu = menu(&tr!("ws-menubar-drillholes"), mtm);
-    let empty_drill_hole_item = add_submenu(&root, &tr!("ws-menubar-drillholes"), &empty_drill_hole_menu, mtm);
-    empty_drill_hole_item.setTag(DRILL_HOLES_PLACEHOLDER_TAG);
 
     app.setMainMenu(Some(&root));
     NSMenu::setMenuBarVisible(true, mtm);
@@ -515,8 +502,14 @@ fn set_enabled(root: &NSMenu, action: MacMenuAction, enabled: bool) {
 
 /// Match the native discipline menus to the active workspace.
 ///
-/// Looked up by title rather than by tag, so the titles below must stay in
-/// sync with the ones `install_menu_bar` gives the same root menus.
+/// A workspace shows the menus it has and nothing else: a discipline whose
+/// menu belongs elsewhere leaves a shorter bar rather than an empty dropdown,
+/// so Drill & Blast and Planning show none at all. The egui bar does the same -
+/// see `main_menu::draw_workspace_menus`.
+///
+/// Design, Raster and Point Cloud are looked up by title, so the titles below
+/// must stay in sync with the ones `install_menu_bar` gives the same root
+/// menus; the rest carry tags.
 fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
     for title in [tr!("ws-menubar-design"), tr!("ws-menubar-raster"), tr!("ws-menubar-point-cloud")] {
         if let Some(item) = root.itemWithTitle(&NSString::from_str(&title)) {
@@ -527,24 +520,13 @@ fn set_workspace_menus(root: &NSMenu, workspace: Workspace) {
     if let Some(item) = find_item(root, TRIANGULATION_MENU_TAG) {
         item.setHidden(workspace != Workspace::Production);
     }
-    if let Some(item) = find_item(root, TRIANGULATION_PLACEHOLDER_TAG) {
-        item.setHidden(workspace == Workspace::Production);
-    }
 
     if let Some(item) = find_item(root, BLOCK_MODEL_MENU_TAG) {
         item.setHidden(workspace != Workspace::Geology);
     }
-    if let Some(item) = find_item(root, BLOCK_MODEL_PLACEHOLDER_TAG) {
-        item.setHidden(workspace != Workspace::Production);
-    }
 
-    // Geology gets the live Drill Holes submenu; the other workspaces get the
-    // empty one. Every visible discipline menu remains enabled.
     if let Some(item) = find_item(root, DRILL_HOLES_MENU_TAG) {
         item.setHidden(workspace != Workspace::Geology);
-    }
-    if let Some(item) = find_item(root, DRILL_HOLES_PLACEHOLDER_TAG) {
-        item.setHidden(workspace == Workspace::Geology);
     }
 }
 
