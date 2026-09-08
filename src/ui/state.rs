@@ -50,6 +50,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) show_xy_grid: bool,
     pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
+    pub(crate) vsync_enabled: bool,
     pub(crate) frame_rate_cap: u32,
     pub(crate) resize_frame_rate_cap: u32,
     pub(crate) block_model_interaction_resolution_divisor: u32,
@@ -90,6 +91,7 @@ impl Default for PreferencesDraft {
             show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
+            vsync_enabled: crate::app::io::default_vsync_enabled(),
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
             resize_frame_rate_cap: crate::app::io::default_resize_frame_rate_cap(),
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
@@ -934,6 +936,13 @@ pub(crate) struct EditorState {
     /// panel seeds it from the live values.
     pub(crate) preferences_draft: Option<PreferencesDraft>,
     pub(crate) snap_poll_rate: u32,
+    /// Present in step with the display. With this on the display paces the
+    /// frame rate and `frame_rate_cap` is not applied.
+    pub(crate) vsync_enabled: bool,
+    /// Whether this adapter's surface offers a present mode to turn vsync off
+    /// at all. Set from the renderer once it exists; the preference is hidden
+    /// where it cannot be honoured (a browser surface always presents in step).
+    pub(crate) vsync_switchable: bool,
     pub(crate) frame_rate_cap: u32,
     pub(crate) resize_frame_rate_cap: u32,
     pub(crate) block_model_interaction_resolution_divisor: u32,
@@ -943,6 +952,10 @@ pub(crate) struct EditorState {
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
+    /// Smoothed seconds between rendered frames, which `measured_fps` is the
+    /// reciprocal of. See the note where it is updated: the average has to be
+    /// taken over the interval, never over the instantaneous rate.
+    pub(crate) smoothed_frame_interval: Option<f32>,
     /// Developer view: colour each surface chunk distinctly to visualise the
     /// Morton spatial chunking (and drive the chunk-cull stats readout).
     pub(crate) debug_chunk_coloring: bool,
@@ -1904,6 +1917,7 @@ impl EditorState {
             show_xy_grid: self.show_xy_grid,
             show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
+            vsync_enabled: self.vsync_enabled,
             frame_rate_cap: self.frame_rate_cap,
             resize_frame_rate_cap: self.resize_frame_rate_cap,
             block_model_interaction_resolution_divisor: self.block_model_interaction_resolution_divisor,
@@ -1955,6 +1969,8 @@ impl EditorState {
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             preferences_draft: None,
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
+            vsync_enabled: crate::app::io::default_vsync_enabled(),
+            vsync_switchable: false,
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
             resize_frame_rate_cap: crate::app::io::default_resize_frame_rate_cap(),
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
@@ -1962,6 +1978,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
             measured_fps: None,
+            smoothed_frame_interval: None,
             debug_chunk_coloring: false,
             debug_chunk_stats: None,
             debug_clip_plane_distances: None,

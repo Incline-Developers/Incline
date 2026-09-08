@@ -145,6 +145,14 @@ impl<'a> Graphics<'a> {
             .find(|m| *m == wgpu::PresentMode::Fifo)
             .or_else(|| surface_caps.present_modes.first().copied())
             .ok_or_else(|| anyhow!("Surface reports no supported present modes"))?;
+        // What "vsync off" means on this adapter. Mailbox renders freely and
+        // presents the newest frame each refresh, so it drops the wait without
+        // tearing; Immediate is the tearing fallback. Neither is guaranteed -
+        // a browser surface offers only Fifo - and where there is none the
+        // preference is not offered at all (`supports_vsync_off`).
+        let no_vsync_present_mode = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
+            .into_iter()
+            .find(|mode| surface_caps.present_modes.contains(mode));
         userspace_log!("{}", tr_format!(literal = "Surface presentation mode: %mode%", mode = format!("{present_mode:?}")));
         let alpha_mode = surface_caps
             .alpha_modes
@@ -1465,6 +1473,7 @@ impl<'a> Graphics<'a> {
             scene_cache,
             scene_cache_blit_layout,
             scene_cache_blit_pipeline,
+            no_vsync_present_mode,
             scene_cache_key: None,
             depth_texture,
             depth_view,

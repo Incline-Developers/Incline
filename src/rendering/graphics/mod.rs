@@ -265,6 +265,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) scene_cache_key: Option<u64>,
     pub(super) scene_cache_blit_layout: wgpu::BindGroupLayout,
     pub(super) scene_cache_blit_pipeline: wgpu::RenderPipeline,
+    /// The present mode this surface uses with vsync off, if it has one.
+    no_vsync_present_mode: Option<wgpu::PresentMode>,
     pub(super) depth_texture: wgpu::Texture,
     pub(super) depth_view: wgpu::TextureView,
     pub(super) block_model_transparency_targets: Option<BlockModelTransparencyTargets>,
@@ -595,6 +597,31 @@ impl<'a> Graphics<'a> {
             slice.input = SliceInputState::default();
         }
         self.sync_cursor_grab();
+    }
+
+    /// Whether this surface can present without waiting for the display.
+    pub(crate) fn supports_vsync_off(&self) -> bool {
+        self.no_vsync_present_mode.is_some()
+    }
+
+    /// Present in step with the display, or as fast as frames are produced.
+    ///
+    /// Only the surface configuration changes, so unlike a resize this keeps
+    /// every attachment and cache; a no-op when the mode is already the one
+    /// asked for, which is what makes it safe to call on every preference
+    /// commit.
+    pub(crate) fn set_vsync_enabled(&mut self, enabled: bool) {
+        let mode = if enabled {
+            wgpu::PresentMode::Fifo
+        } else {
+            self.no_vsync_present_mode.unwrap_or(wgpu::PresentMode::Fifo)
+        };
+        if self.config.present_mode == mode {
+            return;
+        }
+        self.config.present_mode = mode;
+        self.surface.configure(&self.device, &self.config);
+        crate::userspace_log!("{}", crate::i18n::tr_format!(literal = "Surface presentation mode: %mode%", mode = format!("{mode:?}")));
     }
 
     pub(crate) fn needs_continuous_redraw(&self) -> bool {

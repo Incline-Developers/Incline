@@ -593,6 +593,7 @@ impl<'a> App<'a> {
         self.editor.show_scale_bar = config.show_scale_bar;
         self.editor.renderer_background_color = config.renderer_background_color;
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
+        self.editor.vsync_enabled = config.vsync_enabled;
         self.editor.frame_rate_cap = config.frame_rate_cap.clamp(20, 1000);
         self.editor.resize_frame_rate_cap = config.resize_frame_rate_cap.clamp(20, 1000);
         self.editor.block_model_interaction_resolution_divisor = config.block_model_interaction_resolution_divisor.clamp(1, 64);
@@ -1203,6 +1204,25 @@ impl<'a> App<'a> {
         self.editor.gizmo_drag_plane_index = None;
         self.editor.rotate_gizmo_drag_ring = None;
         self.editor.rotate_preview_active = false;
+    }
+
+    /// How long to hold off the next frame.
+    ///
+    /// While resizing, the resize cap deliberately renders below the display's
+    /// rate: attachments are rebuilt every frame and the interaction stays
+    /// responsive for costing fewer of them. Otherwise the cap only applies
+    /// with vsync off - with it on the display already paces presentation, and
+    /// a cap the refresh rate does not divide evenly just makes every frame
+    /// miss its slot and wait for the next one (144 on a 165 Hz display
+    /// presents 82.5 times a second, not 144).
+    fn frame_interval(&self) -> Duration {
+        if self.pending_resize.is_some() {
+            rate_interval(self.editor.resize_frame_rate_cap)
+        } else if self.editor.vsync_enabled {
+            Duration::ZERO
+        } else {
+            rate_interval(self.editor.frame_rate_cap)
+        }
     }
 
     fn invalidate_geometry(&mut self) {
@@ -1855,6 +1875,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         match pollster::block_on(Graphics::new(window.clone())) {
             Ok(graphics) => {
                 self.graphics = Some(graphics);
+                self.apply_present_mode_preference();
                 self.redraw_requested = true;
                 self.fit_view_to_extents();
             }
@@ -1921,11 +1942,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         if (self.redraw_requested || continuous_redraw)
             && let Some(window) = self.window.as_ref()
         {
-            let frame_interval = if self.pending_resize.is_some() {
-                rate_interval(self.editor.resize_frame_rate_cap)
-            } else {
-                rate_interval(self.editor.frame_rate_cap)
-            };
+            let frame_interval = self.frame_interval();
             if let Some(last_render) = self.last_render_time {
                 let deadline = last_render + frame_interval;
                 if now < deadline {
@@ -1965,6 +1982,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 match result {
                     Some(Ok(graphics)) => {
                         self.graphics = Some(graphics);
+                        self.apply_present_mode_preference();
                         self.web_graphics_state = GraphicsState::Ready;
                         self.redraw_requested = true;
                         crate::show_web_startup_ready();
