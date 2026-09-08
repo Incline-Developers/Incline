@@ -12,9 +12,9 @@ use crate::{
 pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 5.0;
 /// Smallest on-screen diameter used to draw a drill-hole trace.
 pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
-/// The collar marker keeps the same scale relative to a trace when the trace
-/// reaches its screen-space floor.
-pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = MIN_RENDER_PIXEL_DIAMETER * COLLAR_MARKER_RADIUS_SCALE as f32;
+/// Independent screen-space floor: collars shrink to dots in overview views
+/// instead of magnifying the trace's minimum diameter by the marker scale.
+pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = 3.0;
 /// World-space collar radius for datasets that do not provide a physical hole
 /// diameter. Roughly matches a 240 mm production hole after the marker scale.
 pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;

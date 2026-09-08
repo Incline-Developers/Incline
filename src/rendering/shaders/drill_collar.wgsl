@@ -31,6 +31,8 @@ struct VertexOutput {
 
 const OUTLINE_PIXELS: f32 = 1.6;
 const EDGE_PIXELS: f32 = 0.8;
+// Keep in sync with model::drill_hole::MIN_RENDER_PIXEL_DIAMETER.
+const MIN_HOLE_PIXEL_DIAMETER: f32 = 2.0;
 
 @vertex
 fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -> VertexOutput {
@@ -58,8 +60,8 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
         1.0e-6,
     );
 
-    // The marker's floor is the trace's two-pixel floor multiplied by the
-    // collar scale, so their apparent size ratio stays fixed at any zoom.
+    // Floor the marker independently of the trace so it can shrink to a dot
+    // in overview views while retaining its world-space scale up close.
     let source_marker_radius = max(instance.center_radius.w, 1.0e-6);
     let source_hole_radius = max(instance.fill_hole_radius.w, 1.0e-6);
     let radius_pixels = max(source_marker_radius * pixels_per_world, instance.outline_pixels.w * 0.5);
@@ -68,8 +70,7 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
     // sliced open by it in any side-on view. Lifting the marker clear along
     // the view direction moves it nearer the camera by the same amount under
     // either projection.
-    let marker_scale = max(source_marker_radius / source_hole_radius, 1.0);
-    let hole_radius = radius_pixels / (pixels_per_world * marker_scale);
+    let hole_radius = max(source_hole_radius, MIN_HOLE_PIXEL_DIAMETER * 0.5 / pixels_per_world);
     let lifted = center - view_direction * hole_radius * 1.5;
 
     var clip = camera.view_proj * vec4<f32>(lifted, 1.0);
@@ -99,5 +100,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let outline_width = max(OUTLINE_PIXELS, input.radius_pixels * 0.22);
     let inner_radius = max(input.radius_pixels - outline_width, 0.0);
     let ring = smoothstep(inner_radius - EDGE_PIXELS, inner_radius, distance_pixels);
-    return vec4<f32>(mix(input.fill, input.outline, ring), coverage);
+    // At the three-pixel minimum, show only the fill so selection remains
+    // legible. Restore the outline gradually, reaching full strength at an
+    // eight-pixel diameter where there is room for both colours.
+    let outline_strength = smoothstep(1.5, 4.0, input.radius_pixels);
+    return vec4<f32>(mix(input.fill, input.outline, ring * outline_strength), coverage);
 }
