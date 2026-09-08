@@ -352,6 +352,11 @@ fn viewport_label_text(editor: &EditorState) -> Option<String> {
         ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => Some(tr!(literal = "Select a drill hole")),
         ActiveTool::RotateCollar => Some(tr!(literal = "Drag a ring, or type an azimuth and dip - each hole turns about its own collar")),
         ActiveTool::SetInitiationPoint => Some(tr!(literal = "Click a collar to add or edit an initiation point")),
+        // The palette selects its first product for you, so the only way to
+        // reach the tool with nothing to tie with is to have deleted them
+        // all. Say so up front rather than only in the console warning the
+        // first click would earn - see `App::tie_holes_click`.
+        ActiveTool::TieHoles if editor.active_product().is_none() => Some(tr!(literal = "No delay product to tie with · right-click the Delay Palette heading to add one")),
         ActiveTool::OffsetElement if editor.offset_awaiting_side_pick => Some(tr!(literal = "Choose offset side")),
         ActiveTool::OffsetElement if editor.offset_target_ids.is_empty() => Some(tr!(literal = "Select a line or polyline")),
         ActiveTool::DrapeToTopology if editor.drape_phase == state::DrapePhase::Designs => Some(tr!(literal = "Select designs")),
@@ -555,7 +560,7 @@ fn draw_ui(
     // and they carry on underneath it, and after the viewport bar, so it
     // starts directly under it: the mockup's shape, and the order it takes to
     // get there.
-    let products_rect = (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor, commands));
+    let products_rect = (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor));
     if products_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical in the workspaces without this panel, or
@@ -1185,6 +1190,11 @@ fn draw_global_dialogs(
     // Delete explorer item confirmation (triangulation, raster, point cloud, block model, drill hole)
     if editor.pending_delete_item.is_some() {
         dialogs::confirmations::draw_delete_item_confirm_dialog(root_ui, commands, editor);
+    }
+
+    // Delete delay product confirmation
+    if editor.pending_delete_delay_product.is_some() {
+        dialogs::confirmations::draw_delete_delay_product_dialog(root_ui, commands, editor);
     }
 
     // Dirty project close confirmation

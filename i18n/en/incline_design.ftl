@@ -80,6 +80,9 @@ dialog-delete-title = Delete { $kind }
 dialog-delete-confirm =
     Delete '{ $name }' from the project?
     This cannot be undone.
+confirm-delete-product =
+    Delete product '{ $name }' from the palette?
+    This cannot be undone.
 
 
 ## Create Triangulation dialog
@@ -450,8 +453,10 @@ literal-near-clip-limit-25931ba2c7873778 = Near clip limit
 literal-new-product-6c2124d5d6badd3a = New Product
 literal-new-project-cd084c5e5d3ea300 = New Project
 literal-new-layer-name-e4ea5292efa5d03f = New layer name
+literal-no-delay-product-to-tie-with-right-click-the-delay-palette-heading-to-add-one-4a3aa70c37174d3e = No delay product to tie with · right-click the Delay Palette heading to add one
 literal-no-matches-28d7266643f5992f = No matches
 literal-no-object-selected-d42da7912e4d01b6 = No object selected
+literal-no-products-483f3f49aae9b3c2 = No products
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = No spatial extent available
 literal-none-669b18c6d2d9c95b = None
 literal-north-arrow-0a1293ff4a52606d = North arrow
@@ -480,6 +485,7 @@ literal-plan-mode-a6e837218738a71d = Plan Mode
 literal-point-cloud-ef650548cfd32358 = Point Cloud
 literal-point-clouds-9bcb25b923c4c211 = Point Clouds
 literal-press-enter-to-use-the-typed-radius-or-click-to-use-the-pointer-radius-7f9cddd5ad7a20c8 = Press Enter to use the typed radius, or click to use the pointer radius
+literal-product-de1f02481331134c = Product
 literal-project-282049f502eac1de = Project
 literal-project-name-446c46bc623ccce1 = Project name
 literal-quit-app-fa0a388754b23d8b = Quit %app%

@@ -162,6 +162,15 @@ impl ExplorerEntry {
         self
     }
 
+    /// Draw `icon`, tinted `color`, in the gutter the label is indented past.
+    ///
+    /// The gutter is the same width whether or not a row fills it, so marking
+    /// one row of a list this way does not shift the others' labels.
+    pub(crate) fn leading_icon(mut self, icon: egui::ImageSource<'static>, color: egui::Color32) -> Self {
+        self.leading_icon = Some((icon, color));
+        self
+    }
+
     /// Show trailing eye and padlock toggles at the row's right edge.
     pub(crate) fn toggles(mut self, toggles: EntryToggles) -> Self {
         self.toggles = Some(toggles);

@@ -1565,6 +1565,8 @@ pub(crate) struct EditorState {
     /// Projected initiation cards, rebuilt from all visible drill datasets
     /// each frame so the UI can keep them above scene depth.
     pub(crate) initiation_cards: Vec<InitiationCard>,
+    /// Product awaiting destructive deletion confirmation: (id, row label).
+    pub(crate) pending_delete_delay_product: Option<(DelayProductId, String)>,
     /// Whether the palette's New Product dialog is open.
     pub(crate) new_delay_product_open: bool,
     /// What that dialog has been filled in with so far.
@@ -1632,6 +1634,7 @@ impl EditorState {
             || self.delete_confirm_open
             || self.pending_delete_layer.is_some()
             || self.pending_delete_item.is_some()
+            || self.pending_delete_delay_product.is_some()
             || self.pending_close_project.is_some()
             || self.pending_discard_project.is_some()
             || self.pending_discard_layer.is_some()
@@ -1760,6 +1763,7 @@ impl EditorState {
         self.renaming_item = None;
         self.pending_delete_layer = None;
         self.pending_delete_item = None;
+        self.pending_delete_delay_product = None;
         self.pending_discard_layer = None;
         self.selection_box_start_px = None;
         self.selection_box_current_px = None;
@@ -2287,6 +2291,7 @@ impl EditorState {
             blast_round_key: None,
             initiation_dialog: None,
             initiation_cards: Vec::new(),
+            pending_delete_delay_product: None,
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
             new_delay_product_name: String::new(),

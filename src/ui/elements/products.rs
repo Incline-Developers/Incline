@@ -5,22 +5,28 @@
 //! below carry on underneath it, the way the explorer's column is claimed
 //! before them and they stop at its edge.
 //!
-//! What is in it is a palette of cards rather than a list: a product is
-//! recognised by its colour and its delay at a glance while a pattern is being
-//! tied in, which is what the card shows. Interhole delays are the only
-//! product so far - see [`crate::ui::state::DelayProduct`] - so the palette is
-//! one section, and a new kind would be another beside it.
+//! It is built out of the explorer's own parts - the banded rows, the coloured
+//! section heading carrying the only symbol in the panel, the lit row for the
+//! one that is armed - so the two side panels read as one interface rather
+//! than as a tree beside a board of cards. A product fits a row: the delay, in
+//! the colour a tie-in laid with it is drawn in, and the name after it.
+//! Interhole delays are the only product so far - see
+//! [`crate::ui::state::DelayProduct`] - so the palette is one section, and a
+//! new kind would be another beside it.
+//!
+//! Nothing in the panel is a button: a product is chosen by clicking its row,
+//! and the palette itself is edited from the section heading's right-click
+//! menu, so the list holds products and only products.
 
 use crate::{
     i18n::tr,
     ui::{
         EditorState,
-        state::{DelayProduct, UiCommand},
+        state::DelayProduct,
+        unthemed_icon,
         widgets::{
-            collapsible_section::CollapsibleSection,
             context_menu::{ContextMenuAction, context_menu_popup},
-            shifted,
-            toolbar::GROUP_CORNER_RADIUS,
+            explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
         },
     },
 };
@@ -29,43 +35,39 @@ use crate::{
 /// the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "products_panel";
 
-/// Width the panel opens at: two cards across, with room for the section's
-/// own margins.
-const DEFAULT_WIDTH: f32 = 216.0;
-/// Narrowest the panel may be dragged: one card and its margins.
-const MIN_WIDTH: f32 = 128.0;
+/// Width the panel opens at: a delay, its name, and the heading above them,
+/// without the column being wider than the little it has to say.
+const DEFAULT_WIDTH: f32 = 190.0;
+/// Narrowest the panel may be dragged. Rows truncate rather than clip.
+const MIN_WIDTH: f32 = 140.0;
 /// Widest, so dragging it out cannot swallow the scene.
-const MAX_WIDTH: f32 = 420.0;
+const MAX_WIDTH: f32 = 360.0;
 
-/// Height of one product card. Its three rows - the tie-in mark, the delay,
-/// the name - are placed down it from the constants below.
-const CARD_HEIGHT: f32 = 74.0;
-/// Narrowest a card is laid out at, which is what decides how many fit across
-/// the panel.
-const MIN_CARD_WIDTH: f32 = 84.0;
-/// Gap between one card and the next, across and down.
-const CARD_GAP: f32 = 6.0;
-/// Distance from a card's top edge to the centre of its tie-in mark.
-const MARK_CENTER: f32 = 20.0;
-/// ...to the centre of the delay it reads as.
-const VALUE_CENTER: f32 = 41.0;
-/// ...and to the centre of the name under it.
-const NAME_CENTER: f32 = 61.0;
-/// Clear space kept either side of a card's contents.
-const CARD_INSET: f32 = 9.0;
-/// Half the length of one arm of the New Product card's plus.
-const PLUS_ARM: f32 = 7.0;
+/// Heading tint for the palette: the red the heading's own tie-in icon is
+/// drawn in, so the section reads as one mark rather than as a symbol beside
+/// a differently coloured name. Like the explorer's tints it is one colour for
+/// both themes, holding better than 4:1 against the light panel and the dark
+/// one alike.
+const HEADER_DELAY_PALETTE: egui::Color32 = egui::Color32::from_rgb(0xE2, 0x3B, 0x46);
+
+/// Space between a product's delay and the name after it.
+const LABEL_GAP: f32 = 6.0;
 
 /// Draw the products panel and return what it claimed.
-pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
+pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -> egui::Rect {
+    // The explorer's row colours, because these are the explorer's rows: the
+    // two side panels share one palette rather than each mixing its own.
+    let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
     egui::Panel::right(PANEL_ID)
         .resizable(true)
         .default_size(DEFAULT_WIDTH)
         .min_size(MIN_WIDTH)
         .max_size(MAX_WIDTH)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::same(6)))
+        .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
+            // Prevent content from forcing the panel wider than the user has dragged it.
+            ui.set_max_width(ui.available_width());
             // The palette can outgrow a short viewport. Keep that content
             // inside the height the surrounding bottom panels left us; if it
             // overflows, scroll it rather than allowing the side panel's frame
@@ -76,191 +78,120 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState, c
                 .min_scrolled_height(0.0)
                 .max_height(ui.available_height())
                 .show(ui, |ui| {
-                    CollapsibleSection::new("delay_palette", tr!(literal = "Delay Palette"))
-                        .default_open(true)
-                        .show(ui, |ui| draw_delay_palette(ui, editor, commands));
+                    // A name longer than the column ends in an ellipsis rather
+                    // than widening the panel.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                    // Rows carry their own height and butt up against each
+                    // other, so the banding tiles the list without gaps.
+                    ui.spacing_mut().item_spacing.y = 0.0;
+
+                    // Reserved before any row is laid out and filled once the
+                    // list's height is known: see `paint_fixed_stripes`.
+                    let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
+                    let (toggle, header, _) = ExplorerHeader::new(egui::Id::new("delay_palette_collapse"), tr!(literal = "Delay Palette"))
+                        .icon(unthemed_icon!("tie_holes.svg"))
+                        .color(HEADER_DELAY_PALETTE)
+                        .show(ui, |ui| draw_delay_palette(ui, editor));
+                    // Adding to the palette is editing the palette rather than
+                    // one product in it, so it hangs off the section heading -
+                    // the way the explorer's own section menus do - instead of
+                    // taking a permanent row at the foot of the list.
+                    context_menu_popup(&toggle.union(header.inner), tr!(literal = "Delay Palette"), |ui| {
+                        if ContextMenuAction::new(tr!(literal = "New Product")).show(ui).clicked() {
+                            editor.begin_new_delay_product();
+                            ui.close();
+                        }
+                    });
+                    paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
                 });
         })
         .response
         .rect
 }
 
-/// The palette itself: every stored product, then the cell that adds one.
+/// The palette itself: one row per stored product.
 ///
-/// The cards are packed across whatever width the panel has been dragged to,
-/// so the palette is two columns at its default width and reflows rather than
-/// clipping when it is narrowed.
-///
-/// A product is something a click in the scene applies, so the cards are live
-/// only while the Tie Holes tool is armed. The New Product cell is not one of
-/// them: adding to the palette is editing the palette, which is worth doing
-/// before a round is tied in as much as during one.
-fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
-    let tying = editor.tying_holes();
-    let available = ui.available_width();
-    let columns = (((available + CARD_GAP) / (MIN_CARD_WIDTH + CARD_GAP)).floor() as usize).max(1);
-    let card_width = ((available - CARD_GAP * (columns - 1) as f32) / columns as f32).floor().max(1.0);
-
-    // The New Product cell is laid out as one more card, so it fills the row
-    // the products leave off in rather than starting a block of its own.
-    let cells = editor.delay_products.len() + 1;
-    let mut delete = None;
+/// Every row is live whether or not the Tie Holes tool is armed. Which
+/// product a tie-in will be laid with is a standing choice, not a state of
+/// the tool: it is worth setting before the tool is picked up, and the
+/// palette always stands on one - the first, until another is clicked - so
+/// arming the tool never lands on nothing.
+fn draw_delay_palette(ui: &mut egui::Ui, editor: &mut EditorState) {
     let mut select = None;
-    let mut add = false;
+    let mut delete = None;
 
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(CARD_GAP, CARD_GAP);
-        for row in 0..cells.div_ceil(columns) {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = CARD_GAP;
-                for cell in row * columns..((row + 1) * columns).min(cells) {
-                    match editor.delay_products.get(cell) {
-                        Some(product) => {
-                            let chosen = editor.active_delay_product == Some(product.id);
-                            // `add_enabled_ui` fades what is painted inside it
-                            // toward the background, which is the whole of what
-                            // a card with nothing to apply it says.
-                            let card = ui.add_enabled_ui(tying, |ui| draw_product_card(ui, product, card_width, chosen)).inner;
-                            if card.clicked {
-                                select = Some(product.id);
-                            }
-                            if card.delete {
-                                delete = Some(product.id);
-                            }
-                        }
-                        None => add |= draw_new_product_card(ui, card_width),
-                    }
-                }
-            });
+    if editor.delay_products.is_empty() {
+        explorer_note(ui, tr!(literal = "No products"));
+    }
+    // The palette stands on its first product whenever the selection has
+    // nothing to point at - a config that never named one, say - so the row
+    // a tie-in would use is always a marked one. Settled before the rows are
+    // laid out, so the mark appears in the same frame rather than the next.
+    if editor.active_delay_product.is_none() {
+        editor.active_delay_product = editor.delay_products.first().map(|product| product.id);
+    }
+    for product in &editor.delay_products {
+        let chosen = editor.active_delay_product == Some(product.id);
+        // Two marks, because the row has to be readable as chosen at a
+        // glance in a list of near-identical rows: the lit fill the explorer
+        // gives its active layer, and a dot in the label gutter in the
+        // product's own colour - the colour a tie-in laid with it is drawn
+        // in. The gutter is reserved on every row, so the dot marks one
+        // without shifting the others.
+        let mut entry = ExplorerEntry::new(egui::Id::new(("delay_product", product.id)), product_label(ui, product)).selected(chosen);
+        if chosen {
+            entry = entry.leading_icon(unthemed_icon!("product_active.svg"), product.color);
         }
-    });
+        let response = entry.show(ui).response;
+        if response.clicked() {
+            select = Some(product.id);
+        }
+        let label = format!("{} {}", product.delay_ms, product.name);
+        context_menu_popup(&response, label.clone(), |ui| {
+            if ContextMenuAction::new(tr!(literal = "Delete Product")).show(ui).clicked() {
+                delete = Some((product.id, label.clone()));
+                ui.close();
+            }
+        });
+    }
 
     if let Some(id) = select {
         editor.active_delay_product = Some(id);
     }
-    if add {
-        editor.begin_new_delay_product();
-    }
-    if let Some(id) = delete {
-        commands.push(UiCommand::DeleteDelayProduct(id));
-    }
-}
-
-/// What a click on a product's card asked for.
-struct CardResponse {
-    /// Make this the product a tie-in is laid with.
-    clicked: bool,
-    /// Its context menu asked for it to go.
-    delete: bool,
-}
-
-/// Draw one product's card, `chosen` marking the one a tie-in would be laid
-/// with, and report what was asked of it.
-fn draw_product_card(ui: &mut egui::Ui, product: &DelayProduct, width: f32, chosen: bool) -> CardResponse {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, CARD_HEIGHT), egui::Sense::click());
-    let mut delete = false;
-    context_menu_popup(&response, format!("{} ms {}", product.delay_ms, product.name), |ui| {
-        if ContextMenuAction::new(tr!(literal = "Delete Product")).show(ui).clicked() {
-            delete = true;
-            ui.close();
-        }
-    });
-
-    if !ui.is_rect_visible(rect) {
-        return CardResponse {
-            clicked: response.clicked(),
-            delete,
-        };
-    }
-    paint_card_frame(ui, rect, response.hovered(), chosen);
-    paint_tie_in_mark(ui, rect, product.color);
-    let text = ui.visuals().text_color();
-    paint_row(ui, rect, VALUE_CENTER, &product.delay_ms.to_string(), 19.0, text);
-    paint_row(ui, rect, NAME_CENTER, &product.name.to_uppercase(), 9.0, ui.visuals().weak_text_color());
-    CardResponse {
-        clicked: response.clicked(),
-        delete,
+    // Deleting a product is not undoable, so it goes through the same
+    // confirmation every other destructive delete does; the command is only
+    // pushed once that dialog is accepted.
+    if let Some(pending) = delete {
+        editor.pending_delete_delay_product = Some(pending);
     }
 }
 
-/// Draw the cell that opens the New Product dialog, and report a click on it.
-fn draw_new_product_card(ui: &mut egui::Ui, width: f32) -> bool {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, CARD_HEIGHT), egui::Sense::click());
-    if ui.is_rect_visible(rect) {
-        paint_card_frame(ui, rect, response.hovered(), false);
-        // The plus stands where a product's mark and delay both are, so the
-        // cell reads as the same shape with nothing in it yet.
-        let color = if response.hovered() {
-            ui.visuals().text_color()
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        let center = egui::pos2(rect.center().x, rect.top() + (MARK_CENTER + VALUE_CENTER) / 2.0);
-        let stroke = egui::Stroke::new(2.0, color);
-        ui.painter().line_segment([center - egui::vec2(PLUS_ARM, 0.0), center + egui::vec2(PLUS_ARM, 0.0)], stroke);
-        ui.painter().line_segment([center - egui::vec2(0.0, PLUS_ARM), center + egui::vec2(0.0, PLUS_ARM)], stroke);
-        paint_row(ui, rect, NAME_CENTER, &tr!(literal = "New Product").to_uppercase(), 9.0, color);
-    }
-    response.clicked()
-}
-
-/// The card's surface: a step up from the section it sits in, lit while the
-/// pointer is over it and ringed while it is the one a tie-in is laid with.
-fn paint_card_frame(ui: &egui::Ui, rect: egui::Rect, hovered: bool, chosen: bool) {
-    let dark = ui.visuals().dark_mode;
-    let panel = ui.visuals().panel_fill;
-    let fill = shifted(panel, if dark { 14 } else { -6 } + if hovered { 8 } else { 0 } + if chosen { 6 } else { 0 });
-    let border = shifted(panel, if dark { 30 } else { -34 });
-    ui.painter().rect_filled(rect, GROUP_CORNER_RADIUS, fill);
-    // The selection ring is the same accent every selected control in the
-    // interface carries, so which product is armed reads the way a selected
-    // row does rather than as a mark of the palette's own.
-    let stroke = if chosen {
-        egui::Stroke::new(1.6, ui.visuals().selection.stroke.color)
-    } else {
-        egui::Stroke::new(1.0, border)
-    };
-    ui.painter().rect_stroke(rect, GROUP_CORNER_RADIUS, stroke, egui::StrokeKind::Inside);
-}
-
-/// The tie-in mark at the head of a product's card: the run of cord it delays,
-/// with the connector itself sitting in the middle of it.
+/// One product as a row's label: the delay in the product's own colour, with
+/// its name after it in the weight the panel gives secondary text.
 ///
-/// Drawn rather than iconified because the colour is the product's own, and it
-/// is the one thing on the card that is read from across the room.
-fn paint_tie_in_mark(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
-    let painter = ui.painter();
-    let y = rect.top() + MARK_CENTER;
-    let left = rect.left() + CARD_INSET;
-    let right = rect.right() - CARD_INSET;
-    if right <= left {
-        return;
-    }
-    painter.line_segment([egui::pos2(left, y), egui::pos2(right, y)], egui::Stroke::new(2.0, color));
-
-    // The connector: a bar across the cord, with the arrow that says which way
-    // the round travels running into it.
-    let bar = rect.center().x + 1.0;
-    let stroke = egui::Stroke::new(1.8, color);
-    painter.line_segment([egui::pos2(bar, y - 5.0), egui::pos2(bar, y + 5.0)], stroke);
-    painter.line_segment([egui::pos2(bar - 6.0, y - 4.0), egui::pos2(bar - 2.0, y)], stroke);
-    painter.line_segment([egui::pos2(bar - 2.0, y), egui::pos2(bar - 6.0, y + 4.0)], stroke);
-}
-
-/// Paint one of a card's rows of text, centred and clipped to the card.
-fn paint_row(ui: &egui::Ui, rect: egui::Rect, offset: f32, text: &str, size: f32, color: egui::Color32) {
-    let mut job = egui::text::LayoutJob::single_section(
-        text.to_owned(),
+/// Laid out as one [`egui::text::LayoutJob`] rather than as two widgets, so
+/// the row stays a single label that carries the click, the context menu and
+/// the selection fill, and truncates as a whole when the panel is narrowed.
+fn product_label(ui: &egui::Ui, product: &DelayProduct) -> egui::WidgetText {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &product.delay_ms.to_string(),
+        0.0,
         egui::TextFormat {
-            font_id: egui::FontId::proportional(size),
-            color,
+            font_id: crate::ui::fonts::bold_font(font.size),
+            color: product.color,
             ..Default::default()
         },
     );
-    // A name longer than the card ends in an ellipsis rather than running out
-    // over its neighbour.
-    job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 2.0 * CARD_INSET).max(0.0));
-    let galley = ui.painter().layout_job(job);
-    let center = egui::pos2(rect.center().x, rect.top() + offset);
-    ui.painter().galley(center - galley.size() / 2.0, galley, color);
+    job.append(
+        &product.name,
+        LABEL_GAP,
+        egui::TextFormat {
+            font_id: font,
+            color: ui.visuals().weak_text_color(),
+            ..Default::default()
+        },
+    );
+    job.into()
 }
