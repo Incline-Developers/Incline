@@ -49,6 +49,8 @@ ws-production = Production
 ws-drill-and-blast = Drill & Blast
 ws-geology = Geology
 ws-planning = Planning
+planning-page-setup = Setup
+planning-page-schedule = Schedule
 
 ## Menubars
 

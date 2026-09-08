@@ -8,7 +8,7 @@
 
 use crate::ui::{
     EditorState, UiCommand, UiProjectView,
-    state::{ActiveTool, Workspace},
+    state::{ActiveTool, PlanningPage, Workspace},
     themed_icon,
     widgets::toolbar::GROUP_CORNER_RADIUS,
 };
@@ -162,9 +162,19 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     let mut drag = ui.ctx().data_mut(|data| data.get_temp::<WorkspaceTabDrag>(drag_id));
     let font = egui::TextStyle::Button.resolve(ui.style());
     let widths = Workspace::ALL.map(|workspace| ui.painter().layout_no_wrap(workspace.label(), font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
-    let width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
+    let tab_width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
+    let page_font = font.clone();
+    let page_widths = PlanningPage::ALL.map(|page| ui.painter().layout_no_wrap(page.label(), page_font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
+    let pages_visible = editor.active_workspace == Workspace::Planning;
+    // Treat Planning and its fixed pages as one group when moving major tabs.
+    let pages_width = if pages_visible {
+        17.0 + page_widths.iter().sum::<f32>() + ui.spacing().item_spacing.x * 2.0
+    } else {
+        0.0
+    };
+    let width = |workspace| tab_width(workspace) + if workspace == Workspace::Planning { pages_width } else { 0.0 };
     let spacing = ui.spacing().item_spacing.x;
-    let total_width = widths.iter().sum::<f32>() + spacing * 3.0;
+    let total_width = widths.iter().sum::<f32>() + spacing * 3.0 + pages_width;
     let (strip, _) = ui.allocate_exact_size(egui::vec2(total_width, TAB_HEIGHT), egui::Sense::hover());
     let pointer = ui.input(|input| input.pointer.interact_pos());
     let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -205,7 +215,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
         } else {
             animated_x
         };
-        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(width(workspace), TAB_HEIGHT));
+        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(tab_width(workspace), TAB_HEIGHT));
         tabs.push((workspace, id, rect));
         x += width(workspace) + spacing;
     }
@@ -213,6 +223,9 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     tabs.sort_by_key(|(workspace, _, _)| drag.as_ref().is_some_and(|drag| drag.workspace == *workspace));
     for (workspace, id, rect) in tabs {
         let response = draw_workspace_tab(ui, editor, commands, workspace, bar_fill, id, rect);
+        if workspace == Workspace::Planning && pages_visible {
+            draw_planning_pages(ui, editor, commands, rect, page_widths, bar_fill);
+        }
         if response.drag_started() && !cancelled {
             let press = ui.input(|input| input.pointer.press_origin()).unwrap_or(rect.center());
             drag = Some(WorkspaceTabDrag {
@@ -242,6 +255,42 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
             data.remove::<WorkspaceTabDrag>(drag_id);
         }
     });
+}
+
+/// Click-only pages use an underline to distinguish them from workspace tabs.
+fn draw_planning_pages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, parent: egui::Rect, widths: [f32; 2], bar_fill: egui::Color32) {
+    let mut x = parent.right() + ui.spacing().item_spacing.x;
+    for (page, width) in PlanningPage::ALL.into_iter().zip(widths) {
+        let rect = egui::Rect::from_min_size(egui::pos2(x, parent.top()), egui::vec2(width, TAB_HEIGHT));
+        let selected = editor.planning_page == page;
+        let response = ui.interact(rect, ui.id().with(("planning-page", page)), egui::Sense::click());
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, page.label()));
+        ui.painter()
+            .rect_filled(rect, GROUP_CORNER_RADIUS, tab_fill(ui.visuals(), bar_fill, TabState::Inactive, response.hovered()));
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            page.label(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            if selected { ui.visuals().strong_text_color() } else { ui.visuals().text_color() },
+        );
+        if selected {
+            let y = rect.bottom() - 1.0;
+            ui.painter().line_segment(
+                [egui::pos2(rect.left() + TAB_PADDING, y), egui::pos2(rect.right() - TAB_PADDING, y)],
+                egui::Stroke::new(1.5, ui.visuals().strong_text_color()),
+            );
+        }
+        if response.clicked() {
+            commands.push(UiCommand::SetPlanningPage(page));
+        }
+        x += width + ui.spacing().item_spacing.x;
+    }
+    let divider_x = x - ui.spacing().item_spacing.x + 8.0;
+    ui.painter().line_segment(
+        [egui::pos2(divider_x, parent.top() + 3.0), egui::pos2(divider_x, parent.bottom() - 3.0)],
+        ui.visuals().widgets.noninteractive.bg_stroke,
+    );
 }
 
 /// Open `workspace`, putting down anything the tools it does not carry had

@@ -1539,6 +1539,7 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    pub(crate) planning_page: PlanningPage,
     pub(crate) workspace_order: [Workspace; 4],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -2294,6 +2295,7 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Object,
             active_workspace: Workspace::Production,
+            planning_page: PlanningPage::Setup,
             workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -2735,6 +2737,7 @@ pub(crate) enum UiCommand {
     SetShowPoints(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
+    SetPlanningPage(PlanningPage),
     ReorderWorkspace {
         workspace: Workspace,
         before: Option<Workspace>,
@@ -3055,6 +3058,7 @@ impl UiCommand {
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
             | Self::ApplyPreferences(_)
+            | Self::SetPlanningPage(_)
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
@@ -3561,6 +3565,24 @@ impl Workspace {
     /// drawn, and the editors of its own discipline.
     pub(crate) fn has_production_tools(self) -> bool {
         matches!(self, Self::Production)
+    }
+}
+
+/// Fixed pages within the Planning workspace, remembered for this session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PlanningPage {
+    Setup,
+    Schedule,
+}
+
+impl PlanningPage {
+    pub(crate) const ALL: [Self; 2] = [Self::Setup, Self::Schedule];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Setup => tr!("planning-page-setup"),
+            Self::Schedule => tr!("planning-page-schedule"),
+        }
     }
 }
 

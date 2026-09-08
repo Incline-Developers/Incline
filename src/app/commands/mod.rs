@@ -625,6 +625,11 @@ impl<'a> App<'a> {
                 }
                 Ok(())
             }
+            UiCommand::SetPlanningPage(page) => {
+                self.editor.planning_page = page;
+                self.redraw_requested = true;
+                Ok(())
+            }
             UiCommand::ReorderWorkspace { workspace, before } => {
                 let mut order = self.editor.workspace_order.to_vec();
                 if before != Some(workspace) {
