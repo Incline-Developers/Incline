@@ -225,7 +225,6 @@ impl<'a> App<'a> {
             renderable_block_indices: loaded.renderable_block_indices,
             uniform_grid: loaded.uniform_grid,
             opaque_surface_blocks: loaded.opaque_surface_blocks,
-            visible: true,
             color: DEFAULT_BLOCK_MODEL_COLOR,
             slice: None,
             active_color_variable: loaded.active_color_variable,
@@ -244,15 +243,6 @@ impl<'a> App<'a> {
         // The model renders from block_model_gpu's per-id cache, not the
         // document scene. Avoid re-uploading every vector object here.
         self.invalidate_topology_bounds_and_redraw();
-    }
-
-    pub(crate) fn toggle_block_model_visible(&mut self, id: BlockModelId) {
-        let item = ItemRef::BlockModel(id);
-        let Some(style) = self.item_style(item) else {
-            return;
-        };
-        let visible = !style.visible();
-        self.set_item_style(item, style.with_visible(visible));
     }
 
     pub(crate) fn set_block_model_color_variable(&mut self, id: BlockModelId, variable: String) {
@@ -554,14 +544,17 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn close_block_model(&mut self, id: BlockModelId) {
-        let Some(entity_id) = self.block_models.iter_mut().find(|model| model.id == id).map(|model| {
-            model.state.loaded = false;
-            model.entity_id()
-        }) else {
+        self.set_item_loaded(crate::model::ItemRef::BlockModel(id), false);
+    }
+
+    pub(crate) fn release_blockmodel_runtime(&mut self, id: BlockModelId) {
+        let Some(entity_id) = self.block_models.iter_mut().find(|model| model.id == id).map(|model| model.entity_id()) else {
             return;
         };
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::BlockModel(id));
-        self.clear_block_model_entity_state(entity_id);
+        self.editor.selected_handles.remove(&entity_id);
+        self.editor.hidden_handles.remove(&entity_id);
+        self.editor.translucent_handles.remove(&entity_id);
         self.editor.block_model_table_pages.remove(&id);
         self.editor.viewport_block_model_id = self.editor.viewport_block_model_id.filter(|active| *active != id);
         self.editor.block_model_variable_ranges.retain(|(model_id, _), _| *model_id != id);

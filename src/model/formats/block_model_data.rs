@@ -83,6 +83,20 @@ fn validate_allocation<T>(len: usize, description: &str) -> Result<(), BlockMode
 }
 
 impl BlockModelData {
+    pub(crate) fn unloaded(metadata: BlockModelMetadata) -> Self {
+        Self {
+            metadata,
+            rotation: DMat3::IDENTITY,
+            numeric_values: BTreeMap::new(),
+            _reservation: crate::app::memory::MemoryReservation::untracked(),
+        }
+    }
+
+    pub(crate) fn release_values(&mut self) {
+        self.numeric_values.clear();
+        self._reservation = crate::app::memory::MemoryReservation::untracked();
+    }
+
     pub(crate) fn from_regular_grid(lower: DVec3, cell: DVec3, dims: [usize; 3], columns: Vec<BlockModelColumn>) -> Result<Self, BlockModelDataError> {
         let n_blocks = dims
             .into_iter()

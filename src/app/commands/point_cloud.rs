@@ -41,13 +41,12 @@ impl<'a> App<'a> {
         );
         self.point_clouds.push(OpenPointCloud {
             id,
-            state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
+            state: crate::model::project::ProjectItemState::dirty(loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())).with_loaded(visible),
             name,
             points: loaded.points,
             colors: loaded.colors,
             prepared: loaded.prepared,
             bounds: loaded.bounds,
-            visible,
             color,
             point_size,
         });
@@ -210,25 +209,15 @@ impl<'a> App<'a> {
         self.pending_point_cloud_loads = still_pending;
     }
 
-    pub(crate) fn toggle_point_cloud_visible(&mut self, id: PointCloudId) {
-        let item = crate::model::ItemRef::PointCloud(id);
-        let Some(style) = self.item_style(item) else {
-            return;
-        };
-        let visible = !style.visible();
-        self.set_item_style(item, style.with_visible(visible));
+    pub(crate) fn close_point_cloud(&mut self, id: PointCloudId) {
+        self.set_item_loaded(crate::model::ItemRef::PointCloud(id), false);
     }
 
-    pub(crate) fn close_point_cloud(&mut self, id: PointCloudId) {
-        if let Some(cloud) = self.point_clouds.iter_mut().find(|cloud| cloud.id == id) {
-            cloud.state.loaded = false;
-        }
+    pub(crate) fn release_pointcloud_runtime(&mut self, id: PointCloudId) {
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::PointCloud(id));
         let entity = SceneEntityId::PointCloud(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
-        self.editor.explicitly_frozen.remove(&entity);
-        self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
         self.invalidate_topology_bounds_and_redraw();
     }

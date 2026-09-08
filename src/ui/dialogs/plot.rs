@@ -337,7 +337,7 @@ fn preview_legend_entries(project: &UiProjectView) -> Vec<LegendEntry> {
     let mut entries: Vec<LegendEntry> = project
         .triangulations
         .iter()
-        .filter(|entry| entry.is_loaded && entry.visible)
+        .filter(|entry| entry.is_loaded)
         .map(|entry| LegendEntry {
             label: entry.name.clone(),
             color: [0.5, 0.5, 0.5, 1.0],

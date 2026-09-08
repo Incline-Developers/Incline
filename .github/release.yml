@@ -1,0 +1,24 @@
+# Configures the notes that `gh release create --generate-notes` writes in
+# .github/workflows/release.yml. GitHub reads this file from the default
+# branch, so changes only take effect once they land on main.
+changelog:
+  exclude:
+    # Anything carrying this label is left out of the release notes entirely:
+    # chores, CI tweaks, revert pairs, internal refactors.
+    labels:
+      - ignore-for-release
+  categories:
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    # Catch-all: every merged PR that matched none of the above and was not
+    # excluded. Without it, unlabelled PRs would vanish from the notes.
+    - title: Other changes
+      labels:
+        - "*"

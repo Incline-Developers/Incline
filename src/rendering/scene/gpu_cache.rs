@@ -148,6 +148,7 @@ pub(crate) struct BlockModelGpuCache {
 }
 
 struct PendingVolumeBuild {
+    cancel: crate::app::jobs::CancelFlag,
     key: u64,
     receiver: mpsc::Receiver<anyhow::Result<Option<BlockVolumeAsset>>>,
 }
@@ -158,8 +159,20 @@ struct PreparedVolume {
 }
 
 struct PendingSurfaceBuild {
+    cancel: crate::app::jobs::CancelFlag,
     key: u64,
     receiver: mpsc::Receiver<anyhow::Result<SurfaceChunkSets>>,
+}
+
+impl Drop for PendingVolumeBuild {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+impl Drop for PendingSurfaceBuild {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 struct PreparedSurfaceChunks {
@@ -391,11 +404,16 @@ impl BlockModelGpuCache {
             self.prepared_volumes.remove(&block_model.id);
             let snapshot = block_model.clone();
             let (sender, receiver) = mpsc::channel();
+            let cancel = crate::app::jobs::CancelFlag::default();
+            let worker_cancel = cancel.clone();
             crate::app::jobs::spawn_pool_task(move || {
-                let result = crate::app::jobs::run_compute_catching_panic(|| build_block_volume_asset(&snapshot).map_err(anyhow::Error::msg));
+                if worker_cancel.is_cancelled() {
+                    return;
+                }
+                let result = crate::app::jobs::run_compute_catching_panic(|| build_block_volume_asset(&snapshot, &worker_cancel).map_err(anyhow::Error::msg));
                 let _ = sender.send(result);
             });
-            self.pending_volume_builds.insert(block_model.id, PendingVolumeBuild { key, receiver });
+            self.pending_volume_builds.insert(block_model.id, PendingVolumeBuild { key, receiver, cancel });
         }
     }
 
@@ -613,7 +631,7 @@ impl BlockModelGpuCache {
             let boundary_highlights = editor.show_block_model_boundary_highlights;
 
             if let Some(cached) = self.models.get_mut(&block_model.id) {
-                cached.visible = block_model.visible;
+                cached.visible = block_model.state.loaded;
                 let variable_dirty = cached.variable != block_model.active_color_variable;
                 let fallback_color_dirty = cached.fallback_color != block_model.color;
                 let geometry_dirty = cached.translucent != translucent || cached.force_translucent != force_translucent;
@@ -960,7 +978,7 @@ impl BlockModelGpuCache {
                         hidden_fingerprint,
                         scene_origin,
                         rotation: block_model.model.rotation(),
-                        visible: block_model.visible,
+                        visible: block_model.state.loaded,
                         fallback_color: block_model.color,
                         slice: block_model_instance_slice(scene_origin, block_model),
                     },
@@ -1062,11 +1080,24 @@ fn schedule_surface_build(
     prepared.remove(&block_model.id);
     let snapshot = block_model.clone();
     let (sender, receiver) = mpsc::channel();
+    let cancel = crate::app::jobs::CancelFlag::default();
+    let worker_cancel = cancel.clone();
     crate::app::jobs::spawn_pool_task(move || {
-        let result = crate::app::jobs::run_compute_catching_panic(|| Ok(build_block_model_surface_chunk_sets(scene_origin, &snapshot, force_translucent, has_partial_alpha_stops)));
+        if worker_cancel.is_cancelled() {
+            return;
+        }
+        let result = crate::app::jobs::run_compute_catching_panic(|| {
+            Ok(build_block_model_surface_chunk_sets(
+                scene_origin,
+                &snapshot,
+                force_translucent,
+                has_partial_alpha_stops,
+                &worker_cancel,
+            ))
+        });
         let _ = sender.send(result);
     });
-    pending.insert(block_model.id, PendingSurfaceBuild { key, receiver });
+    pending.insert(block_model.id, PendingSurfaceBuild { key, receiver, cancel });
 }
 
 fn upload_surface_chunks(device: &wgpu::Device, chunks: Vec<SurfaceChunkCpu>) -> Vec<CachedBlockModelSurfaceChunk> {
@@ -1208,7 +1239,7 @@ impl TriangulationGpuCache {
     ) {
         // A drape survives unloading and hiding the raster, so the texture a
         // surface actually samples is the drape filtered by what can be drawn.
-        let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded && raster.visible).map(|raster| raster.id).collect();
+        let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded).map(|raster| raster.id).collect();
         let loaded: HashSet<_> = triangulations.iter().filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
         self.meshes.retain(|id, _| loaded.contains(id));
         for triangulation in triangulations {
@@ -1809,32 +1840,47 @@ fn recolor_block_model_surface_chunks(queue: &wgpu::Queue, block_model: &OpenBlo
 /// job pool (via [`schedule_surface_build`]); the render thread only uploads
 /// the finished sets. When a volume renders the model these chunks are never
 /// drawn, so the scheduler simply doesn't request them in that case.
-fn build_block_model_surface_chunk_sets(scene_origin: DVec3, block_model: &OpenBlockModel, force_translucent: bool, has_partial_alpha_stops: bool) -> SurfaceChunkSets {
+fn build_block_model_surface_chunk_sets(
+    scene_origin: DVec3,
+    block_model: &OpenBlockModel,
+    force_translucent: bool,
+    has_partial_alpha_stops: bool,
+    cancel: &crate::app::jobs::CancelFlag,
+) -> SurfaceChunkSets {
     if force_translucent {
         return SurfaceChunkSets {
             opaque: Vec::new(),
-            transparent: build_block_model_surface_chunks(scene_origin, block_model, false, BlockSurfaceSelection::All),
+            transparent: build_block_model_surface_chunks(scene_origin, block_model, false, BlockSurfaceSelection::All, cancel),
         };
     }
     if has_partial_alpha_stops {
         return SurfaceChunkSets {
-            opaque: build_block_model_surface_chunks(scene_origin, block_model, true, BlockSurfaceSelection::OpaqueOnly),
-            transparent: build_block_model_surface_chunks(scene_origin, block_model, false, BlockSurfaceSelection::TransparentOnly),
+            opaque: build_block_model_surface_chunks(scene_origin, block_model, true, BlockSurfaceSelection::OpaqueOnly, cancel),
+            transparent: build_block_model_surface_chunks(scene_origin, block_model, false, BlockSurfaceSelection::TransparentOnly, cancel),
         };
     }
     SurfaceChunkSets {
-        opaque: build_block_model_surface_chunks(scene_origin, block_model, true, BlockSurfaceSelection::All),
+        opaque: build_block_model_surface_chunks(scene_origin, block_model, true, BlockSurfaceSelection::All, cancel),
         transparent: Vec::new(),
     }
 }
 
-fn build_block_model_surface_chunks(scene_origin: DVec3, block_model: &OpenBlockModel, cull_shared_faces: bool, selection: BlockSurfaceSelection) -> Vec<SurfaceChunkCpu> {
+fn build_block_model_surface_chunks(
+    scene_origin: DVec3,
+    block_model: &OpenBlockModel,
+    cull_shared_faces: bool,
+    selection: BlockSurfaceSelection,
+    cancel: &crate::app::jobs::CancelFlag,
+) -> Vec<SurfaceChunkCpu> {
     use rayon::prelude::*;
 
     const BLOCKS_PER_CHUNK: usize = 8192;
 
     // Captured by field below: `OpenBlockModel` holds a `RefCell` cache and
     // is not `Sync`, but every piece the parallel loops need is.
+    if cancel.is_cancelled() {
+        return Vec::new();
+    }
     let color_values = block_model_color_values(block_model);
     let renderable = &block_model.renderable_block_indices;
     let blocks = &block_model.blocks;
@@ -1850,6 +1896,9 @@ fn build_block_model_surface_chunks(scene_origin: DVec3, block_model: &OpenBlock
     // these instead of re-evaluating the predicates per block.
     let (grades, drawn): (Vec<f32>, Vec<bool>) = renderable
         .par_map(|block_index| {
+            if cancel.is_cancelled() {
+                return (0.0, false);
+            }
             let grade = grade_for_block(&color_values, block_index, hide_empty);
             let intersects_slice = slice.is_none_or(|slice| {
                 blocks
@@ -1861,6 +1910,9 @@ fn build_block_model_surface_chunks(scene_origin: DVec3, block_model: &OpenBlock
         })
         .into_iter()
         .unzip();
+    if cancel.is_cancelled() {
+        return Vec::new();
+    }
     let occupancy = cull_shared_faces.then(|| build_block_occupancy(block_model, &drawn));
 
     // The shader places blocks with `rotation * local + translation`. Offset
@@ -1877,6 +1929,9 @@ fn build_block_model_surface_chunks(scene_origin: DVec3, block_model: &OpenBlock
     (0..chunk_count)
         .into_par_iter()
         .filter_map(|chunk_index| {
+            if cancel.is_cancelled() {
+                return None;
+            }
             let chunk_base = chunk_index * BLOCKS_PER_CHUNK;
             let chunk_end = (chunk_base + BLOCKS_PER_CHUNK).min(renderable.len());
             let mut instances = Vec::with_capacity(chunk_end - chunk_base);

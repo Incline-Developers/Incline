@@ -28,9 +28,9 @@ impl App<'_> {
     fn tie_target(&self) -> Option<&OpenDrillHoleDataset> {
         let id = self.editor.active_drill_hole?;
         let entity = crate::model::SceneEntityId::DrillHole(id);
-        self.drill_holes.iter().find(|dataset| {
-            dataset.id == id && dataset.state.loaded && dataset.visible && !self.editor.hidden_handles.contains(&entity) && !self.editor.frozen_handles.contains(&entity)
-        })
+        self.drill_holes
+            .iter()
+            .find(|dataset| dataset.id == id && dataset.state.loaded && !self.editor.hidden_handles.contains(&entity) && !self.editor.frozen_handles.contains(&entity))
     }
 
     fn pick_hole_at_cursor(&self) -> Option<DrillHoleRef> {
@@ -38,19 +38,14 @@ impl App<'_> {
         let cursor = self.editor.cursor_screen_px?;
         let view_proj = graphics.view_proj();
         let mut best: Option<(f32, DrillHoleRef)> = None;
-        for dataset in self.selectable_drill_holes() {
-            let entity = dataset.entity_id();
-            if !dataset.state.loaded || !dataset.visible || self.editor.hidden_handles.contains(&entity) || self.editor.frozen_handles.contains(&entity) {
+        let dataset = self.tie_target()?;
+        for (index, hole) in dataset.dataset.holes.iter().enumerate() {
+            let Some(position) = graphics.world_to_window_px(&view_proj, hole.collar_position()) else {
                 continue;
-            }
-            for (index, hole) in dataset.dataset.holes.iter().enumerate() {
-                let Some(position) = graphics.world_to_window_px(&view_proj, hole.collar_position()) else {
-                    continue;
-                };
-                let distance = (cursor.0 - position.0).hypot(cursor.1 - position.1);
-                if distance <= PICK_THRESHOLD_PX && best.is_none_or(|(best_distance, _)| distance < best_distance) {
-                    best = Some((distance, DrillHoleRef { dataset: dataset.id, hole: index }));
-                }
+            };
+            let distance = (cursor.0 - position.0).hypot(cursor.1 - position.1);
+            if distance <= PICK_THRESHOLD_PX && best.is_none_or(|(best_distance, _)| distance < best_distance) {
+                best = Some((distance, DrillHoleRef { dataset: dataset.id, hole: index }));
             }
         }
         best.map(|(_, hole)| hole)
@@ -302,9 +297,9 @@ impl App<'_> {
         };
         let view_proj = graphics.view_proj();
         let mut best: Option<(f32, TieInRef)> = None;
-        for dataset in self.selectable_drill_holes() {
+        for dataset in &self.drill_holes {
             let entity = dataset.entity_id();
-            if !dataset.state.loaded || !dataset.visible || self.editor.hidden_handles.contains(&entity) || self.editor.frozen_handles.contains(&entity) {
+            if !dataset.state.loaded || self.editor.hidden_handles.contains(&entity) || self.editor.frozen_handles.contains(&entity) {
                 continue;
             }
             for tie in &dataset.dataset.ties {

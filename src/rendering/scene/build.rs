@@ -55,6 +55,12 @@ struct CachedPolylineFill {
 }
 
 impl PolylineFillCache {
+    pub(crate) fn release_layers(&mut self, document: &Document, layers: &[crate::model::LayerId]) {
+        self.entries
+            .retain(|id, _| document.get_object(*id).is_some_and(|object| !layers.contains(&object.layer())));
+        self.entries.shrink_to_fit();
+    }
+
     fn retain_document(&mut self, document: &Document) {
         self.entries
             .retain(|id, _| matches!(document.get_object(*id), Some(Object::Polyline { closed: true, fill, .. }) if *fill != FillStyle::Clear));
@@ -179,7 +185,7 @@ pub(crate) fn rebuild_document_scene(input: DocumentSceneBuildInput<'_>) {
                 continue;
             }
             let handle = SceneEntityId::Object(object.id());
-            let layer_visible = document.layer(object.layer()).map(|layer| layer.visible).unwrap_or(true);
+            let layer_visible = document.layer(object.layer()).map(|layer| layer.loaded).unwrap_or(true);
             if !layer_visible || editor.hidden_handles.contains(&handle) {
                 continue;
             }

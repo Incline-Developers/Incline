@@ -400,6 +400,7 @@ fn reset_camera_defaults(draft: &mut PreferencesDraft) {
 fn reset_performance_defaults(draft: &mut PreferencesDraft) {
     let defaults = PreferencesDraft::default();
     draft.snap_poll_rate = defaults.snap_poll_rate;
+    draft.vsync_enabled = defaults.vsync_enabled;
     draft.frame_rate_cap = defaults.frame_rate_cap;
     draft.resize_frame_rate_cap = defaults.resize_frame_rate_cap;
     draft.block_model_interaction_resolution_divisor = defaults.block_model_interaction_resolution_divisor;
@@ -503,6 +504,9 @@ fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &
 }
 
 fn draw_performance_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    // An adapter with no way to present out of step - a browser surface, say -
+    // has nothing to offer here, and the cap it gates would never be applied.
+    let vsync_switchable = editor.vsync_switchable;
     settings_section(
         ui,
         editor,
@@ -515,11 +519,22 @@ fn draw_performance_settings(ui: &mut egui::Ui, editor: &mut EditorState, comman
                     .suffix(tr!(literal = " Hz"))
                     .show(ui),
             );
-            changed |= committed(
-                &MenuFieldU32::new(tr!(literal = "Frame rate cap"), &mut draft.frame_rate_cap, 20..=1000)
-                    .suffix(tr!(literal = " FPS"))
-                    .show(ui),
-            );
+            if vsync_switchable {
+                changed |= committed(
+                    &MenuFieldBool::new(tr!(literal = "Vertical sync"), &mut draft.vsync_enabled)
+                        .help_text(tr!(
+                            literal = "Presents in step with the display: no tearing, and the display sets the frame rate. Off, frames present as soon as they are drawn and the cap below applies."
+                        ))
+                        .show(ui),
+                );
+            }
+            if !draft.vsync_enabled {
+                changed |= committed(
+                    &MenuFieldU32::new(tr!(literal = "Frame rate cap"), &mut draft.frame_rate_cap, 20..=1000)
+                        .suffix(tr!(literal = " FPS"))
+                        .show(ui),
+                );
+            }
             changed |= committed(
                 &MenuFieldU32::new(tr!(literal = "Cap while resizing"), &mut draft.resize_frame_rate_cap, 20..=1000)
                     .suffix(tr!(literal = " FPS"))
@@ -598,7 +613,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("object:{}", id.0),
                 layer: layer.map(|layer| layer.name.clone()),
                 source: None,
-                visible: layer.is_some_and(|layer| layer.visible) && !document.is_object_hidden(id) && !editor.hidden_handles.contains(&entity),
+                visible: layer.is_some_and(|layer| layer.loaded) && !document.is_object_hidden(id) && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: object.world_bounds(),
             })
@@ -611,7 +626,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("triangulation:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
-                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                visible: item.is_loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.bounds,
             })
@@ -626,7 +641,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("block-model:{}", id.0),
                 layer: None,
                 source,
-                visible: model.visible && !editor.hidden_handles.contains(&entity),
+                visible: model.state.loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.and_then(|item| item.bounds).or_else(|| model.world_bounds()),
             })
@@ -639,7 +654,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("point-cloud:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
-                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                visible: item.is_loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.bounds,
             })
@@ -652,7 +667,7 @@ fn entity_details(entity: SceneEntityId, editor: &EditorState, project: &UiProje
                 id: format!("drill-hole:{}", id.0),
                 layer: None,
                 source: item.source_name.clone(),
-                visible: item.visible && !editor.hidden_handles.contains(&entity),
+                visible: item.is_loaded && !editor.hidden_handles.contains(&entity),
                 locked,
                 bounds: item.bounds,
             })

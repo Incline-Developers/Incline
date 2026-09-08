@@ -53,7 +53,7 @@ pub(crate) fn snap_cursor(
         if frozen.contains(&entity) || hidden.contains(&entity) {
             continue;
         }
-        if !document.layer(object.layer()).map(|l| l.visible).unwrap_or(true) {
+        if !document.layer(object.layer()).map(|l| l.loaded).unwrap_or(true) {
             continue;
         }
 
@@ -145,7 +145,7 @@ pub(crate) fn snap_cursor(
 
     for tri in triangulations {
         let entity = tri.entity_id();
-        if !tri.state.loaded || !tri.visible || hidden.contains(&entity) || frozen.contains(&entity) {
+        if !tri.state.loaded || hidden.contains(&entity) || frozen.contains(&entity) {
             continue;
         }
         match mode {

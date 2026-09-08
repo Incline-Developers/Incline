@@ -88,9 +88,6 @@ pub(crate) struct EntryToggles {
     pub(crate) visible: bool,
     /// Whether the item is locked against selection and editing.
     pub(crate) locked: bool,
-    /// Unloaded items keep both icons in place, greyed out and inert, so rows
-    /// do not change width as items load and unload.
-    pub(crate) enabled: bool,
 }
 
 /// An explorer row's response, plus whichever trailing toggle was clicked.
@@ -165,6 +162,15 @@ impl ExplorerEntry {
         self
     }
 
+    /// Draw `icon`, tinted `color`, in the gutter the label is indented past.
+    ///
+    /// The gutter is the same width whether or not a row fills it, so marking
+    /// one row of a list this way does not shift the others' labels.
+    pub(crate) fn leading_icon(mut self, icon: egui::ImageSource<'static>, color: egui::Color32) -> Self {
+        self.leading_icon = Some((icon, color));
+        self
+    }
+
     /// Show trailing eye and padlock toggles at the row's right edge.
     pub(crate) fn toggles(mut self, toggles: EntryToggles) -> Self {
         self.toggles = Some(toggles);
@@ -227,7 +233,7 @@ impl ExplorerEntry {
                     })
                     .inner;
                 let (visibility_clicked, lock_clicked) = match toggles {
-                    Some(EntryToggles { visible, locked, enabled }) => {
+                    Some(EntryToggles { visible, locked }) => {
                         let visibility_clicked = entry_toggle(
                             ui,
                             if visible {
@@ -236,7 +242,7 @@ impl ExplorerEntry {
                                 crate::ui::unthemed_icon!("entry_hidden.svg")
                             },
                             visible,
-                            enabled,
+                            true,
                             height,
                         );
                         let lock_clicked = entry_toggle(
@@ -247,7 +253,7 @@ impl ExplorerEntry {
                                 crate::ui::unthemed_icon!("entry_unlocked.svg")
                             },
                             locked,
-                            enabled,
+                            true,
                             height,
                         );
                         (visibility_clicked, lock_clicked)

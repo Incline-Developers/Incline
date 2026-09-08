@@ -22,6 +22,12 @@ pub(crate) const fn default_snap_poll_rate() -> u32 {
     30
 }
 
+/// Present in step with the display. The frame rate cap below only applies
+/// with this off - see `App::frame_interval`.
+pub(crate) const fn default_vsync_enabled() -> bool {
+    true
+}
+
 pub(crate) const fn default_frame_rate_cap() -> u32 {
     144
 }
@@ -158,6 +164,11 @@ pub(crate) struct Config {
     pub(crate) renderer_background_color: [f32; 4],
     #[serde(default = "default_snap_poll_rate")]
     pub(crate) snap_poll_rate: u32,
+    #[serde(default = "default_vsync_enabled")]
+    pub(crate) vsync_enabled: bool,
+    /// Upper bound on the frame rate with vsync off. Ignored with vsync on,
+    /// where the display already paces presentation and a cap below its
+    /// refresh rate would only beat against it.
     #[serde(default = "default_frame_rate_cap")]
     pub(crate) frame_rate_cap: u32,
     #[serde(default = "default_resize_frame_rate_cap")]
@@ -221,6 +232,7 @@ impl Default for Config {
             panel_chrome: default_panel_chrome(),
             renderer_background_color: default_renderer_background_color(),
             snap_poll_rate: default_snap_poll_rate(),
+            vsync_enabled: default_vsync_enabled(),
             frame_rate_cap: default_frame_rate_cap(),
             resize_frame_rate_cap: default_resize_frame_rate_cap(),
             block_model_interaction_resolution_divisor: default_block_model_interaction_resolution_divisor(),

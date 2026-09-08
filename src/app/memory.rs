@@ -62,9 +62,17 @@ impl Drop for Reservation {
 }
 
 impl MemoryReservation {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn untracked() -> Self {
-        Self
+    pub(crate) fn untracked() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self {
+                _reservation: Arc::new(Reservation { bytes: 0 }),
+            }
+        }
     }
 }
 

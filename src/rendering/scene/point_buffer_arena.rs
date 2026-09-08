@@ -123,13 +123,6 @@ impl PointBufferArena {
             });
         }
     }
-
-    /// Drop every pool and its backing GPU blocks. Callers invoke this only when
-    /// no slots are outstanding (all point clouds unloaded), reclaiming the GPU
-    /// memory the arena's high-water mark held.
-    pub(crate) fn clear(&mut self) {
-        self.pools.clear();
-    }
 }
 
 fn slots_per_block(stride: u64) -> u32 {

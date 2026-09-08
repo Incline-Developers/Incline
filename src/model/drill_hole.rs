@@ -12,9 +12,9 @@ use crate::{
 pub(crate) const COLLAR_MARKER_RADIUS_SCALE: f64 = 5.0;
 /// Smallest on-screen diameter used to draw a drill-hole trace.
 pub(crate) const MIN_RENDER_PIXEL_DIAMETER: f32 = 2.0;
-/// The collar marker keeps the same scale relative to a trace when the trace
-/// reaches its screen-space floor.
-pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = MIN_RENDER_PIXEL_DIAMETER * COLLAR_MARKER_RADIUS_SCALE as f32;
+/// Independent screen-space floor: collars shrink to dots in overview views
+/// instead of magnifying the trace's minimum diameter by the marker scale.
+pub(crate) const COLLAR_MARKER_MIN_PIXEL_DIAMETER: f32 = 3.0;
 /// World-space collar radius for datasets that do not provide a physical hole
 /// diameter. Roughly matches a 240 mm production hole after the marker scale.
 pub(crate) const COLLAR_MARKER_FALLBACK_RADIUS: f64 = 0.6;
@@ -30,7 +30,7 @@ pub(crate) const MAX_PATTERN_HOLES: usize = 25_000;
 /// applies the same screen-space floor as a drill-hole trace.
 pub(crate) const TIE_RADIUS_SCALE: f64 = 1.5;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct DrillHoleId(pub(crate) u64);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -386,7 +386,7 @@ pub(crate) fn generate_pattern_collars(
 /// else is touched - the intervals above all, whose per-interval value maps
 /// are what makes a whole [`DrillHole`] expensive to copy - so a live preview
 /// captures and rewrites only this.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct HolePlacement {
     pub(crate) collar: DVec3,
     pub(crate) trace: Vec<TraceStation>,
@@ -397,19 +397,18 @@ pub(crate) struct HolePlacement {
 /// negative. This is the convention [`project_tangent`] resolves a survey in,
 /// so a hole read out of a file and a hole turned here describe themselves the
 /// same way.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct HoleOrientation {
     pub(crate) azimuth: f64,
     pub(crate) dip: f64,
 }
 
-/// How far a hole may be tipped either side of horizontal. Passing vertical
-/// would carry the hole over to the opposite bearing, silently rewriting the
-/// azimuth the driller was given, so a turn stops there instead.
+/// Limit for canonical dip readouts and typed drill-plan orientations.
+/// Ring gestures retain unwrapped dip angles so they can pass through vertical.
 pub(crate) const MAX_HOLE_DIP: f64 = 90.0;
 
 /// How a Rotate Collar edit turns the holes it was handed.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum CollarRotation {
     /// Point every hole the same way, whatever each was pointing before - what
     /// the panel applies, a round being drilled at one angle.
@@ -493,7 +492,7 @@ impl HolePlacement {
             CollarRotation::Absolute(target) => target,
             CollarRotation::Delta { azimuth, dip } => HoleOrientation {
                 azimuth: (from.azimuth + azimuth).rem_euclid(360.0),
-                dip: (from.dip + dip).clamp(-MAX_HOLE_DIP, MAX_HOLE_DIP),
+                dip: from.dip + dip,
             },
         })
     }
@@ -886,7 +885,6 @@ pub(crate) struct OpenDrillHoleDataset {
     pub(crate) state: ProjectItemState,
     pub(crate) name: String,
     pub(crate) dataset: Arc<DrillHoleDataset>,
-    pub(crate) visible: bool,
     pub(crate) color: DrillColorState,
 }
 

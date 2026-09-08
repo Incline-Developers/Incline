@@ -54,7 +54,7 @@ pub(super) fn slice_preview_scene_key(
         triangulation.id.hash(&mut hasher);
         triangulation.state.loaded.hash(&mut hasher);
         (Arc::as_ptr(&triangulation.mesh) as usize).hash(&mut hasher);
-        triangulation.visible.hash(&mut hasher);
+        triangulation.state.loaded.hash(&mut hasher);
         for channel in triangulation.color.iter().chain(&triangulation.line_color) {
             channel.to_bits().hash(&mut hasher);
         }
@@ -66,7 +66,7 @@ pub(super) fn slice_preview_scene_key(
         block_model.id.hash(&mut hasher);
         block_model.state.loaded.hash(&mut hasher);
         (Arc::as_ptr(&block_model.blocks) as usize).hash(&mut hasher);
-        block_model.visible.hash(&mut hasher);
+        block_model.state.loaded.hash(&mut hasher);
         if let Some(slice) = block_model.slice {
             for value in slice.min.to_array().into_iter().chain(slice.max.to_array()) {
                 value.to_bits().hash(&mut hasher);
@@ -92,7 +92,7 @@ pub(super) fn slice_preview_scene_key(
     for dataset in drill_holes {
         dataset.id.hash(&mut hasher);
         dataset.state.loaded.hash(&mut hasher);
-        dataset.visible.hash(&mut hasher);
+        dataset.state.loaded.hash(&mut hasher);
         dataset.color.active_field.hash(&mut hasher);
         dataset.color.smooth.hash(&mut hasher);
         for stop in &dataset.color.stops {
@@ -112,7 +112,7 @@ pub(super) fn slice_preview_scene_key(
         point_cloud.id.hash(&mut hasher);
         point_cloud.state.loaded.hash(&mut hasher);
         (Arc::as_ptr(&point_cloud.prepared) as usize).hash(&mut hasher);
-        point_cloud.visible.hash(&mut hasher);
+        point_cloud.state.loaded.hash(&mut hasher);
         point_cloud.point_size.to_bits().hash(&mut hasher);
         for channel in point_cloud.color {
             channel.to_bits().hash(&mut hasher);
@@ -121,7 +121,7 @@ pub(super) fn slice_preview_scene_key(
     for raster in rasters {
         raster.id.hash(&mut hasher);
         raster.state.loaded.hash(&mut hasher);
-        raster.visible.hash(&mut hasher);
+        raster.state.loaded.hash(&mut hasher);
         (Arc::as_ptr(&raster.rgba) as usize).hash(&mut hasher);
     }
     hasher.finish()

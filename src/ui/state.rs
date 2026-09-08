@@ -50,6 +50,7 @@ pub(crate) struct PreferencesDraft {
     pub(crate) show_xy_grid: bool,
     pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
+    pub(crate) vsync_enabled: bool,
     pub(crate) frame_rate_cap: u32,
     pub(crate) resize_frame_rate_cap: u32,
     pub(crate) block_model_interaction_resolution_divisor: u32,
@@ -90,6 +91,7 @@ impl Default for PreferencesDraft {
             show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
+            vsync_enabled: crate::app::io::default_vsync_enabled(),
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
             resize_frame_rate_cap: crate::app::io::default_resize_frame_rate_cap(),
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
@@ -803,10 +805,6 @@ pub(crate) struct RotateGizmoScreen {
     /// Per-ring opacity. A ring turning edge-on fades out and stops being
     /// clickable rather than collapsing to a line the cursor cannot follow.
     pub(crate) ring_fade: [f32; 2],
-    /// Sign turning a cursor sweep about the centre into a rotation about the
-    /// ring's world axis. A ring whose far face is towards the camera reads
-    /// the opposite way round on screen, and this is what carries that.
-    pub(crate) ring_sign: [f64; 2],
     /// Physical pixels per logical point at the time of projection, so hit
     /// tests can size their slack the same way the gizmo is sized.
     pub(crate) scale_factor: f32,
@@ -818,7 +816,6 @@ impl Default for RotateGizmoScreen {
             center_px: None,
             ring_px: [Vec::new(), Vec::new()],
             ring_fade: [0.0; 2],
-            ring_sign: [1.0; 2],
             scale_factor: 1.0,
         }
     }
@@ -934,6 +931,13 @@ pub(crate) struct EditorState {
     /// panel seeds it from the live values.
     pub(crate) preferences_draft: Option<PreferencesDraft>,
     pub(crate) snap_poll_rate: u32,
+    /// Present in step with the display. With this on the display paces the
+    /// frame rate and `frame_rate_cap` is not applied.
+    pub(crate) vsync_enabled: bool,
+    /// Whether this adapter's surface offers a present mode to turn vsync off
+    /// at all. Set from the renderer once it exists; the preference is hidden
+    /// where it cannot be honoured (a browser surface always presents in step).
+    pub(crate) vsync_switchable: bool,
     pub(crate) frame_rate_cap: u32,
     pub(crate) resize_frame_rate_cap: u32,
     pub(crate) block_model_interaction_resolution_divisor: u32,
@@ -943,6 +947,10 @@ pub(crate) struct EditorState {
     pub(crate) downscale_raster_previews: bool,
     pub(crate) frame_counter_enabled: bool,
     pub(crate) measured_fps: Option<f32>,
+    /// Smoothed seconds between rendered frames, which `measured_fps` is the
+    /// reciprocal of. See the note where it is updated: the average has to be
+    /// taken over the interval, never over the instantaneous rate.
+    pub(crate) smoothed_frame_interval: Option<f32>,
     /// Developer view: colour each surface chunk distinctly to visualise the
     /// Morton spatial chunking (and drive the chunk-cull stats readout).
     pub(crate) debug_chunk_coloring: bool,
@@ -988,8 +996,8 @@ pub(crate) struct EditorState {
     pub(crate) tool_hatch: ToolHatch,
     /// Active drawing layer, if any.
     pub(crate) active_layer: Option<LayerId>,
-    /// The drill hole dataset the Drill & Blast workspace works on: what its
-    /// editing, tie-in and simulation tools act against. `None` until one is
+    /// The destination for new tie-ins and initiation points, and the dataset
+    /// used for blast simulation. Independent of selected holes. `None` until one is
     /// picked, and dropped again when that dataset is closed or removed.
     pub(crate) active_drill_hole: Option<DrillHoleId>,
     /// Draggable blast-pattern builder and its document-backed boundary.
@@ -1280,6 +1288,8 @@ pub(crate) struct EditorState {
     //
     /// Projected Rotate Collar gizmo for the current frame.
     pub(crate) rotate_gizmo: RotateGizmoScreen,
+    /// Preview bearing before canonical dip readout folds at vertical.
+    pub(crate) rotate_gizmo_azimuth: Option<f64>,
     pub(crate) rotate_gizmo_hovered_ring: Option<u8>,
     pub(crate) rotate_gizmo_drag_ring: Option<u8>,
     /// Panel values, in degrees. Absolute rather than a delta: a round is
@@ -1565,6 +1575,8 @@ pub(crate) struct EditorState {
     /// Projected initiation cards, rebuilt from all visible drill datasets
     /// each frame so the UI can keep them above scene depth.
     pub(crate) initiation_cards: Vec<InitiationCard>,
+    /// Product awaiting destructive deletion confirmation: (id, row label).
+    pub(crate) pending_delete_delay_product: Option<(DelayProductId, String)>,
     /// Whether the palette's New Product dialog is open.
     pub(crate) new_delay_product_open: bool,
     /// What that dialog has been filled in with so far.
@@ -1632,6 +1644,7 @@ impl EditorState {
             || self.delete_confirm_open
             || self.pending_delete_layer.is_some()
             || self.pending_delete_item.is_some()
+            || self.pending_delete_delay_product.is_some()
             || self.pending_close_project.is_some()
             || self.pending_discard_project.is_some()
             || self.pending_discard_layer.is_some()
@@ -1760,6 +1773,7 @@ impl EditorState {
         self.renaming_item = None;
         self.pending_delete_layer = None;
         self.pending_delete_item = None;
+        self.pending_delete_delay_product = None;
         self.pending_discard_layer = None;
         self.selection_box_start_px = None;
         self.selection_box_current_px = None;
@@ -1845,6 +1859,7 @@ impl EditorState {
         self.move_panel_delta = [0.0; 3];
         self.move_panel_last_preview = [0.0; 3];
         self.rotate_gizmo = RotateGizmoScreen::default();
+        self.rotate_gizmo_azimuth = None;
         self.rotate_gizmo_hovered_ring = None;
         self.rotate_gizmo_drag_ring = None;
         self.rotate_panel_azimuth = 0.0;
@@ -1900,6 +1915,7 @@ impl EditorState {
             show_xy_grid: self.show_xy_grid,
             show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
+            vsync_enabled: self.vsync_enabled,
             frame_rate_cap: self.frame_rate_cap,
             resize_frame_rate_cap: self.resize_frame_rate_cap,
             block_model_interaction_resolution_divisor: self.block_model_interaction_resolution_divisor,
@@ -1951,6 +1967,8 @@ impl EditorState {
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             preferences_draft: None,
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
+            vsync_enabled: crate::app::io::default_vsync_enabled(),
+            vsync_switchable: false,
             frame_rate_cap: crate::app::io::default_frame_rate_cap(),
             resize_frame_rate_cap: crate::app::io::default_resize_frame_rate_cap(),
             block_model_interaction_resolution_divisor: crate::app::io::default_block_model_interaction_resolution_divisor(),
@@ -1958,6 +1976,7 @@ impl EditorState {
             downscale_raster_previews: crate::app::io::default_downscale_raster_previews(),
             frame_counter_enabled: false,
             measured_fps: None,
+            smoothed_frame_interval: None,
             debug_chunk_coloring: false,
             debug_chunk_stats: None,
             debug_clip_plane_distances: None,
@@ -2128,6 +2147,7 @@ impl EditorState {
             gizmo_drag_axis_index: None,
             gizmo_drag_plane_index: None,
             rotate_gizmo: RotateGizmoScreen::default(),
+            rotate_gizmo_azimuth: None,
             rotate_gizmo_hovered_ring: None,
             rotate_gizmo_drag_ring: None,
             rotate_panel_azimuth: 0.0,
@@ -2287,6 +2307,7 @@ impl EditorState {
             blast_round_key: None,
             initiation_dialog: None,
             initiation_cards: Vec::new(),
+            pending_delete_delay_product: None,
             new_delay_product_open: false,
             new_delay_product_delay_ms: 0,
             new_delay_product_name: String::new(),
@@ -2475,6 +2496,15 @@ pub(crate) enum ActiveTool {
 }
 
 impl ActiveTool {
+    /// Tools that place new design geometry on the active layer. Derived
+    /// edits such as offsetting retain their source object's layer.
+    pub(crate) fn requires_active_layer(self) -> bool {
+        matches!(
+            self,
+            Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::MakeCircle | Self::MakeText | Self::FuseIntoPolyline
+        )
+    }
+
     /// The two translate tools: production's Move Design and Drill & Blast's
     /// Move Collar. They share the gizmo, the numeric panel and every drag
     /// path there is - what differs is only what they translate - so the
@@ -2645,7 +2675,6 @@ pub(crate) enum UiCommand {
     ImportRasterPaths(Vec<PathBuf>),
     LoadRaster(RasterTextureId),
     UnloadRaster(RasterTextureId),
-    ToggleRasterVisible(RasterTextureId),
     /// Lock/unlock a raster against draping, undraping and deletion.
     ToggleRasterLocked(RasterTextureId),
     RemoveRaster(RasterTextureId),
@@ -2656,7 +2685,6 @@ pub(crate) enum UiCommand {
     ClearActiveTriangulationRaster,
     LoadPointCloud(PointCloudId),
     ClosePointCloud(PointCloudId),
-    TogglePointCloudVisible(PointCloudId),
     RemovePointCloud(PointCloudId),
     ChooseImportSourceFiles(DataMenu),
     #[cfg(target_arch = "wasm32")]
@@ -2757,8 +2785,6 @@ pub(crate) enum UiCommand {
     CancelCollarRotation,
     LoadLayer(LayerId),
     UnloadLayer(LayerId),
-    /// Show/hide a design layer without unloading it.
-    ToggleLayerVisible(LayerId),
     /// Lock/unlock every object on a design layer against selection and editing.
     ToggleLayerLocked(LayerId),
     /// Lock/unlock one scene entity against selection and editing.
@@ -2769,7 +2795,6 @@ pub(crate) enum UiCommand {
     SetSectionLocked(ExplorerSection, bool),
     SelectAllObjectsInLayer(LayerId),
     ActivateTriangulation(TriangulationId),
-    ToggleTriangulationVisible(TriangulationId),
     CloseTriangulation(TriangulationId),
     /// Batch variants - produce a single history entry for multi-select changes.
     BatchSetObjectColor(Vec<ObjectId>, ObjectColor),
@@ -2790,7 +2815,6 @@ pub(crate) enum UiCommand {
     LoadBlockModel(BlockModelId),
     CloseBlockModel(BlockModelId),
     RemoveBlockModel(BlockModelId),
-    ToggleBlockModelVisible(BlockModelId),
     SetBlockModelColorVariable {
         id: BlockModelId,
         variable: String,
@@ -2814,7 +2838,6 @@ pub(crate) enum UiCommand {
     LoadDrillHole(DrillHoleId),
     CloseDrillHole(DrillHoleId),
     RemoveDrillHole(DrillHoleId),
-    ToggleDrillHoleVisible(DrillHoleId),
     OpenDrillHoleColorDialog(DrillHoleId),
     SetDrillHoleColorField {
         id: DrillHoleId,
@@ -3102,7 +3125,6 @@ impl UiCommand {
             Self::ImportRasterPaths(paths) => report(tr!(literal = "Import Raster"), tr_format!(literal = "%count% file(s)", count = paths.len())),
             Self::LoadRaster(id) => report(tr!(literal = "Load Raster"), format!("{id:?}")),
             Self::UnloadRaster(id) => report(tr!(literal = "Unload Raster"), format!("{id:?}")),
-            Self::ToggleRasterVisible(id) => report(tr!(literal = "Set Raster Visibility"), format!("{id:?}")),
             Self::ToggleRasterLocked(id) => report(tr!(literal = "Set Raster Lock"), format!("{id:?}")),
             Self::RemoveRaster(id) => report(tr!(literal = "Remove Raster"), format!("{id:?}")),
             Self::DrapeRaster(id) => report(tr!(literal = "Drape Raster"), format!("{id:?}")),
@@ -3110,8 +3132,7 @@ impl UiCommand {
             Self::UndrapeAllRasters => report(tr!(literal = "Undrape Rasters"), tr!(literal = "Removed from every triangulation")),
             Self::ClearActiveTriangulationRaster => report(tr!(literal = "Clear Raster"), tr!(literal = "Removed from active triangulation")),
             Self::LoadPointCloud(id) => report(tr!(literal = "Load Point Cloud"), format!("{id:?}")),
-            Self::ClosePointCloud(id) => report(tr!(literal = "Close Point Cloud"), format!("{id:?}")),
-            Self::TogglePointCloudVisible(id) => report(tr!(literal = "Set Point Cloud Visibility"), format!("{id:?}")),
+            Self::ClosePointCloud(id) => report(tr!(literal = "Unload Point Cloud"), format!("{id:?}")),
             Self::RemovePointCloud(id) => report(tr!(literal = "Remove Point Cloud"), format!("{id:?}")),
             Self::ImportCsvBlockModel { path, .. } => report(tr!(literal = "Import CSV Block Model"), path.display().to_string()),
             Self::ExportOmf => report(tr!(literal = "Export OMF"), tr!(literal = "All open Incline Design data")),
@@ -3161,9 +3182,8 @@ impl UiCommand {
             Self::ApplyBezier => report(tr!(literal = "Create Bezier Curve"), tr!(literal = "Apply to selection")),
             Self::ApplyMoveDelta(delta) => report(tr!(literal = "Move Selection"), format!("{delta}")),
             Self::ApplyCollarRotation => report(tr!(literal = "Rotate Collar"), tr!(literal = "Apply to selection")),
-            Self::LoadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} shown")),
-            Self::UnloadLayer(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?} hidden")),
-            Self::ToggleLayerVisible(id) => report(tr!(literal = "Set Layer Visibility"), format!("{id:?}")),
+            Self::LoadLayer(id) => report(tr!(literal = "Load Layer"), format!("{id:?}")),
+            Self::UnloadLayer(id) => report(tr!(literal = "Unload Layer"), format!("{id:?}")),
             Self::ToggleLayerLocked(id) => report(tr!(literal = "Set Layer Lock"), format!("{id:?}")),
             Self::ToggleEntityLocked(handle) => report(tr!(literal = "Set Entity Lock"), format!("{handle:?}")),
             Self::SetSectionVisible(section, visible) => report(
@@ -3176,7 +3196,6 @@ impl UiCommand {
             ),
             Self::SelectAllObjectsInLayer(id) => report(tr!(literal = "Select Layer Objects"), format!("{id:?}")),
             Self::ActivateTriangulation(id) => report(tr!(literal = "Set Current Triangulation"), format!("{id:?}")),
-            Self::ToggleTriangulationVisible(id) => report(tr!(literal = "Set Triangulation Visibility"), format!("{id:?}")),
             Self::CloseTriangulation(id) => report(tr!(literal = "Unload Triangulation"), format!("{id:?}")),
             Self::BatchSetObjectColor(ids, _) => report(tr!(literal = "Set Object Colour"), tr_format!(literal = "%count% object(s)", count = ids.len())),
             Self::BatchSetPolylineClosed(ids, closed) => report(
@@ -3206,7 +3225,6 @@ impl UiCommand {
             Self::LoadBlockModel(id) => report(tr!(literal = "Load Block Model"), format!("{id:?}")),
             Self::CloseBlockModel(id) => report(tr!(literal = "Unload Block Model"), format!("{id:?}")),
             Self::RemoveBlockModel(id) => report(tr!(literal = "Remove Block Model"), format!("{id:?}")),
-            Self::ToggleBlockModelVisible(id) => report(tr!(literal = "Set Block Model Visibility"), format!("{id:?}")),
             Self::SetBlockModelColorVariable { variable, .. } => report(tr!(literal = "Set Block Model Variable"), variable.clone()),
             Self::ImportDrillHole(source) => report(tr!(literal = "Import Drillholes"), source.display_name()),
             Self::CreateDrillPattern { name, collars, .. } => report(
@@ -3214,9 +3232,8 @@ impl UiCommand {
                 tr_format!(literal = "%name% · %count% holes", name = name, count = collars.len()),
             ),
             Self::LoadDrillHole(id) => report(tr!(literal = "Load Drillholes"), format!("{id:?}")),
-            Self::CloseDrillHole(id) => report(tr!(literal = "Close Drillholes"), format!("{id:?}")),
+            Self::CloseDrillHole(id) => report(tr!(literal = "Unload Drillholes"), format!("{id:?}")),
             Self::RemoveDrillHole(id) => report(tr!(literal = "Remove Drillholes"), format!("{id:?}")),
-            Self::ToggleDrillHoleVisible(id) => report(tr!(literal = "Set Drillhole Visibility"), format!("{id:?}")),
             Self::SetDrillHoleColorField { field, .. } => report(tr!(literal = "Colour Drillholes"), field.clone().unwrap_or_else(|| tr!(literal = "Uniform white"))),
             Self::SetDrillHoleColorPreset { preset, .. } => report(tr!(literal = "Set Drillhole Colour Preset"), preset.label()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!(literal = "Create Block Model"), name.clone()),
@@ -3302,14 +3319,12 @@ pub(crate) struct UiFrameOutput {
     pub(crate) pointer_gesture_active: bool,
 }
 
-/// One loaded layer shown in the explorer tree.
+/// One project layer shown in the explorer tree.
 #[derive(Clone, Debug)]
 pub(crate) struct UiLayerEntry {
     pub(crate) id: LayerId,
     pub(crate) name: String,
-    /// Drawn in the viewport. Independent of loading: an unloaded layer keeps
-    /// the visibility it will come back with.
-    pub(crate) visible: bool,
+    /// Whether the layer is loaded and drawn in the viewport.
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
 }
@@ -3399,7 +3414,6 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) id: PointCloudId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
@@ -3411,7 +3425,6 @@ pub(crate) struct UiRasterTextureEntry {
     pub(crate) id: RasterTextureId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     /// Currently draped over at least one triangulation.
@@ -3426,7 +3439,6 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) id: TriangulationId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
@@ -3442,7 +3454,6 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) id: BlockModelId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
@@ -3455,7 +3466,6 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) id: crate::model::drill_hole::DrillHoleId,
     pub(crate) name: String,
     pub(crate) source_name: Option<String>,
-    pub(crate) visible: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
@@ -3510,29 +3520,32 @@ impl UiProjectView {
 ///
 /// The tab decides what the viewport bar carries, the way Blender's workspace
 /// tabs decide what its editors show. Production, Drill & Blast and Geology are
-/// built out.
+/// built out; Planning carries what every workspace does and is where the
+/// scheduling tools will go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
     Geology,
+    Planning,
 }
 
 impl Workspace {
     /// Every workspace, in the order the tabs are drawn.
-    pub(crate) const ALL: [Self; 3] = [Self::Production, Self::DrillAndBlast, Self::Geology];
+    pub(crate) const ALL: [Self; 4] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning];
 
     pub(crate) fn label(self) -> String {
         match self {
             Self::Production => tr!("ws-production"),
             Self::DrillAndBlast => tr!("ws-drill-and-blast"),
             Self::Geology => tr!("ws-geology"),
+            Self::Planning => tr!("ws-planning"),
         }
     }
 
     /// Whether the tab can be selected at all yet.
     pub(crate) fn implemented(self) -> bool {
-        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology)
+        matches!(self, Self::Production | Self::DrillAndBlast | Self::Geology | Self::Planning)
     }
 
     /// Whether this workspace carries the mine production tools.

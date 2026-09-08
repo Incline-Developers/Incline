@@ -182,6 +182,39 @@ pub(crate) fn draw_delete_item_confirm_dialog(ui: &mut egui::Ui, commands: &mut 
     }
 }
 
+/// Draw the confirmation dialog shown before deleting a product from the
+/// Drill & Blast palette.
+///
+/// The palette is not part of the undo history - it lives in the config file,
+/// not in the document - so the only way back from a deletion is to add the
+/// product again. That is what earns it the same confirmation the explorer's
+/// destructive deletes get.
+pub(crate) fn draw_delete_delay_product_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
+    let Some((id, name)) = editor.pending_delete_delay_product.clone() else {
+        return;
+    };
+    let title = tr!("dialog-delete-title", kind = tr!(literal = "Product"));
+    let mut open = true;
+    DragableMenu::new("delete_delay_product_confirmation_dialog", title.clone())
+        .open(&mut open)
+        .min_width(280.0)
+        .show(ui.ctx(), |ui| {
+            ui.label(tr!("confirm-delete-product", name = name.clone()));
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(title.clone()).danger()).clicked() || menu::dialog_confirm_pressed(ui.ctx()) {
+                    commands.push(UiCommand::DeleteDelayProduct(id));
+                    editor.pending_delete_delay_product = None;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    editor.pending_delete_delay_product = None;
+                }
+            });
+        });
+    if !open {
+        editor.pending_delete_delay_product = None;
+    }
+}
+
 /// Draw the confirmation dialog shown before closing a dirty project.
 pub(crate) fn draw_close_project_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
     let Some(runtime_id) = editor.pending_close_project else {

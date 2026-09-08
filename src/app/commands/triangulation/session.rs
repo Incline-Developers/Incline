@@ -68,7 +68,6 @@ impl<'a> App<'a> {
                         spatial: loaded.spatial,
                         edges: loaded.edges,
                         surface_face_order: loaded.surface_face_order,
-                        visible: true,
                         color: DEFAULT_TRIANGULATION_COLOR,
                         line_color: [0.05, 0.08, 0.10, 1.0],
                         line_weight: Some(1.0),
@@ -177,7 +176,6 @@ impl<'a> App<'a> {
                         spatial: loaded.spatial,
                         edges: loaded.edges,
                         surface_face_order: loaded.surface_face_order,
-                        visible: true,
                         color: DEFAULT_TRIANGULATION_COLOR,
                         line_color: [0.05, 0.08, 0.10, 1.0],
                         line_weight: Some(1.0),
@@ -241,37 +239,19 @@ impl<'a> App<'a> {
         }
     }
 
-    pub(crate) fn toggle_triangulation_visible(&mut self, id: TriangulationId) {
-        let Some(tri) = self.triangulations.iter().find(|tri| tri.id == id) else {
-            return;
-        };
-        let handle = tri.entity_id();
-        let name = tri.name.clone();
-        let visible = !(tri.visible && !self.editor.hidden_handles.contains(&handle));
-        if visible {
-            // A toolbar hide is stored on the scene entity, while the explorer
-            // stores visibility on the triangulation. Showing from either UI
-            // must clear both sources of hidden state.
-            self.editor.hidden_handles.remove(&handle);
-        }
-        let message = if visible {
-            tr_format!(literal = "Shown triangulation '%name%'", name = name)
-        } else {
-            tr_format!(literal = "Hidden triangulation '%name%'", name = name)
-        };
-        let style = ItemStyle::of_triangulation(tri).with_visible(visible);
-        userspace_log!("{}", message);
-        self.set_item_style(ItemRef::Triangulation(id), style);
+    pub(crate) fn close_triangulation(&mut self, id: TriangulationId) {
+        self.set_item_loaded(crate::model::ItemRef::Triangulation(id), false);
     }
 
-    pub(crate) fn close_triangulation(&mut self, id: TriangulationId) {
+    pub(crate) fn release_triangulation_runtime(&mut self, id: TriangulationId) {
         let Some(tri) = self.triangulations.iter_mut().find(|tri| tri.id == id) else {
             return;
         };
-        tri.state.loaded = false;
         let name = tri.name.clone();
         let handle = tri.entity_id();
-        self.clear_triangulation_entity_state(handle);
+        self.editor.selected_handles.remove(&handle);
+        self.editor.hidden_handles.remove(&handle);
+        self.editor.translucent_handles.remove(&handle);
         self.clear_dialog_refs_to_triangulation(id);
         // In-flight jobs derived from this triangulation would otherwise
         // finish later and apply against a closed source.
@@ -394,7 +374,6 @@ impl<'a> App<'a> {
             spatial,
             edges,
             surface_face_order,
-            visible: true,
             color: DEFAULT_TRIANGULATION_COLOR,
             line_color: [0.05, 0.08, 0.10, 1.0],
             line_weight: Some(1.0),

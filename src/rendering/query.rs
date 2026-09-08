@@ -30,7 +30,7 @@ impl SceneQuery {
             .iter()
             .filter(|triangulation| {
                 let entity = triangulation.entity_id();
-                triangulation.state.loaded && triangulation.visible && !hidden.contains(&entity) && frozen.is_none_or(|set| !set.contains(&entity))
+                triangulation.state.loaded && !hidden.contains(&entity) && frozen.is_none_or(|set| !set.contains(&entity))
             })
             .filter_map(|triangulation| {
                 triangulation
@@ -39,6 +39,30 @@ impl SceneQuery {
                     .map(|point| (triangulation.entity_id(), point))
             })
             .min_by(|(_, a), (_, b)| (*a - ray_origin).dot(ray_direction).total_cmp(&(*b - ray_origin).dot(ray_direction)))
+    }
+
+    /// Test a rendered document pick at its own screen position. Frozen
+    /// surfaces still hide geometry, even though they cannot be selected.
+    pub(crate) fn surface_occludes_pick(
+        triangulations: &[OpenTriangulation],
+        hidden: &HashSet<SceneEntityId>,
+        view_projection: &DMat4,
+        scene_origin: DVec3,
+        candidate: DVec3,
+    ) -> bool {
+        let Some((origin, direction)) = ray_through_world_point(view_projection, candidate) else {
+            return false;
+        };
+        let Some((_, surface)) = Self::nearest_surface(triangulations, hidden, None, origin, direction) else {
+            return false;
+        };
+        // Pick vertices come from rebased f32 render buffers, whereas the BVH
+        // retains f64 coordinates. Allow their rounding error so a line on the
+        // surface remains selectable from either side after rotating the view.
+        let rounding = (candidate - scene_origin).abs().max_element() * f64::from(f32::EPSILON);
+        let surface_depth = (surface - origin).dot(direction);
+        let tolerance = 1.0e-5_f64.max(rounding).max(surface_depth.abs() * 1.0e-9);
+        (candidate - surface).dot(direction) > tolerance
     }
 
     /// Nearest selectable drill hole under a ray, named down to the hole
@@ -61,7 +85,7 @@ impl SceneQuery {
     ) -> Option<(DrillHoleRef, DVec3)> {
         let mut nearest = f64::INFINITY;
         let mut nearest_hole = None;
-        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
             let entity = dataset.entity_id();
             if hidden.contains(&entity) || frozen.contains(&entity) {
                 continue;
@@ -282,7 +306,7 @@ fn nearest_opaque_document_fill(document: &Document, snap_index: &ObjectSnapInde
             return false;
         };
         let entity = SceneEntityId::Object(object.id());
-        !hidden.contains(&entity) && document.layer(object.layer()).is_none_or(|layer| layer.visible) && document.object_fill_rgba(object)[3] >= 1.0 - f32::EPSILON
+        !hidden.contains(&entity) && document.layer(object.layer()).is_none_or(|layer| layer.loaded) && document.object_fill_rgba(object)[3] >= 1.0 - f32::EPSILON
     })
 }
 

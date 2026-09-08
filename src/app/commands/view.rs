@@ -71,6 +71,7 @@ impl<'a> App<'a> {
         self.editor.show_scale_bar = preferences.show_scale_bar;
         self.editor.renderer_background_color = preferences.renderer_background_color;
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
+        self.editor.vsync_enabled = preferences.vsync_enabled;
         self.editor.frame_rate_cap = preferences.frame_rate_cap;
         self.editor.resize_frame_rate_cap = preferences.resize_frame_rate_cap;
         self.editor.block_model_interaction_resolution_divisor = preferences.block_model_interaction_resolution_divisor;
@@ -79,6 +80,7 @@ impl<'a> App<'a> {
         self.editor.frame_counter_enabled = preferences.frame_counter_enabled;
         if !preferences.frame_counter_enabled {
             self.editor.measured_fps = None;
+            self.editor.smoothed_frame_interval = None;
         }
         self.editor.debug_chunk_coloring = preferences.debug_chunk_coloring;
         if !preferences.debug_chunk_coloring {
@@ -109,6 +111,7 @@ impl<'a> App<'a> {
             crate::mac::install_menu_bar();
         }
         self.configure_graphics_camera_preferences();
+        self.apply_present_mode_preference();
         self.editor.preferences_draft = Some(preferences);
         // Preferences apply live from the explorer's properties panel, so this
         // runs on every committed edit: too often for the activity console.
@@ -122,6 +125,26 @@ impl<'a> App<'a> {
         );
         self.redraw_requested = true;
         Ok(())
+    }
+
+    /// Hand the renderer the vsync preference, and read back whether this
+    /// adapter can honour it.
+    ///
+    /// Called whenever the preference changes and once the renderer exists,
+    /// since the surface is configured before any preference has been seen.
+    pub(crate) fn apply_present_mode_preference(&mut self) {
+        let enabled = self.editor.vsync_enabled;
+        let Some(graphics) = self.graphics.as_mut() else {
+            return;
+        };
+        let switchable = graphics.supports_vsync_off();
+        graphics.set_vsync_enabled(enabled);
+        self.editor.vsync_switchable = switchable;
+        // A surface that cannot turn vsync off presents in step whatever the
+        // stored preference says, so the cap must not be applied on top of it.
+        if !switchable {
+            self.editor.vsync_enabled = true;
+        }
     }
 
     pub(crate) fn configure_graphics_camera_preferences(&mut self) {
@@ -194,6 +217,7 @@ pub(crate) fn config_from(preferences: &crate::ui::state::PreferencesDraft, dela
         show_scale_bar: preferences.show_scale_bar,
         renderer_background_color: preferences.renderer_background_color,
         snap_poll_rate: preferences.snap_poll_rate,
+        vsync_enabled: preferences.vsync_enabled,
         frame_rate_cap: preferences.frame_rate_cap,
         resize_frame_rate_cap: preferences.resize_frame_rate_cap,
         block_model_interaction_resolution_divisor: preferences.block_model_interaction_resolution_divisor,
