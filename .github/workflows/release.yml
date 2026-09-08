@@ -96,7 +96,7 @@ jobs:
           set -euo pipefail
           mkdir -p out
           name="Incline-Design-${{ needs.version.outputs.version }}-linux-x86_64"
-          cp target/release/Incline-Design "target/release/$name"
+          cp target/release/incline-design "target/release/$name"
           tar -czf "out/$name.tar.gz" -C target/release "$name"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -124,7 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p unsigned
-          cp target/release/Incline-Design.exe unsigned/
+          cp target/release/incline-design.exe unsigned/Incline-Design.exe
 
       # SignPath signs the bare .exe, not an archive around it, so the raw
       # binary is what gets uploaded and submitted. upload-artifact zips it in
