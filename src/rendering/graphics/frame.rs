@@ -16,28 +16,17 @@ fn main_scene_cache_key(
     drill_holes: &[OpenDrillHoleDataset],
     point_clouds: &[OpenPointCloud],
     rasters: &[OpenRasterTexture],
+    drill_hole_content_key: u64,
 ) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     slice_preview::slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters).hash(&mut hasher);
-    for dataset in drill_holes {
-        dataset.id.hash(&mut hasher);
-        dataset.state.loaded.hash(&mut hasher);
-        dataset.color.active_field.hash(&mut hasher);
-        dataset.color.smooth.hash(&mut hasher);
-        for stop in &dataset.color.stops {
-            stop.t.to_bits().hash(&mut hasher);
-            for color in stop.color {
-                color.to_bits().hash(&mut hasher);
-            }
-        }
-        for category in &dataset.color.categories {
-            category.value.hash(&mut hasher);
-            for color in category.color {
-                color.to_bits().hash(&mut hasher);
-            }
-        }
-    }
+    // Every other item kind reaches the key above by the identity of the data
+    // it is holding, but a drill hole dataset is edited in place - laying a
+    // tie, turning a collar - so nothing about it here would change. Its
+    // instance cache has already been resynced by the time this runs, and it
+    // reports what it is holding: see `DrillHoleGpuCache::content_key`.
+    drill_hole_content_key.hash(&mut hasher);
     EditorSceneState::of(editor).hash(&mut hasher);
     hasher.write(bytemuck::bytes_of(camera_uniform));
     hasher.finish()
@@ -363,7 +352,17 @@ impl<'a> Graphics<'a> {
         }
 
         let primary_frustum = frustum::Frustum::from_view_proj(glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj));
-        let scene_key = main_scene_cache_key(&self.camera_uniform, editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);
+        let scene_key = main_scene_cache_key(
+            &self.camera_uniform,
+            editor,
+            document,
+            triangulations,
+            block_models,
+            drill_holes,
+            point_clouds,
+            rasters,
+            self.drill_hole_gpu.content_key(),
+        );
         let gpu_work_pending = gpu_work_was_pending
             || self.point_cloud_gpu.has_pending_uploads()
             || self.block_model_gpu.has_pending_builds()
