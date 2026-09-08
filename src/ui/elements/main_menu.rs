@@ -40,8 +40,12 @@ const SEPARATOR_HEIGHT: f32 = 16.0;
 const SEPARATOR_MARGIN: f32 = 8.0;
 /// Space either side of a workspace tab's label.
 const TAB_PADDING: f32 = 10.0;
-/// Height of a workspace tab's fill.
+/// Vertical space a workspace tab claims in the bar.
 const TAB_HEIGHT: f32 = 20.0;
+/// Height of a workspace tab's fill, sat against the top of that space. Shorter
+/// than [`TAB_HEIGHT`] so the group box behind Planning keeps air below it
+/// instead of bleeding into the region under the bar.
+const TAB_FILL_HEIGHT: f32 = 17.0;
 /// Space either side of a dropdown's label in the viewport bar.
 ///
 /// `egui`'s `menu_style` packs bar labels to 2 points, which is right for a
@@ -213,7 +217,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
         } else {
             animated_x
         };
-        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(tab_width(workspace), TAB_HEIGHT));
+        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(tab_width(workspace), TAB_FILL_HEIGHT));
         tabs.push((workspace, id, rect));
         x += width(workspace) + spacing;
     }
@@ -222,7 +226,8 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
     for (workspace, id, rect) in tabs {
         if workspace == Workspace::Planning && pages_width > 0.0 {
             let group_rect = egui::Rect::from_min_max(rect.min, rect.max + egui::vec2(pages_width, 0.0));
-            ui.painter().rect_filled(group_rect.expand(2.0), GROUP_CORNER_RADIUS, egui::Color32::BLACK);
+            let group_fill = if ui.visuals().dark_mode { egui::Color32::BLACK } else { egui::Color32::WHITE };
+            ui.painter().rect_filled(group_rect.expand(2.0), GROUP_CORNER_RADIUS, group_fill);
         }
         let response = draw_workspace_tab(ui, editor, commands, workspace, bar_fill, id, rect);
         if workspace == Workspace::Planning && pages_width > 0.0 {
@@ -267,7 +272,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 fn draw_planning_pages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, parent: egui::Rect, widths: [f32; 2]) {
     let mut x = parent.right() + ui.spacing().item_spacing.x;
     for (page, width) in PlanningPage::ALL.into_iter().zip(widths) {
-        let rect = egui::Rect::from_min_size(egui::pos2(x, parent.top()), egui::vec2(width, TAB_HEIGHT));
+        let rect = egui::Rect::from_min_size(egui::pos2(x, parent.top()), egui::vec2(width, TAB_FILL_HEIGHT));
         let selected = editor.planning_page == page;
         let enabled = editor.active_workspace == Workspace::Planning;
         let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };

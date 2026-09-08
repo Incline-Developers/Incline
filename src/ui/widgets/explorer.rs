@@ -143,6 +143,8 @@ pub(crate) struct ExplorerEntry {
     reserve_toggle_gutter: bool,
     toggles: Option<EntryToggles>,
     leading_icon: Option<(egui::ImageSource<'static>, egui::Color32)>,
+    header_aligned_icon: bool,
+    error: Option<String>,
 }
 
 impl ExplorerEntry {
@@ -154,6 +156,8 @@ impl ExplorerEntry {
             reserve_toggle_gutter: false,
             toggles: None,
             leading_icon: None,
+            header_aligned_icon: false,
+            error: None,
         }
     }
 
@@ -168,6 +172,22 @@ impl ExplorerEntry {
     /// one row of a list this way does not shift the others' labels.
     pub(crate) fn leading_icon(mut self, icon: egui::ImageSource<'static>, color: egui::Color32) -> Self {
         self.leading_icon = Some((icon, color));
+        self
+    }
+
+    /// Match the section header's 16-point icon and left alignment.
+    pub(crate) fn header_aligned_icon(mut self) -> Self {
+        self.header_aligned_icon = true;
+        self
+    }
+
+    /// Mark the row invalid: `hint` replaces the leading icon with the red
+    /// error badge and shows as its hover text. Mirrors
+    /// [`GridRow::error`](super::data_grid::GridRow::error) and the `error`
+    /// argument of [`PropertyRows::field`](super::data_grid::PropertyRows::field).
+    #[allow(dead_code)] // Feature-facing: step rows gain validation with the feature.
+    pub(crate) fn error(mut self, hint: Option<&str>) -> Self {
+        self.error = hint.map(str::to_owned);
         self
     }
 
@@ -189,6 +209,8 @@ impl ExplorerEntry {
             reserve_toggle_gutter,
             toggles,
             leading_icon,
+            header_aligned_icon,
+            error,
         } = self;
         let height = row_height(ui);
         ui.scope_builder(egui::UiBuilder::new().id(id.with("explorer_entry_scope")), |ui| {
@@ -200,13 +222,25 @@ impl ExplorerEntry {
                     // Match its gutter so this leaf starts at the same x.
                     ui.add_space(ui.spacing().indent);
                 }
+                // An error overrides whatever leading icon was set with the red
+                // badge and carries the message as hover text.
+                let leading_icon = match &error {
+                    Some(_) => Some((crate::ui::unthemed_icon!("step_error.svg"), egui::Color32::WHITE)),
+                    None => leading_icon,
+                };
                 match leading_icon {
                     Some((icon, color)) => {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(ENTRY_LABEL_GUTTER, height), egui::Sense::hover());
+                        let (rect, response) = ui.allocate_exact_size(egui::vec2(ENTRY_LABEL_GUTTER, height), egui::Sense::hover());
+                        if let Some(hint) = &error {
+                            response.on_hover_text(hint.clone());
+                        }
                         if ui.is_rect_visible(rect) {
-                            egui::Image::new(icon)
-                                .tint(color)
-                                .paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(TOGGLE_ICON)));
+                            let icon_rect = if header_aligned_icon {
+                                egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - 8.0), egui::vec2(16.0, 16.0))
+                            } else {
+                                egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(TOGGLE_ICON))
+                            };
+                            egui::Image::new(icon).tint(color).paint_at(ui, icon_rect);
                         }
                     }
                     None => ui.add_space(ENTRY_LABEL_GUTTER),

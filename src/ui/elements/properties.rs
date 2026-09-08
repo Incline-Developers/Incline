@@ -99,7 +99,13 @@ pub(crate) fn draw_properties(
     // A selection tab whose selection has gone shows settings meanwhile, but
     // stays the chosen tab: selecting another block model or design brings it
     // straight back rather than making the user pick the icon again.
-    let shown_tab = if context.tab_available(editor.active_property_tab) {
+    let shown_tab = if editor.is_planning_setup()
+        && !matches!(
+            editor.active_property_tab,
+            PropertyTab::Interface | PropertyTab::Camera | PropertyTab::Performance | PropertyTab::Developer
+        ) {
+        PropertyTab::Interface
+    } else if context.tab_available(editor.active_property_tab) {
         editor.active_property_tab
     } else {
         PropertyTab::Object
@@ -273,6 +279,9 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, shown_tab: Proper
         content_fill,
     );
     tab_button(ui, editor, shown_tab, PropertyTab::Developer, themed_icon!(ui, "properties_developer.svg"), content_fill);
+    if editor.is_planning_setup() {
+        return;
+    }
     // Object starts the data/object group and stays available even before a
     // selection exists, so it can be the stable startup tab.
     ui.add_space(TAB_GROUP_GAP);

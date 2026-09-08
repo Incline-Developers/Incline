@@ -367,7 +367,7 @@ impl<'a> Graphics<'a> {
             || self.point_cloud_gpu.has_pending_uploads()
             || self.block_model_gpu.has_pending_builds()
             || self.block_model_gpu.has_visible_pending_streaming(&primary_frustum, &editor.hidden_handles);
-        let render_scene = scene_cache_needs_render(self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
+        let render_scene = !editor.is_planning_setup() && scene_cache_needs_render(self.scene_cache_key, scene_key, scene_content_changed, gpu_work_pending);
         let sample_volume_feedback = render_scene && self.frame_index.is_multiple_of(VOLUME_FEEDBACK_INTERVAL_FRAMES);
         if sample_volume_feedback {
             let phase = (self.frame_index / VOLUME_FEEDBACK_INTERVAL_FRAMES) % 64;
@@ -395,7 +395,23 @@ impl<'a> Graphics<'a> {
             );
             self.scene_cache_key = Some(scene_key);
         }
-        self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene);
+        if !editor.is_planning_setup() {
+            self.render_editor_overlay_pass(&mut encoder, &view, self.viewport_rect, editor, !render_scene);
+        } else {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Planning setup background"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
 
         // One-shot viewport export: re-render the scene (without the egui
         // chrome) into an offscreen texture and queue a readback on this

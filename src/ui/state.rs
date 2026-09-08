@@ -116,6 +116,10 @@ impl Default for PreferencesDraft {
 }
 
 impl EditorState {
+    pub(crate) fn is_planning_setup(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Setup
+    }
+
     /// Set (or clear) the status-bar message. Whenever the displayed task
     /// changes, the outgoing one is remembered as `last_finished_task` so the
     /// idle bar keeps reading "<task>: Finished" at 100%.

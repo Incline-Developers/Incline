@@ -1594,3 +1594,26 @@ asset-loading = Loading asset data
 asset-unloading = Unloading asset data
 asset-load-failed = Could not load asset data
 asset-unload-failed = Could not unload asset data
+
+# Planning → Set Up. Step tree and content categories are wired up; item
+# rows and property fields are scaffold that fills in with the feature.
+planning-configuration = Configuration
+planning-site-data = Site Data
+planning-content = Content
+planning-content-type = Content Type
+
+planning-dumps = Dumps
+planning-stockpiles = Stockpiles
+planning-loaders = Loaders
+planning-trucks = Trucks
+
+planning-name = Name
+planning-new-dump = New Dump
+planning-new-stockpile = New Stockpile
+planning-new-loader = New Loader
+planning-new-truck = New Truck
+
+planning-properties = Properties
+planning-property = Property
+planning-value = Value
+planning-schedule-name = Schedule Name

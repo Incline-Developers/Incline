@@ -234,7 +234,9 @@ impl Gui {
             self.renderer.free_texture(id);
         }
 
-        let canvas_rect = if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
+        let canvas_rect = if editor.is_planning_setup() {
+            ViewportRect { x: 0, y: 0, width: 0, height: 0 }
+        } else if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {
             ViewportRect {
                 x: (canvas_rect_logical.min.x * pixels_per_point).round().max(0.0) as u32,
                 y: (canvas_rect_logical.min.y * pixels_per_point).round().max(0.0) as u32,
@@ -535,6 +537,43 @@ fn draw_ui(
     // do not, because what is there is the two bars, which are that same
     // background already - see `chrome::Gap`.
     chrome::claim_gap(root_ui, "chrome_window_edge", chrome::Gap::Sides);
+
+    if editor.is_planning_setup() {
+        let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
+        let console = if editor.show_console {
+            let (min, max) = elements::properties::height_limits(root_ui.available_height());
+            elements::console::draw_console(root_ui, min, max, frame_context.console_snapshot)
+        } else {
+            egui::Rect::NOTHING
+        };
+        let details = elements::planning_setup::draw_details(root_ui);
+        dialogs::about::draw_about_dialog(root_ui, editor);
+        #[cfg(target_arch = "wasm32")]
+        if editor.new_project_dialog_open {
+            dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, details);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let naming_browser_project = editor.new_project_dialog_open;
+        #[cfg(not(target_arch = "wasm32"))]
+        let naming_browser_project = false;
+        if project.needs_startup_dialog && !naming_browser_project {
+            dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
+        }
+        *canvas_rect_out = egui::Rect::ZERO;
+        geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
+        let ctx = root_ui.ctx();
+        chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
+        chrome::paint_regions(ctx, [explorer.tree, explorer.properties, console, details]);
+        chrome::paint_grips(
+            ctx,
+            [
+                chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
+                chrome::Grip::new(explorer.properties, chrome::Edge::Top, elements::properties::PANEL_ID),
+                chrome::Grip::new(console, chrome::Edge::Top, elements::console::PANEL_ID),
+            ],
+        );
+        return geometry_dirty;
+    }
 
     // The bar spans the window, so it is claimed before the explorer: the
     // column, the tools and the scene all start below it.
