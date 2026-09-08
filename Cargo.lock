@@ -2082,7 +2082,7 @@ dependencies = [
 [[package]]
 name = "mineflow"
 version = "0.1.0"
-source = "git+https://github.com/Incline-Developers/MineFlow-rs.git?rev=466910e3a7e3d2e06a62186b4dd77ed45c8a8818#466910e3a7e3d2e06a62186b4dd77ed45c8a8818"
+source = "git+https://github.com/Incline-Developers/MineFlow-rs.git?rev=3a6a3b541aa55a50eebd5efadea4943c82353a08#3a6a3b541aa55a50eebd5efadea4943c82353a08"
 dependencies = [
  "cc",
 ]
