@@ -112,9 +112,8 @@ pub(crate) struct GizmoDragState {
 
 /// A live Rotate Collar ring drag.
 ///
-/// The sweep is measured on screen, as the cursor's angle about the projected
-/// gizmo centre - the ring under the pointer is drawn as exactly that circle,
-/// so following it needs no unprojection back into the ring's world plane.
+/// Ring geometry is captured at drag start so preview changes cannot reverse
+/// the gesture's coordinate frame.
 pub(crate) struct CollarRotateDrag {
     /// Which ring is being dragged: see `ui::state::ROTATE_GIZMO_AZIMUTH_RING`.
     pub(crate) ring: u8,
@@ -122,16 +121,17 @@ pub(crate) struct CollarRotateDrag {
     /// drag so a preview moving the collars cannot move the pivot under it.
     pub(crate) center_px: (f32, f32),
     /// Cursor angle last frame, for the step this frame is measured against.
-    pub(crate) last_angle: f64,
-    /// Total swept angle in screen radians, unwrapped, so a sweep past the
-    /// atan2 discontinuity keeps going and a multi-turn sweep is honoured.
+    pub(crate) last_angle: Option<f64>,
+    /// Total swept angle in ring radians, unwrapped, so a sweep past the
+    /// angle wrap keeps going and a multi-turn sweep is honoured.
     pub(crate) swept: f64,
     /// The turn standing when the drag began, so grabbing a ring again
     /// continues the edit rather than restarting it from the originals.
     pub(crate) start: CollarRotation,
-    /// How far the anchor hole may still be tipped either way before it would
-    /// pass vertical, bounding the accumulated dip so a drag stays reversible.
-    pub(crate) dip_room: (f64, f64),
+    /// Projected samples in increasing world ring angle, frozen during a drag.
+    pub(crate) ring_px: Vec<(f32, f32)>,
+    /// Ignore ambiguous cursor movement through the centre of the gizmo.
+    pub(crate) dead_zone_px: f32,
 }
 
 /// A live Move preview belongs to the project whose objects were captured.

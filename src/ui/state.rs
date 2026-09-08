@@ -805,10 +805,6 @@ pub(crate) struct RotateGizmoScreen {
     /// Per-ring opacity. A ring turning edge-on fades out and stops being
     /// clickable rather than collapsing to a line the cursor cannot follow.
     pub(crate) ring_fade: [f32; 2],
-    /// Sign turning a cursor sweep about the centre into a rotation about the
-    /// ring's world axis. A ring whose far face is towards the camera reads
-    /// the opposite way round on screen, and this is what carries that.
-    pub(crate) ring_sign: [f64; 2],
     /// Physical pixels per logical point at the time of projection, so hit
     /// tests can size their slack the same way the gizmo is sized.
     pub(crate) scale_factor: f32,
@@ -820,7 +816,6 @@ impl Default for RotateGizmoScreen {
             center_px: None,
             ring_px: [Vec::new(), Vec::new()],
             ring_fade: [0.0; 2],
-            ring_sign: [1.0; 2],
             scale_factor: 1.0,
         }
     }
@@ -1293,6 +1288,8 @@ pub(crate) struct EditorState {
     //
     /// Projected Rotate Collar gizmo for the current frame.
     pub(crate) rotate_gizmo: RotateGizmoScreen,
+    /// Preview bearing before canonical dip readout folds at vertical.
+    pub(crate) rotate_gizmo_azimuth: Option<f64>,
     pub(crate) rotate_gizmo_hovered_ring: Option<u8>,
     pub(crate) rotate_gizmo_drag_ring: Option<u8>,
     /// Panel values, in degrees. Absolute rather than a delta: a round is
@@ -1862,6 +1859,7 @@ impl EditorState {
         self.move_panel_delta = [0.0; 3];
         self.move_panel_last_preview = [0.0; 3];
         self.rotate_gizmo = RotateGizmoScreen::default();
+        self.rotate_gizmo_azimuth = None;
         self.rotate_gizmo_hovered_ring = None;
         self.rotate_gizmo_drag_ring = None;
         self.rotate_panel_azimuth = 0.0;
@@ -2149,6 +2147,7 @@ impl EditorState {
             gizmo_drag_axis_index: None,
             gizmo_drag_plane_index: None,
             rotate_gizmo: RotateGizmoScreen::default(),
+            rotate_gizmo_azimuth: None,
             rotate_gizmo_hovered_ring: None,
             rotate_gizmo_drag_ring: None,
             rotate_panel_azimuth: 0.0,

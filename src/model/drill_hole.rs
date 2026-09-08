@@ -403,9 +403,8 @@ pub(crate) struct HoleOrientation {
     pub(crate) dip: f64,
 }
 
-/// How far a hole may be tipped either side of horizontal. Passing vertical
-/// would carry the hole over to the opposite bearing, silently rewriting the
-/// azimuth the driller was given, so a turn stops there instead.
+/// Limit for canonical dip readouts and typed drill-plan orientations.
+/// Ring gestures retain unwrapped dip angles so they can pass through vertical.
 pub(crate) const MAX_HOLE_DIP: f64 = 90.0;
 
 /// How a Rotate Collar edit turns the holes it was handed.
@@ -493,7 +492,7 @@ impl HolePlacement {
             CollarRotation::Absolute(target) => target,
             CollarRotation::Delta { azimuth, dip } => HoleOrientation {
                 azimuth: (from.azimuth + azimuth).rem_euclid(360.0),
-                dip: (from.dip + dip).clamp(-MAX_HOLE_DIP, MAX_HOLE_DIP),
+                dip: from.dip + dip,
             },
         })
     }
