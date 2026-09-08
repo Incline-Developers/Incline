@@ -1008,7 +1008,7 @@ impl<'a> App<'a> {
                     g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
                         &self.triangulations,
-                        self.selectable_drill_holes(),
+                        &self.drill_holes,
                         &self.editor.hidden_handles,
                         frozen,
                         self.editor.xray_enabled,
@@ -1438,6 +1438,16 @@ impl<'a> App<'a> {
         }
         let allowed_in_slice = matches!(tool, ActiveTool::None | ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
         if (self.editor.fly_mode_enabled && tool != ActiveTool::None) || (self.editor.slice_mode_enabled && !allowed_in_slice) {
+            return;
+        }
+        if tool != self.editor.active_tool
+            && ((tool.requires_active_layer() && self.active_layer().is_none())
+                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint)
+                    && !self
+                        .editor
+                        .active_drill_hole
+                        .is_some_and(|id| self.drill_holes.iter().any(|dataset| dataset.id == id && dataset.state.loaded))))
+        {
             return;
         }
 

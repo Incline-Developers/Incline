@@ -996,8 +996,8 @@ pub(crate) struct EditorState {
     pub(crate) tool_hatch: ToolHatch,
     /// Active drawing layer, if any.
     pub(crate) active_layer: Option<LayerId>,
-    /// The drill hole dataset the Drill & Blast workspace works on: what its
-    /// editing, tie-in and simulation tools act against. `None` until one is
+    /// The destination for new tie-ins and initiation points, and the dataset
+    /// used for blast simulation. Independent of selected holes. `None` until one is
     /// picked, and dropped again when that dataset is closed or removed.
     pub(crate) active_drill_hole: Option<DrillHoleId>,
     /// Draggable blast-pattern builder and its document-backed boundary.
@@ -2496,6 +2496,15 @@ pub(crate) enum ActiveTool {
 }
 
 impl ActiveTool {
+    /// Tools that place new design geometry on the active layer. Derived
+    /// edits such as offsetting retain their source object's layer.
+    pub(crate) fn requires_active_layer(self) -> bool {
+        matches!(
+            self,
+            Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::MakeCircle | Self::MakeText | Self::FuseIntoPolyline
+        )
+    }
+
     /// The two translate tools: production's Move Design and Drill & Blast's
     /// Move Collar. They share the gizmo, the numeric panel and every drag
     /// path there is - what differs is only what they translate - so the

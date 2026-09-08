@@ -123,7 +123,7 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
                         // instead of squeezing what is in it.
                         let run = egui::Rect::from_min_max(egui::pos2(left_edge, band.top()), band.max);
                         let drawn = cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            draw_centre_settings(ui, editor, project, commands);
+                            draw_centre_settings(ui, editor, project);
                         });
                         ui.data_mut(|data| data.insert_temp(width_id, drawn.width()));
                     }
@@ -230,11 +230,11 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 
 /// The centre run: every workspace gets the working elevation, alongside any
 /// settings belonging specifically to that workspace.
-fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
     match editor.active_workspace {
         Workspace::Production => draw_drawing_settings(ui, editor, project),
         Workspace::DrillAndBlast => {
-            draw_blast_settings(ui, editor, project, commands);
+            draw_blast_settings(ui, editor, project);
             centre_part(ui);
             draw_z_setting(ui, editor);
         }
@@ -295,16 +295,14 @@ fn elide(ui: &egui::Ui, name: &str) -> String {
     })
 }
 
-/// What the Drill & Blast tools act on: the drill hole dataset being edited,
-/// tied in and simulated. It is also what the workspace can select - see
-/// `App::selectable_drill_holes` - so changing it drops the selection the
-/// outgoing dataset was holding.
+/// The destination for new tie-ins and initiation points, and the dataset
+/// being simulated. Selection and collar edits are independent of it.
 ///
 /// Only loaded datasets are offered - a closed one has no holes in the scene
 /// to work on - and a selection that stops being loaded reads as "None" here
 /// until another is picked, the same way the layer combo above treats a layer
 /// that has gone.
-fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
     ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
     let previous = editor.active_drill_hole;
 
@@ -324,10 +322,7 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
                 ui.selectable_value(&mut editor.active_drill_hole, Some(dataset.id), &dataset.name);
             }
         });
-    // Only holes in the active dataset can be selected, so a selection made
-    // in the outgoing one has nothing left to act on.
     if editor.active_drill_hole != previous {
-        commands.push(UiCommand::ClearSelection);
         // A tie-in runs between holes of one dataset, so it goes with it.
         editor.end_tie_chain();
         editor.initiation_dialog = None;

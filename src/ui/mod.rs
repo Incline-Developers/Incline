@@ -518,7 +518,7 @@ fn draw_ui(
 
     // --- Panel layout: compute rects for all fixed panels ---
     let project_active = project.has_active_project;
-    let editing_enabled = project.has_active_project && editor.active_layer.is_some() && !editor.fly_mode_enabled && !editor.slice_mode_enabled;
+    let editing_enabled = project.has_active_project && !editor.fly_mode_enabled && !editor.slice_mode_enabled;
 
     // On macOS the File and Project dropdowns are in the system menu bar
     // (`mac.rs`) instead, but the bar itself is still drawn: the mark and the
