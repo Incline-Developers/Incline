@@ -836,11 +836,7 @@ impl<'a> App<'a> {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
-                ActiveTool::None => {
-                    if !self.select_tie_at_cursor() {
-                        self.begin_select_or_drag();
-                    }
-                }
+                ActiveTool::None => self.begin_select_or_drag(),
                 ActiveTool::Move => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
                         match hit_gizmo_handle(&self.editor, cursor_px) {

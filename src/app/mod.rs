@@ -352,7 +352,7 @@ pub(crate) struct App<'a> {
     /// or tool state.
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
-    pending_topology_click: Option<(SceneEntityId, DVec3)>,
+    pending_selection_click: Option<crate::rendering::graphics::camera::ScenePick>,
     move_session_original: Option<MoveSession>,
     /// Captured collar placements, shared by Move Collar and Rotate Collar:
     /// both rewrite the same holes from the same originals, and only one of
@@ -462,7 +462,7 @@ impl<'a> Default for App<'a> {
             right_orbit_active: false,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,
-            pending_topology_click: None,
+            pending_selection_click: None,
             move_session_original: None,
             collar_move_session: None,
             collar_rotation: None,
@@ -1192,7 +1192,7 @@ impl<'a> App<'a> {
             self.cancel_text_edit();
         }
         self.editor.clear_project_transients();
-        self.pending_topology_click = None;
+        self.pending_selection_click = None;
         // Clear any in-progress gesture so it cannot bleed into the new project.
         self.move_session_original = None;
         self.collar_move_session = None;

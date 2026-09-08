@@ -7,7 +7,7 @@ use crate::{
 
 impl<'a> App<'a> {
     pub(crate) fn begin_select_or_drag(&mut self) {
-        self.pending_topology_click = None;
+        self.pending_selection_click = None;
 
         if let Some(target) = self.editor.triangulation_pick_target {
             let picked = self
@@ -133,52 +133,11 @@ impl<'a> App<'a> {
                 .or_else(|| graphics.cursor_world(self.editor.z_level).map(|world| (None, world)))
         });
         match picked {
-            Some((Some(pick), world)) => {
-                let handle = pick.entity;
-                // Drill & Blast selects the hole the cursor was over, where
-                // production selects the dataset holding it.
-                let hole = pick.hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
-                if matches!(handle, SceneEntityId::Triangulation(_)) {
-                    self.pending_topology_click = Some((handle, world));
-                    self.editor.selection_box_start_px = self.editor.cursor_screen_px;
-                    self.editor.selection_box_current_px = self.editor.cursor_screen_px;
-                    return;
-                }
-
-                // Selecting an object may retarget the active project, but never the
-                // active layer: that is owned solely by the toolbar layer selector.
-                if let SceneEntityId::Object(object_id) = handle {
-                    self.activate_project_for_object(object_id);
-                }
-                // Clicking what is already selected takes it back out of the
-                // selection, so a whole-scene entity can be dropped without
-                // going for empty space.
-                let already_selected = match hole {
-                    Some(hole) => self.editor.selected_drill_holes.contains(&hole),
-                    None => {
-                        matches!(
-                            handle,
-                            SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) | SceneEntityId::DrillHole(_) | SceneEntityId::PointCloud(_)
-                        ) && self.editor.selected_handles.contains(&handle)
-                    }
-                };
-                let selection_mode = if self.modifiers.shift_key() {
-                    SelectionMode::Toggle
-                } else if self.modifiers.control_key() {
-                    SelectionMode::Add
-                } else if already_selected {
-                    SelectionMode::Toggle
-                } else {
-                    SelectionMode::Replace
-                };
-                match hole {
-                    Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
-                    None => self.editor.on_canvas_pick(handle, world, selection_mode),
-                }
-                self.active_triangulation = match handle {
-                    SceneEntityId::Triangulation(id) if self.editor.selected_handles.contains(&handle) => Some(id),
-                    _ => None,
-                };
+            Some((Some(pick), _)) => {
+                // Resolve clicks only on release, so a box can start over any entity.
+                self.pending_selection_click = Some(pick);
+                self.editor.selection_box_start_px = self.editor.cursor_screen_px;
+                self.editor.selection_box_current_px = self.editor.cursor_screen_px;
             }
             Some((None, world)) => {
                 self.active_triangulation = None;
@@ -359,11 +318,11 @@ impl<'a> App<'a> {
 
     pub(crate) fn finish_box_selection(&mut self) {
         let (Some(start), Some(end)) = (self.editor.selection_box_start_px.take(), self.editor.selection_box_current_px.take()) else {
-            self.pending_topology_click = None;
+            self.pending_selection_click = None;
             return;
         };
         let dragged = (end.0 - start.0).abs().max((end.1 - start.1).abs()) >= 3.0;
-        let pending_topology_click = self.pending_topology_click.take();
+        let pending_selection_click = self.pending_selection_click.take();
 
         if self.editor.active_tool == ActiveTool::DrapeToTopology {
             self.finish_drape_selection(start, end, dragged);
@@ -445,17 +404,46 @@ impl<'a> App<'a> {
         }
 
         if !dragged {
-            if let Some((handle, world)) = pending_topology_click {
+            if self.editor.active_tool == ActiveTool::None && self.select_tie_at_cursor() {
+                return;
+            }
+            if let Some(pick) = pending_selection_click {
+                let world = pick.world;
+                let handle = pick.entity;
+                // Drill & Blast selects the hole the cursor was over, where
+                // production selects the dataset holding it.
+                let hole = pick.hole.filter(|_| self.editor.active_workspace == Workspace::DrillAndBlast);
+
+                // Selecting an object may retarget the active project, but never the
+                // active layer: that is owned solely by the toolbar layer selector.
+                if let SceneEntityId::Object(object_id) = handle {
+                    self.activate_project_for_object(object_id);
+                }
+                // Clicking what is already selected takes it back out of the
+                // selection, so a whole-scene entity can be dropped without
+                // going for empty space.
+                let already_selected = match hole {
+                    Some(hole) => self.editor.selected_drill_holes.contains(&hole),
+                    None => {
+                        matches!(
+                            handle,
+                            SceneEntityId::Triangulation(_) | SceneEntityId::BlockModel(_) | SceneEntityId::DrillHole(_) | SceneEntityId::PointCloud(_)
+                        ) && self.editor.selected_handles.contains(&handle)
+                    }
+                };
                 let selection_mode = if self.modifiers.shift_key() {
                     SelectionMode::Toggle
                 } else if self.modifiers.control_key() {
                     SelectionMode::Add
-                } else if self.editor.selected_handles.contains(&handle) {
+                } else if already_selected {
                     SelectionMode::Toggle
                 } else {
                     SelectionMode::Replace
                 };
-                self.editor.on_canvas_pick(handle, world, selection_mode);
+                match hole {
+                    Some(hole) => self.editor.on_drill_hole_pick(hole, world, selection_mode),
+                    None => self.editor.on_canvas_pick(handle, world, selection_mode),
+                }
                 self.active_triangulation = match handle {
                     SceneEntityId::Triangulation(id) if self.editor.selected_handles.contains(&handle) => Some(id),
                     _ => None,
