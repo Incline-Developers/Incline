@@ -1542,6 +1542,7 @@ pub(crate) struct EditorState {
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
+    pub(crate) workspace_order: [Workspace; 4],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
     pub(crate) delay_products: Vec<DelayProduct>,
@@ -2296,6 +2297,7 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Object,
             active_workspace: Workspace::Production,
+            workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
             active_delay_product: builtin_delay_products().first().map(|product| product.id),
@@ -2736,6 +2738,10 @@ pub(crate) enum UiCommand {
     SetShowPoints(bool),
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
+    ReorderWorkspace {
+        workspace: Workspace,
+        before: Option<Workspace>,
+    },
     /// Switch the UI language from the status bar's picker. Applied live and
     /// saved into the config, exactly as any other preference is.
     SetLanguage(crate::i18n::LanguageChoice),
@@ -3052,6 +3058,7 @@ impl UiCommand {
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
             | Self::ApplyPreferences(_)
+            | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
             | Self::SetInitiation { .. }
@@ -3522,7 +3529,7 @@ impl UiProjectView {
 /// tabs decide what its editors show. Production, Drill & Blast and Geology are
 /// built out; Planning carries what every workspace does and is where the
 /// scheduling tools will go.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Workspace {
     Production,
     DrillAndBlast,
@@ -3531,7 +3538,7 @@ pub(crate) enum Workspace {
 }
 
 impl Workspace {
-    /// Every workspace, in the order the tabs are drawn.
+    /// Every workspace, in the default tab order.
     pub(crate) const ALL: [Self; 4] = [Self::Production, Self::DrillAndBlast, Self::Geology, Self::Planning];
 
     pub(crate) fn label(self) -> String {

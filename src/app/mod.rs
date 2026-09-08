@@ -581,6 +581,14 @@ impl<'a> App<'a> {
     }
 
     fn apply_config(&mut self, config: io::Config) {
+        let mut order = Vec::new();
+        for workspace in config.workspace_order.iter().chain(crate::ui::state::Workspace::ALL.iter()) {
+            if !order.contains(workspace) {
+                order.push(*workspace);
+            }
+        }
+        self.editor.workspace_order = order.try_into().expect("all workspaces appear exactly once");
+        self.editor.active_workspace = self.editor.workspace_order[0];
         // The status bar's picker switches this live afterwards; here it just
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;

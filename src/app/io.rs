@@ -221,6 +221,8 @@ pub(crate) struct Config {
     /// here with the rest of what outlives a project.
     #[serde(default = "default_delay_products")]
     pub(crate) delay_products: Vec<StoredDelayProduct>,
+    #[serde(default)]
+    pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
 }
 
 impl Default for Config {
@@ -256,6 +258,7 @@ impl Default for Config {
             fly_near_clip_limit: default_fly_near_clip_limit(),
             fly_max_clip_span: default_fly_max_clip_span(),
             delay_products: default_delay_products(),
+            workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
         }
     }
 }

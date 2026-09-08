@@ -61,7 +61,11 @@ impl<'a> App<'a> {
         preferences.fly_near_clip_limit = crate::app::io::finite_clamped(preferences.fly_near_clip_limit, 0.01, 100.0, crate::app::io::default_fly_near_clip_limit());
         preferences.fly_max_clip_span = crate::app::io::finite_clamped(preferences.fly_max_clip_span, 100.0, 1_000_000.0, crate::app::io::default_fly_max_clip_span());
 
-        crate::app::io::save_config(&config_from(&preferences, self.editor.delay_products.iter().map(DelayProduct::to_stored).collect()))?;
+        crate::app::io::save_config(&config_from(
+            &preferences,
+            self.editor.workspace_order,
+            self.editor.delay_products.iter().map(DelayProduct::to_stored).collect(),
+        ))?;
 
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
@@ -205,8 +209,13 @@ impl<'a> App<'a> {
 /// whole: a save that left a field out of the literal would drop whatever the
 /// last one had put there. The products are passed in rather than read off the
 /// draft because they are not a preference the settings tabs edit - the
-/// palette owns them, and both callers hand over the same list.
-pub(crate) fn config_from(preferences: &crate::ui::state::PreferencesDraft, delay_products: Vec<crate::app::io::StoredDelayProduct>) -> crate::app::io::Config {
+/// palette owns them. The workspace order is passed separately for the same
+/// reason, so saving preferences or products preserves the tab arrangement.
+pub(crate) fn config_from(
+    preferences: &crate::ui::state::PreferencesDraft,
+    workspace_order: [crate::ui::state::Workspace; 4],
+    delay_products: Vec<crate::app::io::StoredDelayProduct>,
+) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
         dark_mode: preferences.dark_mode,
@@ -238,5 +247,6 @@ pub(crate) fn config_from(preferences: &crate::ui::state::PreferencesDraft, dela
         fly_near_clip_limit: preferences.fly_near_clip_limit,
         fly_max_clip_span: preferences.fly_max_clip_span,
         delay_products,
+        workspace_order: workspace_order.to_vec(),
     }
 }

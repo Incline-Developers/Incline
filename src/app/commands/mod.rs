@@ -625,6 +625,25 @@ impl<'a> App<'a> {
                 }
                 Ok(())
             }
+            UiCommand::ReorderWorkspace { workspace, before } => {
+                let mut order = self.editor.workspace_order.to_vec();
+                if before != Some(workspace) {
+                    order.retain(|item| *item != workspace);
+                    let index = before.and_then(|target| order.iter().position(|item| *item == target)).unwrap_or(order.len());
+                    order.insert(index, workspace);
+                    let order = order.try_into().expect("reordering preserves all workspaces");
+                    if self.editor.workspace_order != order {
+                        let config = view::config_from(
+                            &self.editor.current_preferences(),
+                            order,
+                            self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
+                        );
+                        crate::app::io::save_config(&config)?;
+                        self.editor.workspace_order = order;
+                    }
+                }
+                Ok(())
+            }
             UiCommand::ApplyPreferences(preferences) => self.apply_preferences(preferences),
             UiCommand::SetLanguage(choice) => self.set_language(choice),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),

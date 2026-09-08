@@ -148,11 +148,100 @@ fn draw_separator(ui: &mut egui::Ui) {
     ui.add_space(SEPARATOR_MARGIN);
 }
 
-/// Draw the run of workspace tabs.
+/// A drag previews the order locally; only releasing commits it to settings.
+#[derive(Clone)]
+struct WorkspaceTabDrag {
+    workspace: Workspace,
+    order: [Workspace; 4],
+    grab_offset: f32,
+}
+
+/// Draw the run of workspace tabs, sliding neighbours out of the dragged tab's way.
 fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, bar_fill: egui::Color32) {
-    for workspace in Workspace::ALL {
-        draw_workspace_tab(ui, editor, commands, workspace, bar_fill);
+    let drag_id = ui.id().with("workspace-tab-drag");
+    let mut drag = ui.ctx().data_mut(|data| data.get_temp::<WorkspaceTabDrag>(drag_id));
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let widths = Workspace::ALL.map(|workspace| ui.painter().layout_no_wrap(workspace.label(), font.clone(), egui::Color32::PLACEHOLDER).size().x + TAB_PADDING * 2.0);
+    let width = |workspace| widths[Workspace::ALL.iter().position(|item| *item == workspace).unwrap()];
+    let spacing = ui.spacing().item_spacing.x;
+    let total_width = widths.iter().sum::<f32>() + spacing * 3.0;
+    let (strip, _) = ui.allocate_exact_size(egui::vec2(total_width, TAB_HEIGHT), egui::Sense::hover());
+    let pointer = ui.input(|input| input.pointer.interact_pos());
+    let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    if cancelled {
+        drag = None;
     }
+    if let Some(drag) = &mut drag
+        && let Some(pointer) = pointer
+    {
+        let center = pointer.x - drag.grab_offset + width(drag.workspace) / 2.0;
+        let mut index = drag.order.iter().position(|item| *item == drag.workspace).unwrap();
+        let mut x = strip.left();
+        let centers = drag.order.map(|workspace| {
+            let center = x + width(workspace) / 2.0;
+            x += width(workspace) + spacing;
+            center
+        });
+        while index > 0 && center < centers[index - 1] {
+            drag.order.swap(index, index - 1);
+            index -= 1;
+        }
+        while index + 1 < drag.order.len() && center > centers[index + 1] {
+            drag.order.swap(index, index + 1);
+            index += 1;
+        }
+    }
+    let order = drag.as_ref().map_or(editor.workspace_order, |drag| drag.order);
+    let mut x = strip.left();
+    let mut tabs = Vec::new();
+    for workspace in order {
+        let id = ui.id().with(("workspace-tab", workspace));
+        let animated_x = ui.ctx().animate_value_with_time(id.with("position"), x, 0.12);
+        let left = if let Some(drag) = &drag
+            && drag.workspace == workspace
+            && let Some(pointer) = pointer
+        {
+            (pointer.x - drag.grab_offset).clamp(strip.left(), strip.right() - width(workspace))
+        } else {
+            animated_x
+        };
+        let rect = egui::Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(width(workspace), TAB_HEIGHT));
+        tabs.push((workspace, id, rect));
+        x += width(workspace) + spacing;
+    }
+    // Paint the held tab last so it travels above its sliding neighbours.
+    tabs.sort_by_key(|(workspace, _, _)| drag.as_ref().is_some_and(|drag| drag.workspace == *workspace));
+    for (workspace, id, rect) in tabs {
+        let response = draw_workspace_tab(ui, editor, commands, workspace, bar_fill, id, rect);
+        if response.drag_started() && !cancelled {
+            let press = ui.input(|input| input.pointer.press_origin()).unwrap_or(rect.center());
+            drag = Some(WorkspaceTabDrag {
+                workspace,
+                order,
+                grab_offset: press.x - rect.left(),
+            });
+        }
+    }
+    if ui.input(|input| input.pointer.any_released()) {
+        if let Some(drag) = drag.take()
+            && drag.order != editor.workspace_order
+        {
+            let index = drag.order.iter().position(|item| *item == drag.workspace).unwrap();
+            commands.push(UiCommand::ReorderWorkspace {
+                workspace: drag.workspace,
+                before: drag.order.get(index + 1).copied(),
+            });
+        }
+    } else if !ui.input(|input| input.pointer.primary_down()) {
+        drag = None;
+    }
+    ui.ctx().data_mut(|data| {
+        if let Some(drag) = drag {
+            data.insert_temp(drag_id, drag);
+        } else {
+            data.remove::<WorkspaceTabDrag>(drag_id);
+        }
+    });
 }
 
 /// Open `workspace`, putting down anything the tools it does not carry had
@@ -204,7 +293,15 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
 /// A tab for a workspace that has nothing behind it yet is drawn as bare text
 /// on the bar rather than left off it, so the shape of the application is
 /// visible before all of it is built.
-fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace, bar_fill: egui::Color32) {
+fn draw_workspace_tab(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    commands: &mut Vec<UiCommand>,
+    workspace: Workspace,
+    bar_fill: egui::Color32,
+    id: egui::Id,
+    rect: egui::Rect,
+) -> egui::Response {
     let enabled = workspace.implemented();
     let selected = editor.active_workspace == workspace;
     let state = if !enabled {
@@ -221,8 +318,8 @@ fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
     // background: the weak text colour below is the whole of what a disabled tab
     // says about itself, and a fade would wash it out further. The colours below
     // say what state a tab is in; the sense is what stops it being clicked.
-    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(galley.size().x + TAB_PADDING * 2.0, TAB_HEIGHT), sense);
+    let sense = if enabled { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
+    let response = ui.interact(rect, id, sense);
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, workspace.label()));
 
     let visuals = ui.visuals();
@@ -237,6 +334,7 @@ fn draw_workspace_tab(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mu
     if response.clicked() {
         select_workspace(editor, commands, workspace);
     }
+    response
 }
 
 /// What a workspace tab is showing about itself.
