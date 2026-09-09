@@ -77,6 +77,7 @@ pub(crate) enum MacMenuAction {
     OpenPointCloudTin,
     OpenCreateBlockModel,
     OpenCreateOreTriangulation,
+    OpenPreferences,
     OpenAbout,
     UndrapeAllRasters,
     ShowProjectInFileManager,
@@ -139,6 +140,7 @@ impl MacMenuAction {
         Self::OpenPointCloudTin,
         Self::OpenCreateBlockModel,
         Self::OpenCreateOreTriangulation,
+        Self::OpenPreferences,
         Self::OpenAbout,
         Self::UndrapeAllRasters,
         Self::ShowProjectInFileManager,
@@ -307,6 +309,9 @@ pub(crate) fn install_menu_bar() {
     add_action(&file_menu, &tr!("menu-file-export"), "", MacMenuAction::OpenExport, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export-viewport-image"), "", MacMenuAction::ExportViewportImage, &target, mtm);
     add_action(&file_menu, &tr!("menu-file-export-engineering-drawing"), "", MacMenuAction::OpenPlotDialog, &target, mtm);
+    add_separator(&file_menu, mtm);
+    add_action(&file_menu, &tr!("preferences-title"), ",", MacMenuAction::OpenPreferences, &target, mtm);
+    add_action(&file_menu, &tr!("menu-file-about", app = crate::APP_NAME), "", MacMenuAction::OpenAbout, &target, mtm);
     add_submenu(&root, &tr!("menu-file"), &file_menu, mtm);
 
     // Switches onto the same settings the Interface preferences tab holds;

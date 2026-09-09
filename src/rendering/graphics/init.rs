@@ -50,6 +50,7 @@ impl<'a> Graphics<'a> {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|e| anyhow!("No compatible GPU adapter found: {e:?}"))?;
@@ -184,6 +185,7 @@ impl<'a> Graphics<'a> {
             alpha_mode,
             view_formats,
             desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         let sample_count = MSAA_SAMPLE_COUNT;
         let (msaa_color, msaa_view) = Self::create_msaa_target(&device, &config, sample_count);
@@ -569,54 +571,54 @@ impl<'a> Graphics<'a> {
             immediate_size: 0,
         });
 
-        let vertex_buffers = [wgpu::VertexBufferLayout {
+        let vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-        }];
-        let surface_vertex_buffers = [wgpu::VertexBufferLayout {
+        })];
+        let surface_vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<SurfaceVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-        }];
+        })];
         // One instance per block: lower.xyz + grade, then upper.xyz + pad.
         // The shader expands vertex_index 0..36 into the cube's faces.
-        let block_model_vertex_buffers = [wgpu::VertexBufferLayout {
+        let block_model_vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<BlockInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3],
-        }];
+        })];
 
-        let stroke_vertex_buffers = [wgpu::VertexBufferLayout {
+        let stroke_vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<StrokeVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Float32x2, 4 => Float32],
-        }];
-        let edge_instance_buffers = [wgpu::VertexBufferLayout {
+        })];
+        let edge_instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<EdgeInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-        }];
-        let point_uncolored_instance_buffers = [wgpu::VertexBufferLayout {
+        })];
+        let point_uncolored_instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<PointPosition>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-        }];
-        let point_colored_instance_buffers = [wgpu::VertexBufferLayout {
+        })];
+        let point_colored_instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<PointInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4],
-        }];
-        let drill_hole_instance_buffers = [wgpu::VertexBufferLayout {
+        })];
+        let drill_hole_instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<DrillSegmentInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
-        }];
-        let drill_collar_instance_buffers = [wgpu::VertexBufferLayout {
+        })];
+        let drill_collar_instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<DrillCollarInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
-        }];
+        })];
 
         let create_stroke_pipeline = |label, depth_stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1038,11 +1040,11 @@ impl<'a> Graphics<'a> {
             bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&raster_surface_bind_group_layout)],
             immediate_size: 0,
         });
-        let raster_plane_vertex_buffers = [wgpu::VertexBufferLayout {
+        let raster_plane_vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: (size_of::<f32>() * 4) as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
-        }];
+        })];
         let raster_plane_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Raster Plane Pipeline"),
             layout: Some(&raster_plane_pipeline_layout),

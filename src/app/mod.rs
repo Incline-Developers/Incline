@@ -517,6 +517,7 @@ impl<'a> App<'a> {
             }
             MacMenuAction::ExportViewportImage => Some(UiCommand::ExportViewportImage),
             MacMenuAction::OpenPlotDialog => Some(UiCommand::OpenPlotDialog),
+            MacMenuAction::OpenPreferences => Some(UiCommand::OpenPreferences),
             MacMenuAction::OpenAbout => {
                 self.editor.show_about = true;
                 None
@@ -1647,28 +1648,14 @@ impl<'a> App<'a> {
         let mut triangulations = self
             .triangulations
             .iter()
-            .map(|tri| {
-                let bounds = tri.mesh.bounds();
-                UiTriangulationEntry {
-                    id: tri.id,
-                    name: tri.name.clone(),
-                    source_name: tri.state.source_name.clone(),
-                    is_active: self.active_triangulation == Some(tri.id),
-                    is_loaded: tri.state.loaded,
-                    dirty: tri.state.is_dirty(),
-                    color: tri.color,
-                    vertex_count: tri.state.summary.as_ref().map_or_else(|| tri.mesh.vertex_count(), |summary| summary.primary_count),
-                    triangle_count: tri.state.summary.as_ref().map_or_else(|| tri.mesh.face_count(), |summary| summary.secondary_count),
-                    bounds: tri.state.summary.as_ref().map_or_else(
-                        || {
-                            Some((
-                                glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z),
-                                glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z),
-                            ))
-                        },
-                        |summary| summary.bounds,
-                    ),
-                }
+            .map(|tri| UiTriangulationEntry {
+                id: tri.id,
+                name: tri.name.clone(),
+                source_name: tri.state.source_name.clone(),
+                is_active: self.active_triangulation == Some(tri.id),
+                is_loaded: tri.state.loaded,
+                dirty: tri.state.is_dirty(),
+                color: tri.color,
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -1686,7 +1673,6 @@ impl<'a> App<'a> {
                     .as_ref()
                     .map_or_else(|| model.renderable_block_indices.len(), |summary| summary.primary_count),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
-                bounds: model.world_bounds(),
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self
@@ -1704,7 +1690,6 @@ impl<'a> App<'a> {
                     .summary
                     .as_ref()
                     .map_or_else(|| dataset.dataset.fields.len(), |summary| summary.secondary_count),
-                bounds: dataset.state.summary.as_ref().map_or(dataset.dataset.bounds, |summary| summary.bounds),
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -1717,7 +1702,6 @@ impl<'a> App<'a> {
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
-                bounds: cloud.state.summary.as_ref().map_or(Some(cloud.bounds), |summary| summary.bounds),
             })
             .collect::<Vec<_>>();
         let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();

@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use winit::keyboard::PhysicalKey;
 
 use super::{frustum::Frustum, *};
-use crate::rendering::pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point};
+use crate::{
+    rendering::pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point},
+    ui::state::ActiveTool,
+};
 
 /// Ground distance a view with nothing to frame spans across the viewport, in
 /// metres. Mine design starts at pit scale, so an empty scene opens on a few
@@ -1178,13 +1181,9 @@ impl<'a> Graphics<'a> {
         (min_depth, max_depth)
     }
 
-    /// Ensure an in-progress drawing remains inside the camera's clip volume
-    /// even when its drawing plane lies outside the committed scene.
-    pub(super) fn include_pending_stroke_in_depth(&mut self, editor: &EditorState) {
-        if editor.pending_stroke.is_empty() && editor.circle_draft.is_none() {
-            return;
-        }
-
+    /// Keep drawing, slice-line and measurement previews inside the clip volume
+    /// even when their endpoints lie outside the committed scene.
+    pub(super) fn include_tool_previews_in_depth(&mut self, editor: &EditorState) {
         let forward = self.camera.forward();
         let depth_from_camera = |point: DVec3| {
             let point = self.exaggerate_point(point);
@@ -1229,6 +1228,65 @@ impl<'a> Graphics<'a> {
                 min_depth = min_depth.min(depth);
                 max_depth = max_depth.max(depth);
             }
+        }
+
+        let mut include = |point: DVec3| {
+            if point.is_finite() {
+                let depth = depth_from_camera(point);
+                min_depth = min_depth.min(depth);
+                max_depth = max_depth.max(depth);
+            }
+        };
+        // Tie overlays are emitted directly from their stored preview state.
+        if let Some(anchor) = editor.tie_anchor_world {
+            include(anchor);
+            if let Some(end) = editor.tie_path_end_world {
+                include(end);
+            }
+        }
+        for leg in &editor.tie_preview {
+            include(leg.start);
+            include(leg.end);
+        }
+        match editor.active_tool {
+            ActiveTool::MakeCircle => {
+                // The centre cross is visible even before a radius is available.
+                if let Some(draft) = &editor.circle_draft {
+                    include(draft.center);
+                }
+            }
+            ActiveTool::VerticalSlice => {
+                if let Some(start) = editor.slice_pending_start {
+                    include(start);
+                    if let Some(cursor) = editor.cursor_world {
+                        // Match the flat XY preview drawn in scene::overlays.
+                        include(DVec3::new(cursor.x, cursor.y, start.z));
+                    }
+                }
+            }
+            ActiveTool::MeasureDistance => {
+                if let Some(start) = editor.measurement_start {
+                    include(start);
+                    if let Some(end) = editor.measurement_end.or(editor.cursor_world) {
+                        include(end);
+                    }
+                }
+            }
+            ActiveTool::MeasureBatterAngle => {
+                let mut points = editor.batter_angle_points.clone();
+                if points.len() < 3
+                    && let Some(cursor) = editor.cursor_world
+                {
+                    points.push(cursor);
+                }
+                for &point in &points {
+                    include(point);
+                }
+                if let Some(measurement) = crate::ui::state::batter_angle_measurement(&points) {
+                    include(measurement.projection);
+                }
+            }
+            _ => {}
         }
 
         if min_depth.is_finite() {

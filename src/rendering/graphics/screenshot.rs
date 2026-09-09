@@ -210,7 +210,7 @@ fn encode_mapped_png(capture: &PendingScreenshot) -> Result<Vec<u8>> {
             return Err(anyhow!("Unsupported surface format for image export: {other:?}"));
         }
     };
-    let padded = capture.buffer.get_mapped_range(..);
+    let padded = capture.buffer.get_mapped_range(..)?;
     let row_bytes = capture.width as usize * 4;
     let mut rgba = Vec::with_capacity(row_bytes * capture.height as usize);
     for row in padded.chunks_exact(capture.padded_bytes_per_row as usize) {

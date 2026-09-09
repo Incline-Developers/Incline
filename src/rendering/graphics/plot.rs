@@ -273,7 +273,7 @@ fn unpack_mapped_rgba(capture: &PendingPlotMap) -> Result<Vec<u8>> {
         wgpu::TextureFormat::Rgba8Unorm => false,
         other => return Err(anyhow!("Unsupported surface format for plot export: {other:?}")),
     };
-    let padded = capture.buffer.get_mapped_range(..);
+    let padded = capture.buffer.get_mapped_range(..)?;
     let row_bytes = capture.width as usize * 4;
     let mut rgba = Vec::with_capacity(row_bytes * capture.height as usize);
     for row in padded.chunks_exact(capture.padded_bytes_per_row as usize) {

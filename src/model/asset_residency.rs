@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use glam::DVec3;
 
 use super::{
     OpenItem,
@@ -17,7 +16,6 @@ use super::{
 pub(crate) struct AssetSummary {
     pub(crate) primary_count: usize,
     pub(crate) secondary_count: usize,
-    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 impl OpenItem {
@@ -63,11 +61,9 @@ impl OpenItem {
     pub(crate) fn release_payload(&mut self) {
         let summary = match self {
             Self::Triangulation(item) => {
-                let bounds = item.mesh.bounds();
                 let summary = AssetSummary {
                     primary_count: item.mesh.vertex_count(),
                     secondary_count: item.mesh.face_count(),
-                    bounds: Some((DVec3::from_array(bounds.min.as_array()), DVec3::from_array(bounds.max.as_array()))),
                 };
                 item.mesh = Arc::new(super::formats::mesh_data::Triangulation::empty());
                 item.spatial = Arc::new(super::spatial::TriangleBvh::build(&item.mesh));
@@ -79,7 +75,6 @@ impl OpenItem {
                 let summary = AssetSummary {
                     primary_count: item.renderable_block_indices.len(),
                     secondary_count: item.model.metadata.variables.len(),
-                    bounds: item.world_bounds,
                 };
                 item.model.release_values();
                 item.blocks = Arc::new(super::block_model::BlockBoundsSource::Explicit(Vec::new()));
@@ -91,7 +86,6 @@ impl OpenItem {
                 let summary = AssetSummary {
                     primary_count: item.dataset.holes.len(),
                     secondary_count: item.dataset.fields.len(),
-                    bounds: item.dataset.bounds,
                 };
                 item.dataset = Arc::new(super::drill_hole::DrillHoleDataset::new(Vec::new()));
                 summary
@@ -100,7 +94,6 @@ impl OpenItem {
                 let summary = AssetSummary {
                     primary_count: item.points.len(),
                     secondary_count: 0,
-                    bounds: Some(item.bounds),
                 };
                 item.points = Arc::new(Vec::new());
                 item.colors = None;
