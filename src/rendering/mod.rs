@@ -5,6 +5,7 @@ pub(crate) mod graphics;
 pub(crate) mod pick;
 pub(crate) mod query;
 pub(crate) mod scene;
+pub(crate) mod section_grid;
 pub(crate) mod snap;
 pub(crate) mod text;
 

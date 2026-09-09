@@ -158,7 +158,7 @@ impl GridUniform {
             color
         }
 
-        let luminance = background[0] * 0.2126 + background[1] * 0.7152 + background[2] * 0.0722;
+        let luminance = crate::rendering::color::relative_luminance(background);
         let (minor_color, major_color, x_axis_color, y_axis_color) = if luminance > 0.35 {
             (color([72, 77, 82], 0.28), color([55, 60, 66], 0.46), color([130, 62, 66], 0.78), color([67, 108, 57], 0.78))
         } else {

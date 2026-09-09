@@ -339,8 +339,6 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     if editor.slice_mode_enabled {
-        // A snap target is generally off the section plane, so this view
-        // disables snapping and says so on the minor line while a snap mode is selected.
         let gestures = tr!(literal = "middle-drag pan · right-drag orbit · Shift+wheel walk · W/S move slab · Q/E rotate · Reset Section View squares up · Esc exit");
         return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(if editor.cursor_mode.snaps() {
             tr_format!(literal = "no snapping · %gestures%", gestures = gestures.as_str())
@@ -613,6 +611,9 @@ fn draw_ui(
     // - lays itself out in.
     let canvas_rect = scene_rect;
     *canvas_rect_out = canvas_rect;
+
+    // Draw first so later overlays paint above it.
+    widgets::viewport::draw_section_grid(root_ui, editor, canvas_rect);
 
     draw_initiation_cards(root_ui, editor, canvas_rect);
 

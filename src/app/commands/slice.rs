@@ -84,8 +84,7 @@ impl<'a> App<'a> {
         self.leave_slice_mode();
     }
 
-    /// Leaves the vertical slice view; a half-drawn stroke, the active tool and any picks carry over into plan view.
-    /// Every exit from slice mode runs through here, so this is the one place that has to know.
+    /// Single exit point for slice mode; a half-drawn stroke, the active tool and any picks carry over into plan view.
     pub(crate) fn leave_slice_mode(&mut self) {
         if !self.editor.slice_mode_enabled {
             return;
@@ -122,7 +121,14 @@ impl<'a> App<'a> {
         self.editor.slice_mode_enabled && !self.right_orbit_active
     }
 
-    /// Re-projects the cursor onto the section after it moves with no mouse event behind it; a section never honours a snap.
+    /// Toggles the section grid: elevation levels plus easting/northing lines where the cut face crosses them. Not persisted with the project.
+    pub(crate) fn set_slice_grid_enabled(&mut self, enabled: bool) {
+        self.editor.slice_grid_enabled = enabled;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr_format!(literal = "Set section grid = %enabled%", enabled = enabled));
+    }
+
+    /// Re-projects the cursor onto the section after a camera move with no mouse event behind it; always unsnapped, since a section never honours a snap.
     pub(crate) fn refresh_slice_cursor(&mut self) {
         if !self.slice_cursor_tracks_section() {
             return;

@@ -3,7 +3,8 @@
 use super::*;
 use crate::{
     app::commands::drawing::rotate_collar::{ring_axis, ring_basis},
-    ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen},
+    rendering::section_grid,
+    ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen, SectionGridLine, SectionGridLineKind},
 };
 
 pub(crate) type ScreenSegmentPx = ((f32, f32), (f32, f32));
@@ -79,6 +80,10 @@ const ROTATE_RING_FADE_FULL: f32 = 0.28;
 /// units. Long enough to measure cleanly, short enough that a perspective
 /// view's scale is still the collar's own.
 const CARD_SCALE_PROBE_WORLD: f64 = 1.0;
+
+/// Cap on grid lines per axis; `grid_values` coarsens spacing to stay under
+/// it rather than dropping the axis.
+const MAX_GRID_LINES: usize = 64;
 
 fn fade_ramp(value: f32, min: f32, max: f32) -> f32 {
     if value <= min {
@@ -374,6 +379,57 @@ impl<'a> Graphics<'a> {
         )
     }
 
+    /// Section grid in window pixels: elevation levels plus world easting/northing lines where the cut crosses them.
+    fn build_section_grid(&self) -> Vec<SectionGridLine> {
+        let Some(slice) = self.slice_view.as_ref() else { return Vec::new() };
+        let screen = self.screen_size();
+
+        // Sized from zoom alone, not the viewport corners, so an orbit does not re-rule the grid.
+        let half_length = slice_visible_half_length(self.projection.zoom, screen);
+        let half_height = self.projection.zoom;
+
+        // half_height is display units (exaggerated); bottom/top are true
+        // metres via unexaggeration - eastings/northings need no such step.
+        let bottom = self.unexaggerate_point(slice.center - DVec3::Z * half_height).z;
+        let top = self.unexaggerate_point(slice.center + DVec3::Z * half_height).z;
+
+        let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
+        let points_per_pixel = 1.0 / self.window.scale_factor();
+        let strike_pt = 2.0 * half_length / world_per_pixel * points_per_pixel;
+        let height_pt = 2.0 * half_height / world_per_pixel * points_per_pixel;
+
+        // Axis and elevation get separate spacing: exaggeration keeps a screen cell from being square.
+        let axis = section_grid::upright_axis(slice.direction);
+        let axis_spacing = section_grid::grid_spacing(section_grid::upright_span(slice.direction, half_length), strike_pt);
+        let elevation_spacing = section_grid::grid_spacing(top - bottom, height_pt);
+
+        let view_proj = self.view_proj();
+        let center_xy = slice.center.truncate();
+        // Unclipped depth: a line must not vanish for reaching outside the section's thin depth slab.
+        let project =
+            |along_strike: f64, elevation: f64| self.world_to_window_px_unclipped_depth(&view_proj, section_grid::plane_point(center_xy, slice.direction, along_strike, elevation));
+        let mut lines = Vec::new();
+        let mut push = |from: (f64, f64), to: (f64, f64), value: f64, kind: SectionGridLineKind| {
+            if let (Some(from_px), Some(to_px)) = (project(from.0, from.1), project(to.0, to.1)) {
+                lines.push(SectionGridLine { from_px, to_px, value, kind });
+            }
+        };
+
+        // Level = constant true elevation; Upright = fixed at a world easting/northing regardless of orbit.
+        for elevation in section_grid::grid_values((bottom, top), elevation_spacing, MAX_GRID_LINES) {
+            push((-half_length, elevation), (half_length, elevation), elevation, SectionGridLineKind::Level);
+        }
+        for crossing in section_grid::upright_crossings(center_xy, slice.direction, half_length, axis_spacing, MAX_GRID_LINES) {
+            push(
+                (crossing.along_strike, bottom),
+                (crossing.along_strike, top),
+                crossing.value,
+                SectionGridLineKind::Upright(axis),
+            );
+        }
+        lines
+    }
+
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
         // Where the snap landed, for the drawn cursor to mark. The snapped
         // point is the one the tool will use, and it is not the pointer: it
@@ -469,6 +525,12 @@ impl<'a> Graphics<'a> {
         } else {
             editor.batter_berm_source_screen_px.clear();
             editor.batter_berm_rings_screen_px.clear();
+        }
+
+        if editor.slice_grid_enabled {
+            editor.section_grid_px = self.build_section_grid();
+        } else {
+            editor.section_grid_px.clear();
         }
 
         use crate::ui::state::ActiveTool;

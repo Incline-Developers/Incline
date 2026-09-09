@@ -305,6 +305,29 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                         });
                     }
 
+                    // Plan has no cut face for the grid to trace, so it is
+                    // hidden here rather than shown disabled.
+                    if editor.slice_mode_enabled {
+                        ui.add_space(12.);
+
+                        let grid = ui.add(
+                            ToolbarButton::new(
+                                egui::Image::new(themed_icon!(ui, "section_grid.svg")),
+                                if editor.slice_grid_enabled {
+                                    tr!(literal = "Hide RL Grid")
+                                } else {
+                                    tr!(literal = "Show RL Grid")
+                                },
+                            )
+                            .id_salt("section_grid")
+                            .button_side(side)
+                            .selected(editor.slice_grid_enabled),
+                        );
+                        if grid.clicked() {
+                            commands.push(UiCommand::SetSliceGridEnabled(!editor.slice_grid_enabled));
+                        }
+                    }
+
                     // Task progress hugs the right end of the strip, out of the
                     // way of the tools and with room to say what is running -
                     // the status bar had neither.

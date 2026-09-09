@@ -729,6 +729,30 @@ pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::Colla
     }
 }
 
+/// Horizontal axis of an upright section-grid line: `Easting` lines run at constant E, `Northing` at constant N.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SectionGridAxis {
+    Easting,
+    Northing,
+}
+
+/// Kind of section-grid line: `Level` at constant elevation, `Upright` where the cut crosses a world easting/northing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SectionGridLineKind {
+    Level,
+    Upright(SectionGridAxis),
+}
+
+/// One frame's screen-space projection of a section-grid line, in physical pixels matching `cursor_screen_px`.
+#[derive(Clone, Copy)]
+pub(crate) struct SectionGridLine {
+    pub(crate) from_px: (f32, f32),
+    pub(crate) to_px: (f32, f32),
+    /// World coordinate in metres: elevation for a level line, easting or northing for an upright one.
+    pub(crate) value: f64,
+    pub(crate) kind: SectionGridLineKind,
+}
+
 /// Plane-handle index used for the Move gizmo's view-aligned ring, which
 /// translates in the camera plane instead of a world-axis plane.
 pub(crate) const MOVE_GIZMO_VIEW_PLANE: u8 = 3;
@@ -1144,6 +1168,9 @@ pub(crate) struct EditorState {
     pub(crate) slice_direction: [f64; 2],
     /// Half-width of the section currently visible in the main viewport.
     pub(crate) slice_half_length: f64,
+    /// Whether the section shows the world grid (constant-elevation and easting/northing lines).
+    pub(crate) slice_grid_enabled: bool,
+    pub(crate) section_grid_px: Vec<SectionGridLine>,
 
     // Selection box
     /// Physical-pixel bounds of an in-progress box selection.
@@ -2089,6 +2116,8 @@ impl EditorState {
             slice_center: [0.0; 3],
             slice_direction: [1.0, 0.0],
             slice_half_length: 0.0,
+            slice_grid_enabled: false,
+            section_grid_px: Vec::new(),
             selection_box_start_px: None,
             selection_box_current_px: None,
             drape_phase: DrapePhase::Designs,
@@ -2762,6 +2791,8 @@ pub(crate) enum UiCommand {
     ResetView,
     /// Squares the camera to the section plane without leaving slice mode or changing the section itself, unlike `ResetView`.
     ResetSliceView,
+    /// Show or hide the world grid ruled across the section.
+    SetSliceGridEnabled(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     SetStandardView(StandardView),
@@ -3191,6 +3222,7 @@ impl UiCommand {
                 tr!(literal = "Set Topology Wireframes"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
             ),
+            Self::SetSliceGridEnabled(enabled) => report(tr!(literal = "Set Section Grid"), if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
             Self::SetShowPoints(enabled) => report(
                 tr!(literal = "Set Point Visibility"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },

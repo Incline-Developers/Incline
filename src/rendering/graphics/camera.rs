@@ -80,7 +80,6 @@ fn point_in_polygon(point: DVec2, polygon: &[DVec2]) -> bool {
     !(left && right)
 }
 
-/// Whether a polygon touches the box: a corner of either inside the other, an edge crossing, or the box lying wholly inside the shape.
 fn polygon_touches_rect(polygon: &[DVec2], rect: ScreenRect) -> bool {
     if polygon.iter().any(|&point| rect.contains(point)) {
         return true;
@@ -187,7 +186,7 @@ fn hole_legs(hole: &crate::model::drill_hole::DrillHole) -> impl Iterator<Item =
     hole.trace.windows(2).map(|pair| (pair[0].position, pair[1].position)).chain(point)
 }
 
-/// The part of a text label's quad the section shows, projected to the screen; a label is clipped glyph by glyph, so one straddling a wall is measured only by its shown part.
+/// The part of a text label's quad the section shows, projected to the screen; the label is one quad, clipped whole, so one straddling a wall is measured only by its shown part.
 fn visible_text_polygon(record: &TextPickRecord, slab: Option<SectionSlab>, view_proj: &DMat4, screen: Size) -> Option<Vec<DVec2>> {
     project_polygon(view_proj, screen, &slab_clipped_polygon(slab, &record.corners)?)
 }
@@ -204,7 +203,6 @@ fn pick_record_touches_rect(
     if !pick_record_bounds_may_touch_rect(record, view_proj, screen, rect) {
         return false;
     }
-    // A vertex in the box settles it without walking the record's triangles.
     if visible_screen_vertices(group, record, scene_origin, slab, view_proj, screen).any(|point| rect.contains(point)) {
         return true;
     }
@@ -411,32 +409,33 @@ impl<'a> Graphics<'a> {
         (near, (far - near).normalize())
     }
 
+    /// True (unexaggerated) world point where viewport-relative physical
+    /// pixel `px` meets the current section plane, or `None` when there is
+    /// no sound answer. A slice camera looks horizontally, so this unprojects
+    /// onto the section plane rather than a horizontal Z plane.
+    /// `cursor_world_at_target_depth` cannot substitute: its offset from the
+    /// section changes with zoom, so picks at different zoom land off-plane.
+    pub(super) fn section_point_at_px(&self, px: (f32, f32)) -> Option<DVec3> {
+        let screen = self.screen_size();
+        let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
+        let slice = self.slice_view.as_ref()?;
+        let on_section = screen_to_world_on_section_plane(&self.camera, self.projection.zoom, aspect, screen, px, slice.center, slice.normal());
+        // Feeds the coordinate readout, measure tools, and placed geometry;
+        // `None` covers a degenerate viewport or an edge-on section.
+        on_section.filter(|point| point.is_finite()).map(|point| self.unexaggerate_point(point))
+    }
+
     /// World coordinate under the current cursor, using the last cursor
     /// position tracked by the camera controller. In plan and 3D views the
     /// point lies on the plane `z = plane_z`; in the vertical slice view it
     /// lies on the section plane and `plane_z` is ignored.
     pub(crate) fn cursor_world(&self, plane_z: f64) -> Option<DVec3> {
+        // In slice mode this is always the section-plane point under the cursor.
+        if self.slice_view.is_some() {
+            return self.section_point_at_px(self.camera_controller.mouse_loc);
+        }
         let screen = self.screen_size();
         let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
-        // A slice camera looks horizontally, so it never intersects a
-        // horizontal Z plane; the cursor is unprojected onto the section plane instead, not whatever plane the camera is orbited to.
-        if let Some(slice) = self.slice_view.as_ref() {
-            let on_section = screen_to_world_on_section_plane(
-                &self.camera,
-                self.projection.zoom,
-                aspect,
-                screen,
-                self.camera_controller.mouse_loc,
-                slice.center,
-                slice.normal(),
-            );
-            // This point feeds the coordinate readout and the measure tools, and
-            // the tools that place geometry on the section, so it can end up in
-            // the document and in a saved file. A degenerate viewport would make
-            // it non-finite, and an edge-on section gives none either; both report no cursor, the way the plan view's
-            // `screen_to_world_on_plane` reports a view it cannot solve.
-            return on_section.filter(|point| point.is_finite()).map(|point| self.unexaggerate_point(point));
-        }
         let displayed_plane_z = self.scene_origin.z + (plane_z - self.scene_origin.z) * self.vertical_exaggeration;
         screen_to_world_on_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc, displayed_plane_z)
             .map(|point| self.unexaggerate_point(point))
@@ -661,7 +660,6 @@ impl<'a> Graphics<'a> {
             if frozen.contains(&record.entity) {
                 continue;
             }
-            // A label is clipped at the walls glyph by glyph, so the box only has to enclose the part of it that shows.
             let Some(polygon) = visible_text_polygon(record, slab, &view_proj, screen) else {
                 continue;
             };
@@ -878,15 +876,12 @@ impl<'a> Graphics<'a> {
                 .min_by(|a, b| (*a - ray_origin).dot(direction).total_cmp(&(*b - ray_origin).dot(direction)))
                 .unwrap_or_else(|| {
                     // No asset surface hit - try picking any document object
-                    // near the cursor so the pivot lands on visible geometry,
-                    // then the working plane under the cursor, and only then
-                    // the camera-target depth, which is a view that looks
-                    // along the working plane and cannot meet it.
+                    // near the cursor, then the working plane under it, then
+                    // the camera-target depth if the view can't meet the plane.
                     self.pick_at_cursor(SNAP_THRESHOLD_PX, triangulations, hidden, frozen, false)
                         .map(|(_, world)| world)
                         .or_else(|| {
-                            // A tilted view can have the working plane behind
-                            // it; a pivot there would sit behind the viewer.
+                            // Reject a working-plane hit behind the viewer (a tilted view can put the plane there).
                             self.cursor_world(working_plane_z)
                                 .filter(|point| (self.exaggerate_point(*point) - self.camera.position).dot(self.camera.forward()) > 0.0)
                         })
@@ -1330,7 +1325,6 @@ impl<'a> Graphics<'a> {
             slice.orbit = DVec2::ZERO;
         }
 
-        // The camera side after the orbit above; walk/pan below are defined against it so they read the same from either side of the cut (Q/E rotate the section itself, not the eye).
         let normal = slice.normal();
         let (forward, right, up) = slice.camera_basis();
         slice.update_viewing_side(forward);
@@ -1343,7 +1337,6 @@ impl<'a> Graphics<'a> {
             slice.center += super::walk_direction(normal, slice.viewing_from_front) * (held_seconds + walked_seconds) * slice.move_speed;
         }
 
-        // Pan and zoom move the centre along the camera's screen right/up, flattened into the section plane (see `plane_screen_axes`).
         let (screen_right, screen_up) = super::plane_screen_axes(right, up, normal);
 
         if slice.pan != DVec2::ZERO {
