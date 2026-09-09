@@ -341,7 +341,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     if editor.slice_mode_enabled {
-        let gestures = tr!(literal = "middle-drag pan · right-drag orbit · Shift+wheel walk · W/S move slab · Q/E rotate · Reset Section View squares up · Esc exit");
+        let gestures = tr!("slice-viewport-gestures");
         return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(if editor.cursor_mode.snaps() {
             tr_format!(literal = "no snapping · %gestures%", gestures = gestures.as_str())
         } else {

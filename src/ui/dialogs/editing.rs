@@ -1390,7 +1390,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
         });
 }
 
-/// Slice view dock: slab width, movement speed, Q/E rotate rate, and Exit.
+/// Slice view dock: slab width, movement speed, Q/E rotate rate, reset, and exit.
 pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     ViewportDockPanel::new("slice_panel", tr!(literal = "Slice View"), viewport_rect)
         .min_width(210.0)
@@ -1414,6 +1414,9 @@ pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, comm
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add(MenuButton::new(tr!(literal = "Exit slice"))).clicked() {
                     commands.push(UiCommand::SetSliceModeEnabled(false));
+                }
+                if ui.add(MenuButton::new(tr!("slice-reset-view"))).clicked() {
+                    commands.push(UiCommand::ResetSliceView);
                 }
             });
         });
