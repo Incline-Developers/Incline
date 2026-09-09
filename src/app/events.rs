@@ -187,6 +187,7 @@ impl<'a> App<'a> {
                     self.refresh_intersection_availability();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
+                    self.refresh_object_edit_dialog();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
                         let title = project.projects.first().map_or_else(
@@ -1424,7 +1425,10 @@ impl<'a> App<'a> {
                     self.try_finish_tool();
                 }
             }
-            KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled => {
+            // The "Edit Object" dialog has its own row Delete button and no
+            // keyboard shortcut for it, and it is opened on a selected object,
+            // so without this guard Delete/Backspace raises "delete this object?".
+            KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled && self.editor.object_edit_dialog.is_none() => {
                 if !self.editor.selected_tie_ins.is_empty() {
                     self.delete_selected_tie_ins();
                     return;

@@ -21,7 +21,7 @@ use crate::{
         themed_icon, unthemed_icon,
         widgets::{
             collapsible_section::CollapsibleSection,
-            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
+            menu::{self, MenuButton, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
             viewport::BlockModelProperties,
         },
     },
@@ -170,7 +170,7 @@ pub(crate) fn draw_properties(
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
-                        PropertyTab::Object => draw_object_tab(ui, editor, project, block_models, document, &context),
+                        PropertyTab::Object => draw_object_tab(ui, editor, project, block_models, document, &context, commands),
                         PropertyTab::BlockModel => draw_block_model_tab(ui, editor, block_models, &context, commands),
                         PropertyTab::Triangulation => draw_triangulation_tab(ui, project, &context, commands, geometry_dirty),
                         PropertyTab::Design => draw_design_tab(ui, editor, document, &context, commands, geometry_dirty),
@@ -716,7 +716,15 @@ fn spatial_vector_rows(ui: &mut egui::Ui, label: &str, value: glam::DVec3) {
 
 /// Generic information shared by every selectable scene entity. Type-specific
 /// appearance and geometry controls remain in the neighbouring tabs.
-fn draw_object_tab(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectView, block_models: &[OpenBlockModel], document: &Document, context: &PropertyContext) {
+fn draw_object_tab(
+    ui: &mut egui::Ui,
+    editor: &EditorState,
+    project: &UiProjectView,
+    block_models: &[OpenBlockModel],
+    document: &Document,
+    context: &PropertyContext,
+    commands: &mut Vec<UiCommand>,
+) {
     menu::menu_section(ui, tr!(literal = "Object"));
     let details = context
         .entities
@@ -783,6 +791,17 @@ fn draw_object_tab(ui: &mut egui::Ui, editor: &EditorState, project: &UiProjectV
             ui.label(egui::RichText::new(tr!(literal = "No spatial extent available")).color(ui.visuals().weak_text_color()));
         }
     });
+
+    // The dialog only knows how to edit document objects, not the other scene
+    // entity kinds, and a multi-selection has no single object to describe.
+    if let [SceneEntityId::Object(id)] = context.entities.as_slice() {
+        ui.add_space(4.0);
+        menu::menu_actions(ui, |ui| {
+            if ui.add(MenuButton::new(tr!(literal = "Edit..."))).clicked() {
+                commands.push(UiCommand::OpenObjectEditDialog(*id));
+            }
+        });
+    }
     ui.add_space(6.0);
 }
 
@@ -843,7 +862,7 @@ pub(crate) fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
     });
 }
 
-fn fill_style_label(style: FillStyle) -> String {
+pub(crate) fn fill_style_label(style: FillStyle) -> String {
     match style {
         FillStyle::Clear => tr!(literal = "Clear"),
         FillStyle::Crosses => tr!(literal = "Crosses"),

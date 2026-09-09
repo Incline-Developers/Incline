@@ -132,6 +132,15 @@ pub(crate) fn draw_right_click_context(
         }
 
         if has_doc_objects {
+            // The editor works on a single working copy, so it is offered only
+            // when the selection names exactly one design object.
+            if let [object_id] = selected_obj_ids.as_slice()
+                && ContextMenuAction::new(tr!(literal = "Edit Object...")).show(ui).clicked()
+            {
+                commands.push(UiCommand::OpenObjectEditDialog(*object_id));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+
             if ContextMenuAction::new(tr!(literal = "Move to Layer...")).show(ui).clicked() {
                 let target_layer = project
                     .projects

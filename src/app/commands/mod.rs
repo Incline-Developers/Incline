@@ -3,6 +3,7 @@ pub(crate) mod drawing; // Handles finishing polylines, creating points, etc com
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
+pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
@@ -781,6 +782,14 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenInsertPointAtElevationDialog => {
                 self.open_insert_point_at_elevation_dialog();
+                Ok(())
+            }
+            UiCommand::OpenObjectEditDialog(id) => {
+                self.open_object_edit_dialog(id);
+                Ok(())
+            }
+            UiCommand::ApplyObjectEdit { id, object, close } => {
+                self.apply_object_edit(id, *object, close);
                 Ok(())
             }
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {

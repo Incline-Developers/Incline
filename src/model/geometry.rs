@@ -342,7 +342,7 @@ fn bulge_segment_bounds(start: DVec3, end: DVec3, bulge: f64) -> (DVec3, DVec3) 
     (min, max)
 }
 
-fn bulge_arc_parameters(start: DVec3, end: DVec3, bulge: f64) -> Option<(DVec2, DVec2, f64, f64)> {
+pub(crate) fn bulge_arc_parameters(start: DVec3, end: DVec3, bulge: f64) -> Option<(DVec2, DVec2, f64, f64)> {
     let chord = end.truncate() - start.truncate();
     let chord_len = chord.length();
     if !bulge.is_finite() || bulge.abs() <= f64::EPSILON || chord_len <= f64::EPSILON {

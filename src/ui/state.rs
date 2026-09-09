@@ -17,7 +17,7 @@ use crate::{
     i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{
-        Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
+        Axis, FillStyle, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
         drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
         formats::{
@@ -1135,6 +1135,9 @@ pub(crate) struct EditorState {
     /// Design > Insert Point > At intersection.
     pub(crate) selection_has_intersections: bool,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
+    /// The "Edit Object" dialog, holding a working copy of one design object
+    /// until Apply or OK hands it back to the document.
+    pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
 
     // Display overrides
     pub(crate) xray_enabled: bool,
@@ -1657,11 +1660,16 @@ impl EditorState {
     /// Dialogs that take Escape as their cancel shortcut. The startup splash
     /// is absent on purpose: nothing in the tool chain reacts to Escape while
     /// it is up, so its own handler is enough.
+    ///
+    /// The "Edit Object" dialog is here but not in
+    /// [`Self::dialog_owns_confirm_key`]: Escape must close it rather than
+    /// run the viewport tool-cancel chain and drop the user out of slice
+    /// view, while Enter belongs to the cell being edited, which commits on it.
     pub(crate) fn dialog_owns_cancel_key(&self) -> bool {
         if self.viewport_pick_in_progress() {
             return false;
         }
-        self.dialog_owns_both_keys()
+        self.object_edit_dialog.is_some() || self.dialog_owns_both_keys()
     }
 
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
@@ -1830,6 +1838,7 @@ impl EditorState {
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
+        self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
         self.batter_angle_points.clear();
@@ -2099,6 +2108,7 @@ impl EditorState {
             move_to_axis_dialog: None,
             selection_has_intersections: false,
             insert_point_at_elevation_dialog: None,
+            object_edit_dialog: None,
             xray_enabled: false,
             vertical_exaggeration_dialog_open: false,
             vertical_exaggeration: 1.0,
@@ -3090,6 +3100,17 @@ pub(crate) enum UiCommand {
     FitPlotScaleToData,
     /// Render and write the configured plot sheet.
     ExportPlotSheet,
+
+    /// Open the "Edit Object" dialog on one design object, seeding its working
+    /// copy from the document.
+    OpenObjectEditDialog(ObjectId),
+    /// Write the dialog's working copy back as one undoable replace; `close`
+    /// shuts the dialog once the write went through (OK), Apply leaves it open.
+    ApplyObjectEdit {
+        id: ObjectId,
+        object: Box<Object>,
+        close: bool,
+    },
 }
 
 impl UiCommand {
@@ -3139,6 +3160,7 @@ impl UiCommand {
             | Self::OpenCreateTriangulation
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
+            | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
             | Self::OpenCutTriangulationByPolyline
             | Self::BeginCutPolyPick
@@ -3314,6 +3336,7 @@ impl UiCommand {
             Self::RelimitLineResize { source_id, .. } => report(tr!(literal = "Relimit Line"), format!("{source_id:?}")),
             Self::CommitBatterBerm => report(tr!(literal = "Create Batter Berm"), tr!(literal = "Apply generated rings")),
             Self::InsertPointsAtIntersections => report(tr!(literal = "Insert Intersection Points"), tr!(literal = "Selected polylines")),
+            Self::ApplyObjectEdit { object, .. } => report(tr!(literal = "Edit Object"), object.kind_name()),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!(literal = "Insert Points at Elevation"),
                 tr_format!(literal = "%count% object(s) · Z %elevation%", count = object_ids.len(), elevation = elevation),
