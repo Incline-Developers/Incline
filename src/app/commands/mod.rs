@@ -625,8 +625,23 @@ impl<'a> App<'a> {
                 }
                 Ok(())
             }
+            UiCommand::SetPlanningSubpage(subpage) => {
+                if self.editor.planning_page.subpages().contains(&subpage) {
+                    if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule {
+                        self.editor.schedule_subpage = subpage;
+                    }
+                    if self.editor.is_planning_viewport() {
+                        self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
+                    }
+                    self.redraw_requested = true;
+                }
+                Ok(())
+            }
             UiCommand::SetPlanningPage(page) => {
                 self.editor.planning_page = page;
+                if self.editor.is_planning_viewport() {
+                    self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
+                }
                 self.redraw_requested = true;
                 Ok(())
             }

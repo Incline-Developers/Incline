@@ -99,10 +99,17 @@ pub(crate) fn draw_viewport_bar(ui: &mut egui::Ui, editor: &mut EditorState, pro
 
                     let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         draw_project_actions(ui, editor, project, commands, side);
-                        main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                        if editor.active_workspace == Workspace::Planning {
+                            divider(ui, side);
+                            draw_planning_subpages(ui, editor, commands);
+                        } else {
+                            main_menu::draw_workspace_menus(ui, editor, project, commands, (side - MENU_ROW_INSET).max(1.0));
+                        }
                     });
                     let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        draw_view_tools(ui, editor, project, commands, side);
+                        if !editor.is_planning_setup() {
+                            draw_view_tools(ui, editor, project, commands, side);
+                        }
                     });
 
                     // egui centres a block it is told the size of, and the run
@@ -231,6 +238,9 @@ fn draw_project_actions(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
 /// The centre run: every workspace gets the working elevation, alongside any
 /// settings belonging specifically to that workspace.
 fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView) {
+    if editor.is_planning_setup() {
+        return;
+    }
     match editor.active_workspace {
         Workspace::Production => draw_drawing_settings(ui, editor, project),
         Workspace::DrillAndBlast => {
@@ -596,4 +606,30 @@ fn draw_blast_view_tools(ui: &mut egui::Ui, editor: &EditorState, project: &UiPr
         .id_salt("burden_relief_heatmap")
         .button_side(side),
     );
+}
+
+/// Ordered page steps replace the discipline menus in Planning.
+fn draw_planning_subpages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    for (index, subpage) in editor.planning_page.subpages().iter().copied().enumerate() {
+        if index > 0 {
+            ui.label(egui::RichText::new(">").weak());
+        }
+        let label = subpage.label();
+        let selected = editor.planning_subpage() == subpage;
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let color = ui.visuals().text_color();
+        let galley = ui.painter().layout_no_wrap(label.clone(), font, color);
+        let padding = 8.0;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(galley.size().x + padding * 2.0, ui.spacing().interact_size.y), egui::Sense::click());
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label.as_str()));
+        ui.painter().galley(rect.center() - galley.size() * 0.5, galley, color);
+        if selected {
+            let y = rect.bottom() - 1.0;
+            ui.painter()
+                .line_segment([egui::pos2(rect.left() + padding, y), egui::pos2(rect.right() - padding, y)], egui::Stroke::new(1.5, color));
+        }
+        if response.clicked() {
+            commands.push(UiCommand::SetPlanningSubpage(subpage));
+        }
+    }
 }

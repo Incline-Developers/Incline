@@ -105,6 +105,8 @@ pub(crate) fn draw_properties(
             PropertyTab::Interface | PropertyTab::Camera | PropertyTab::Performance | PropertyTab::Developer
         ) {
         PropertyTab::Interface
+    } else if editor.active_property_tab == PropertyTab::Reserves && !editor.is_planning_viewport() {
+        PropertyTab::Object
     } else if context.tab_available(editor.active_property_tab) {
         editor.active_property_tab
     } else {
@@ -172,6 +174,7 @@ pub(crate) fn draw_properties(
                     // the panel's own surface rather than a card's.
                     crate::ui::widgets::menu::apply_menu_style(ui, content_fill);
                     match shown_tab {
+                        PropertyTab::Reserves => super::planning_reserves::draw_records(ui),
                         PropertyTab::Interface => draw_interface_settings(ui, editor, commands),
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
@@ -285,6 +288,9 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState, shown_tab: Proper
     // Object starts the data/object group and stays available even before a
     // selection exists, so it can be the stable startup tab.
     ui.add_space(TAB_GROUP_GAP);
+    if editor.is_planning_viewport() {
+        tab_button(ui, editor, shown_tab, PropertyTab::Reserves, unthemed_icon!("section_block_models.svg"), content_fill);
+    }
     tab_button(ui, editor, shown_tab, PropertyTab::Object, unthemed_icon!("properties_object.svg"), content_fill);
     if context.block_model.is_some() {
         tab_button(ui, editor, shown_tab, PropertyTab::BlockModel, unthemed_icon!("section_block_models.svg"), content_fill);
@@ -313,6 +319,9 @@ fn tab_button(ui: &mut egui::Ui, editor: &mut EditorState, shown_tab: PropertyTa
     }
     let icon_rect = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(16.0));
     egui::Image::new(icon).fit_to_exact_size(icon_rect.size()).paint_at(ui, icon_rect);
+    if tab == PropertyTab::Reserves {
+        response.clone().on_hover_text(tr!("planning-reserves-dumps"));
+    }
     if response.clicked() {
         editor.active_property_tab = tab;
     }

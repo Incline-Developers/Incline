@@ -116,8 +116,20 @@ impl Default for PreferencesDraft {
 }
 
 impl EditorState {
+    pub(crate) fn planning_subpage(&self) -> PlanningSubpage {
+        match self.planning_page {
+            PlanningPage::Solids => PlanningSubpage::Setup,
+            PlanningPage::Haulage => PlanningSubpage::Layout,
+            PlanningPage::Schedule => self.schedule_subpage,
+        }
+    }
+
+    pub(crate) fn is_planning_viewport(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_subpage() != PlanningSubpage::Setup
+    }
+
     pub(crate) fn is_planning_setup(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Setup
+        self.active_workspace == Workspace::Planning && self.planning_subpage() == PlanningSubpage::Setup
     }
 
     /// Set (or clear) the status-bar message. Whenever the displayed task
@@ -1544,6 +1556,7 @@ pub(crate) struct EditorState {
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
     pub(crate) planning_page: PlanningPage,
+    pub(crate) schedule_subpage: PlanningSubpage,
     pub(crate) workspace_order: [Workspace; 4],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -2299,7 +2312,8 @@ impl EditorState {
             bezier_dialog_open: false,
             active_property_tab: PropertyTab::Object,
             active_workspace: Workspace::Production,
-            planning_page: PlanningPage::Setup,
+            planning_page: PlanningPage::Solids,
+            schedule_subpage: PlanningSubpage::Setup,
             workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -2742,6 +2756,7 @@ pub(crate) enum UiCommand {
     SetStandardView(StandardView),
     ApplyPreferences(PreferencesDraft),
     SetPlanningPage(PlanningPage),
+    SetPlanningSubpage(PlanningSubpage),
     ReorderWorkspace {
         workspace: Workspace,
         before: Option<Workspace>,
@@ -3063,6 +3078,7 @@ impl UiCommand {
             | Self::CancelRelimit
             | Self::ApplyPreferences(_)
             | Self::SetPlanningPage(_)
+            | Self::SetPlanningSubpage(_)
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
             | Self::SelectBlockModel(_)
@@ -3575,17 +3591,45 @@ impl Workspace {
 /// Fixed pages within the Planning workspace, remembered for this session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PlanningPage {
-    Setup,
+    Solids,
+    Haulage,
     Schedule,
 }
 
 impl PlanningPage {
-    pub(crate) const ALL: [Self; 2] = [Self::Setup, Self::Schedule];
+    pub(crate) const ALL: [Self; 3] = [Self::Solids, Self::Haulage, Self::Schedule];
 
     pub(crate) fn label(self) -> String {
         match self {
-            Self::Setup => tr!("planning-page-setup"),
+            Self::Solids => tr!("planning-page-solids"),
+            Self::Haulage => tr!("planning-page-haulage"),
             Self::Schedule => tr!("planning-page-schedule"),
+        }
+    }
+
+    pub(crate) fn subpages(self) -> &'static [PlanningSubpage] {
+        match self {
+            Self::Solids => &[PlanningSubpage::Setup],
+            Self::Haulage => &[PlanningSubpage::Layout],
+            Self::Schedule => &[PlanningSubpage::Setup, PlanningSubpage::Animate],
+        }
+    }
+}
+
+/// Steps within a Planning page. Schedule remembers its selected step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PlanningSubpage {
+    Setup,
+    Layout,
+    Animate,
+}
+
+impl PlanningSubpage {
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Setup => tr!("planning-page-setup"),
+            Self::Layout => tr!("planning-subpage-layout"),
+            Self::Animate => tr!("planning-subpage-animate"),
         }
     }
 }
@@ -3728,6 +3772,7 @@ pub(crate) fn builtin_delay_products() -> Vec<DelayProduct> {
 /// and only appear while there is something they apply to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
+    Reserves,
     Interface,
     Camera,
     Performance,

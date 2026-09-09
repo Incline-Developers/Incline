@@ -206,15 +206,24 @@ impl PropertyRows<'_> {
     }
 
     /// An editable key/value pair. `error`, when set, shows a red badge in the
-    /// key column with the message as its tooltip. Returns the field's response.
+    /// value column with the message as its tooltip. Returns the field's response.
     pub(crate) fn field(&mut self, key: &str, value: &mut String, error: Option<&str>) -> egui::Response {
+        self.value_field(key, value, None, error, false)
+    }
+
+    /// A calculated value is rendered directly in the table cell with an optional unit.
+    pub(crate) fn readonly(&mut self, key: &str, value: &str, unit: Option<&str>, error: Option<&str>) -> egui::Response {
+        self.value_field(key, &mut value.to_owned(), unit, error, true)
+    }
+
+    fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, error: Option<&str>, readonly: bool) -> egui::Response {
         let (rect, split) = self.begin_row(false);
         self.ui.put(
-            self.key_rect(rect, split, error.is_some()),
+            self.key_rect(rect, split, false),
             egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min),
         );
         if let Some(message) = error {
-            let icon_rect = egui::Rect::from_center_size(egui::pos2(split - 12.0, rect.center().y), egui::vec2(16.0, 16.0));
+            let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(16.0, 16.0));
             self.ui
                 .put(
                     icon_rect,
@@ -224,7 +233,43 @@ impl PropertyRows<'_> {
                 )
                 .on_hover_text(message);
         }
-        let value_rect = self.value_rect(rect, split);
+        let mut value_rect = self.value_rect(rect, split);
+        if error.is_some() {
+            value_rect.max.x -= 22.0;
+        }
+        if let Some(unit) = unit {
+            let width = self
+                .ui
+                .painter()
+                .layout_no_wrap(unit.to_owned(), egui::TextStyle::Body.resolve(self.ui.style()), self.ui.visuals().weak_text_color())
+                .size()
+                .x
+                + 8.0;
+            let unit_rect = egui::Rect::from_min_max(egui::pos2((value_rect.right() - width).max(value_rect.left()), value_rect.top()), value_rect.max);
+            let galley =
+                egui::WidgetText::from(egui::RichText::new(unit).weak()).into_galley(self.ui, Some(egui::TextWrapMode::Truncate), unit_rect.width(), egui::TextStyle::Body);
+            self.ui.painter().with_clip_rect(self.ui.clip_rect().intersect(unit_rect)).galley(
+                egui::pos2(unit_rect.right() - galley.size().x, unit_rect.center().y - galley.size().y * 0.5),
+                galley,
+                self.ui.visuals().weak_text_color(),
+            );
+            value_rect.max.x = unit_rect.left();
+        }
+        if readonly {
+            // TextEdit has its own minimum height and frame sizing. Calculated
+            // cells need only text, bounded by the same row as their unit.
+            let text_rect = value_rect.shrink2(egui::vec2(4.0, 0.0));
+            let galley = egui::WidgetText::from(value.as_str()).into_galley(self.ui, Some(egui::TextWrapMode::Truncate), text_rect.width().max(0.0), egui::TextStyle::Body);
+            self.ui.painter().with_clip_rect(self.ui.clip_rect().intersect(value_rect)).galley(
+                egui::pos2(text_rect.left(), text_rect.center().y - galley.size().y * 0.5),
+                galley,
+                self.ui.visuals().text_color(),
+            );
+            return self
+                .ui
+                .interact(value_rect, self.ui.id().with(("calculated", key)), egui::Sense::hover())
+                .on_hover_text(value.as_str());
+        }
         self.ui
             .scope_builder(egui::UiBuilder::new().max_rect(value_rect), |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(value_rect));

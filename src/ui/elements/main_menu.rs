@@ -269,7 +269,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 }
 
 /// Click-only pages use an underline to distinguish them from workspace tabs.
-fn draw_planning_pages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, parent: egui::Rect, widths: [f32; 2]) {
+fn draw_planning_pages(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>, parent: egui::Rect, widths: [f32; 3]) {
     let mut x = parent.right() + ui.spacing().item_spacing.x;
     for (page, width) in PlanningPage::ALL.into_iter().zip(widths) {
         let rect = egui::Rect::from_min_size(egui::pos2(x, parent.top()), egui::vec2(width, TAB_FILL_HEIGHT));

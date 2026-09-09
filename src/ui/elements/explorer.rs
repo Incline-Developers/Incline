@@ -116,7 +116,7 @@ pub(crate) fn draw_explorer(
             let tree_rect = crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
 
             if editor.is_planning_setup() {
-                super::planning_setup::draw_steps(ui);
+                super::planning_setup::draw_steps(ui, editor.planning_page);
                 return;
             }
 

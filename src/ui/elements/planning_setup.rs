@@ -1,4 +1,4 @@
-//! Planning → Set Up layout.
+//! Shared layout for the Solids and Schedule Setup subpages.
 //!
 //! The step tree and the content category list are wired up; item rows and
 //! property fields are still scaffold — they render their empty grids so the
@@ -9,6 +9,7 @@ use crate::{
     ui::{
         chrome,
         fonts::bold,
+        state::PlanningPage,
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
@@ -29,8 +30,8 @@ fn striped_list(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-pub(crate) fn draw_steps(ui: &mut egui::Ui) {
-    let selection_id = egui::Id::new("planning_configuration_selected");
+pub(crate) fn draw_steps(ui: &mut egui::Ui, page: PlanningPage) {
+    let selection_id = egui::Id::new(("planning_configuration_selected", page));
     let mut configuration = ui.data(|data| data.get_temp::<bool>(selection_id)).unwrap_or(false);
     striped_list(ui, |ui| {
         ui.horizontal(|ui| {
@@ -68,8 +69,8 @@ fn category_labels() -> [String; 4] {
     [tr!("planning-dumps"), tr!("planning-stockpiles"), tr!("planning-loaders"), tr!("planning-trucks")]
 }
 
-fn draw_content_categories(ui: &mut egui::Ui, rect: egui::Rect) -> usize {
-    let category_id = egui::Id::new("planning_site_category");
+fn draw_content_categories(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) -> usize {
+    let category_id = egui::Id::new(("planning_site_category", page));
     let mut category = ui.data(|data| data.get_temp::<usize>(category_id)).unwrap_or(0).min(3);
     DataGrid::new("planning_categories", rect, &tr!("planning-content"))
         .column_header(&tr!("planning-content-type"))
@@ -111,8 +112,8 @@ fn draw_item_properties(ui: &mut egui::Ui, rect: egui::Rect) {
     });
 }
 
-fn draw_configuration(ui: &mut egui::Ui, rect: egui::Rect) {
-    let name_id = egui::Id::new("planning_schedule_name");
+fn draw_configuration(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) {
+    let name_id = egui::Id::new(("planning_schedule_name", page));
     let mut schedule_name = ui.data(|data| data.get_temp::<String>(name_id)).unwrap_or_default();
     PropertyTable::new("planning_configuration", rect, &tr!("planning-configuration")).show(ui, |rows| {
         rows.header(&tr!("planning-property"), &tr!("planning-value"));
@@ -121,16 +122,18 @@ fn draw_configuration(ui: &mut egui::Ui, rect: egui::Rect) {
     ui.data_mut(|data| data.insert_temp(name_id, schedule_name));
 }
 
-pub(crate) fn draw_details(ui: &mut egui::Ui) -> egui::Rect {
+pub(crate) fn draw_details(ui: &mut egui::Ui, page: PlanningPage) -> egui::Rect {
     egui::CentralPanel::default()
         .frame(chrome::region_frame(ui))
         .show(ui, |ui| {
-            let configuration = ui.data(|data| data.get_temp::<bool>(egui::Id::new("planning_configuration_selected"))).unwrap_or(false);
+            let configuration = ui
+                .data(|data| data.get_temp::<bool>(egui::Id::new(("planning_configuration_selected", page))))
+                .unwrap_or(false);
             let available = ui.available_rect_before_wrap();
             let area = available.shrink2(egui::vec2(0.0, 10.0_f32.min(available.height() * 0.5)));
             if configuration {
                 let table = egui::Rect::from_min_size(area.min, egui::vec2(area.width().min(520.0), area.height()));
-                draw_configuration(ui, table);
+                draw_configuration(ui, table, page);
                 ui.allocate_rect(area, egui::Sense::hover());
                 return;
             }
@@ -142,7 +145,7 @@ pub(crate) fn draw_details(ui: &mut egui::Ui) -> egui::Rect {
             let properties_origin = egui::pos2(middle.right() + gap, area.top());
             let properties = egui::Rect::from_min_size(properties_origin, egui::vec2((area.right() - properties_origin.x).clamp(0.0, 440.0), area.height()));
 
-            let category = draw_content_categories(ui, left);
+            let category = draw_content_categories(ui, left, page);
             draw_items(ui, middle, category);
             draw_item_properties(ui, properties);
             ui.allocate_rect(area, egui::Sense::hover());

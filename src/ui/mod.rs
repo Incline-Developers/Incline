@@ -538,6 +538,10 @@ fn draw_ui(
     // background already - see `chrome::Gap`.
     chrome::claim_gap(root_ui, "chrome_window_edge", chrome::Gap::Sides);
 
+    // The bar spans the window, so it is claimed before the explorer: the
+    // column, the tools and the scene all start below it.
+    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
+
     if editor.is_planning_setup() {
         let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
         let console = if editor.show_console {
@@ -546,7 +550,7 @@ fn draw_ui(
         } else {
             egui::Rect::NOTHING
         };
-        let details = elements::planning_setup::draw_details(root_ui);
+        let details = elements::planning_setup::draw_details(root_ui, editor.planning_page);
         dialogs::about::draw_about_dialog(root_ui, editor);
         #[cfg(target_arch = "wasm32")]
         if editor.new_project_dialog_open {
@@ -563,7 +567,7 @@ fn draw_ui(
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        chrome::paint_regions(ctx, [explorer.tree, explorer.properties, console, details]);
+        chrome::paint_regions(ctx, [viewport_bar_rect, explorer.tree, explorer.properties, console, details]);
         chrome::paint_grips(
             ctx,
             [
@@ -574,10 +578,6 @@ fn draw_ui(
         );
         return geometry_dirty;
     }
-
-    // The bar spans the window, so it is claimed before the explorer: the
-    // column, the tools and the scene all start below it.
-    let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
     let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
 
@@ -609,7 +609,11 @@ fn draw_ui(
     // and they carry on underneath it, and after the viewport bar, so it
     // starts directly under it: the mockup's shape, and the order it takes to
     // get there.
-    let products_rect = (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor));
+    let products_rect = if editor.is_planning_viewport() {
+        Some(elements::planning_reserves::draw_data_panel(root_ui))
+    } else {
+        (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor))
+    };
     if products_rect.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical in the workspaces without this panel, or
@@ -1132,7 +1136,15 @@ fn draw_ui(
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
             chrome::Grip::new(explorer.properties, chrome::Edge::Top, elements::properties::PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
-            chrome::Grip::new(products_claimed, chrome::Edge::Left, elements::products::PANEL_ID),
+            chrome::Grip::new(
+                products_claimed,
+                chrome::Edge::Left,
+                if editor.is_planning_viewport() {
+                    elements::planning_reserves::PANEL_ID
+                } else {
+                    elements::products::PANEL_ID
+                },
+            ),
         ],
     );
 

@@ -69,3 +69,5 @@ pub(crate) fn bar_strip(ui: &mut egui::Ui, id_salt: &str, height: f32, add_conte
     }
     ui.data_mut(|data| data.insert_temp(width_id, measured));
 }
+
+pub(crate) mod planning_reserves;

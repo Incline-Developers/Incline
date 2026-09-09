@@ -1617,3 +1617,23 @@ planning-properties = Properties
 planning-property = Property
 planning-value = Value
 planning-schedule-name = Schedule Name
+
+planning-reserves-dumps = Reserves / Dumps
+planning-placeholder = Sample data · Preview only
+planning-sample-reserve = North pit reserve
+planning-sample-dump = West waste dump
+planning-sample-stockpile = ROM stockpile
+planning-structure = Structure
+planning-data-source = Data source
+planning-sample-data = Placeholder
+planning-mining = Mining
+planning-volume = Volume
+planning-ore-tonnes = Ore tonnes
+planning-waste-tonnes = Waste tonnes
+planning-grade = Fe grade
+planning-centroid = Centroid
+
+planning-page-solids = Solids
+planning-page-haulage = Haulage
+planning-subpage-layout = Layout
+planning-subpage-animate = Animate
