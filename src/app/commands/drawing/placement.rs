@@ -93,6 +93,8 @@ impl<'a> App<'a> {
         let Some(layer) = self.active_layer() else {
             return;
         };
+        // A vertex is pinned to the plane showing when it was clicked; the
+        // section can move afterwards (W/S walk, Q/E turn), so a line may span planes.
         self.editor.pending_stroke.push(world);
         match self.editor.active_tool {
             ActiveTool::MakeLine if self.editor.pending_stroke.len() >= 2 => {

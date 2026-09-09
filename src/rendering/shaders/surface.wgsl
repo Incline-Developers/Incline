@@ -1,10 +1,3 @@
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    cam_forward: vec4<f32>,
-};
-@group(0) @binding(0)
-var<uniform> camera: CameraUniform;
-
 struct SurfaceStyle {
     color: vec4<f32>,
     // x: raster blend opacity; remaining lanes reserved.
@@ -48,6 +41,8 @@ struct VertexOutput {
     // worst close-up in fly mode).
     @location(1) @interpolate(flat) normal: vec3<f32>,
     @location(2) surface_xy: vec2<f32>,
+    // Distance from the section plane; affine in position, so interpolation is exact.
+    @location(3) section_offset: f32,
 };
 
 @vertex
@@ -58,11 +53,15 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     let scene_position = model.position + chunk.offset.xyz;
     out.surface_xy = scene_position.xy;
     out.clip_position = camera.view_proj * vec4<f32>(scene_position, 1.0);
+    out.section_offset = section_plane_offset(scene_position);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if outside_section_slab(in.section_offset) {
+        discard;
+    }
     let normal = normalize(in.normal);
     // Fixed world-space orientation lighting. Surfaces are two-sided, so n and
     // -n describe the same face orientation: abs(dot(...)) keeps their shading

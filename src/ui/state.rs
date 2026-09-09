@@ -1063,7 +1063,7 @@ pub(crate) struct EditorState {
     pub(crate) editing_labels_id: Option<ObjectId>,
 
     // Cursor & snapping
-    /// Z plane used for plan-view placement operations (point, line, poly vertices).
+    /// Z plane used for placement (point, line, poly vertices) outside the slice view.
     pub(crate) z_level: f64,
     /// Editable Z level value used by the toolbar and Design > Move to > Set Z.
     pub(crate) z_input: f64,
@@ -1601,13 +1601,16 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
-    /// Whether a placement click has to land on a snap target to count. Not in
-    /// the slice view, where a snap would drag the point off the section plane.
+    pub(crate) fn overlay_follows_cursor(&self) -> bool {
+        !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
+    }
+
+    /// Never true in the slice view: its cursor is already pinned to the section plane, not snapped.
     pub(crate) fn snapping_active(&self) -> bool {
         self.cursor_mode.snaps() && !self.slice_mode_enabled
     }
 
-    pub(crate) fn view_mode_owns_left_click(&self) -> bool {
+    pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
         self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses())
     }
 
@@ -2540,12 +2543,10 @@ impl ActiveTool {
         matches!(self, Self::MoveCollar | Self::RotateCollar)
     }
 
-    /// The tools a vertical section supports: its camera offers a cursor only on the section plane.
     pub(crate) fn works_in_slice_view(self) -> bool {
         matches!(self, Self::MeasureDistance | Self::MeasureBatterAngle | Self::MakePoint | Self::MakeLine | Self::MakePoly)
     }
 
-    /// Whether a tool is armed and the section cannot serve it; `None` is not a tool to refuse.
     pub(crate) fn section_refuses(self) -> bool {
         self != Self::None && !self.works_in_slice_view()
     }
@@ -2759,6 +2760,8 @@ pub(crate) enum UiCommand {
     ConfirmDrapeSelection,
     CancelRelimit,
     ResetView,
+    /// Squares the camera to the section plane without leaving slice mode or changing the section itself, unlike `ResetView`.
+    ResetSliceView,
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     SetStandardView(StandardView),
@@ -3183,6 +3186,7 @@ impl UiCommand {
             Self::CommitStrokeOpen => report(tr!(literal = "Create Line"), tr!(literal = "Finish open polyline")),
             Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
             Self::ResetView => report(tr!(literal = "Reset View"), tr!(literal = "Fit to extents")),
+            Self::ResetSliceView => report(tr!(literal = "Reset Section View"), tr!(literal = "Camera square to the section")),
             Self::SetTopologyWireframes(enabled) => report(
                 tr!(literal = "Set Topology Wireframes"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },

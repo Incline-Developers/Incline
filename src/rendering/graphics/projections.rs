@@ -386,6 +386,7 @@ impl<'a> Graphics<'a> {
 
         if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
             let view_proj = self.view_proj();
+            let slab = self.section_slab();
             // The delay card is drawn at a world size, so each one carries the
             // screen scale measured at its own collar: project a probe one
             // world unit across the view and take the pixels it covers. Under
@@ -400,6 +401,10 @@ impl<'a> Graphics<'a> {
                     dataset.dataset.initiations.iter().filter_map(|initiation| {
                         let hole = dataset.dataset.holes.get(initiation.hole)?;
                         let collar = hole.collar_position();
+                        // Drop the card when its anchor is outside the section slab.
+                        if slab.is_some_and(|slab| !slab.contains(collar)) {
+                            return None;
+                        }
                         let screen_px = self.world_to_window_px(&view_proj, collar)?;
                         let probe_px = self.world_to_window_px_unclipped_depth(&view_proj, collar + probe_offset)?;
                         Some(crate::ui::state::InitiationCard {
@@ -420,11 +425,20 @@ impl<'a> Graphics<'a> {
 
         if let Some(failure) = &editor.tri_create_failure {
             let vp = self.view_proj();
-            editor.tri_create_diagnostic_markers_screen_px = failure.diagnostic.markers_world.iter().filter_map(|&point| self.world_to_window_px(&vp, point)).collect();
+            let slab = self.section_slab();
+            // Drop a marker or segment outside the slab; a segment needs both ends inside.
+            editor.tri_create_diagnostic_markers_screen_px = failure
+                .diagnostic
+                .markers_world
+                .iter()
+                .filter(|&&point| slab.is_none_or(|slab| slab.contains(point)))
+                .filter_map(|&point| self.world_to_window_px(&vp, point))
+                .collect();
             editor.tri_create_diagnostic_segments_screen_px = failure
                 .diagnostic
                 .segments_world
                 .iter()
+                .filter(|segment| segment.iter().all(|&point| slab.is_none_or(|slab| slab.contains(point))))
                 .map(|segment| segment.map(|point| self.world_to_window_px(&vp, point)))
                 .collect();
         } else {

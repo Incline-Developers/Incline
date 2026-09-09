@@ -499,6 +499,19 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
         }
     }
 
+    // Square the camera back up to the section. Only shown while the
+    // section is up (slice mode).
+    if editor.slice_mode_enabled {
+        let reset_section = ui.add(
+            ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_section_view.svg")), tr!(literal = "Reset Section View"))
+                .id_salt("reset_section_view")
+                .button_side(side),
+        );
+        if reset_section.clicked() {
+            commands.push(UiCommand::ResetSliceView);
+        }
+    }
+
     let wireframes = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),

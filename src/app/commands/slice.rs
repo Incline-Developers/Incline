@@ -54,7 +54,8 @@ impl<'a> App<'a> {
             );
             self.editor.slice_mode_enabled = true;
         }
-        self.editor.cursor_snapped = false;
+        // No mouse event behind this camera swap; ending any orbit lets the cursor land on the section.
+        self.end_right_orbit();
         self.invalidate_overlay();
         self.redraw_requested = true;
         userspace_log!(
@@ -80,13 +81,16 @@ impl<'a> App<'a> {
             }
             return;
         }
+        self.leave_slice_mode();
+    }
+
+    /// Leaves the vertical slice view; a half-drawn stroke, the active tool and any picks carry over into plan view.
+    /// Every exit from slice mode runs through here, so this is the one place that has to know.
+    pub(crate) fn leave_slice_mode(&mut self) {
         if !self.editor.slice_mode_enabled {
             return;
         }
         self.editor.slice_mode_enabled = false;
-        let discarded_vertices = self.editor.pending_stroke.len();
-        let discarded_measurement = self.editor.measurement_start.is_some() || !self.editor.batter_angle_points.is_empty();
-        self.discard_stroke();
         self.editor.slice_preview_detached = false;
         self.editor.slice_preview_navigation.reset();
         self.slice_preview_cursor_px = None;
@@ -98,13 +102,41 @@ impl<'a> App<'a> {
             graphics.close_slice_preview();
             graphics.exit_slice_mode();
         }
+        self.end_right_orbit();
         self.redraw_requested = true;
         userspace_log!("{}", tr!(literal = "Exited slice view"));
-        if discarded_vertices > 0 {
-            userspace_log!("{}", tr!("slice-discarded-vertices", count = discarded_vertices));
+    }
+
+    /// Squares the section camera to its plane; undoes only the orbit, leaving direction, slab position, pan and zoom untouched.
+    pub(crate) fn reset_slice_view(&mut self) {
+        if !self.graphics.as_mut().is_some_and(|graphics| graphics.reset_slice_view()) {
+            return;
         }
-        if discarded_measurement {
-            userspace_log!("{}", tr!(literal = "Discarded the measurement picked on the section"));
+        self.end_right_orbit();
+        self.redraw_requested = true;
+        userspace_log!("{}", tr!(literal = "Reset the section view"));
+    }
+
+    /// Whether the cursor may be re-projected onto the section: yes when the section moves with no mouse event behind it, not while a right drag is orbiting it.
+    pub(crate) fn slice_cursor_tracks_section(&self) -> bool {
+        self.editor.slice_mode_enabled && !self.right_orbit_active
+    }
+
+    /// Re-projects the cursor onto the section after it moves with no mouse event behind it; a section never honours a snap.
+    pub(crate) fn refresh_slice_cursor(&mut self) {
+        if !self.slice_cursor_tracks_section() {
+            return;
+        }
+        let Some(world) = self.graphics.as_ref().and_then(|graphics| graphics.cursor_world(self.editor.z_level)) else {
+            return;
+        };
+        if self.editor.cursor_world == Some(world) {
+            return;
+        }
+        self.editor.cursor_world = Some(world);
+        self.editor.cursor_snapped = false;
+        if self.editor.overlay_follows_cursor() {
+            self.invalidate_overlay();
         }
     }
 }

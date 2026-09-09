@@ -1199,7 +1199,8 @@ impl<'a> App<'a> {
         if self.editor.text_editing_enabled {
             self.cancel_text_edit();
         }
-        self.set_slice_mode_enabled(false);
+        // A section's plane and slab are in the coordinates of the project it was cut from, so it is left whenever the active project changes.
+        self.leave_slice_mode();
         self.editor.clear_project_transients();
         self.pending_selection_click = None;
         // Clear any in-progress gesture so it cannot bleed into the new project.

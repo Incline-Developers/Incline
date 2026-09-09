@@ -29,6 +29,7 @@ impl<'a> App<'a> {
             graphics.screen_size_pub(),
             graphics.window_to_viewport_px(cursor_px),
             PICK_THRESHOLD_PX * 2.5,
+            graphics.section_slab(),
         );
 
         let Some((oid, ObjectPoint::Vertex(vi), _world)) = result else {

@@ -593,8 +593,12 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ResetView => {
-                self.set_slice_mode_enabled(false);
+                self.leave_slice_mode();
                 self.reset_view();
+                Ok(())
+            }
+            UiCommand::ResetSliceView => {
+                self.reset_slice_view();
                 Ok(())
             }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
@@ -704,7 +708,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
-                self.set_slice_mode_enabled(false);
+                self.leave_slice_mode();
                 self.zoom_to_extents();
                 Ok(())
             }

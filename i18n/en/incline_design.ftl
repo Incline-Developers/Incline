@@ -158,15 +158,6 @@ status-fps = FPS: { $fps }
 status-chunks = Chunks: { $rendered }/{ $total } ({ $culled } culled)
 status-clip = Clip near/far/Δ: { $near } / { $far } / { $delta } m
 
-# Logged on leaving the vertical slice view with a stroke still being drawn on
-# the section. Pluralised by count so languages with more than two forms read
-# correctly.
-slice-discarded-vertices =
-    { $count ->
-        [one] Discarded { $count } unfinished vertex drawn on the section
-       *[other] Discarded { $count } unfinished vertices drawn on the section
-    }
-
 ## High-frequency source literals
 
 
@@ -817,7 +808,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = Undraped 
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = That item no longer belongs to the active project
 literal-renamed-before-to-name-88160afa8287cd38 = Renamed '%before%' to '%name%'
 literal-exited-slice-view-0d1f935a85f65cd3 = Exited slice view
-literal-discarded-the-measurement-picked-on-the-section-e4f880e93adbb68e = Discarded the measurement picked on the section
+literal-reset-the-section-view-a90255a33a618651 = Reset the section view
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = Updated text on object %object_id%
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = Finished text edit for object %object_id%
 literal-contour-generation-failed-error-60e87eda1ee29afa = Contour generation failed: %error%
@@ -1142,6 +1133,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Disable Flying Mode
 literal-enable-flying-mode-5be056d1b9bdd218 = Enable Flying Mode
 literal-exit-slice-view-8f48e630d38a6390 = Exit Slice View
 literal-vertical-slice-view-a721497b5e8007fa = Vertical Slice View
+literal-reset-section-view-569ba01ea5ad8448 = Reset Section View
+literal-camera-square-to-the-section-095beff203b315a6 = Camera square to the section
 literal-hide-wireframes-a0bb1a91dde72948 = Hide Wireframes
 literal-show-wireframes-7e8dc68f7023441b = Show Wireframes
 literal-hide-points-6ec095fdf7ed73f4 = Hide Points
@@ -1153,7 +1146,7 @@ literal-value-dip-1a0edf99f1cb897b = %value%° dip
 literal-strike-strike-dip-3cbc18ac238a6a85 = %strike%° strike · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (horizontal, no strike)
 literal-slice-view-531d1a0f0f256066 = Slice view
-literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = middle-drag pan · W/S move slab · Q/E rotate · Esc exit
+literal-middle-drag-pan-right-drag-orbit-shift-wheel-walk-w-s-move-slab-q-e-rotate-reset-section-view-squares-up-esc-exit-5e91e393f437a247 = middle-drag pan · right-drag orbit · Shift+wheel walk · W/S move slab · Q/E rotate · Reset Section View squares up · Esc exit
 literal-no-snapping-gestures-8ba61d06c6179a75 = no snapping · %gestures%
 literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - not available in the section view
 literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = That tool is not available in the section view

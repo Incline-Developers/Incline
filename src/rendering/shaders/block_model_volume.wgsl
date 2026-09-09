@@ -1,16 +1,3 @@
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    cam_forward: vec4<f32>,
-    cam_position: vec4<f32>,
-    viewport: vec4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    // xy: viewport rect offset in physical pixels within the full-window
-    // `scene_depth` target - see `fs_main`.
-    viewport_origin: vec4<f32>,
-};
-@group(0) @binding(0)
-var<uniform> camera: CameraUniform;
-
 struct ColorStop {
     color: vec4<f32>,
     pos: vec4<f32>,
@@ -393,6 +380,29 @@ fn fetch_cell_payload(slot: u32, bs: u32, local: u32) -> u32 {
     return select(word & 0xffffu, word >> 16u, (local & 1u) == 1u);
 }
 
+// Narrows the march span to the part inside the section slab: the walls cut
+// the ray itself, not the eye's depth range. `t`/`t_exit` are in scene-space
+// ray-length units. Outside a section the span is returned unchanged.
+fn clip_march_to_section_slab(ray_origin: vec3<f32>, ray_direction: vec3<f32>, t: f32, t_exit: f32) -> vec2<f32> {
+    if (camera.section_normal.w <= 0.5) {
+        return vec2<f32>(t, t_exit);
+    }
+    let d0 = section_plane_offset(ray_origin);
+    let dd = dot(ray_direction, camera.section_normal.xyz);
+    if (abs(dd) < 1.0e-8) {
+        // Parallel to the walls: wholly inside or wholly outside.
+        if (abs(d0) > camera.section_plane.w) {
+            return vec2<f32>(t_exit, t);
+        }
+        return vec2<f32>(t, t_exit);
+    }
+    let t_a = (camera.section_plane.w - d0) / dd;
+    let t_b = (-camera.section_plane.w - d0) / dd;
+    let slab_min = max(t, min(t_a, t_b));
+    let slab_max = min(t_exit, max(t_a, t_b));
+    return vec2<f32>(slab_min, slab_max);
+}
+
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // camera.viewport.w carries the render scale (<1 while interacting): the
@@ -429,11 +439,6 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         discard;
     }
     let volume_entry = max(hit.x, 0.0);
-    // Normalize translucent optical depth over the complete model chord. This
-    // makes a partial transfer-function alpha an opacity for the visible
-    // volume as a whole, independent of how many cells lie along the ray.
-    // Opaque stops use a saturating optical depth and remain surface-like.
-    let ray_span = max(volume_exit - volume_entry, 1.0e-6);
 
     // Pixel-footprint growth along the ray: unproject the horizontally
     // adjacent pixel and measure how far the two rays diverge per unit t, so
@@ -467,9 +472,17 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let occluder = occluder_h.xyz / occluder_h.w;
         t_exit = min(t_exit, dot(occluder - scene_near, scene_dir) - 1.0e-5);
     }
+    let section_span = clip_march_to_section_slab(scene_near, scene_dir, t, t_exit);
+    t = section_span.x;
+    t_exit = section_span.y;
     if (t_exit <= t) {
         discard;
     }
+    // Translucent optical depth is normalized over the interval actually
+    // marched, not the volume's full chord: the slab and an opaque occluder
+    // both cut `t`/`t_exit` down, and a wider normaliser would thin the model
+    // out. Opaque stops use a saturating optical depth and stay surface-like.
+    let ray_span = max(t_exit - t, 1.0e-6);
     // Beam optimization (Laine & Karras 2010, §4.2): start the march at the
     // tile's conservative entry depth instead of the volume AABB, skipping
     // the per-pixel walk through empty bricks in front of the content.

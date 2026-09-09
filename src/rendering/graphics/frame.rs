@@ -104,14 +104,27 @@ impl<'a> Graphics<'a> {
         let mut scene_content_changed = self.geometry_dirty;
         self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
+        if self.slice_view.is_some() {
+            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
+        }
         if let Some(slice) = self.slice_view.as_mut() {
-            // Slice mode owns the clip planes: the symmetric depth extent *is*
-            // the slab, so the scene-fitting passes below must not run - they
-            // would blow the clip range back out to the scene bounds.
+            // Slice mode sets the clip planes itself; the scene-fitting passes below must not run.
             slice.width = editor.slice_width_input.clamp(0.1, 1.0e6);
             slice.move_speed = editor.slice_speed_input.clamp(0.0, 1.0e6);
             slice.rotate_speed = editor.slice_rotate_input.clamp(1.0, 720.0).to_radians();
-            self.projection.set_symmetric_depth_extent(slice.width * 0.5);
+            // Camera's own depth range, not the slab (fragment shaders clip to that directly) - kept wide enough a tilted or overhead view won't clip away geometry the slab would show.
+            let forward = self.camera.forward();
+            let strike = DVec3::new(slice.direction.x, slice.direction.y, 0.0);
+            // Scene bounds are model elevations, the slice centre a display one - stretch bounds by the vertical exaggeration before comparing.
+            let origin_z = self.scene_origin.z;
+            let exaggeration = self.vertical_exaggeration;
+            let display_z = |z: f64| origin_z + (z - origin_z) * exaggeration;
+            let scene_vertical_half_spread = self
+                .cached_scene_bounds
+                .map(|(min, max)| (display_z(min.z) - slice.center.z).abs().max((display_z(max.z) - slice.center.z).abs()));
+            let vertical_extent = scene_vertical_half_spread.map_or(self.projection.zoom, |spread| self.projection.zoom.max(spread));
+            let tilt_depth = slice_visible_half_length * strike.dot(forward).abs() + vertical_extent * forward.z.abs();
+            self.projection.set_symmetric_depth_extent(slice.width * 0.5 + tilt_depth);
             editor.slice_center = [slice.center.x, slice.center.y, slice.center.z];
             editor.slice_direction = [slice.direction.x, slice.direction.y];
             editor.slice_half_length = slice_visible_half_length;
@@ -121,7 +134,8 @@ impl<'a> Graphics<'a> {
             self.include_batter_berm_preview_in_depth(editor);
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
-        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
+        // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
+        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor, self.section_slab());
         let grid_uniform = GridUniform::new(
             self.scene_origin,
             editor.renderer_background_color,

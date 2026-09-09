@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use winit::keyboard::PhysicalKey;
 
 use super::{frustum::Frustum, *};
-use crate::rendering::pick::{clamped_range, triangle_weights};
+use crate::rendering::pick::{clamped_range, local_vertex_world, slab_clipped_screen_segment, slab_clipped_segment, slab_screen_point};
 
 /// Ground distance a view with nothing to frame spans across the viewport, in
 /// metres. Mine design starts at pit scale, so an empty scene opens on a few
@@ -68,91 +68,149 @@ impl ScreenRect {
     }
 }
 
-fn triangle_touches_rect(triangle: [DVec2; 3], rect: ScreenRect) -> bool {
-    if triangle.iter().any(|&point| rect.contains(point)) {
+fn point_in_polygon(point: DVec2, polygon: &[DVec2]) -> bool {
+    let mut left = false;
+    let mut right = false;
+    for (index, &from) in polygon.iter().enumerate() {
+        let to = polygon[(index + 1) % polygon.len()];
+        let side = (to - from).perp_dot(point - from);
+        left |= side > 0.0;
+        right |= side < 0.0;
+    }
+    !(left && right)
+}
+
+/// Whether a polygon touches the box: a corner of either inside the other, an edge crossing, or the box lying wholly inside the shape.
+fn polygon_touches_rect(polygon: &[DVec2], rect: ScreenRect) -> bool {
+    if polygon.iter().any(|&point| rect.contains(point)) {
         return true;
     }
-    if triangle
+    if polygon
         .iter()
-        .copied()
-        .zip(triangle.iter().copied().cycle().skip(1))
-        .take(3)
-        .any(|(a, b)| segment_intersects_rect(a, b, rect.min_x, rect.max_x, rect.min_y, rect.max_y))
+        .enumerate()
+        .any(|(index, &from)| segment_intersects_rect(from, polygon[(index + 1) % polygon.len()], rect.min_x, rect.max_x, rect.min_y, rect.max_y))
     {
         return true;
     }
-    rect.corners()
-        .iter()
-        .any(|&corner| triangle_weights(corner, triangle[0], triangle[1], triangle[2]).is_some())
+    rect.corners().iter().any(|&corner| point_in_polygon(corner, polygon))
 }
 
-fn quad_touches_rect(corners: [DVec2; 4], rect: ScreenRect) -> bool {
-    triangle_touches_rect([corners[0], corners[1], corners[2]], rect) || triangle_touches_rect([corners[0], corners[2], corners[3]], rect)
+fn polygon_inside_rect(polygon: &[DVec2], rect: ScreenRect) -> bool {
+    polygon.iter().all(|&point| rect.contains(point))
 }
 
-fn projected_text_corners(record: &TextPickRecord, view_proj: &DMat4, screen: Size) -> Option<[DVec2; 4]> {
-    let [Some(a), Some(b), Some(c), Some(d)] = record.corners.map(|corner| crate::rendering::pick::world_to_screen(view_proj, corner, screen)) else {
-        return None;
+/// One wall of the cut below (`wall` picks which); a point's depth here is positive on the side the section shows.
+fn clip_polygon_to_wall(polygon: &[DVec3], slab: SectionSlab, wall: f64) -> Vec<DVec3> {
+    let depth = |point: DVec3| slab.half_width - wall * slab.signed_distance(point);
+    let mut kept = Vec::with_capacity(polygon.len() + 1);
+    for (index, &to) in polygon.iter().enumerate() {
+        let from = polygon[(index + polygon.len() - 1) % polygon.len()];
+        let (from_depth, to_depth) = (depth(from), depth(to));
+        if (from_depth < 0.0) != (to_depth < 0.0) {
+            kept.push(from.lerp(to, from_depth / (from_depth - to_depth)));
+        }
+        if to_depth >= 0.0 {
+            kept.push(to);
+        }
+    }
+    kept
+}
+
+/// The part of a convex world-space polygon that lies between the section's two walls, or `None` when the section shows none of it.
+fn slab_clipped_polygon(slab: Option<SectionSlab>, polygon: &[DVec3]) -> Option<Vec<DVec3>> {
+    let Some(slab) = slab else {
+        return Some(polygon.to_vec());
     };
-    Some([a, b, c, d])
+    let mut kept = polygon.to_vec();
+    for wall in [1.0, -1.0] {
+        kept = clip_polygon_to_wall(&kept, slab, wall);
+        if kept.len() < 3 {
+            return None;
+        }
+    }
+    Some(kept)
 }
 
-fn local_vertex_to_screen(position: [f32; 3], scene_origin: DVec3, view_proj: &DMat4, screen: Size) -> Option<DVec2> {
-    let world = DVec3::from_array(position.map(f64::from)) + scene_origin;
-    crate::rendering::pick::world_to_screen(view_proj, world, screen)
+fn project_polygon(view_proj: &DMat4, screen: Size, polygon: &[DVec3]) -> Option<Vec<DVec2>> {
+    polygon.iter().map(|&point| crate::rendering::pick::world_to_screen(view_proj, point, screen)).collect()
 }
 
-fn pick_record_touches_rect(group: &PickGeometry<'_>, record: &PickRecord, scene_origin: DVec3, view_proj: &DMat4, screen: Size, rect: ScreenRect) -> bool {
+/// Every rendered triangle of one pick record, cut to the part the section shows and projected to the screen; a stroke quad can span the slab with both ends beyond the walls, so only the cut piece is judged.
+fn visible_screen_polygons(group: &PickGeometry<'_>, record: &PickRecord, scene_origin: DVec3, slab: Option<SectionSlab>, view_proj: &DMat4, screen: Size) -> Vec<Vec<DVec2>> {
+    let mut polygons = Vec::new();
+    let stroke_indices = &group.stroke_indices[clamped_range(record.stroke_index_range, group.stroke_indices.len())];
+    let fill_indices = &group.fill_indices[clamped_range(record.fill_index_range, group.fill_indices.len())];
+    for indices in stroke_indices.as_chunks::<3>().0 {
+        let [Some(a), Some(b), Some(c)] = indices.map(|index| group.stroke_verts.get(index as usize)) else {
+            continue;
+        };
+        let corners = [a, b, c].map(|vertex| local_vertex_world(vertex.pos, scene_origin));
+        if let Some(shown) = slab_clipped_polygon(slab, &corners)
+            && let Some(projected) = project_polygon(view_proj, screen, &shown)
+        {
+            polygons.push(projected);
+        }
+    }
+    for indices in fill_indices.as_chunks::<3>().0 {
+        let [Some(a), Some(b), Some(c)] = indices.map(|index| group.fill_verts.get(index as usize)) else {
+            continue;
+        };
+        let corners = [a, b, c].map(|vertex| local_vertex_world(vertex.pos, scene_origin));
+        if let Some(shown) = slab_clipped_polygon(slab, &corners)
+            && let Some(projected) = project_polygon(view_proj, screen, &shown)
+        {
+            polygons.push(projected);
+        }
+    }
+    polygons
+}
+
+fn visible_screen_vertices<'group>(
+    group: &'group PickGeometry<'_>,
+    record: &PickRecord,
+    scene_origin: DVec3,
+    slab: Option<SectionSlab>,
+    view_proj: &'group DMat4,
+    screen: Size,
+) -> impl Iterator<Item = DVec2> + 'group {
+    let stroke = clamped_range(record.stroke_range, group.stroke_verts.len());
+    let fill = clamped_range(record.fill_range, group.fill_verts.len());
+    group.stroke_verts[stroke]
+        .iter()
+        .map(|vertex| vertex.pos)
+        .chain(group.fill_verts[fill].iter().map(|vertex| vertex.pos))
+        .filter_map(move |position| slab_screen_point(slab, view_proj, screen, local_vertex_world(position, scene_origin)))
+}
+
+fn hole_legs(hole: &crate::model::drill_hole::DrillHole) -> impl Iterator<Item = (DVec3, DVec3)> + '_ {
+    let point = (hole.trace.len() == 1).then(|| (hole.trace[0].position, hole.trace[0].position));
+    hole.trace.windows(2).map(|pair| (pair[0].position, pair[1].position)).chain(point)
+}
+
+/// The part of a text label's quad the section shows, projected to the screen; a label is clipped glyph by glyph, so one straddling a wall is measured only by its shown part.
+fn visible_text_polygon(record: &TextPickRecord, slab: Option<SectionSlab>, view_proj: &DMat4, screen: Size) -> Option<Vec<DVec2>> {
+    project_polygon(view_proj, screen, &slab_clipped_polygon(slab, &record.corners)?)
+}
+
+fn pick_record_touches_rect(
+    group: &PickGeometry<'_>,
+    record: &PickRecord,
+    scene_origin: DVec3,
+    slab: Option<SectionSlab>,
+    view_proj: &DMat4,
+    screen: Size,
+    rect: ScreenRect,
+) -> bool {
     if !pick_record_bounds_may_touch_rect(record, view_proj, screen, rect) {
         return false;
     }
-    let stroke_range = clamped_range(record.stroke_range, group.stroke_verts.len());
-    let fill_range = clamped_range(record.fill_range, group.fill_verts.len());
-    if group.stroke_verts[stroke_range]
-        .iter()
-        .map(|vertex| vertex.pos)
-        .chain(group.fill_verts[fill_range].iter().map(|vertex| vertex.pos))
-        .filter_map(|position| local_vertex_to_screen(position, scene_origin, view_proj, screen))
-        .any(|point| rect.contains(point))
-    {
+    // A vertex in the box settles it without walking the record's triangles.
+    if visible_screen_vertices(group, record, scene_origin, slab, view_proj, screen).any(|point| rect.contains(point)) {
         return true;
     }
-
-    let stroke_indices = &group.stroke_indices[clamped_range(record.stroke_index_range, group.stroke_indices.len())];
-    for indices in stroke_indices.as_chunks::<3>().0 {
-        let [Some(a), Some(b), Some(c)] = [
-            group.stroke_verts.get(indices[0] as usize),
-            group.stroke_verts.get(indices[1] as usize),
-            group.stroke_verts.get(indices[2] as usize),
-        ] else {
-            continue;
-        };
-        let [Some(a), Some(b), Some(c)] = [a, b, c].map(|vertex| local_vertex_to_screen(vertex.pos, scene_origin, view_proj, screen)) else {
-            continue;
-        };
-        if triangle_touches_rect([a, b, c], rect) {
-            return true;
-        }
-    }
-
-    let fill_indices = &group.fill_indices[clamped_range(record.fill_index_range, group.fill_indices.len())];
-    for indices in fill_indices.as_chunks::<3>().0 {
-        let [Some(a), Some(b), Some(c)] = [
-            group.fill_verts.get(indices[0] as usize),
-            group.fill_verts.get(indices[1] as usize),
-            group.fill_verts.get(indices[2] as usize),
-        ] else {
-            continue;
-        };
-        let [Some(a), Some(b), Some(c)] = [a, b, c].map(|vertex| local_vertex_to_screen(vertex.pos, scene_origin, view_proj, screen)) else {
-            continue;
-        };
-        if triangle_touches_rect([a, b, c], rect) {
-            return true;
-        }
-    }
-
-    false
+    visible_screen_polygons(group, record, scene_origin, slab, view_proj, screen)
+        .iter()
+        .any(|polygon| polygon_touches_rect(polygon, rect))
 }
 
 fn pick_record_bounds_may_touch_rect(record: &PickRecord, view_proj: &DMat4, screen: Size, rect: ScreenRect) -> bool {
@@ -193,9 +251,17 @@ impl<'a> Graphics<'a> {
         let previous_mouse_loc = self.camera_controller.mouse_loc;
         self.camera_controller.mouse_loc = mouse_loc;
 
-        if self.mouse_pressed == Some(MouseButton::Right) && !self.fly_mode_enabled && self.slice_view.is_none() {
+        if self.mouse_pressed == Some(MouseButton::Right) && !self.fly_mode_enabled {
             let dx = mouse_loc.0 - previous_mouse_loc.0;
             let dy = mouse_loc.1 - previous_mouse_loc.1;
+            if let Some(slice) = self.slice_view.as_mut() {
+                // Rebuilt from slice state each tick, so a rotation here would be overwritten; it accumulates on slice state instead (see `begin_slice_orbit_drag`).
+                if !slice.orbit_dragging {
+                    return false;
+                }
+                slice.orbit += DVec2::new(dx.into(), dy.into());
+                return true;
+            }
             return self.camera_controller.process_mouse(self.mouse_pressed, dx.into(), dy.into());
         }
 
@@ -353,25 +419,23 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
         // A slice camera looks horizontally, so it never intersects a
-        // horizontal Z plane. The point wanted there is on the section itself,
-        // which is the plane through `camera.position`: `update_slice_camera`
-        // parks the camera on the section so the symmetric znear/zfar slab is
-        // centred there. `cursor_world_at_target_depth` cannot serve, because
-        // it builds the point at the camera target instead - `zoom.max(1.0)`
-        // metres in front of the section, by a distance that changes with
-        // zoom. Two measurement picks at the same zoom carried the same offset
-        // and it cancelled, but a scroll between the picks put them on
-        // different parallel planes and the distance came out wrong, and any
-        // point placed on the section would have landed off it, where the
-        // half-slab-width projection clips.
-        if self.slice_view.is_some() {
-            let on_section = screen_to_world_on_view_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc);
+        // horizontal Z plane; the cursor is unprojected onto the section plane instead, not whatever plane the camera is orbited to.
+        if let Some(slice) = self.slice_view.as_ref() {
+            let on_section = screen_to_world_on_section_plane(
+                &self.camera,
+                self.projection.zoom,
+                aspect,
+                screen,
+                self.camera_controller.mouse_loc,
+                slice.center,
+                slice.normal(),
+            );
             // This point feeds the coordinate readout and the measure tools, and
-            // any tool that places geometry on the section, so it can end up in
+            // the tools that place geometry on the section, so it can end up in
             // the document and in a saved file. A degenerate viewport would make
-            // it non-finite; report no cursor instead, the way the plan view's
+            // it non-finite, and an edge-on section gives none either; both report no cursor, the way the plan view's
             // `screen_to_world_on_plane` reports a view it cannot solve.
-            return on_section.is_finite().then(|| self.unexaggerate_point(on_section));
+            return on_section.filter(|point| point.is_finite()).map(|point| self.unexaggerate_point(point));
         }
         let displayed_plane_z = self.scene_origin.z + (plane_z - self.scene_origin.z) * self.vertical_exaggeration;
         screen_to_world_on_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc, displayed_plane_z)
@@ -428,8 +492,9 @@ impl<'a> Graphics<'a> {
             self.camera_controller.mouse_loc,
             threshold_px,
             frozen,
+            self.section_slab(),
         );
-        let text_hit = pick_text(&self.text_pick_records, &view_proj, screen, self.camera_controller.mouse_loc, frozen);
+        let text_hit = pick_text(&self.text_pick_records, &view_proj, screen, self.camera_controller.mouse_loc, frozen, self.section_slab());
 
         let (ray_origin, direction) = self.cursor_model_ray();
         let document_hit = match (geometry_hit, text_hit) {
@@ -447,7 +512,8 @@ impl<'a> Graphics<'a> {
         // under the cursor shifts the clickable region on sloping triangles.
         let document_hit = document_hit.filter(|hit| xray_enabled || !SceneQuery::surface_occludes_pick(triangulations, hidden, &view_proj, self.scene_origin, hit.world));
         let hit = document_hit.map(|hit| (hit.entity, hit.world)).or(surface_hit);
-        let hit = hit.filter(|(_, world)| self.slab_contains(*world, &view_proj));
+        // Reject before either return path: x-ray skips the occlusion filter that would otherwise catch a surface hit far behind the section.
+        let hit = hit.filter(|(_, world)| self.slab_contains(*world));
         if xray_enabled {
             return hit;
         }
@@ -501,6 +567,7 @@ impl<'a> Graphics<'a> {
             threshold_px,
             hidden,
             frozen,
+            self.section_slab(),
         );
 
         document_or_surface
@@ -509,7 +576,8 @@ impl<'a> Graphics<'a> {
             .chain(drill_hole)
             .chain(block_model.map(plain))
             .chain(point_cloud.map(plain))
-            .filter(|pick| self.slab_contains(pick.world, &view_proj))
+            // Unbounded-ray hits can sit outside the rendered slab; without this filter one could win over a candidate the user can see.
+            .filter(|pick| self.slab_contains(pick.world))
             .min_by(|a, b| (a.world - ray_origin).dot(ray_direction).total_cmp(&(b.world - ray_origin).dot(ray_direction)))
     }
 
@@ -526,14 +594,15 @@ impl<'a> Graphics<'a> {
         let hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction)?;
         let view_proj = self.view_proj();
         let screen = self.screen_size();
-        (self.slab_contains(hit.1, &view_proj) && !self.nonselectable_asset_occludes(hit.1, hidden, &view_proj, screen)).then_some(hit)
+        (self.slab_contains(hit.1) && !self.nonselectable_asset_occludes(hit.1, hidden, &view_proj, screen)).then_some(hit)
     }
 
-    /// Whether `world` is in the depth range the view draws: only the slice view clips to a slab.
-    fn slab_contains(&self, world: DVec3, view_proj: &DMat4) -> bool {
-        self.slice_view.is_none() || crate::rendering::pick::world_to_screen(view_proj, world, self.screen_size()).is_some()
+    /// Whether `world` lies inside the section's slab; a no-op in plan/3D views, which show all the ground.
+    fn slab_contains(&self, world: DVec3) -> bool {
+        self.section_slab().is_none_or(|slab| slab.contains(world))
     }
 
+    /// Whether an asset that cannot be selected itself stands in front of a candidate pick and hides it. Both probes use the pick's own slab, so an asset thrown away beyond a wall cannot veto a pick seen through it.
     fn nonselectable_asset_occludes(&self, candidate: DVec3, hidden: &HashSet<SceneEntityId>, view_proj: &DMat4, screen: Size) -> bool {
         let clip = *view_proj * candidate.extend(1.0);
         if clip.w.abs() <= f64::EPSILON {
@@ -542,12 +611,13 @@ impl<'a> Graphics<'a> {
         let candidate_depth = clip.z / clip.w;
         let block_depth = crate::rendering::query::ray_through_world_point(view_proj, candidate)
             .and_then(|(origin, direction)| self.block_model_gpu.nearest_opaque_hit(origin, direction, hidden))
+            .filter(|point| self.slab_contains(*point))
             .and_then(|point| {
                 let clip = *view_proj * point.extend(1.0);
                 (clip.w.abs() > f64::EPSILON).then_some(clip.z / clip.w)
             });
         let point_depth = crate::rendering::pick::world_to_screen(view_proj, candidate, screen)
-            .and_then(|screen_point| self.point_cloud_gpu.nearest_depth_at_screen(view_proj, screen, screen_point, hidden));
+            .and_then(|screen_point| self.point_cloud_gpu.nearest_depth_at_screen(view_proj, screen, screen_point, hidden, self.section_slab()));
         block_depth
             .into_iter()
             .chain(point_depth)
@@ -561,6 +631,7 @@ impl<'a> Graphics<'a> {
         let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
         let view_proj = self.view_proj();
         let screen = self.screen_size();
+        let slab = self.section_slab();
         let mut hits = Vec::new();
         let mut seen = HashSet::new();
 
@@ -572,22 +643,14 @@ impl<'a> Graphics<'a> {
                 if !pick_record_bounds_may_touch_rect(record, &view_proj, screen, rect) {
                     continue;
                 }
-                let stroke = clamped_range(record.stroke_range, group.stroke_verts.len());
-                let fill = clamped_range(record.fill_range, group.fill_verts.len());
-                let points = group.stroke_verts[stroke]
-                    .iter()
-                    .map(|vertex| vertex.pos)
-                    .chain(group.fill_verts[fill].iter().map(|vertex| vertex.pos));
-                let mut any = false;
-                let enclosed = points
-                    .filter_map(|position| {
-                        let world = DVec3::from_array(position.map(f64::from)) + self.scene_origin;
-                        crate::rendering::pick::world_to_screen(&view_proj, world, screen)
-                    })
-                    .all(|point| {
-                        any = true;
-                        rect.contains(point)
-                    });
+                // Enclosure is judged on the part the section shows, not raw vertices: a run spanning wall to wall has none inside them, so cut triangles are measured too, with vertices covering point-only geometry.
+                let polygons = visible_screen_polygons(&group, record, self.scene_origin, slab, &view_proj, screen);
+                let mut any = !polygons.is_empty();
+                let mut enclosed = polygons.iter().all(|polygon| polygon_inside_rect(polygon, rect));
+                for point in visible_screen_vertices(&group, record, self.scene_origin, slab, &view_proj, screen) {
+                    any = true;
+                    enclosed &= rect.contains(point);
+                }
                 if any && enclosed && seen.insert(record.entity) {
                     hits.push(record.entity);
                 }
@@ -598,10 +661,11 @@ impl<'a> Graphics<'a> {
             if frozen.contains(&record.entity) {
                 continue;
             }
-            let Some(corners) = projected_text_corners(record, &view_proj, screen) else {
+            // A label is clipped at the walls glyph by glyph, so the box only has to enclose the part of it that shows.
+            let Some(polygon) = visible_text_polygon(record, slab, &view_proj, screen) else {
                 continue;
             };
-            if corners.iter().all(|&point| rect.contains(point)) && seen.insert(record.entity) {
+            if polygon_inside_rect(&polygon, rect) && seen.insert(record.entity) {
                 hits.push(record.entity);
             }
         }
@@ -615,6 +679,7 @@ impl<'a> Graphics<'a> {
         let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
         let view_proj = self.view_proj();
         let screen = self.screen_size();
+        let slab = self.section_slab();
         let mut hits = Vec::new();
         let mut seen = HashSet::new();
 
@@ -623,7 +688,7 @@ impl<'a> Graphics<'a> {
                 if frozen.contains(&record.entity) {
                     continue;
                 }
-                if pick_record_touches_rect(&group, record, self.scene_origin, &view_proj, screen, rect) && seen.insert(record.entity) {
+                if pick_record_touches_rect(&group, record, self.scene_origin, slab, &view_proj, screen, rect) && seen.insert(record.entity) {
                     hits.push(record.entity);
                 }
             }
@@ -633,10 +698,10 @@ impl<'a> Graphics<'a> {
             if frozen.contains(&record.entity) {
                 continue;
             }
-            let Some(corners) = projected_text_corners(record, &view_proj, screen) else {
+            let Some(polygon) = visible_text_polygon(record, slab, &view_proj, screen) else {
                 continue;
             };
-            if quad_touches_rect(corners, rect) && seen.insert(record.entity) {
+            if polygon_touches_rect(&polygon, rect) && seen.insert(record.entity) {
                 hits.push(record.entity);
             }
         }
@@ -664,6 +729,7 @@ impl<'a> Graphics<'a> {
         let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
         let view_proj = self.view_proj();
         let screen = self.screen_size();
+        let slab = self.section_slab();
         let mut hits = Vec::new();
 
         for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
@@ -672,24 +738,25 @@ impl<'a> Graphics<'a> {
                 continue;
             }
             for (index, hole) in dataset.dataset.holes.iter().enumerate() {
-                let projected: Vec<DVec2> = hole
-                    .trace
-                    .iter()
-                    .filter_map(|station| crate::rendering::pick::world_to_screen(&view_proj, station.position, screen))
+                // Only the trace length between the walls is drawn, so each leg is cut at the walls (not stations): a hole passing through between two stations is still selectable there.
+                let legs: Vec<Option<(DVec2, DVec2)>> = hole_legs(hole)
+                    .filter_map(|(from, to)| slab_clipped_segment(slab, from, to))
+                    .map(|(from, to)| {
+                        match (
+                            crate::rendering::pick::world_to_screen(&view_proj, from, screen),
+                            crate::rendering::pick::world_to_screen(&view_proj, to, screen),
+                        ) {
+                            (Some(from), Some(to)) => Some((from, to)),
+                            _ => None,
+                        }
+                    })
                     .collect();
-                if projected.is_empty() {
-                    continue;
-                }
                 let taken = if cross_select {
-                    projected.iter().any(|point| rect.contains(*point))
-                        || projected
-                            .windows(2)
-                            .any(|pair| segment_intersects_rect(pair[0], pair[1], rect.min_x, rect.max_x, rect.min_y, rect.max_y))
+                    legs.iter()
+                        .flatten()
+                        .any(|&(from, to)| rect.contains(from) || rect.contains(to) || segment_intersects_rect(from, to, rect.min_x, rect.max_x, rect.min_y, rect.max_y))
                 } else {
-                    // A trace that partly failed to project is not wholly
-                    // inside anything, whatever the stations that did project
-                    // say.
-                    projected.len() == hole.trace.len() && projected.iter().all(|point| rect.contains(*point))
+                    !legs.is_empty() && legs.iter().all(|leg| leg.is_some_and(|(from, to)| rect.contains(from) && rect.contains(to)))
                 };
                 if taken {
                     hits.push(DrillHoleRef { dataset: dataset.id, hole: index });
@@ -718,6 +785,7 @@ impl<'a> Graphics<'a> {
         let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
         let view_proj = self.view_proj();
         let screen = self.screen_size();
+        let slab = self.section_slab();
         let mut hits = Vec::new();
 
         for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
@@ -729,10 +797,8 @@ impl<'a> Graphics<'a> {
                 let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.from), dataset.dataset.holes.get(tie.to)) else {
                     continue;
                 };
-                let (Some(a), Some(b)) = (
-                    crate::rendering::pick::world_to_screen(&view_proj, from.collar_position(), screen),
-                    crate::rendering::pick::world_to_screen(&view_proj, to.collar_position(), screen),
-                ) else {
+                let (start, end) = (from.collar_position(), to.collar_position());
+                let Some((a, b)) = slab_clipped_screen_segment(slab, &view_proj, screen, start, end) else {
                     continue;
                 };
                 let taken = if cross_select {
@@ -750,11 +816,7 @@ impl<'a> Graphics<'a> {
     }
 
     /// Begin an orbit with the anchor at the surface or geometry point under the cursor.
-    /// With nothing under the cursor the anchor is the point on the working
-    /// plane at `working_plane_z` instead, the plane a click would draw on, so
-    /// the view turns about something the user can see rather than about a
-    /// depth left behind by the last fit or zoom. The camera-target depth is
-    /// kept only for a view that looks along that plane and cannot meet it.
+    /// Falls back to the point on the working plane at `working_plane_z`, then the camera-target depth, when the view cannot meet that plane.
     /// Called from the app level where triangulations are available.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_orbit_at_surface(
@@ -805,6 +867,7 @@ impl<'a> Graphics<'a> {
                     SNAP_THRESHOLD_PX,
                     hidden,
                     frozen,
+                    self.section_slab(),
                 )
                 .map(|(_, world)| world);
             triangulation_hit
@@ -1028,7 +1091,8 @@ impl<'a> Graphics<'a> {
     /// Keep the depth range tight around the current scene. An oversized range
     /// loses enough precision that back-side mesh edges can compare equal to
     /// the front surface and bleed through it, especially in perspective.
-    pub(super) fn fit_depth_to_scene(
+    /// Bring the cached scene bounds up to date without fitting to them; used by the depth fit below, and by a section, which reads bounds but sets its own clip range.
+    pub(super) fn refresh_scene_bounds(
         &mut self,
         document: &Document,
         triangulations: &[OpenTriangulation],
@@ -1042,6 +1106,18 @@ impl<'a> Graphics<'a> {
             self.cached_scene_bounds = merge_aabbs(&self.cached_object_aabbs);
             self.cached_bounds_document_revision = document.revision();
         }
+    }
+
+    pub(super) fn fit_depth_to_scene(
+        &mut self,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+        hidden: &HashSet<SceneEntityId>,
+    ) {
+        self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden);
         let Some((scene_min, scene_max)) = self.cached_scene_bounds else {
             let depth = (self.projection.zoom * 4.0).max(10.0);
             self.projection.set_view_depth_range(0.0, depth, 1.0);
@@ -1192,9 +1268,11 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    pub(super) fn upload_camera_uniform(&mut self, interaction_resolution_divisor: u32) {
+    /// Write the camera uniform the fragment shaders read. `slab` is the section clip (or `None`); it's an argument because the plot renders the whole ground through this buffer while a section is up in the viewport.
+    pub(super) fn upload_camera_uniform(&mut self, interaction_resolution_divisor: u32, slab: Option<SectionSlab>) {
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
+        self.camera_uniform.set_section_slab(slab, self.scene_origin);
         // While the camera is being orbited/panned/zoomed, draw the volume
         // raycast at a reduced per-axis resolution and upscale. The reduced
         // resolution also coarsens the raycaster's footprint-driven brick LOD
@@ -1226,6 +1304,8 @@ impl<'a> Graphics<'a> {
         };
         // Matches the zoom feel of the main `CameraController` (see init.rs).
         const SLICE_ZOOM_SENSITIVITY: f64 = 0.005;
+        const SLICE_WALK_SECONDS_PER_NOTCH: f64 = 0.25;
+        const WHEEL_NOTCH_PIXELS: f64 = 100.0;
         let step = dt.as_secs_f64().min(0.1);
 
         // Q/E: rotate the slice line about its centre. Q turns the view left
@@ -1236,24 +1316,43 @@ impl<'a> Graphics<'a> {
             slice.direction = DVec2::from_angle(angle).rotate(slice.direction).normalize_or(slice.direction);
         }
 
-        let strike = DVec3::new(slice.direction.x, slice.direction.y, 0.0);
-        let forward = slice.forward();
-
-        // W/S: move the slab along its normal.
-        let slab_amount = f64::from(i8::from(slice.input.forward)) - f64::from(i8::from(slice.input.backward));
-        if slab_amount != 0.0 {
-            slice.center += forward * slab_amount * slice.move_speed * step;
+        // Right-drag orbits only the eye, so the plane being drawn on never moves under a stroke (Q/E turn the section itself); settled before the walk/pan/zoom below since those act on this orientation.
+        if !slice.orbit_dragging || self.mouse_pressed != Some(MouseButton::Right) {
+            slice.orbit_dragging = false;
+        }
+        if slice.orbit != DVec2::ZERO {
+            let angles = self.camera_controller.orbit_angles(slice.orbit.x, slice.orbit.y);
+            // Matches the plan view's sign: it rotates the camera position by the negated horizontal angle, so forward turns by its negative.
+            slice.yaw -= angles.x;
+            // Clamped to within `MIN_SECTION_INCIDENCE` of straight up/down so the view never grazes the section, where no pixel has a point on it and every placement tool goes quiet with no visible cause.
+            let pitch_limit = std::f64::consts::FRAC_PI_2 - crate::rendering::camera::MIN_SECTION_INCIDENCE;
+            slice.pitch = (slice.pitch + angles.y).clamp(-pitch_limit, pitch_limit);
+            slice.orbit = DVec2::ZERO;
         }
 
-        // Middle-drag pan within the section plane: horizontal = strike,
-        // vertical = elevation. Pixel-to-world matches the ortho pan feel.
+        // The camera side after the orbit above; walk/pan below are defined against it so they read the same from either side of the cut (Q/E rotate the section itself, not the eye).
+        let normal = slice.normal();
+        let (forward, right, up) = slice.camera_basis();
+        slice.update_viewing_side(forward);
+
+        // W/S and Shift+wheel both walk the slab along its normal, in the same metres, added together and applied once; forward is away from the eye, not `+normal`.
+        let held_seconds = (f64::from(i8::from(slice.input.forward)) - f64::from(i8::from(slice.input.backward))) * step;
+        let walked_seconds = slice.walk / WHEEL_NOTCH_PIXELS * SLICE_WALK_SECONDS_PER_NOTCH;
+        slice.walk = 0.0;
+        if held_seconds + walked_seconds != 0.0 {
+            slice.center += super::walk_direction(normal, slice.viewing_from_front) * (held_seconds + walked_seconds) * slice.move_speed;
+        }
+
+        // Pan and zoom move the centre along the camera's screen right/up, flattened into the section plane (see `plane_screen_axes`).
+        let (screen_right, screen_up) = super::plane_screen_axes(right, up, normal);
+
         if slice.pan != DVec2::ZERO {
             let world_per_pixel = (2.0 * self.projection.zoom / screen.1.max(1.0) as f64).max(0.0);
-            slice.center += (strike * slice.pan.x + DVec3::Z * slice.pan.y) * world_per_pixel;
+            slice.center += (screen_right * slice.pan.x + screen_up * slice.pan.y) * world_per_pixel;
             slice.pan = DVec2::ZERO;
         }
 
-        // Scroll: ortho zoom toward the cursor, mirroring the main controller.
+        // Scroll: ortho zoom toward the cursor, along the same axes as the pan.
         if slice.scroll != 0.0 {
             let zoom_scale = if slice.scroll > 0.0 {
                 1.0 - (1.0 / (1.0 + SLICE_ZOOM_SENSITIVITY * slice.scroll))
@@ -1263,14 +1362,13 @@ impl<'a> Graphics<'a> {
             let zoom_factor = self.projection.zoom * zoom_scale;
             let mouse_ndc = crate::rendering::camera::point(mouse_loc.0, mouse_loc.1, screen);
             let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
-            slice.center += (strike * mouse_ndc.x * aspect + DVec3::Z * mouse_ndc.y) * zoom_factor;
+            slice.center += (screen_right * mouse_ndc.x * aspect + screen_up * mouse_ndc.y) * zoom_factor;
             self.projection.zoom = (self.projection.zoom - zoom_factor).max(1.0e-4);
             slice.scroll = 0.0;
         }
 
-        // The camera sits on the slice plane itself so the symmetric
-        // znear/zfar slab is centred on the plane.
-        self.camera.look_to(slice.center, forward, DVec3::Z, self.projection.zoom.max(1.0));
+        // The camera sits on the section plane, so the znear/zfar range stays centred on it; the shown slab is the shader clip, not this range, so orbiting only changes the angle, not what's cut.
+        self.camera.look_to(slice.center, forward, up, self.projection.zoom.max(1.0));
     }
 
     pub(crate) fn update(&mut self, dt: Duration, interaction_resolution_divisor: u32) {
@@ -1284,7 +1382,7 @@ impl<'a> Graphics<'a> {
             let screen_size = self.screen_size();
             self.camera_controller.update_camera(&mut self.camera, &mut self.projection, dt, screen_size);
         }
-        self.upload_camera_uniform(interaction_resolution_divisor);
+        self.upload_camera_uniform(interaction_resolution_divisor, self.section_slab());
     }
 
     pub(crate) fn input(&mut self, event: &WindowEvent) -> bool {
@@ -1297,10 +1395,7 @@ impl<'a> Graphics<'a> {
                 // burst (and 150 ms after), like camera drags and resizes.
                 self.mark_interaction();
                 if let Some(slice) = self.slice_view.as_mut() {
-                    slice.scroll += match delta {
-                        MouseScrollDelta::LineDelta(_, scroll) => f64::from(*scroll) * 100.0,
-                        MouseScrollDelta::PixelDelta(position) => position.y,
-                    };
+                    slice.scroll += super::scroll_pixels(delta);
                 } else if self.fly_mode_enabled {
                     self.fly_camera_controller.process_scroll(delta);
                 } else {

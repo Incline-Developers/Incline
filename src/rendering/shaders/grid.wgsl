@@ -2,20 +2,6 @@
 // triangle reconstructs the plane intersection for each pixel, so the grid has
 // no finite mesh edge and stays stable while panning or zooming.
 
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    cam_forward: vec4<f32>,
-    cam_position: vec4<f32>,
-    viewport: vec4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    // xy: viewport rect offset in physical pixels within the render target -
-    // `@builtin(position)` is target-relative, not viewport-relative, so this
-    // must be subtracted before treating a fragment's position as 0-based.
-    viewport_origin: vec4<f32>,
-};
-@group(0) @binding(0)
-var<uniform> camera: CameraUniform;
-
 struct GridUniform {
     // xy: absolute world offset of the rebased scene; z: world-Z-zero elevation
     // relative to that scene origin; w: perspective-view flag.

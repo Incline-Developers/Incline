@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
-use glam::{DMat4, DVec2, DVec3, DVec4};
+use glam::{DMat4, DQuat, DVec2, DVec3, DVec4};
 use lyon::tessellation::VertexBuffers;
 use web_time::Instant;
 use wgpu::util::DeviceExt;
@@ -22,7 +22,7 @@ use crate::{
     },
     rendering::{
         BlockInstance, StrokeVertex, SurfaceVertex, Vertex,
-        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, screen_to_world_on_plane, screen_to_world_on_view_plane},
+        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, SectionSlab, screen_to_world_on_plane, screen_to_world_on_section_plane},
         pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
@@ -430,6 +430,18 @@ pub(crate) struct SliceViewState {
     pub(super) pan: DVec2,
     /// Accumulated scroll deltas (pixels, 1 line ≈ 100 px).
     pub(super) scroll: f64,
+    pub(super) walk: f64,
+    pub(super) orbit: DVec2,
+    /// Whether a right drag has passed the click/drag threshold; below it a
+    /// right click still finishes the drawn polyline instead of moving the view.
+    pub(super) orbit_dragging: bool,
+    /// Orbit from square-on, radians: `yaw` about world Z, then `pitch` about
+    /// the yawed screen-right axis; both zero is the entered view.
+    pub(super) yaw: f64,
+    pub(super) pitch: f64,
+    /// Which side of the plane the camera is on (`true` = front, the entered
+    /// side); `walk_direction` reads it to keep the walk direction correct after an orbit.
+    pub(super) viewing_from_front: bool,
     /// Camera and ortho zoom to restore on exit.
     pub(super) saved_camera: Camera,
     pub(super) saved_zoom: f64,
@@ -437,14 +449,82 @@ pub(crate) struct SliceViewState {
 
 impl SliceViewState {
     pub(super) fn has_pending_updates(&self) -> bool {
-        self.input.any() || self.pan != DVec2::ZERO || self.scroll != 0.0
+        self.input.any() || self.pan != DVec2::ZERO || self.scroll != 0.0 || self.orbit != DVec2::ZERO || self.walk != 0.0
+    }
+
+    pub(super) fn slab(&self) -> SectionSlab {
+        SectionSlab {
+            point: self.center,
+            normal: self.normal(),
+            half_width: self.width * 0.5,
+        }
     }
 
     /// View direction of the section (the slab normal), horizontal by
     /// construction. Chosen so that screen-right equals `+direction`.
-    pub(super) fn forward(&self) -> DVec3 {
+    pub(super) fn normal(&self) -> DVec3 {
         slice_view_forward(self.direction)
     }
+
+    pub(super) fn camera_basis(&self) -> (DVec3, DVec3, DVec3) {
+        camera_frame(self.normal(), self.yaw, self.pitch)
+    }
+
+    pub(super) fn update_viewing_side(&mut self, forward: DVec3) {
+        self.viewing_from_front = settled_viewing_side(self.viewing_from_front, forward.dot(self.normal()));
+    }
+}
+
+/// Camera basis for a section `normal`, yawed about world Z then pitched
+/// about the resulting screen-right; right stays horizontal so the frame never collapses looking straight down.
+fn camera_frame(normal: DVec3, yaw: f64, pitch: f64) -> (DVec3, DVec3, DVec3) {
+    let yawed = DQuat::from_rotation_z(yaw) * normal;
+    let right = yawed.cross(DVec3::Z).normalize_or(DVec3::X);
+    let forward = DQuat::from_axis_angle(right, pitch) * yawed;
+    (forward, right, right.cross(forward).normalize_or(DVec3::Z))
+}
+
+/// Hysteresis around edge-on, in degrees: below this margin the camera's
+/// recorded side of the plane doesn't flip, since exactly edge-on the sign is arbitrary and would flicker under a barely-moving hand.
+const SIDE_FLIP_MARGIN_DEGREES: f64 = 5.0;
+
+fn settled_viewing_side(was_front: bool, incidence: f64) -> bool {
+    if incidence.abs() > SIDE_FLIP_MARGIN_DEGREES.to_radians().sin() {
+        incidence > 0.0
+    } else {
+        was_front
+    }
+}
+
+/// Direction a forward walk moves the plane, away from the eye: `normal`
+/// from the front side, `-normal` from the back.
+fn walk_direction(normal: DVec3, viewing_from_front: bool) -> DVec3 {
+    if viewing_from_front { normal } else { -normal }
+}
+
+/// Camera `right`/`up` flattened into the section plane (`normal`); pan and
+/// zoom-anchor move along these, and the flattened right vanishes edge-on.
+fn plane_screen_axes(right: DVec3, up: DVec3, normal: DVec3) -> (DVec3, DVec3) {
+    (right - normal * right.dot(normal), up - normal * up.dot(normal))
+}
+
+/// Wheel delta as `(x, y)` pixels; one notch is 100 px on either axis.
+fn axis_pixels(delta: &MouseScrollDelta) -> (f64, f64) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (f64::from(*x) * 100.0, f64::from(*y) * 100.0),
+        MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
+    }
+}
+
+pub(crate) fn scroll_pixels(delta: &MouseScrollDelta) -> f64 {
+    axis_pixels(delta).1
+}
+
+/// Wheel delta in pixels, preferring `y` like `scroll_pixels`, but falling
+/// back to `x`: Shift+wheel arrives as a horizontal delta (`y` zero) on Chrome and on macOS.
+pub(crate) fn scroll_pixels_either_axis(delta: &MouseScrollDelta) -> f64 {
+    let (x, y) = axis_pixels(delta);
+    if y != 0.0 { y } else { x }
 }
 
 /// View direction for a slice line running along `direction`:
@@ -595,6 +675,9 @@ impl<'a> Graphics<'a> {
         self.fly_camera_controller.clear_input();
         if let Some(slice) = self.slice_view.as_mut() {
             slice.input = SliceInputState::default();
+            // Drop the armed orbit: otherwise the next pointer move would rotate the restored view.
+            slice.orbit_dragging = false;
+            slice.orbit = DVec2::ZERO;
         }
         self.sync_cursor_grab();
     }
@@ -731,15 +814,20 @@ impl<'a> Graphics<'a> {
             input: SliceInputState::default(),
             pan: DVec2::ZERO,
             scroll: 0.0,
+            walk: 0.0,
+            orbit: DVec2::ZERO,
+            orbit_dragging: false,
+            yaw: 0.0,
+            pitch: 0.0,
+            viewing_from_front: true,
             saved_camera,
             saved_zoom,
         };
-        self.camera.look_to(slice.center, slice.forward(), DVec3::Z, self.projection.zoom);
+        let (forward, _, up) = slice.camera_basis();
+        self.camera.look_to(slice.center, forward, up, self.projection.zoom);
         self.slice_view = Some(slice);
     }
 
-    /// Whether the section is about to move on its own: held W/S/Q/E, a middle-drag pan, or a scroll.
-    /// `update` consumes those deltas, so callers that must react ask before it runs.
     pub(crate) fn slice_view_moving(&self) -> bool {
         self.slice_view.as_ref().is_some_and(SliceViewState::has_pending_updates)
     }
@@ -752,6 +840,46 @@ impl<'a> Graphics<'a> {
         };
         self.camera = slice.saved_camera;
         self.projection.zoom = slice.saved_zoom;
+        if self.mouse_pressed == Some(MouseButton::Right) && !self.fly_mode_enabled {
+            self.mouse_pressed = None;
+        }
+    }
+
+    pub(crate) fn begin_slice_orbit_drag(&mut self, initial: DVec2) -> bool {
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        slice.orbit_dragging = true;
+        slice.orbit += initial;
+        self.begin_right_orbit_drag();
+        true
+    }
+
+    pub(crate) fn slice_walk_scroll(&mut self, delta: &MouseScrollDelta) -> bool {
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        slice.walk += scroll_pixels_either_axis(delta);
+        self.mark_interaction();
+        true
+    }
+
+    pub(crate) fn section_slab(&self) -> Option<SectionSlab> {
+        self.slice_view.as_ref().map(SliceViewState::slab)
+    }
+
+    pub(crate) fn reset_slice_view(&mut self) -> bool {
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        slice.yaw = 0.0;
+        slice.pitch = 0.0;
+        slice.orbit = DVec2::ZERO;
+        slice.orbit_dragging = false;
+        slice.viewing_from_front = true;
+        let (forward, _, up) = slice.camera_basis();
+        self.camera.look_to(slice.center, forward, up, self.projection.zoom.max(1.0));
+        true
     }
 
     /// Forward a held-key press/release to the slice navigation input:

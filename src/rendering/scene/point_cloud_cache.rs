@@ -17,6 +17,7 @@ use crate::{
         point_cloud::{OpenPointCloud, POINT_CLOUD_LOD_LEVELS, PointCloudId, PreparedPointCloud},
     },
     rendering::{
+        camera::SectionSlab,
         graphics::frustum::Frustum,
         scene::point_buffer_arena::{PointBufferArena, PointSlot},
     },
@@ -142,13 +143,21 @@ impl PointCloudGpuCache {
 
     /// Nearest depth-writing point splat covering `screen_point` at the LOD
     /// used by the most recent render pass.
-    pub(crate) fn nearest_depth_at_screen(&self, view_proj: &DMat4, screen: (f32, f32), screen_point: DVec2, hidden: &HashSet<SceneEntityId>) -> Option<f64> {
-        self.nearest_hit_at_screen(view_proj, screen, screen_point, 0.0, hidden, &HashSet::new())
+    pub(crate) fn nearest_depth_at_screen(
+        &self,
+        view_proj: &DMat4,
+        screen: (f32, f32),
+        screen_point: DVec2,
+        hidden: &HashSet<SceneEntityId>,
+        slab: Option<SectionSlab>,
+    ) -> Option<f64> {
+        self.nearest_hit_at_screen(view_proj, screen, screen_point, 0.0, hidden, &HashSet::new(), slab)
             .map(|(_, _, depth)| depth)
     }
 
     /// Nearest visible point-cloud splat under the cursor, including a small
     /// interaction tolerance beyond the rendered billboard.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn nearest_visible_entity_at_screen(
         &self,
         view_proj: &DMat4,
@@ -157,11 +166,15 @@ impl PointCloudGpuCache {
         threshold_px: f32,
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
+        slab: Option<SectionSlab>,
     ) -> Option<(SceneEntityId, DVec3)> {
-        self.nearest_hit_at_screen(view_proj, screen, screen_point, f64::from(threshold_px), hidden, frozen)
+        self.nearest_hit_at_screen(view_proj, screen, screen_point, f64::from(threshold_px), hidden, frozen, slab)
             .map(|(entity, world, _)| (entity, world))
     }
 
+    /// `slab` is the slab of ground a section shows, or `None` to show it all.
+    /// A splat outside it is dropped by the fragment shader too, so it is skipped here: it can't be picked or hide a pick.
+    #[allow(clippy::too_many_arguments)]
     fn nearest_hit_at_screen(
         &self,
         view_proj: &DMat4,
@@ -170,6 +183,7 @@ impl PointCloudGpuCache {
         padding_px: f64,
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
+        slab: Option<SectionSlab>,
     ) -> Option<(SceneEntityId, DVec3, f64)> {
         let mut nearest = None;
         let inverse = view_proj.inverse();
@@ -200,6 +214,9 @@ impl PointCloudGpuCache {
                             continue;
                         };
                         let world = cached.prepared.origin + DVec3::from_array(local.map(f64::from));
+                        if slab.is_some_and(|slab| !slab.contains(world)) {
+                            continue;
+                        }
                         let Some(projected) = crate::rendering::pick::world_to_screen(view_proj, world, screen) else {
                             continue;
                         };
