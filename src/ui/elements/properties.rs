@@ -151,6 +151,14 @@ pub(crate) fn draw_selection_appearance(
                 geometry_dirty,
             );
         });
+        // The object editor needs exactly one selected design object.
+        if editor.selected_handles.len() == 1
+            && let [object_id] = objects.as_slice()
+            && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Edit Object...")).show(ui).clicked()
+        {
+            commands.push(UiCommand::OpenObjectEditDialog(*object_id));
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
         if crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Move to Layer..."))
             .show(ui)
             .clicked()

@@ -86,9 +86,8 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
 
 /// Draw the canvas right-click context menu for selected objects and triangulations.
 ///
-/// Actions only: an object's own values (colour, shape, fill, line weight) are
-/// edited in the explorer's Design properties tab. Updates `geometry_dirty`
-/// when changes are made.
+/// Groups design appearance and editing controls before shared selection actions.
+/// Updates `geometry_dirty` when changes are made.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_right_click_context(
     ui: &mut egui::Ui,
@@ -118,15 +117,6 @@ pub(crate) fn draw_right_click_context(
             }
 
             context_menu_separator(ui);
-        }
-
-        // The object editor needs exactly one selected design object.
-        if editor.selected_handles.len() == 1
-            && let Some(crate::model::SceneEntityId::Object(object_id)) = editor.selected_handles.iter().next()
-            && ContextMenuAction::new(tr!(literal = "Edit Object...")).show(ui).clicked()
-        {
-            commands.push(UiCommand::OpenObjectEditDialog(*object_id));
-            commands.push(UiCommand::CloseCanvasContextMenu);
         }
 
         if !editor.selected_handles.is_empty() {
