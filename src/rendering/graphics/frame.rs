@@ -472,7 +472,7 @@ impl<'a> Graphics<'a> {
         {
             self.window.request_redraw();
         }
-        output.present();
+        self.queue.present(output);
         if let Some(capture) = pending_screenshot {
             self.finish_screenshot_capture(capture);
         }

@@ -166,7 +166,7 @@ impl Gui {
             console_snapshot: &console_snapshot,
         };
         let mut canvas_rect_logical = egui::Rect::NOTHING;
-        let full_output = self.ctx.run_ui(raw_input, |ui| {
+        let mut full_output = self.ctx.run_ui(raw_input, |ui| {
             geometry_dirty |= draw_ui(
                 ui,
                 editor,
@@ -189,8 +189,10 @@ impl Gui {
         mirror_copy_text_to_browser_clipboard(&full_output.platform_output);
         self.state.handle_platform_output(window, full_output.platform_output);
 
-        for (id, image_delta) in &full_output.textures_delta.set {
-            self.renderer.update_texture(device, queue, *id, image_delta);
+        for (id, image_deltas) in full_output.textures_delta.set.drain() {
+            for image_delta in image_deltas {
+                self.renderer.update_texture(device, queue, id, &image_delta);
+            }
         }
 
         let pixels_per_point = full_output.pixels_per_point;
@@ -230,8 +232,8 @@ impl Gui {
             self.renderer.render(&mut render_pass.forget_lifetime(), &paint_jobs, &screen_descriptor);
         }
 
-        for id in &full_output.textures_delta.free {
-            self.renderer.free_texture(id);
+        for id in full_output.textures_delta.free.drain() {
+            self.renderer.free_texture(&id);
         }
 
         let canvas_rect = if canvas_rect_logical.is_finite() && canvas_rect_logical.is_positive() {

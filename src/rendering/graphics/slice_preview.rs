@@ -247,6 +247,7 @@ impl DetachedSlicePreview {
             alpha_mode,
             view_formats: graphics.config.view_formats.clone(),
             desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&graphics.device, &config);
 
@@ -350,11 +351,11 @@ impl DetachedSlicePreview {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: size_of::<OverlayVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
-                }],
+                })],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -423,6 +424,7 @@ impl EmbeddedSlicePreview {
             alpha_mode: wgpu::CompositeAlphaMode::Opaque,
             view_formats: graphics.config.view_formats.clone(),
             desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         let (texture, view, gui_view) = Self::create_color_target(&graphics.device, &config);
         let texture_id = graphics.gui.register_native_texture(&graphics.device, &gui_view);
@@ -908,7 +910,7 @@ impl<'a> Graphics<'a> {
         std::mem::swap(&mut self.size, &mut preview.size);
 
         self.queue.submit([encoder.finish()]);
-        output.present();
+        self.queue.present(output);
         Ok(())
     }
 }
