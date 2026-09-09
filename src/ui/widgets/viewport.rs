@@ -1202,19 +1202,71 @@ fn value_to_normalized(value: f64, min: f64, max: f64) -> f32 {
     }
 }
 
-/// A compact notification pinned to the top of the 3D viewport.
+/// One prompt for the viewport banner: the instruction, and optionally the
+/// detail that qualifies it.
+///
+/// The two halves are given separately rather than punctuated into one string
+/// so the banner can set them apart itself - the instruction at full strength,
+/// the detail dimmed and held off at a gap, no punctuation between them - and
+/// so a translator can move either half on its own.
+#[derive(Clone)]
+pub(crate) struct ViewportMessage {
+    text: String,
+    minor: Option<String>,
+}
+
+impl ViewportMessage {
+    /// The instruction: what the tool is waiting for, in as few words as it
+    /// takes to say it.
+    pub(crate) fn text(text: impl Into<String>) -> Self {
+        Self { text: text.into(), minor: None }
+    }
+
+    /// Detail that qualifies the instruction - the keys it answers to, the way
+    /// out of it, why it is being asked. Written as its own phrase: the banner
+    /// parts it from the instruction with weight and space, not punctuation.
+    pub(crate) fn minor(mut self, minor: impl Into<String>) -> Self {
+        self.minor = Some(minor.into());
+        self
+    }
+}
+
+/// A compact prompt pinned to the top of the 3D viewport.
+///
+/// Painted as a member of the floating-menu family - same surface, hairline
+/// and corner radius - so it reads as part of the window rather than as a
+/// sticky note dropped on top of it. An accent pip marks it as a live prompt,
+/// and a [`ViewportMessage`]'s two halves are set apart by weight and spacing
+/// so the thing to do is read before the keys that qualify it.
 pub(crate) struct ViewportLabel {
     id: egui::Id,
-    text: String,
+    message: ViewportMessage,
     viewport_rect: egui::Rect,
     margin: f32,
 }
 
+/// Gap set between a prompt's instruction and its detail: the only thing
+/// parting them, so it is wider than ordinary word spacing.
+const PROMPT_DETAIL_GAP: f32 = 12.0;
+/// Diameter of the pip that marks the card as a prompt.
+const PROMPT_PIP_DIAMETER: f32 = 5.0;
+
+/// Colour of the prompt pip: the amber the viewport already draws its guides
+/// and previews in, stepped down in the light theme where full-strength amber
+/// on a pale card reads as washed out.
+fn prompt_pip_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(255, 200, 60)
+    } else {
+        egui::Color32::from_rgb(198, 140, 12)
+    }
+}
+
 impl ViewportLabel {
-    pub(crate) fn new(id_source: impl Hash + Debug, text: impl Into<String>, viewport_rect: egui::Rect) -> Self {
+    pub(crate) fn new(id_source: impl Hash + Debug, message: ViewportMessage, viewport_rect: egui::Rect) -> Self {
         Self {
             id: egui::Id::new(id_source),
-            text: text.into(),
+            message,
             viewport_rect,
             margin: 12.0,
         }
@@ -1232,14 +1284,27 @@ impl ViewportLabel {
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                let visuals = ui.visuals().clone();
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(255, 246, 218))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(226, 210, 164)))
-                    .corner_radius(egui::CornerRadius::same(4))
-                    .inner_margin(egui::Margin::symmetric(10, 5))
+                    .fill(menu::menu_surface(&visuals))
+                    .stroke(menu::menu_border(&visuals))
+                    .corner_radius(egui::CornerRadius::same(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
+                    .inner_margin(egui::Margin { left: 9, right: 11, top: 5, bottom: 5 })
                     .show(ui, |ui| {
-                        let text = egui::RichText::new(self.text).color(egui::Color32::from_rgb(52, 43, 25));
-                        ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 7.0;
+                            let (pip, _) = ui.allocate_exact_size(egui::Vec2::splat(PROMPT_PIP_DIAMETER), egui::Sense::hover());
+                            ui.painter().circle_filled(pip.center(), PROMPT_PIP_DIAMETER / 2.0, prompt_pip_color(&visuals));
+
+                            let label = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
+                                ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap_mode(egui::TextWrapMode::Extend));
+                            };
+                            label(ui, self.message.text, visuals.strong_text_color());
+                            if let Some(minor) = self.message.minor {
+                                ui.spacing_mut().item_spacing.x = PROMPT_DETAIL_GAP;
+                                label(ui, minor, visuals.weak_text_color());
+                            }
+                        });
                     });
             });
     }

@@ -83,7 +83,19 @@ pub(crate) fn setup_custom_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// The family the bundled bold faces are registered under.
+fn bold_family() -> egui::FontFamily {
+    egui::FontFamily::Name("noto_sans_bold".into())
+}
+
 /// Return a [`RichText`] styled with the bundled bold font face.
 pub(crate) fn bold(label: &str) -> egui::RichText {
-    egui::RichText::new(label).family(egui::FontFamily::Name("noto_sans_bold".into()))
+    egui::RichText::new(label).family(bold_family())
+}
+
+/// The bundled bold face at `size`, for text laid out as an
+/// [`egui::text::LayoutJob`] - which carries font ids rather than the family
+/// name [`bold`] sets on a [`RichText`].
+pub(crate) fn bold_font(size: f32) -> egui::FontId {
+    egui::FontId::new(size, bold_family())
 }

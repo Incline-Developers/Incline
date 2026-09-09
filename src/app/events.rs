@@ -142,11 +142,7 @@ impl<'a> App<'a> {
                     self.poll_jobs();
                     self.refresh_status_message();
                     let now = Instant::now();
-                    let frame_interval = if self.pending_resize.is_some() {
-                        super::rate_interval(self.editor.resize_frame_rate_cap)
-                    } else {
-                        super::rate_interval(self.editor.frame_rate_cap)
-                    };
+                    let frame_interval = self.frame_interval();
                     if self.last_render_time.is_some_and(|last_render| now.duration_since(last_render) < frame_interval) {
                         // Winit/compositors can issue redraw events directly. Defer
                         // early events so both normal and resize rendering obey the
@@ -183,8 +179,17 @@ impl<'a> App<'a> {
                         let dt = now - last_render_time;
                         self.last_render_time = Some(now);
                         if !dt.is_zero() {
-                            let instantaneous_fps = 1.0 / dt.as_secs_f32();
-                            self.editor.measured_fps = Some(self.editor.measured_fps.map_or(instantaneous_fps, |fps| fps * 0.9 + instantaneous_fps * 0.1));
+                            // Smooth the frame *interval* and invert it once, rather
+                            // than averaging instantaneous rates: frames arrive in
+                            // pairs, one blocked on the display and one taken straight
+                            // from the swapchain's spare image, and an average of 1/dt
+                            // is dominated by the short one. Alternating 16 ms and
+                            // 0.8 ms frames average to 60 rendered frames a second but
+                            // to over 600 instantaneous ones.
+                            let seconds = dt.as_secs_f32();
+                            let interval = self.editor.smoothed_frame_interval.map_or(seconds, |previous| previous * 0.9 + seconds * 0.1);
+                            self.editor.smoothed_frame_interval = Some(interval);
+                            self.editor.measured_fps = (interval > 0.0).then(|| 1.0 / interval);
                         }
                         graphics.update(dt, self.editor.block_model_interaction_resolution_divisor);
                         self.editor.can_undo = self.history.can_undo();
@@ -831,11 +836,7 @@ impl<'a> App<'a> {
                     self.editor.selection_box_start_px = self.editor.cursor_screen_px;
                     self.editor.selection_box_current_px = self.editor.cursor_screen_px;
                 }
-                ActiveTool::None => {
-                    if !self.select_tie_at_cursor() {
-                        self.begin_select_or_drag();
-                    }
-                }
+                ActiveTool::None => self.begin_select_or_drag(),
                 ActiveTool::Move => {
                     if let Some(cursor_px) = self.editor.cursor_screen_px {
                         match hit_gizmo_handle(&self.editor, cursor_px) {
@@ -1007,7 +1008,7 @@ impl<'a> App<'a> {
                     g.pick_scene_entity_at_cursor(
                         crate::app::PICK_THRESHOLD_PX,
                         &self.triangulations,
-                        self.selectable_drill_holes(),
+                        &self.drill_holes,
                         &self.editor.hidden_handles,
                         frozen,
                         self.editor.xray_enabled,
@@ -1439,6 +1440,16 @@ impl<'a> App<'a> {
         if (self.editor.fly_mode_enabled && tool != ActiveTool::None) || (self.editor.slice_mode_enabled && !allowed_in_slice) {
             return;
         }
+        if tool != self.editor.active_tool
+            && ((tool.requires_active_layer() && self.active_layer().is_none())
+                || (matches!(tool, ActiveTool::TieHoles | ActiveTool::SetInitiationPoint)
+                    && !self
+                        .editor
+                        .active_drill_hole
+                        .is_some_and(|id| self.drill_holes.iter().any(|dataset| dataset.id == id && dataset.state.loaded))))
+        {
+            return;
+        }
 
         let previous_tool = self.editor.active_tool;
         let next_tool = if previous_tool == tool { ActiveTool::None } else { tool };
@@ -1472,6 +1483,13 @@ impl<'a> App<'a> {
         }
 
         self.editor.active_tool = next_tool;
+        // Arming or dropping a tool can change the scene on its own, with no
+        // geometry touched: Tie Holes lifts drill traces above the topology
+        // and draws the surface connectors (see `Graphics::draw_drill_holes`).
+        // Nothing else here repaints for that, so the switch has to.
+        if next_tool != previous_tool {
+            self.redraw_requested = true;
+        }
         if next_tool == ActiveTool::DrapeToTopology && previous_tool != ActiveTool::DrapeToTopology {
             self.editor.drape_phase = crate::ui::state::DrapePhase::Designs;
             self.editor.drape_object_ids.clear();

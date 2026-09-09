@@ -52,11 +52,25 @@ pub(crate) struct DrillHoleGpuCache {
     /// entries so it can use the normal drill shaders without pretending to
     /// be a dataset before Create is pressed.
     preview: Option<CachedDrillHoles>,
+    /// Bumped whenever the instances above are rebuilt, dropped or replaced.
+    ///
+    /// A drill hole dataset is edited in place - a tie laid, a collar turned -
+    /// with the item's revision as the only signal that anything changed, so
+    /// there is nothing in the dataset itself for the cached scene image in
+    /// `frame::main_scene_cache_key` to key on. It hashes this counter
+    /// instead: every rebuild here re-renders the scene the instances are
+    /// drawn into, rather than leaving the edit invisible until the camera
+    /// next moves.
+    content_key: u64,
 }
 
 impl DrillHoleGpuCache {
     pub(crate) fn sync(&mut self, device: &wgpu::Device, scene_origin: DVec3, datasets: &[OpenDrillHoleDataset], editor: &crate::ui::state::EditorState) {
+        let retained = self.entries.len();
         self.entries.retain(|id, _| datasets.iter().any(|dataset| dataset.id == *id && dataset.state.loaded));
+        if self.entries.len() != retained {
+            self.content_key = self.content_key.wrapping_add(1);
+        }
         for dataset in datasets {
             if !dataset.state.loaded {
                 continue;
@@ -90,6 +104,7 @@ impl DrillHoleGpuCache {
                     usage: wgpu::BufferUsages::VERTEX,
                 })
             });
+            self.content_key = self.content_key.wrapping_add(1);
             self.entries.insert(
                 dataset.id,
                 CachedDrillHoles {
@@ -114,7 +129,7 @@ impl DrillHoleGpuCache {
             || !editor.drill_pattern_preview_diameter.is_finite()
             || editor.drill_pattern_preview_diameter <= 0.0
         {
-            self.preview = None;
+            self.content_key = self.content_key.wrapping_add(u64::from(self.preview.take().is_some()));
             return;
         }
 
@@ -169,6 +184,7 @@ impl DrillHoleGpuCache {
             contents: bytemuck::cast_slice(&collars),
             usage: wgpu::BufferUsages::VERTEX,
         }));
+        self.content_key = self.content_key.wrapping_add(1);
         self.preview = Some(CachedDrillHoles {
             buffer,
             count: instances.len().min(u32::MAX as usize) as u32,
@@ -180,6 +196,12 @@ impl DrillHoleGpuCache {
         });
     }
 
+    /// What the cached instances currently are, for a scene cache that has to
+    /// know when they stop being what it drew. See [`Self::content_key`]'s
+    /// field.
+    pub(crate) fn content_key(&self) -> u64 {
+        self.content_key
+    }
     pub(crate) fn get(&self, id: DrillHoleId) -> Option<&CachedDrillHoles> {
         self.entries.get(&id)
     }
@@ -238,7 +260,7 @@ impl HoleSelection {
 fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> u64 {
     let mut hash = DefaultHasher::new();
     dataset.id.hash(&mut hash);
-    dataset.visible.hash(&mut hash);
+    dataset.state.loaded.hash(&mut hash);
     // Hole positions are not hashed one by one: an edit to the geometry - the
     // Move Collar tool is the only one so far - bumps the item's revision, and
     // that is what tells the cache the instances it built are stale.
@@ -268,7 +290,7 @@ fn dataset_key(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &
 }
 
 fn build_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillSegmentInstance> {
-    if !dataset.state.loaded || !dataset.visible {
+    if !dataset.state.loaded {
         return Vec::new();
     }
     let mut instances = Vec::new();
@@ -367,7 +389,7 @@ fn build_tie_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, sele
 }
 
 fn build_collar_instances(dataset: &OpenDrillHoleDataset, scene_origin: DVec3, selection: &HoleSelection) -> Vec<DrillCollarInstance> {
-    if !dataset.state.loaded || !dataset.visible {
+    if !dataset.state.loaded {
         return Vec::new();
     }
     let selected_colors = selection.any().then(|| {

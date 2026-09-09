@@ -229,10 +229,6 @@ fn build_rotate_gizmo(
         // A ring is fully readable face-on and useless edge-on, which is
         // exactly how squarely its axis points along the view.
         gizmo.ring_fade[index] = fade_ramp(towards_view.abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
-        // Screen angles grow clockwise (screen Y runs down), and a ring whose
-        // far face is towards the camera reads the other way round again; both
-        // are folded into this one sign.
-        gizmo.ring_sign[index] = if towards_view < 0.0 { -1.0 } else { 1.0 };
         if gizmo.ring_fade[index] <= 0.0 {
             continue;
         }
@@ -399,7 +395,7 @@ impl<'a> Graphics<'a> {
             let probe_offset = forward.cross(self.camera.up()).normalize_or_zero() * CARD_SCALE_PROBE_WORLD;
             editor.initiation_cards = drill_holes
                 .iter()
-                .filter(|dataset| dataset.state.loaded && dataset.visible && !editor.hidden_handles.contains(&dataset.entity_id()))
+                .filter(|dataset| dataset.state.loaded && !editor.hidden_handles.contains(&dataset.entity_id()))
                 .flat_map(|dataset| {
                     dataset.dataset.initiations.iter().filter_map(|initiation| {
                         let hole = dataset.dataset.holes.get(initiation.hole)?;
@@ -469,7 +465,7 @@ impl<'a> Graphics<'a> {
         editor.rotate_gizmo = match collar_anchor.filter(|_| editor.active_tool.rotates()) {
             // The dip ring stands in the vertical plane the anchor hole points
             // along, so it always shows the plane its toe would swing in.
-            Some((center, azimuth)) => self.project_rotate_gizmo(center, azimuth),
+            Some((center, azimuth)) => self.project_rotate_gizmo(center, editor.rotate_gizmo_azimuth.unwrap_or(azimuth)),
             None => RotateGizmoScreen::default(),
         };
         if editor.active_tool == ActiveTool::MoveCollar {

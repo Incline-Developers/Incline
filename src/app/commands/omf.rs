@@ -122,7 +122,6 @@ impl<'a> App<'a> {
         if let Some(project) = self.workspace.active_project_mut() {
             project.lossy_save_warnings = lossy_save_warnings;
             project.lossy_save_confirmed = false;
-            project.loaded_layers.extend(project.project.document.layers().iter().map(|layer| layer.id));
         }
 
         let mut raster_id_map = std::collections::HashMap::new();
@@ -135,7 +134,7 @@ impl<'a> App<'a> {
             if let Some(open) = self.raster_textures.last_mut() {
                 open.id = crate::model::raster::RasterTextureId(target_id);
                 open.state.set_provenance(source_name, source_format);
-                open.visible = imported.visible;
+                open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
             }
             if let Some(preferred_id) = preferred_id {
                 raster_id_map.insert(preferred_id, crate::model::raster::RasterTextureId(target_id));
@@ -163,13 +162,14 @@ impl<'a> App<'a> {
             ));
             self.triangulations.push(OpenTriangulation {
                 id,
-                state: crate::model::project::ProjectItemState::dirty_with_format(source_name, source_format),
+                state: crate::model::project::ProjectItemState::dirty_with_format(source_name, source_format)
+                    .with_loaded(imported.is_loaded)
+                    .with_deferred(imported.deferred),
                 name,
                 mesh,
                 spatial,
                 edges,
                 surface_face_order,
-                visible: imported.visible,
                 color: imported.color,
                 line_color: imported.line_color,
                 line_weight: imported.line_weight,
@@ -177,7 +177,9 @@ impl<'a> App<'a> {
                 raster_opacity: imported.raster_opacity,
             });
             self.touch_active_project_content();
-            self.active_triangulation.get_or_insert(id);
+            if imported.is_loaded {
+                self.active_triangulation.get_or_insert(id);
+            }
         }
         for imported in block_models {
             let target_id = allocate_item_id(imported.preferred_id, &mut self.next_block_model_id, self.block_models.iter().map(|item| item.id.0));
@@ -185,9 +187,12 @@ impl<'a> App<'a> {
             if let Some(open) = self.block_models.last_mut() {
                 open.id = crate::model::block_model::BlockModelId(target_id);
                 open.state.set_provenance(imported.source_name, imported.source_format);
-                open.visible = imported.visible;
+                open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
                 open.color = imported.color;
                 open.slice = imported.slice;
+                if !open.state.loaded {
+                    open.color_transfers.clear();
+                }
                 open.color_transfers.extend(imported.color_transfers);
                 open.hide_empty_color_values = imported.hide_empty_color_values;
             }
@@ -198,15 +203,16 @@ impl<'a> App<'a> {
             if let Some(open) = self.drill_holes.last_mut() {
                 open.id = crate::model::drill_hole::DrillHoleId(target_id);
                 open.state.set_provenance(imported.source_name, imported.source_format);
-                open.visible = imported.visible;
+                open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
                 open.color = imported.color;
             }
         }
         for imported in point_clouds {
             let target_id = allocate_item_id(imported.preferred_id, &mut self.next_point_cloud_id, self.point_clouds.iter().map(|item| item.id.0));
-            self.add_loaded_point_cloud(imported.loaded, imported.visible, imported.color, imported.point_size);
+            self.add_loaded_point_cloud(imported.loaded, imported.is_loaded, imported.color, imported.point_size);
             if let Some(open) = self.point_clouds.last_mut() {
                 open.id = crate::model::point_cloud::PointCloudId(target_id);
+                open.state = open.state.clone().with_deferred(imported.deferred);
                 open.state.set_provenance(imported.source_name, imported.source_format);
             }
         }
@@ -379,7 +385,6 @@ impl<'a> App<'a> {
             for design in designs {
                 if let Some(project) = self.workspace.active_project_mut() {
                     project::merge_document_unique_layers(&mut project.project.document, &design.document);
-                    project.loaded_layers.extend(project.project.document.layers().iter().map(|layer| layer.id));
                 }
             }
 
@@ -388,12 +393,13 @@ impl<'a> App<'a> {
             let mut raster_id_map = std::collections::HashMap::new();
             for mut raster in rasters {
                 let preferred_id = raster.preferred_id;
-                let visible = raster.visible;
+                let visible = raster.is_loaded;
+                let deferred = raster.deferred;
                 raster.loaded.name = project::unique_item_name(raster.loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
                 self.add_loaded_raster(raster.loaded);
                 if let Some(open) = self.raster_textures.last_mut() {
                     open.state.set_provenance(raster.source_name, raster.source_format);
-                    open.visible = visible;
+                    open.state = open.state.clone().with_loaded(visible).with_deferred(deferred);
                     if let Some(preferred_id) = preferred_id {
                         raster_id_map.insert(preferred_id, open.id);
                     }
@@ -415,13 +421,14 @@ impl<'a> App<'a> {
                 self.next_triangulation_id += 1;
                 self.triangulations.push(OpenTriangulation {
                     id,
-                    state: crate::model::project::ProjectItemState::dirty_with_format(imported.source_name, imported.source_format),
+                    state: crate::model::project::ProjectItemState::dirty_with_format(imported.source_name, imported.source_format)
+                        .with_loaded(imported.is_loaded)
+                        .with_deferred(imported.deferred),
                     name,
                     mesh,
                     spatial,
                     edges,
                     surface_face_order,
-                    visible: imported.visible,
                     color: imported.color,
                     line_color: imported.line_color,
                     line_weight: imported.line_weight,
@@ -440,9 +447,12 @@ impl<'a> App<'a> {
                 self.add_loaded_block_model(loaded);
                 if let Some(open) = self.block_models.last_mut() {
                     open.state.set_provenance(imported.source_name, imported.source_format);
-                    open.visible = imported.visible;
+                    open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
                     open.color = imported.color;
                     open.slice = imported.slice;
+                    if !open.state.loaded {
+                        open.color_transfers.clear();
+                    }
                     open.color_transfers.extend(imported.color_transfers);
                     open.hide_empty_color_values = imported.hide_empty_color_values;
                 }
@@ -453,14 +463,17 @@ impl<'a> App<'a> {
                 self.add_loaded_drill_holes(loaded);
                 if let Some(open) = self.drill_holes.last_mut() {
                     open.state.set_provenance(imported.source_name, imported.source_format);
-                    open.visible = imported.visible;
+                    open.state = open.state.clone().with_loaded(imported.is_loaded).with_deferred(imported.deferred);
                     open.color = imported.color;
                 }
             }
             for imported in point_clouds {
                 let mut loaded = imported.loaded;
                 loaded.name = project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
-                self.add_loaded_point_cloud(loaded, imported.visible, imported.color, imported.point_size);
+                self.add_loaded_point_cloud(loaded, imported.is_loaded, imported.color, imported.point_size);
+                if let Some(open) = self.point_clouds.last_mut() {
+                    open.state = open.state.clone().with_deferred(imported.deferred);
+                }
                 if let Some(open) = self.point_clouds.last_mut() {
                     open.state.set_provenance(imported.source_name, imported.source_format);
                 }

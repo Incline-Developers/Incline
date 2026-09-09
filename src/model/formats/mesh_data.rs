@@ -43,6 +43,17 @@ pub enum ReadError {
 }
 
 impl Triangulation {
+    pub(crate) fn empty() -> Self {
+        Self {
+            vertices: Vec::new(),
+            faces: Vec::new(),
+            bounds: Bounds {
+                min: Vertex::new(0.0, 0.0, 0.0),
+                max: Vertex::new(0.0, 0.0, 0.0),
+            },
+        }
+    }
+
     pub fn vertex_count(&self) -> usize {
         self.vertices.len()
     }

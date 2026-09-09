@@ -1,7 +1,7 @@
 use super::*;
 
 impl<'a> Graphics<'a> {
-    pub(super) fn create_scene_cache_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> SceneCacheTarget {
+    pub(super) fn create_scene_cache_target(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, blit_layout: &wgpu::BindGroupLayout) -> SceneCacheTarget {
         let scene_format = config.format.add_srgb_suffix();
         let view_formats = (scene_format != config.format).then_some(scene_format).into_iter().collect::<Vec<_>>();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -15,7 +15,10 @@ impl<'a> Graphics<'a> {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            // Read back by the blit that restores the cached scene under the
+            // editor overlay, never copied - so the surface itself needs no
+            // COPY_DST and this target works on every adapter.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &view_formats,
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -23,7 +26,82 @@ impl<'a> Graphics<'a> {
             format: Some(scene_format),
             ..Default::default()
         });
-        SceneCacheTarget { texture, view }
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Main Scene Cache Bind Group"),
+            layout: blit_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        SceneCacheTarget { view, bind_group }
+    }
+
+    /// Layout and pipeline for the fullscreen fetch that puts the cached scene
+    /// back into the multisample target before the overlay draws over it.
+    pub(super) fn create_scene_cache_blit(device: &wgpu::Device, scene_format: wgpu::TextureFormat, sample_count: u32) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Main Scene Cache Blit Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/scene_cache_blit.wgsl"));
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Main Scene Cache Blit Pipeline Layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        // The pass it runs in carries the scene depth buffer, which the blit
+        // must leave exactly as the scene left it: every overlay draw after it
+        // still tests against that depth.
+        let mut depth = Self::depth_state(false, 0);
+        depth.depth_compare = Some(wgpu::CompareFunction::Always);
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Main Scene Cache Blit Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(depth),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+        (layout, pipeline)
     }
 
     /// Keep expensive full-resolution block-model attachments resident only

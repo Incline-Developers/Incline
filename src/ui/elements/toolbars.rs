@@ -49,12 +49,12 @@ struct LeftTool {
 ///
 /// One flat list rather than clusters: the column is a single run of cells, so
 /// what a tool belongs to is its neighbours' business, not a tile's.
-fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
+fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| LeftTool {
         icon: egui::Image::new(icon),
         tooltip,
         action: LeftToolAction::Tool(tool),
-        enabled: editing_enabled,
+        enabled: editing_enabled && (!tool.requires_active_layer() || editor.active_layer.is_some()),
     };
     vec![
         LeftTool {
@@ -92,7 +92,7 @@ fn left_tools(ui: &egui::Ui, editing_enabled: bool, project_active: bool) -> Vec
 
 /// The Drill & Blast tools, in the order they are drawn: lay a pattern out,
 /// nudge its holes, re-aim them, tie them together, then say where it starts.
-fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, project_active: bool) -> Vec<LeftTool> {
+fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     // Setting the initiation point acts on the pattern the viewport bar's
     // centre run names, and reads it the same way that run does: a dataset
     // that is no longer loaded shows as "None" there and is nothing to act on
@@ -114,7 +114,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             icon: egui::Image::new(themed_icon!(ui, "move_element.svg")),
             tooltip: tr!(literal = "Move Collar"),
             action: LeftToolAction::Tool(ActiveTool::MoveCollar),
-            enabled: has_active_dataset,
+            enabled: editing_enabled,
         },
         LeftTool {
             // Move Collar's counterpart: the same holes, turned instead of
@@ -122,19 +122,19 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, pro
             icon: egui::Image::new(themed_icon!(ui, "rotate_element.svg")),
             tooltip: tr!(literal = "Rotate Collar"),
             action: LeftToolAction::Tool(ActiveTool::RotateCollar),
-            enabled: has_active_dataset,
+            enabled: editing_enabled,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
             tooltip: tr!(literal = "Tie Holes"),
             action: LeftToolAction::Tool(ActiveTool::TieHoles),
-            enabled: has_active_dataset,
+            enabled: editing_enabled && has_active_dataset,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
             tooltip: tr!(literal = "Set Initiation Point"),
             action: LeftToolAction::Tool(ActiveTool::SetInitiationPoint),
-            enabled: has_active_dataset,
+            enabled: editing_enabled && has_active_dataset,
         },
     ]
 }
@@ -191,8 +191,8 @@ pub(crate) fn draw_left_toolbar(
     commands: &mut Vec<UiCommand>,
 ) -> egui::Rect {
     let tools = match editor.active_workspace {
-        workspace if workspace.has_production_tools() => left_tools(ui, editing_enabled, project_active),
-        Workspace::DrillAndBlast => blast_tools(ui, project, editor, project_active),
+        workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
+        Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),
     };
     // The run wraps into further columns rather than off the bottom of a short

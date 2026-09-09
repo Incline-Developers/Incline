@@ -88,7 +88,6 @@ impl<'a> App<'a> {
             state: crate::model::project::ProjectItemState::dirty(None),
             name,
             dataset,
-            visible: true,
             color: DrillColorState::default(),
         };
         self.execute_edit(Command::AddItem {
@@ -207,21 +206,11 @@ impl<'a> App<'a> {
             state: crate::model::project::ProjectItemState::dirty(Some(loaded.source.display_name())),
             name,
             dataset: loaded.dataset,
-            visible: true,
             color: DrillColorState::default(),
         });
         self.touch_active_project_content();
         self.persist_session();
         self.invalidate_topology_bounds_and_redraw();
-    }
-
-    pub(crate) fn toggle_drill_hole_visible(&mut self, id: DrillHoleId) {
-        let item = ItemRef::DrillHole(id);
-        let Some(style) = self.item_style(item) else {
-            return;
-        };
-        let visible = !style.visible();
-        self.set_item_style(item, style.with_visible(visible));
     }
 
     /// Record a change to one dataset's colour state as an undo step.
@@ -231,7 +220,13 @@ impl<'a> App<'a> {
         };
         let mut color = dataset.color.clone();
         change(dataset, &mut color);
-        self.set_item_style(ItemRef::DrillHole(id), ItemStyle::DrillHole { visible: dataset.visible, color });
+        self.set_item_style(
+            ItemRef::DrillHole(id),
+            ItemStyle::DrillHole {
+                loaded: dataset.state.loaded,
+                color,
+            },
+        );
         self.request_topology_redraw();
     }
 
@@ -284,16 +279,15 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn close_drill_hole(&mut self, id: DrillHoleId) {
+        self.set_item_loaded(crate::model::ItemRef::DrillHole(id), false);
+    }
+
+    pub(crate) fn release_drillhole_runtime(&mut self, id: DrillHoleId) {
         self.cancel_collar_move_touching(id);
-        if let Some(dataset) = self.drill_holes.iter_mut().find(|dataset| dataset.id == id) {
-            dataset.state.loaded = false;
-        }
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
         let entity = SceneEntityId::DrillHole(id);
         self.editor.selected_handles.remove(&entity);
         self.editor.hidden_handles.remove(&entity);
-        self.editor.explicitly_frozen.remove(&entity);
-        self.editor.frozen_handles.remove(&entity);
         self.editor.translucent_handles.remove(&entity);
         if self.editor.drill_hole_color_dialog == Some(id) {
             self.editor.drill_hole_color_dialog = None;

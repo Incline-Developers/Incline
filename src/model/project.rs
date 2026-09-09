@@ -28,6 +28,8 @@ pub(crate) struct ProjectItemState {
     pub(crate) source_name: Option<String>,
     pub(crate) source_format: Option<String>,
     pub(crate) loaded: bool,
+    pub(crate) deferred: Option<crate::model::formats::omf::DeferredAsset>,
+    pub(crate) summary: Option<crate::model::asset_residency::AssetSummary>,
     revision: u64,
     epoch: u64,
     saved_epoch: u64,
@@ -51,10 +53,25 @@ impl ProjectItemState {
             source_name,
             source_format,
             loaded: true,
+            deferred: None,
+            summary: None,
             revision: 1,
             epoch: 1,
             saved_epoch: 0,
         }
+    }
+
+    pub(crate) fn with_deferred(mut self, deferred: Option<(crate::model::formats::omf::DeferredAsset, crate::model::asset_residency::AssetSummary)>) -> Self {
+        if let Some((locator, summary)) = deferred {
+            self.deferred = Some(locator);
+            self.summary = Some(summary);
+        }
+        self
+    }
+
+    pub(crate) fn with_loaded(mut self, loaded: bool) -> Self {
+        self.loaded = loaded;
+        self
     }
 
     /// Record that the item's content changed, giving it an epoch no earlier
@@ -218,12 +235,9 @@ pub(crate) struct OpenProject {
     /// succeeds; Merge reports them without attaching them to the target.
     pub(crate) lossy_save_warnings: Vec<String>,
     pub(crate) lossy_save_confirmed: bool,
-    /// Layers currently present in the shared scene. The project remains the
-    /// source of truth even while a layer is unloaded.
-    pub(crate) loaded_layers: HashSet<LayerId>,
     /// Identity of project-owned content outside the design document. Every
-    /// persisted dataset/style/membership change advances it; load and unload
-    /// do not. Public so an [`crate::model::EditTarget`] can borrow it
+    /// aggregate membership change advances it; each item's own state tracks
+    /// its payload, style and loaded flag. Public so an [`crate::model::EditTarget`] can borrow it
     /// alongside the document, which lives one field over.
     pub(crate) content: ProjectContentState,
     /// Namespace-invariant content fingerprint of the complete project at its
@@ -454,32 +468,19 @@ impl ProjectStore {
         // keys are not; retaining them would permanently duplicate every
         // entry after runtime ids are assigned.
         project.content_hash_cache.borrow_mut().clear();
-        project.loaded_layers.clear();
     }
 
     /// Replace the project at `index` with a freshly parsed copy (revert to
     /// disk). The replacement gets a new runtime namespace, so the caller must
     /// drop undo history and selections that reference the old namespace.
-    /// Loaded layers are restored by their stable local id, which remains
-    /// unambiguous even when multiple layers share a name. Returns the new
+    /// Loaded states come from the replacement project. Returns its new
     /// runtime id.
     #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn replace_project(&mut self, index: usize, mut project: OpenProject) -> Option<u32> {
         if index >= self.projects.len() {
             return None;
         }
-        const LOCAL_MASK: u64 = u32::MAX as u64;
-        let loaded_local_ids: HashSet<u64> = self.projects[index].loaded_layers.iter().map(|layer| layer.0 & LOCAL_MASK).collect();
         self.prepare_project(&mut project);
-        project.loaded_layers.extend(
-            project
-                .project
-                .document
-                .layers()
-                .iter()
-                .filter(|layer| loaded_local_ids.contains(&(layer.id.0 & LOCAL_MASK)))
-                .map(|layer| layer.id),
-        );
         let runtime_id = project.runtime_id;
         self.projects[index] = project;
         Some(runtime_id)
@@ -492,8 +493,8 @@ impl ProjectStore {
     }
 
     /// Fingerprint of everything `scene_document()` reads: the active
-    /// document's revision (bumped by every document mutation) and loaded-layer
-    /// set. Equal keys guarantee an identical composite, letting callers skip
+    /// document's revision (bumped by logical edits, including load toggles).
+    /// Equal keys guarantee an identical composite, letting callers skip
     /// the rebuild.
     pub(crate) fn composite_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -501,31 +502,24 @@ impl ProjectStore {
         for project in &self.projects {
             project.runtime_id.hash(&mut hasher);
             project.project.document.revision().hash(&mut hasher);
-            // Order-insensitive fold over the loaded-layer set.
-            let mut layers_fold: u64 = 0;
-            for layer in &project.loaded_layers {
-                layers_fold ^= layer.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            }
-            layers_fold.hash(&mut hasher);
-            project.loaded_layers.len().hash(&mut hasher);
         }
         hasher.finish()
     }
 
     /// Build the runtime document rendered and queried by the viewport from
-    /// the retained project document and its loaded-layer cache state.
+    /// the loaded layers in the retained project document.
     pub(crate) fn scene_document(&self) -> Document {
         let mut scene = Document::new();
         for project in &self.projects {
             let document = &project.project.document;
             let mut per_layer: HashMap<LayerId, Vec<usize>> = HashMap::new();
             for (index, object) in document.objects().iter().enumerate() {
-                if project.loaded_layers.contains(&object.layer()) && !document.is_object_hidden(object.id()) {
+                if project.project.document.layer(object.layer()).is_some_and(|layer| layer.loaded) && !document.is_object_hidden(object.id()) {
                     per_layer.entry(object.layer()).or_default().push(index);
                 }
             }
             for layer in document.layers() {
-                if !project.loaded_layers.contains(&layer.id) {
+                if !layer.loaded {
                     continue;
                 }
                 let indices = per_layer.remove(&layer.id).unwrap_or_default();
@@ -575,10 +569,11 @@ pub(crate) fn merge_document(target: &mut Document, imported: &Document) -> usiz
     for layer in imported.layers() {
         let target_layer = target
             .layer_id_by_name(&layer.name)
-            .unwrap_or_else(|| target.add_layer(layer.name.clone(), layer.color_index, layer.color, layer.visible, layer.elevation));
+            .unwrap_or_else(|| target.add_layer(layer.name.clone(), layer.color_index, layer.color, layer.loaded, layer.elevation));
         layer_map.insert(layer.id, target_layer);
     }
 
+    target.copy_deferred_layers(imported, &layer_map, false);
     let mut added = 0;
     for object in imported.objects() {
         let layer = layer_map.get(&object.layer()).copied().unwrap_or_else(|| target.ensure_default_layer());
@@ -599,10 +594,11 @@ pub(crate) fn merge_document_unique_layers(target: &mut Document, imported: &Doc
     let mut layer_map = HashMap::new();
     for layer in imported.layers() {
         let name = unique_layer_name(target, &layer.name);
-        let target_layer = target.add_layer(name, layer.color_index, layer.color, layer.visible, layer.elevation);
+        let target_layer = target.add_layer(name, layer.color_index, layer.color, layer.loaded, layer.elevation);
         layer_map.insert(layer.id, target_layer);
     }
 
+    target.copy_deferred_layers(imported, &layer_map, false);
     let mut added = 0;
     for object in imported.objects() {
         let layer = layer_map.get(&object.layer()).copied().unwrap_or_else(|| target.ensure_default_layer());
@@ -637,6 +633,7 @@ pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Docu
         layer_map.insert(layer.id, target_layer);
     }
 
+    target.copy_deferred_layers(imported, &layer_map, true);
     let mut added = 0;
     for object in imported.objects() {
         let layer = layer_map.get(&object.layer()).copied().unwrap_or_else(|| target.ensure_default_layer());
@@ -728,7 +725,6 @@ pub(crate) fn open_project(path: Option<PathBuf>, mut project: ProjectFile) -> R
         project,
         lossy_save_warnings: Vec::new(),
         lossy_save_confirmed: false,
-        loaded_layers: HashSet::new(),
         content: ProjectContentState::default(),
         saved_content_hash: None,
         saved_layer_hashes: None,
@@ -757,7 +753,6 @@ pub(crate) fn open_imported_project(source_name: String, mut project: ProjectFil
         project,
         lossy_save_warnings: Vec::new(),
         lossy_save_confirmed: false,
-        loaded_layers: HashSet::new(),
         content: ProjectContentState::default(),
         saved_content_hash: None,
         saved_layer_hashes: None,

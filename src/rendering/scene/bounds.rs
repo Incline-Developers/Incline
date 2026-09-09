@@ -61,7 +61,7 @@ fn for_each_visible_object_aabb(
     hidden: &std::collections::HashSet<SceneEntityId>,
     emit: &mut impl FnMut(DVec3, DVec3),
 ) {
-    let hidden_layers: std::collections::HashSet<_> = document.layers().iter().filter(|layer| !layer.visible).map(|layer| layer.id).collect();
+    let hidden_layers: std::collections::HashSet<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();
     for object in document.objects() {
         if hidden_layers.contains(&object.layer()) || hidden.contains(&SceneEntityId::Object(object.id())) {
             continue;
@@ -98,7 +98,7 @@ fn for_each_visible_object_aabb(
 
     for triangulation in triangulations
         .iter()
-        .filter(|triangulation| triangulation.state.loaded && triangulation.visible && !hidden.contains(&triangulation.entity_id()))
+        .filter(|triangulation| triangulation.state.loaded && !hidden.contains(&triangulation.entity_id()))
     {
         let bounds = triangulation.mesh.bounds();
         emit(DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z), DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z));
@@ -106,17 +106,14 @@ fn for_each_visible_object_aabb(
 
     for block_model in block_models
         .iter()
-        .filter(|block_model| block_model.state.loaded && block_model.visible && !hidden.contains(&block_model.entity_id()))
+        .filter(|block_model| block_model.state.loaded && !hidden.contains(&block_model.entity_id()))
     {
         if let Some((block_min, block_max)) = block_model.visible_world_bounds() {
             emit(block_min, block_max);
         }
     }
 
-    for dataset in drill_holes
-        .iter()
-        .filter(|dataset| dataset.state.loaded && dataset.visible && !hidden.contains(&dataset.entity_id()))
-    {
+    for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && !hidden.contains(&dataset.entity_id())) {
         if let Some((min, max)) = dataset.dataset.bounds {
             emit(min, max);
         }
@@ -124,7 +121,7 @@ fn for_each_visible_object_aabb(
 
     for point_cloud in point_clouds
         .iter()
-        .filter(|point_cloud| point_cloud.state.loaded && point_cloud.visible && !hidden.contains(&point_cloud.entity_id()))
+        .filter(|point_cloud| point_cloud.state.loaded && !hidden.contains(&point_cloud.entity_id()))
     {
         let (cloud_min, cloud_max) = point_cloud.bounds;
         emit(cloud_min, cloud_max);

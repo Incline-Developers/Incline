@@ -114,7 +114,7 @@ pub(crate) fn export_layer(project: &ProjectFile, layer: LayerId, path: impl AsR
 
 #[cfg(not(target_arch = "wasm32"))]
 fn export_layers(project: &ProjectFile, only_layer: Option<LayerId>, path: impl AsRef<Path>) -> Result<()> {
-    let drawing = export_drawing(project, only_layer);
+    let drawing = export_drawing(project, only_layer)?;
     crate::model::atomic_file::write_atomic(path.as_ref(), |file| {
         let mut writer = std::io::BufWriter::new(file);
         drawing.save(&mut writer)?;
@@ -126,13 +126,13 @@ fn export_layers(project: &ProjectFile, only_layer: Option<LayerId>, path: impl 
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn export_bytes(project: &ProjectFile, only_layer: Option<LayerId>) -> Result<Vec<u8>> {
-    let drawing = export_drawing(project, only_layer);
+    let drawing = export_drawing(project, only_layer)?;
     let mut bytes = Vec::new();
     drawing.save(&mut bytes)?;
     Ok(bytes)
 }
 
-fn export_drawing(project: &ProjectFile, only_layer: Option<LayerId>) -> Drawing {
+fn export_drawing(project: &ProjectFile, only_layer: Option<LayerId>) -> Result<Drawing> {
     let mut drawing = Drawing::new();
     drawing.header.version = AcadVersion::R2004;
     for layer in project.document.layers() {
@@ -142,7 +142,7 @@ fn export_drawing(project: &ProjectFile, only_layer: Option<LayerId>) -> Drawing
         drawing.add_layer(dxf::tables::Layer {
             name: layer.name.clone(),
             color: Color::from_index(layer.color_index.unwrap_or(7).clamp(1, 255)),
-            is_layer_on: layer.visible,
+            is_layer_on: layer.loaded,
             ..Default::default()
         });
     }
@@ -153,7 +153,15 @@ fn export_drawing(project: &ProjectFile, only_layer: Option<LayerId>) -> Drawing
         }
         add_object_to_drawing(&project.document, object, &mut drawing);
     }
-    drawing
+    for (&layer, stored) in &project.document.deferred_layers {
+        if only_layer.is_some_and(|id| id != layer) {
+            continue;
+        }
+        for (object, _) in stored.read(layer)?.objects {
+            add_object_to_drawing(&project.document, &object, &mut drawing);
+        }
+    }
+    Ok(drawing)
 }
 
 fn add_object_to_drawing(document: &Document, object: &Object, drawing: &mut Drawing) {

@@ -19,7 +19,7 @@ use crate::{
     logging::CommandReportSpec,
     model::{
         Command,
-        drill_hole::{CollarRotation, DrillHoleId, HoleOrientation, HolePlacement, MAX_HOLE_DIP},
+        drill_hole::{CollarRotation, DrillHoleId, HoleOrientation, HolePlacement},
     },
     ui::state::ROTATE_GIZMO_AZIMUTH_RING,
 };
@@ -42,7 +42,8 @@ impl<'a> App<'a> {
         // The panel reads out what the holes now point at, so a ring drag
         // moves the numbers a driller would be handed rather than leaving them
         // showing where the selection started.
-        if let Some(orientation) = anchor {
+        self.editor.rotate_gizmo_azimuth = anchor.map(|orientation| orientation.azimuth);
+        if let Some((orientation, _)) = self.selected_collar_orientation() {
             self.editor.rotate_panel_azimuth = orientation.azimuth;
             self.editor.rotate_panel_dip = orientation.dip;
             self.editor.rotate_panel_last_preview = [orientation.azimuth, orientation.dip];
@@ -172,8 +173,7 @@ impl<'a> App<'a> {
 
     /// Start a ring drag at `cursor_px`.
     ///
-    /// The sweep is measured as the cursor's angle about the gizmo centre on
-    /// screen, which is what the ring under the pointer is drawn as. A turn
+    /// The sweep follows the projected ring captured at drag start. A turn
     /// already standing is continued rather than restarted, so releasing and
     /// grabbing again picks up where the last drag left off.
     pub(crate) fn begin_collar_rotate_drag(&mut self, ring: u8, cursor_px: (f32, f32)) {
@@ -185,30 +185,20 @@ impl<'a> App<'a> {
         };
         self.ensure_collar_session();
         let start = self.collar_rotation.unwrap_or(CollarRotation::IDENTITY);
-        // How far the anchor hole may still be tipped either way before it
-        // would pass vertical. Bounding the accumulated delta by that keeps a
-        // drag reversible, rather than piling up angle in a dead zone once the
-        // holes themselves have clamped.
-        //
-        // Measured against the anchor as it was *captured*, not as the preview
-        // currently shows it: the delta this drag accumulates is counted from
-        // there, so the room left either side has to be as well.
-        let anchor_dip = self
-            .collar_move_session
-            .as_ref()
-            .and_then(|session| session.originals.first())
-            .and_then(|(_, placement)| placement.orientation())
-            .map_or(0.0, |orientation| orientation.dip);
-        let dip_room = (-MAX_HOLE_DIP - anchor_dip, MAX_HOLE_DIP - anchor_dip);
+        let ring_px = self.editor.rotate_gizmo.ring_px[usize::from(ring).min(1)].clone();
+        let Some(last_angle) = ring_angle(&ring_px, cursor_px) else {
+            return;
+        };
 
         self.editor.rotate_gizmo_drag_ring = Some(ring);
         self.collar_rotate_drag = Some(CollarRotateDrag {
             ring,
             center_px,
-            last_angle: screen_angle(center_px, cursor_px),
+            last_angle: Some(last_angle),
             swept: 0.0,
             start,
-            dip_room,
+            ring_px,
+            dead_zone_px: 6.0 * self.editor.rotate_gizmo.scale_factor,
         });
     }
 
@@ -220,22 +210,24 @@ impl<'a> App<'a> {
         let Some(cursor_px) = self.editor.cursor_screen_px else {
             return;
         };
-        let angle = screen_angle(drag.center_px, cursor_px);
+        if (cursor_px.0 - drag.center_px.0).hypot(cursor_px.1 - drag.center_px.1) < drag.dead_zone_px {
+            drag.last_angle = None;
+            return;
+        }
+        let Some(angle) = ring_angle(&drag.ring_px, cursor_px) else {
+            return;
+        };
         // Accumulate the step rather than the absolute angle, so a sweep that
-        // crosses the atan2 discontinuity keeps going instead of jumping a
+        // crosses the angle wrap keeps going instead of jumping a
         // full turn, and a deliberate multi-turn sweep is honoured.
-        drag.swept += wrap_to_half_turn(angle - drag.last_angle);
-        drag.last_angle = angle;
+        let Some(last_angle) = drag.last_angle.replace(angle) else {
+            return;
+        };
+        drag.swept += wrap_to_half_turn(angle - last_angle);
         let ring = drag.ring;
         let swept = drag.swept;
         let start = drag.start;
-        let dip_room = drag.dip_room;
-
-        let sign = self.editor.rotate_gizmo.ring_sign[usize::from(ring).min(1)];
-        // The sweep, turned from screen pixels into a rotation about the
-        // ring's own world axis.
-        let turn = (sign * swept).to_degrees();
-        let rotation = advance(start, ring, turn, dip_room);
+        let rotation = advance(start, ring, swept.to_degrees());
         self.preview_collar_rotation(rotation);
     }
 
@@ -259,6 +251,7 @@ impl<'a> App<'a> {
         self.editor.rotate_gizmo_drag_ring = None;
         self.editor.rotate_gizmo_hovered_ring = None;
         self.editor.rotate_preview_active = false;
+        self.editor.rotate_gizmo_azimuth = None;
     }
 }
 
@@ -268,7 +261,7 @@ impl<'a> App<'a> {
 /// azimuth ring swings the bearing, the dip ring tilts within it. Azimuth runs
 /// clockwise seen from above, which is the negative direction about +Z, so the
 /// bearing moves against the rotation the ring reports.
-fn advance(start: CollarRotation, ring: u8, turn: f64, dip_room: (f64, f64)) -> CollarRotation {
+fn advance(start: CollarRotation, ring: u8, turn: f64) -> CollarRotation {
     match start {
         CollarRotation::Absolute(orientation) => CollarRotation::Absolute(match ring {
             ROTATE_GIZMO_AZIMUTH_RING => HoleOrientation {
@@ -276,25 +269,40 @@ fn advance(start: CollarRotation, ring: u8, turn: f64, dip_room: (f64, f64)) -> 
                 ..orientation
             },
             _ => HoleOrientation {
-                dip: (orientation.dip + turn).clamp(-MAX_HOLE_DIP, MAX_HOLE_DIP),
+                dip: orientation.dip + turn,
                 ..orientation
             },
         }),
         CollarRotation::Delta { azimuth, dip } => match ring {
             ROTATE_GIZMO_AZIMUTH_RING => CollarRotation::Delta { azimuth: azimuth - turn, dip },
-            _ => CollarRotation::Delta {
-                azimuth,
-                dip: (dip + turn).clamp(dip_room.0, dip_room.1),
-            },
+            _ => CollarRotation::Delta { azimuth, dip: dip + turn },
         },
     }
 }
 
-/// The cursor's angle about the gizmo centre, in screen radians. Screen Y runs
-/// down, so this grows clockwise on screen - which is what
-/// [`crate::ui::state::RotateGizmoScreen::ring_sign`] is there to convert.
-fn screen_angle(center_px: (f32, f32), cursor_px: (f32, f32)) -> f64 {
-    f64::from(cursor_px.1 - center_px.1).atan2(f64::from(cursor_px.0 - center_px.0))
+/// Recover the world ring angle from its projected, uniformly sampled polyline.
+/// Measuring a screen-space polar angle instead makes foreshortened rings speed
+/// up near their narrow ends. Keep these samples fixed throughout the gesture.
+fn ring_angle(points: &[(f32, f32)], cursor: (f32, f32)) -> Option<f64> {
+    if points.len() < 3 {
+        return None;
+    }
+    let mut nearest = (f64::INFINITY, 0.0);
+    for (index, &a) in points.iter().enumerate() {
+        let b = points[(index + 1) % points.len()];
+        let edge = glam::DVec2::new(f64::from(b.0 - a.0), f64::from(b.1 - a.1));
+        let offset = glam::DVec2::new(f64::from(cursor.0 - a.0), f64::from(cursor.1 - a.1));
+        let length_squared = edge.length_squared();
+        if length_squared <= f64::EPSILON {
+            continue;
+        }
+        let fraction = (offset.dot(edge) / length_squared).clamp(0.0, 1.0);
+        let distance = (offset - fraction * edge).length_squared();
+        if distance < nearest.0 {
+            nearest = (distance, (index as f64 + fraction) * std::f64::consts::TAU / points.len() as f64);
+        }
+    }
+    nearest.0.is_finite().then_some(nearest.1)
 }
 
 /// Fold an angle step into (-pi, pi], so one frame's movement is read as the

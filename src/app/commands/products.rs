@@ -58,7 +58,7 @@ impl App<'_> {
     fn persist_delay_products(&mut self) {
         let preferences = self.editor.current_preferences();
         let products = self.editor.delay_products.iter().map(DelayProduct::to_stored).collect();
-        if let Err(error) = crate::app::io::save_config(&config_from(&preferences, products)) {
+        if let Err(error) = crate::app::io::save_config(&config_from(&preferences, self.editor.workspace_order, products)) {
             userspace_warn!("{}", tr_format!(literal = "Failed to save products: %error%", error = error));
         }
     }

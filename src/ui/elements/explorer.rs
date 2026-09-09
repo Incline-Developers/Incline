@@ -33,12 +33,11 @@ const HEADER_DRILL_HOLES: egui::Color32 = egui::Color32::from_rgb(0xDB, 0x5F, 0x
 /// Attach a data section heading's right-click menu.
 ///
 /// The four actions do to the whole section exactly what its rows' own eye
-/// and padlock do one at a time, so they act on the loaded items only - an
-/// unloaded row's toggles are inert - and the menu greys out when the section
-/// has nothing loaded.
-fn section_heading_menu(response: &egui::Response, section: ExplorerSection, loaded: usize, commands: &mut Vec<UiCommand>) {
+/// and padlock do one at a time. Both controls work on unloaded entries; the
+/// menu greys out when the section is empty.
+fn section_heading_menu(response: &egui::Response, section: ExplorerSection, item_count: usize, commands: &mut Vec<UiCommand>) {
     context_menu_popup(response, section.label(), |ui| {
-        let enabled = loaded > 0;
+        let enabled = item_count > 0;
         if ContextMenuAction::new(tr!(literal = "Reveal All")).enabled(enabled).show(ui).clicked() {
             commands.push(UiCommand::SetSectionVisible(section, true));
             ui.close();
@@ -173,44 +172,33 @@ pub(crate) fn draw_explorer(
                             let layer_label = if layer.is_loaded {
                                 bold(&layer_name)
                             } else {
-                                egui::RichText::new(&layer_name).color(INACTIVE_TEXT_COLOR)
+                                bold(&layer_name).color(INACTIVE_TEXT_COLOR)
                             };
                             // Named `row` rather than `entry`: `entry` is the
                             // enclosing project this layer belongs to.
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
                                 .selected(is_active)
                                 .toggles(EntryToggles {
-                                    visible: layer.visible,
+                                    visible: layer.is_loaded,
                                     locked: layer_locked,
-                                    enabled: layer.is_loaded,
                                 })
                                 .show(ui);
                             if row.visibility_clicked {
-                                commands.push(UiCommand::ToggleLayerVisible(layer_id));
+                                commands.push(if layer.is_loaded { UiCommand::UnloadLayer(layer_id) } else { UiCommand::LoadLayer(layer_id) });
                             }
                             if row.lock_clicked {
                                 commands.push(UiCommand::ToggleLayerLocked(layer_id));
                             }
                             let layer_resp = row.response;
-                            if layer_resp.double_clicked() {
-                                if layer.is_loaded {
-                                    commands.push(UiCommand::UnloadLayer(layer_id));
-                                } else {
-                                    commands.push(UiCommand::LoadLayer(layer_id));
-                                }
-                            }
+
                             context_menu_popup(&layer_resp, layer.name.as_str(), |ui| {
+                                if ContextMenuAction::new(if layer_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
+                                    commands.push(UiCommand::ToggleLayerLocked(layer_id));
+                                    ui.close();
+                                }
                                 if layer.is_loaded {
                                     if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
                                         commands.push(UiCommand::UnloadLayer(layer_id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if layer.visible { tr!(literal = "Hide") } else { tr!(literal = "Show") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleLayerVisible(layer_id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if layer_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleLayerLocked(layer_id));
                                         ui.close();
                                     }
                                     if ContextMenuAction::new(tr!(literal = "Select All Objects")).show(ui).clicked() {
@@ -242,7 +230,7 @@ pub(crate) fn draw_explorer(
                             });
                         }
                     });
-                section_heading_menu(&designs_header_toggle.union(designs_header.inner), ExplorerSection::Designs, project.projects.first().map_or(0, |entry| entry.layers.iter().filter(|layer| layer.is_loaded).count()), commands);
+                section_heading_menu(&designs_header_toggle.union(designs_header.inner), ExplorerSection::Designs, project.projects.first().map_or(0, |entry| entry.layers.len()), commands);
 
                 let triangulations_dirty = project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.dirty);
                 let (triangulations_header_toggle, triangulations_header, _) = ExplorerHeader::new(egui::Id::new("triangulations_collapse"), tr!(literal = "Triangulations"))
@@ -260,55 +248,39 @@ pub(crate) fn draw_explorer(
                             let tri_path = tr_format!(literal = "ID: triangulation:%id%%source%", id = tri.id.0, source = source_suffix);
                             let tri_id = tri.id;
 
-                            let label = if tri.is_loaded {
-                                let dirty_marker = if tri.dirty { " *" } else { "" };
-                                let stats = format!("{}{}", tri.name, dirty_marker);
-                                bold(&stats)
-                            } else {
-                                egui::RichText::new(&tri.name).color(INACTIVE_TEXT_COLOR)
-                            };
+                            let dirty_marker = if tri.dirty { " *" } else { "" };
+                            let stats = format!("{}{}", tri.name, dirty_marker);
+                            let label = if tri.is_loaded { bold(&stats) } else { bold(&stats).color(INACTIVE_TEXT_COLOR) };
 
                             let tri_locked = frozen_handles.contains(&SceneEntityId::Triangulation(tri_id));
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
                                 .selected(tri.is_active)
                                 .toggles(EntryToggles {
-                                    visible: tri.visible,
+                                    visible: tri.is_loaded,
                                     locked: tri_locked,
-                                    enabled: tri.is_loaded,
                                 })
                                 .show(ui);
                             if row.visibility_clicked {
-                                commands.push(UiCommand::ToggleTriangulationVisible(tri_id));
+                                commands.push(if tri.is_loaded { UiCommand::CloseTriangulation(tri_id) } else { UiCommand::LoadTriangulation(tri_id) });
                             }
                             if row.lock_clicked {
                                 commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
                             }
                             let response = row.response.on_hover_text(&tri_path);
 
-                            if response.double_clicked() {
-                                if tri.is_loaded {
-                                    commands.push(UiCommand::CloseTriangulation(tri_id));
-                                } else {
-                                    commands.push(UiCommand::LoadTriangulation(tri_id));
-                                }
-                            } else if response.clicked() && tri.is_loaded {
+                            if response.clicked() && tri.is_loaded {
                                 commands.push(UiCommand::ActivateTriangulation(tri_id));
                             }
 
                             let tri_loaded = tri.is_loaded;
-                            let tri_visible = tri.visible;
                             context_menu_popup(&response, tri.name.as_str(), |ui| {
+                                if ContextMenuAction::new(if tri_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
+                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
+                                    ui.close();
+                                }
                                 if tri_loaded {
                                     if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
                                         commands.push(UiCommand::CloseTriangulation(tri_id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if tri_visible { tr!(literal = "Hide") } else { tr!(literal = "Show") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleTriangulationVisible(tri_id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if tri_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
                                         ui.close();
                                     }
                                 } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
@@ -336,7 +308,7 @@ pub(crate) fn draw_explorer(
                             render_tri_entry(ui, commands, triangulation);
                         }
                     });
-                section_heading_menu(&triangulations_header_toggle.union(triangulations_header.inner), ExplorerSection::Triangulations, project.triangulations.iter().filter(|item| item.is_loaded).count(), commands);
+                section_heading_menu(&triangulations_header_toggle.union(triangulations_header.inner), ExplorerSection::Triangulations, project.triangulations.len(), commands);
 
                 let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
                 let (rasters_header_toggle, rasters_header, _) = ExplorerHeader::new("rasters_collapse".into(), tr!(literal = "Rasters"))
@@ -352,7 +324,7 @@ pub(crate) fn draw_explorer(
                             let label = if raster.is_loaded {
                                 bold(&raster_label)
                             } else {
-                                egui::RichText::new(&raster_label).color(INACTIVE_TEXT_COLOR)
+                                bold(&raster_label).color(INACTIVE_TEXT_COLOR)
                             };
                             let source_suffix = raster.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
                             let details = tr_format!(
@@ -368,37 +340,26 @@ pub(crate) fn draw_explorer(
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
                                 .selected(raster.is_draped)
                                 .toggles(EntryToggles {
-                                    visible: raster.visible,
+                                    visible: raster.is_loaded,
                                     locked: raster_locked,
-                                    enabled: raster.is_loaded,
                                 })
                                 .show(ui);
                             if row.visibility_clicked {
-                                commands.push(UiCommand::ToggleRasterVisible(raster.id));
+                                commands.push(if raster.is_loaded { UiCommand::UnloadRaster(raster.id) } else { UiCommand::LoadRaster(raster.id) });
                             }
                             if row.lock_clicked {
                                 commands.push(UiCommand::ToggleRasterLocked(raster.id));
                             }
                             let response = row.response.on_hover_text(&details);
-                            if response.double_clicked() {
-                                if raster.is_loaded {
-                                    commands.push(UiCommand::UnloadRaster(raster.id));
-                                } else {
-                                    commands.push(UiCommand::LoadRaster(raster.id));
-                                }
-                            }
+
                             context_menu_popup(&response, raster.name.as_str(), |ui| {
+                                if ContextMenuAction::new(if raster_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
+                                    commands.push(UiCommand::ToggleRasterLocked(raster.id));
+                                    ui.close();
+                                }
                                 if raster.is_loaded {
                                     if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
                                         commands.push(UiCommand::UnloadRaster(raster.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if raster.visible { tr!(literal = "Hide") } else { tr!(literal = "Show") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleRasterVisible(raster.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if raster_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleRasterLocked(raster.id));
                                         ui.close();
                                     }
                                     if ContextMenuAction::new(tr!(literal = "Drape Over Surface")).enabled(!raster_locked).show(ui).clicked() {
@@ -430,7 +391,7 @@ pub(crate) fn draw_explorer(
                             });
                         }
                     });
-                section_heading_menu(&rasters_header_toggle.union(rasters_header.inner), ExplorerSection::Rasters, project.raster_textures.iter().filter(|item| item.is_loaded).count(), commands);
+                section_heading_menu(&rasters_header_toggle.union(rasters_header.inner), ExplorerSection::Rasters, project.raster_textures.len(), commands);
 
                 let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
                 let (point_clouds_header_toggle, point_clouds_header, _) = ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), tr!(literal = "Point Clouds"))
@@ -447,7 +408,7 @@ pub(crate) fn draw_explorer(
                             let label = if point_cloud.is_loaded {
                                 bold(&label_text)
                             } else {
-                                egui::RichText::new(&label_text).color(INACTIVE_TEXT_COLOR)
+                                bold(&label_text).color(INACTIVE_TEXT_COLOR)
                             };
                             let source_suffix = point_cloud.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
                             let tooltip = tr_format!(
@@ -459,39 +420,28 @@ pub(crate) fn draw_explorer(
                             let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
                                 .toggles(EntryToggles {
-                                    visible: point_cloud.visible,
+                                    visible: point_cloud.is_loaded,
                                     locked: cloud_locked,
-                                    enabled: point_cloud.is_loaded,
                                 })
                                 .show(ui);
                             if row.visibility_clicked {
-                                commands.push(UiCommand::TogglePointCloudVisible(point_cloud.id));
+                                commands.push(if point_cloud.is_loaded { UiCommand::ClosePointCloud(point_cloud.id) } else { UiCommand::LoadPointCloud(point_cloud.id) });
                             }
                             if row.lock_clicked {
                                 commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
                             }
                             let response = row.response.on_hover_text(&tooltip);
 
-                            if response.double_clicked() {
-                                if point_cloud.is_loaded {
-                                    commands.push(UiCommand::ClosePointCloud(point_cloud.id));
-                                } else {
-                                    commands.push(UiCommand::LoadPointCloud(point_cloud.id));
-                                }
-                            }
+
 
                             context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
+                                if ContextMenuAction::new(if cloud_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
+                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
+                                    ui.close();
+                                }
                                 if point_cloud.is_loaded {
                                     if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
                                         commands.push(UiCommand::ClosePointCloud(point_cloud.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if point_cloud.visible { tr!(literal = "Hide") } else { tr!(literal = "Show") }).show(ui).clicked() {
-                                        commands.push(UiCommand::TogglePointCloudVisible(point_cloud.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if cloud_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
                                         ui.close();
                                     }
                                 } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
@@ -510,7 +460,7 @@ pub(crate) fn draw_explorer(
                             });
                         }
                     });
-                section_heading_menu(&point_clouds_header_toggle.union(point_clouds_header.inner), ExplorerSection::PointClouds, project.point_clouds.iter().filter(|item| item.is_loaded).count(), commands);
+                section_heading_menu(&point_clouds_header_toggle.union(point_clouds_header.inner), ExplorerSection::PointClouds, project.point_clouds.len(), commands);
 
                 let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
                 let (block_models_header_toggle, block_models_header, _) = ExplorerHeader::new(egui::Id::new("block_models_collapse"), tr!(literal = "Block Models"))
@@ -528,19 +478,18 @@ pub(crate) fn draw_explorer(
                             let label = if block_model.is_loaded {
                                 bold(&label_text)
                             } else {
-                                egui::RichText::new(&label_text).color(INACTIVE_TEXT_COLOR)
+                                bold(&label_text).color(INACTIVE_TEXT_COLOR)
                             };
                             let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
                                 .selected(is_selected)
                                 .toggles(EntryToggles {
-                                    visible: block_model.visible,
+                                    visible: block_model.is_loaded,
                                     locked: model_locked,
-                                    enabled: block_model.is_loaded,
                                 })
                                 .show(ui);
                             if row.visibility_clicked {
-                                commands.push(UiCommand::ToggleBlockModelVisible(block_model.id));
+                                commands.push(if block_model.is_loaded { UiCommand::CloseBlockModel(block_model.id) } else { UiCommand::LoadBlockModel(block_model.id) });
                             }
                             if row.lock_clicked {
                                 commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
@@ -552,13 +501,7 @@ pub(crate) fn draw_explorer(
                                 source = block_model_source_suffix,
                                 count = block_model.variable_count
                             ));
-                            if response.double_clicked() {
-                                if block_model.is_loaded {
-                                    commands.push(UiCommand::CloseBlockModel(block_model.id));
-                                } else {
-                                    commands.push(UiCommand::LoadBlockModel(block_model.id));
-                                }
-                            } else if response.clicked() && block_model.is_loaded {
+                            if response.clicked() && block_model.is_loaded {
                                 // Selecting here is what reveals the model's
                                 // properties tab, the same as picking it in
                                 // the viewport does.
@@ -566,17 +509,13 @@ pub(crate) fn draw_explorer(
                             }
 
                             context_menu_popup(&response, block_model.name.as_str(), |ui| {
+                                if ContextMenuAction::new(if model_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
+                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
+                                    ui.close();
+                                }
                                 if block_model.is_loaded {
                                     if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
                                         commands.push(UiCommand::CloseBlockModel(block_model.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if block_model.visible { tr!(literal = "Hide") } else { tr!(literal = "Show") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleBlockModelVisible(block_model.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if model_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
                                         ui.close();
                                     }
                                 } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
@@ -595,7 +534,7 @@ pub(crate) fn draw_explorer(
                             });
                         }
                     });
-                section_heading_menu(&block_models_header_toggle.union(block_models_header.inner), ExplorerSection::BlockModels, project.block_models.iter().filter(|item| item.is_loaded).count(), commands);
+                section_heading_menu(&block_models_header_toggle.union(block_models_header.inner), ExplorerSection::BlockModels, project.block_models.len(), commands);
 
                 let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
                 let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), tr!(literal = "Drill Holes"))
@@ -611,7 +550,7 @@ pub(crate) fn draw_explorer(
                             let label = if dataset.is_loaded {
                                 bold(&dataset_label)
                             } else {
-                                egui::RichText::new(&dataset_label).color(INACTIVE_TEXT_COLOR)
+                                bold(&dataset_label).color(INACTIVE_TEXT_COLOR)
                             };
                             let source_suffix = dataset.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
                             let tooltip = tr_format!(
@@ -624,37 +563,26 @@ pub(crate) fn draw_explorer(
                             let dataset_locked = frozen_handles.contains(&SceneEntityId::DrillHole(dataset.id));
                             let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
                                 .toggles(EntryToggles {
-                                    visible: dataset.visible,
+                                    visible: dataset.is_loaded,
                                     locked: dataset_locked,
-                                    enabled: dataset.is_loaded,
                                 })
                                 .show(ui);
                             if row.visibility_clicked {
-                                commands.push(UiCommand::ToggleDrillHoleVisible(dataset.id));
+                                commands.push(if dataset.is_loaded { UiCommand::CloseDrillHole(dataset.id) } else { UiCommand::LoadDrillHole(dataset.id) });
                             }
                             if row.lock_clicked {
                                 commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
                             }
                             let response = row.response.on_hover_text(&tooltip);
-                            if response.double_clicked() {
-                                if dataset.is_loaded {
-                                    commands.push(UiCommand::CloseDrillHole(dataset.id));
-                                } else {
-                                    commands.push(UiCommand::LoadDrillHole(dataset.id));
-                                }
-                            }
+
                             context_menu_popup(&response, dataset.name.as_str(), |ui| {
+                                if ContextMenuAction::new(if dataset_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
+                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
+                                    ui.close();
+                                }
                                 if dataset.is_loaded {
                                     if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
                                         commands.push(UiCommand::CloseDrillHole(dataset.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if dataset.visible { tr!(literal = "Hide") } else { tr!(literal = "Show") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleDrillHoleVisible(dataset.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(if dataset_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
                                         ui.close();
                                     }
                                     if ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked() {
@@ -677,7 +605,7 @@ pub(crate) fn draw_explorer(
                             });
                         }
                     });
-                section_heading_menu(&drill_holes_header_toggle.union(drill_holes_header.inner), ExplorerSection::DrillHoles, project.drill_holes.iter().filter(|item| item.is_loaded).count(), commands);
+                section_heading_menu(&drill_holes_header_toggle.union(drill_holes_header.inner), ExplorerSection::DrillHoles, project.drill_holes.len(), commands);
 
                 paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
             });

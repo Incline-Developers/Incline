@@ -213,7 +213,7 @@ impl StaticStrokeCache {
         self.claimed.clear();
         for object in document.objects() {
             let rgba = document.object_rgba(object);
-            if !eligible(object, editor, rgba) {
+            if !document.layer(object.layer()).is_some_and(|layer| layer.loaded) || !eligible(object, editor, rgba) {
                 continue;
             }
             // Oversized and bulged members remain on the main stream, whose
@@ -251,8 +251,12 @@ impl StaticStrokeCache {
             self.object_chunk.remove(&id);
         }
 
+        if self.chunks.iter().any(|chunk| chunk.members.is_empty()) {
+            self.chunks.retain(|chunk| !chunk.members.is_empty());
+            self.reindex_chunks();
+        }
         for chunk in &mut self.chunks {
-            chunk.layer_visible = document.layer(chunk.layer).map(|layer| layer.visible).unwrap_or(true);
+            chunk.layer_visible = document.layer(chunk.layer).map(|layer| layer.loaded).unwrap_or(true);
         }
 
         for chunk_index in 0..self.chunks.len() {
@@ -260,6 +264,27 @@ impl StaticStrokeCache {
                 self.rebuild_chunk(chunk_index, device, queue, document, scene_origin, scale_factor, limits);
             }
         }
+    }
+
+    pub(crate) fn release_layers(&mut self, layers: &[LayerId]) {
+        self.chunks.retain(|chunk| !layers.contains(&chunk.layer));
+        self.reindex_chunks();
+    }
+
+    fn reindex_chunks(&mut self) {
+        let retained: HashSet<_> = self.chunks.iter().flat_map(|chunk| chunk.members.iter().copied()).collect();
+        self.object_chunk.retain(|id, _| retained.contains(id));
+        for (index, chunk) in self.chunks.iter().enumerate() {
+            for id in &chunk.members {
+                if let Some((cached_index, _)) = self.object_chunk.get_mut(id) {
+                    *cached_index = index;
+                }
+            }
+        }
+        self.claimed.retain(|id| self.object_chunk.contains_key(id));
+        self.chunks.shrink_to_fit();
+        self.object_chunk.shrink_to_fit();
+        self.claimed.shrink_to_fit();
     }
 
     fn assign(&mut self, layer: LayerId, id: ObjectId, estimate: StrokeEstimate, limits: StaticStrokeLimits) {

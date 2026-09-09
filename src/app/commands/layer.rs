@@ -47,13 +47,11 @@ impl<'a> App<'a> {
             name: name.clone(),
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
-            visible: true,
+            loaded: true,
             elevation: 0.0,
         };
         self.execute_edit(Command::AddLayerSnapshot { layer, objects: Vec::new() });
-        if let Some(project) = self.workspace.active_project_mut() {
-            project.loaded_layers.insert(layer_id);
-        }
+
         self.editor.selected_handles.clear();
         self.editor.active_layer = Some(layer_id);
         userspace_log!("{}", tr_format!(literal = "Created layer '%name%'", name = name));
@@ -62,6 +60,13 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn delete_layer(&mut self, layer_id: LayerId) -> Result<()> {
+        if self.restore_layers_for(vec![layer_id], move |app| {
+            if let Err(error) = app.delete_layer(layer_id) {
+                crate::userspace_error!("{error:#}");
+            }
+        }) {
+            return Ok(());
+        }
         self.editor.pending_delete_layer = None;
         let Some(project) = self.workspace.active_project_mut() else {
             return Ok(());
@@ -82,9 +87,7 @@ impl<'a> App<'a> {
             layer_index,
             objects: on_layer,
         });
-        if let Some(project) = self.workspace.active_project_mut() {
-            project.loaded_layers.remove(&layer_id);
-        }
+
         if self.editor.active_layer == Some(layer_id) {
             self.editor.active_layer = None;
         }
@@ -98,6 +101,9 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn duplicate_layer(&mut self, layer_id: LayerId) {
+        if self.restore_layers_for(vec![layer_id], move |app| app.duplicate_layer(layer_id)) {
+            return;
+        }
         let Some(project) = self.workspace.active_project_mut() else {
             return;
         };
@@ -114,7 +120,7 @@ impl<'a> App<'a> {
             name: duplicate_name.clone(),
             color_index: source_layer.color_index,
             color: source_layer.color,
-            visible: source_layer.visible,
+            loaded: source_layer.loaded,
             elevation: source_layer.elevation,
         };
         let duplicate_objects: Vec<Object> = source_objects
@@ -129,39 +135,41 @@ impl<'a> App<'a> {
             layer: duplicate_layer,
             objects: duplicate_objects,
         });
-        if let Some(project) = self.workspace.active_project_mut() {
-            project.loaded_layers.insert(new_layer_id);
-        }
+
         self.editor.selected_handles.clear();
         userspace_log!("{}", tr_format!(literal = "Duplicated layer '%duplicate_name%'", duplicate_name = duplicate_name));
         self.invalidate_geometry();
     }
 
     pub(crate) fn load_layer(&mut self, layer_id: LayerId) {
-        let scene_was_empty = self.scene_document.objects().is_empty() && self.triangulations.is_empty();
-        let Some(index) = self.workspace.project_index_for_layer(layer_id) else {
+        self.set_layer_loaded(layer_id, true);
+    }
+
+    fn set_layer_loaded(&mut self, layer_id: LayerId, loaded: bool) {
+        self.activate_project_for_layer(layer_id);
+        if !loaded {
+            self.cancel_jobs(|key| matches!(key, crate::app::jobs::JobKey::LayerResidency { layer: pending, restoring: true, .. } if *pending == layer_id));
+        } else if self.layer_load_pending(layer_id) {
             return;
-        };
-        let Some(project) = self.workspace.projects.get_mut(index) else {
-            return;
-        };
-        let Some(name) = project.project.document.layer(layer_id).map(|layer| layer.name.clone()) else {
-            return;
-        };
-        project.loaded_layers.insert(layer_id);
-        self.editor.selected_handles.clear();
-        userspace_log!("{}", tr_format!(literal = "Loaded layer '%name%'", name = name));
-        self.invalidate_geometry();
-        if scene_was_empty {
-            self.fit_view_to_extents();
         }
+        let Some(layer) = self.workspace.active_document().and_then(|document| document.layer(layer_id)) else {
+            return;
+        };
+        if layer.loaded == loaded {
+            return;
+        }
+        self.execute_edit(Command::SetLayerLoaded {
+            id: layer_id,
+            before: layer.loaded,
+            after: loaded,
+        });
     }
 
     pub(crate) fn select_all_objects_in_layer(&mut self, layer_id: LayerId) {
         let Some(project) = self.workspace.active_project() else {
             return;
         };
-        if !project.loaded_layers.contains(&layer_id) {
+        if !project.project.document.layer(layer_id).is_some_and(|layer| layer.loaded) {
             return;
         }
         let handles: Vec<SceneEntityId> = project
@@ -191,59 +199,9 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
-    /// Unload a layer from the scene. Purely a visibility change: the layer's
-    /// in-memory state (including unsaved edits) stays in the document and is
-    /// written out by whole-project saves.
+    /// Unload a layer from the scene while retaining its project membership.
     pub(crate) fn unload_layer(&mut self, layer_id: LayerId) {
-        let Some(index) = self.workspace.project_index_for_layer(layer_id) else {
-            return;
-        };
-        let Some(project) = self.workspace.projects.get_mut(index) else {
-            return;
-        };
-        let object_handles: Vec<_> = project
-            .project
-            .document
-            .objects()
-            .iter()
-            .filter(|object| object.layer() == layer_id)
-            .map(|object| SceneEntityId::Object(object.id()))
-            .collect();
-        if !project.loaded_layers.remove(&layer_id) {
-            return;
-        }
-        for handle in object_handles {
-            self.editor.selected_handles.remove(&handle);
-            self.editor.hidden_handles.remove(&handle);
-            self.editor.explicitly_frozen.remove(&handle);
-            self.editor.frozen_handles.remove(&handle);
-            self.editor.translucent_handles.remove(&handle);
-        }
-        if self.editor.active_layer == Some(layer_id) {
-            self.editor.active_layer = None;
-        }
-        userspace_log!("{}", tr_format!(literal = "Unloaded layer %layer_id%", layer_id = format!("{layer_id:?}")));
-        self.invalidate_geometry();
-    }
-
-    /// Show or hide a loaded layer without unloading it.
-    ///
-    /// Unlike load/unload this keeps the layer's objects in the scene
-    /// document, so snapping targets and selection sets survive the toggle.
-    pub(crate) fn toggle_layer_visible(&mut self, layer_id: LayerId) {
-        self.activate_project_for_layer(layer_id);
-        let Some(layer) = self.workspace.active_document().and_then(|document| document.layer(layer_id)) else {
-            return;
-        };
-        let (name, before) = (layer.name.clone(), layer.visible);
-        self.execute_edit(Command::SetLayerVisible {
-            id: layer_id,
-            before,
-            after: !before,
-        });
-        let state = if before { tr!(literal = "Hidden") } else { tr!(literal = "Shown") };
-        userspace_log!("{}", tr_format!(literal = "%state% layer '%name%'", state = state, name = name));
-        self.invalidate_geometry();
+        self.set_layer_loaded(layer_id, false);
     }
 
     /// Lock or unlock every object on a layer against selection and editing.

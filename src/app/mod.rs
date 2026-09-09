@@ -112,9 +112,8 @@ pub(crate) struct GizmoDragState {
 
 /// A live Rotate Collar ring drag.
 ///
-/// The sweep is measured on screen, as the cursor's angle about the projected
-/// gizmo centre - the ring under the pointer is drawn as exactly that circle,
-/// so following it needs no unprojection back into the ring's world plane.
+/// Ring geometry is captured at drag start so preview changes cannot reverse
+/// the gesture's coordinate frame.
 pub(crate) struct CollarRotateDrag {
     /// Which ring is being dragged: see `ui::state::ROTATE_GIZMO_AZIMUTH_RING`.
     pub(crate) ring: u8,
@@ -122,16 +121,17 @@ pub(crate) struct CollarRotateDrag {
     /// drag so a preview moving the collars cannot move the pivot under it.
     pub(crate) center_px: (f32, f32),
     /// Cursor angle last frame, for the step this frame is measured against.
-    pub(crate) last_angle: f64,
-    /// Total swept angle in screen radians, unwrapped, so a sweep past the
-    /// atan2 discontinuity keeps going and a multi-turn sweep is honoured.
+    pub(crate) last_angle: Option<f64>,
+    /// Total swept angle in ring radians, unwrapped, so a sweep past the
+    /// angle wrap keeps going and a multi-turn sweep is honoured.
     pub(crate) swept: f64,
     /// The turn standing when the drag began, so grabbing a ring again
     /// continues the edit rather than restarting it from the originals.
     pub(crate) start: CollarRotation,
-    /// How far the anchor hole may still be tipped either way before it would
-    /// pass vertical, bounding the accumulated dip so a drag stays reversible.
-    pub(crate) dip_room: (f64, f64),
+    /// Projected samples in increasing world ring angle, frozen during a drag.
+    pub(crate) ring_px: Vec<(f32, f32)>,
+    /// Ignore ambiguous cursor movement through the centre of the gizmo.
+    pub(crate) dead_zone_px: f32,
 }
 
 /// A live Move preview belongs to the project whose objects were captured.
@@ -352,7 +352,7 @@ pub(crate) struct App<'a> {
     /// or tool state.
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
-    pending_topology_click: Option<(SceneEntityId, DVec3)>,
+    pending_selection_click: Option<crate::rendering::graphics::camera::ScenePick>,
     move_session_original: Option<MoveSession>,
     /// Captured collar placements, shared by Move Collar and Rotate Collar:
     /// both rewrite the same holes from the same originals, and only one of
@@ -394,6 +394,8 @@ pub(crate) struct App<'a> {
 
 impl<'a> Default for App<'a> {
     fn default() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        crate::model::asset_storage::initialize_browser();
         Self {
             close_requested: false,
             fatal_shutdown: false,
@@ -460,7 +462,7 @@ impl<'a> Default for App<'a> {
             right_orbit_active: false,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,
-            pending_topology_click: None,
+            pending_selection_click: None,
             move_session_original: None,
             collar_move_session: None,
             collar_rotation: None,
@@ -579,6 +581,14 @@ impl<'a> App<'a> {
     }
 
     fn apply_config(&mut self, config: io::Config) {
+        let mut order = Vec::new();
+        for workspace in config.workspace_order.iter().chain(crate::ui::state::Workspace::ALL.iter()) {
+            if !order.contains(workspace) {
+                order.push(*workspace);
+            }
+        }
+        self.editor.workspace_order = order.try_into().expect("all workspaces appear exactly once");
+        self.editor.active_workspace = self.editor.workspace_order[0];
         // The status bar's picker switches this live afterwards; here it just
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;
@@ -591,6 +601,7 @@ impl<'a> App<'a> {
         self.editor.show_scale_bar = config.show_scale_bar;
         self.editor.renderer_background_color = config.renderer_background_color;
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
+        self.editor.vsync_enabled = config.vsync_enabled;
         self.editor.frame_rate_cap = config.frame_rate_cap.clamp(20, 1000);
         self.editor.resize_frame_rate_cap = config.resize_frame_rate_cap.clamp(20, 1000);
         self.editor.block_model_interaction_resolution_divisor = config.block_model_interaction_resolution_divisor.clamp(1, 64);
@@ -694,7 +705,7 @@ impl<'a> App<'a> {
         self.editor.active_layer.and_then(|layer| {
             self.workspace
                 .active_project()
-                .and_then(|project| (project.loaded_layers.contains(&layer) && project.project.document.layer(layer).is_some()).then_some(layer))
+                .and_then(|project| (project.project.document.layer(layer).is_some_and(|layer| layer.loaded) && project.project.document.layer(layer).is_some()).then_some(layer))
         })
     }
 
@@ -866,6 +877,21 @@ impl<'a> App<'a> {
     /// [`Self::record_applied_edit`] for one already committed by a live drag -
     /// so that anything able to dirty the project can also be taken back.
     pub(crate) fn execute_edit(&mut self, command: Command) {
+        let mut layers = Vec::new();
+        if let Some(document) = self.workspace.active_document() {
+            command.required_layers(false, document, &mut layers);
+            if layers.iter().any(|id| document.deferred_layers.contains_key(id)) {
+                self.restore_layers_for(layers, move |app| app.execute_edit(command));
+                return;
+            }
+        }
+
+        let mut needed = Vec::new();
+        command.required_items(false, &mut needed);
+        if needed.iter().any(|item| self.project_item_state(*item).is_some_and(|state| state.deferred.is_some())) {
+            self.restore_items_for(needed, move |app| app.execute_edit(command));
+            return;
+        }
         let continuing = self.ui_pointer_gesture_active;
         let Some(((), effects)) = self.with_edit_target(|history, target| history.execute(target, command, continuing)) else {
             return;
@@ -895,8 +921,19 @@ impl<'a> App<'a> {
     /// deliberate delete there is no single call site to clean up after. The
     /// sets are keyed by scene entity, so one sweep covers every kind.
     fn drop_editor_references_to_missing_items(&mut self) {
+        if self
+            .editor
+            .active_layer
+            .is_some_and(|id| self.workspace.active_document().is_none_or(|document| document.layer(id).is_none_or(|layer| !layer.loaded)))
+        {
+            self.editor.active_layer = None;
+        }
         let exists = |entity: &SceneEntityId| match entity {
-            SceneEntityId::Object(id) => self.workspace.active_document().is_some_and(|document| document.get_object(*id).is_some()),
+            SceneEntityId::Object(id) => self.workspace.active_document().is_some_and(|document| {
+                document
+                    .get_object(*id)
+                    .is_some_and(|object| document.layer(object.layer()).is_some_and(|layer| layer.loaded))
+            }),
             SceneEntityId::Triangulation(id) => self.triangulations.iter().any(|item| item.id == *id),
             SceneEntityId::BlockModel(id) => self.block_models.iter().any(|item| item.id == *id),
             SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id),
@@ -947,6 +984,18 @@ impl<'a> App<'a> {
     /// Carry out the follow-up work an applied or reverted command reported:
     /// what to invalidate, what to re-persist, what to decode again.
     fn apply_step_effects(&mut self, effects: StepEffects) {
+        for item in effects.unloaded_items {
+            match item {
+                ItemRef::Triangulation(id) => self.release_triangulation_runtime(id),
+                ItemRef::BlockModel(id) => self.release_blockmodel_runtime(id),
+                ItemRef::DrillHole(id) => self.release_drillhole_runtime(id),
+                ItemRef::PointCloud(id) => self.release_pointcloud_runtime(id),
+                ItemRef::Raster(id) => self.release_raster_runtime(id),
+            }
+        }
+        self.evict_unloaded_items();
+        self.evict_unloaded_layers();
+        self.drop_editor_references_to_missing_items();
         if effects.document_changed {
             self.invalidate_geometry();
         }
@@ -1151,7 +1200,7 @@ impl<'a> App<'a> {
             self.cancel_text_edit();
         }
         self.editor.clear_project_transients();
-        self.pending_topology_click = None;
+        self.pending_selection_click = None;
         // Clear any in-progress gesture so it cannot bleed into the new project.
         self.move_session_original = None;
         self.collar_move_session = None;
@@ -1163,6 +1212,25 @@ impl<'a> App<'a> {
         self.editor.gizmo_drag_plane_index = None;
         self.editor.rotate_gizmo_drag_ring = None;
         self.editor.rotate_preview_active = false;
+    }
+
+    /// How long to hold off the next frame.
+    ///
+    /// While resizing, the resize cap deliberately renders below the display's
+    /// rate: attachments are rebuilt every frame and the interaction stays
+    /// responsive for costing fewer of them. Otherwise the cap only applies
+    /// with vsync off - with it on the display already paces presentation, and
+    /// a cap the refresh rate does not divide evenly just makes every frame
+    /// miss its slot and wait for the next one (144 on a 165 Hz display
+    /// presents 82.5 times a second, not 144).
+    fn frame_interval(&self) -> Duration {
+        if self.pending_resize.is_some() {
+            rate_interval(self.editor.resize_frame_rate_cap)
+        } else if self.editor.vsync_enabled {
+            Duration::ZERO
+        } else {
+            rate_interval(self.editor.frame_rate_cap)
+        }
     }
 
     fn invalidate_geometry(&mut self) {
@@ -1347,15 +1415,18 @@ impl<'a> App<'a> {
     /// Evaluate immediately before installing a completed async result so
     /// concurrent loaders cannot all act on a stale start-time snapshot.
     pub(crate) fn scene_has_renderables(&self) -> bool {
-        self.workspace
-            .projects
-            .iter()
-            .any(|project| project.project.document.objects().iter().any(|object| project.loaded_layers.contains(&object.layer())))
-            || !self.triangulations.is_empty()
-            || !self.block_models.is_empty()
-            || !self.drill_holes.is_empty()
-            || !self.point_clouds.is_empty()
-            || !self.raster_textures.is_empty()
+        self.workspace.projects.iter().any(|project| {
+            project
+                .project
+                .document
+                .objects()
+                .iter()
+                .any(|object| project.project.document.layer(object.layer()).is_some_and(|layer| layer.loaded))
+        }) || self.triangulations.iter().any(|item| item.state.loaded)
+            || self.block_models.iter().any(|item| item.state.loaded)
+            || self.drill_holes.iter().any(|item| item.state.loaded)
+            || self.point_clouds.iter().any(|item| item.state.loaded)
+            || self.raster_textures.iter().any(|item| item.state.loaded)
     }
 
     fn teardown_window(&mut self) {
@@ -1423,13 +1494,10 @@ impl<'a> App<'a> {
             // per-layer dirty set independently.
             project.project.document.revision().hash(&mut hasher);
             project.savepoint_revision().hash(&mut hasher);
-            let mut loaded_layers: Vec<_> = project.loaded_layers.iter().copied().collect();
-            loaded_layers.sort_unstable_by_key(|layer| layer.0);
-            loaded_layers.hash(&mut hasher);
             for layer in project.project.document.layers() {
                 layer.id.hash(&mut hasher);
                 layer.name.hash(&mut hasher);
-                layer.visible.hash(&mut hasher);
+                layer.loaded.hash(&mut hasher);
             }
         }
 
@@ -1437,7 +1505,7 @@ impl<'a> App<'a> {
         for triangulation in &self.triangulations {
             triangulation.id.hash(&mut hasher);
             triangulation.name.hash(&mut hasher);
-            (triangulation.visible && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
+            (triangulation.state.loaded && !self.editor.hidden_handles.contains(&triangulation.entity_id())).hash(&mut hasher);
             triangulation.raster_texture.hash(&mut hasher);
             triangulation.color.map(f32::to_bits).hash(&mut hasher);
             triangulation.state.loaded.hash(&mut hasher);
@@ -1448,40 +1516,36 @@ impl<'a> App<'a> {
         for model in &self.block_models {
             model.id.hash(&mut hasher);
             model.name.hash(&mut hasher);
-            model.visible.hash(&mut hasher);
+            model.state.loaded.hash(&mut hasher);
             model.renderable_block_indices.len().hash(&mut hasher);
             model.model.color_variables().into_iter().filter(|variable| !variable.special).count().hash(&mut hasher);
-            model.state.loaded.hash(&mut hasher);
             model.state.revision().hash(&mut hasher);
         }
 
         for dataset in &self.drill_holes {
             dataset.id.hash(&mut hasher);
             dataset.name.hash(&mut hasher);
-            dataset.visible.hash(&mut hasher);
+            dataset.state.loaded.hash(&mut hasher);
             dataset.dataset.holes.len().hash(&mut hasher);
             dataset.dataset.fields.len().hash(&mut hasher);
-            dataset.state.loaded.hash(&mut hasher);
             dataset.state.revision().hash(&mut hasher);
         }
 
         for cloud in &self.point_clouds {
             cloud.id.hash(&mut hasher);
             cloud.name.hash(&mut hasher);
-            cloud.visible.hash(&mut hasher);
-            cloud.points.len().hash(&mut hasher);
             cloud.state.loaded.hash(&mut hasher);
+            cloud.points.len().hash(&mut hasher);
             cloud.state.revision().hash(&mut hasher);
         }
 
         for raster in &self.raster_textures {
             raster.id.hash(&mut hasher);
             raster.name.hash(&mut hasher);
-            raster.visible.hash(&mut hasher);
+            raster.state.loaded.hash(&mut hasher);
             raster.source_size.hash(&mut hasher);
             raster.driver_name.hash(&mut hasher);
             raster.projection.hash(&mut hasher);
-            raster.state.loaded.hash(&mut hasher);
             raster.state.revision().hash(&mut hasher);
         }
         hasher.finish()
@@ -1520,8 +1584,7 @@ impl<'a> App<'a> {
                         .map(|layer| UiLayerEntry {
                             id: layer.id,
                             name: layer.name.clone(),
-                            visible: layer.visible,
-                            is_loaded: project.loaded_layers.contains(&layer.id),
+                            is_loaded: layer.loaded,
                             dirty: dirty_layers.contains(&layer.id),
                         })
                         .collect(),
@@ -1588,17 +1651,21 @@ impl<'a> App<'a> {
                     id: tri.id,
                     name: tri.name.clone(),
                     source_name: tri.state.source_name.clone(),
-                    visible: tri.visible && !self.editor.hidden_handles.contains(&tri.entity_id()),
                     is_active: self.active_triangulation == Some(tri.id),
                     is_loaded: tri.state.loaded,
                     dirty: tri.state.is_dirty(),
                     color: tri.color,
-                    vertex_count: tri.mesh.vertex_count(),
-                    triangle_count: tri.mesh.face_count(),
-                    bounds: Some((
-                        glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z),
-                        glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z),
-                    )),
+                    vertex_count: tri.state.summary.as_ref().map_or_else(|| tri.mesh.vertex_count(), |summary| summary.primary_count),
+                    triangle_count: tri.state.summary.as_ref().map_or_else(|| tri.mesh.face_count(), |summary| summary.secondary_count),
+                    bounds: tri.state.summary.as_ref().map_or_else(
+                        || {
+                            Some((
+                                glam::DVec3::new(bounds.min.x, bounds.min.y, bounds.min.z),
+                                glam::DVec3::new(bounds.max.x, bounds.max.y, bounds.max.z),
+                            ))
+                        },
+                        |summary| summary.bounds,
+                    ),
                 }
             })
             .collect::<Vec<_>>();
@@ -1609,10 +1676,13 @@ impl<'a> App<'a> {
                 id: model.id,
                 name: model.name.clone(),
                 source_name: model.state.source_name.clone(),
-                visible: model.visible,
                 is_loaded: model.state.loaded,
                 dirty: model.state.is_dirty(),
-                _block_count: model.renderable_block_indices.len(),
+                _block_count: model
+                    .state
+                    .summary
+                    .as_ref()
+                    .map_or_else(|| model.renderable_block_indices.len(), |summary| summary.primary_count),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
                 bounds: model.world_bounds(),
             })
@@ -1624,12 +1694,15 @@ impl<'a> App<'a> {
                 id: dataset.id,
                 name: dataset.name.clone(),
                 source_name: dataset.state.source_name.clone(),
-                visible: dataset.visible,
                 is_loaded: dataset.state.loaded,
                 dirty: dataset.state.is_dirty(),
-                hole_count: dataset.dataset.holes.len(),
-                field_count: dataset.dataset.fields.len(),
-                bounds: dataset.dataset.bounds,
+                hole_count: dataset.state.summary.as_ref().map_or_else(|| dataset.dataset.holes.len(), |summary| summary.primary_count),
+                field_count: dataset
+                    .state
+                    .summary
+                    .as_ref()
+                    .map_or_else(|| dataset.dataset.fields.len(), |summary| summary.secondary_count),
+                bounds: dataset.state.summary.as_ref().map_or(dataset.dataset.bounds, |summary| summary.bounds),
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -1639,11 +1712,10 @@ impl<'a> App<'a> {
                 id: cloud.id,
                 name: cloud.name.clone(),
                 source_name: cloud.state.source_name.clone(),
-                visible: cloud.visible,
                 is_loaded: cloud.state.loaded,
                 dirty: cloud.state.is_dirty(),
-                point_count: cloud.points.len(),
-                bounds: Some(cloud.bounds),
+                point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
+                bounds: cloud.state.summary.as_ref().map_or(Some(cloud.bounds), |summary| summary.bounds),
             })
             .collect::<Vec<_>>();
         let draped_raster_ids: BTreeSet<_> = self.triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
@@ -1654,7 +1726,6 @@ impl<'a> App<'a> {
                 id: raster.id,
                 name: raster.name.clone(),
                 source_name: raster.state.source_name.clone(),
-                visible: raster.visible,
                 is_loaded: raster.state.loaded,
                 dirty: raster.state.is_dirty(),
                 is_draped: draped_raster_ids.contains(&raster.id),
@@ -1812,6 +1883,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         match pollster::block_on(Graphics::new(window.clone())) {
             Ok(graphics) => {
                 self.graphics = Some(graphics);
+                self.apply_present_mode_preference();
                 self.redraw_requested = true;
                 self.fit_view_to_extents();
             }
@@ -1878,11 +1950,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         if (self.redraw_requested || continuous_redraw)
             && let Some(window) = self.window.as_ref()
         {
-            let frame_interval = if self.pending_resize.is_some() {
-                rate_interval(self.editor.resize_frame_rate_cap)
-            } else {
-                rate_interval(self.editor.frame_rate_cap)
-            };
+            let frame_interval = self.frame_interval();
             if let Some(last_render) = self.last_render_time {
                 let deadline = last_render + frame_interval;
                 if now < deadline {
@@ -1922,6 +1990,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 match result {
                     Some(Ok(graphics)) => {
                         self.graphics = Some(graphics);
+                        self.apply_present_mode_preference();
                         self.web_graphics_state = GraphicsState::Ready;
                         self.redraw_requested = true;
                         crate::show_web_startup_ready();
