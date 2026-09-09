@@ -541,6 +541,26 @@ pub(super) fn slice_visible_half_length(zoom: f64, screen: Size) -> f64 {
     (zoom * aspect).max(1.0e-4)
 }
 
+/// Bound the infinite section slab over the scene's display-space extents.
+/// The overview's visible line length must not limit depth: orbiting can bring
+/// geometry farther along the section into view even at a very small zoom.
+fn slice_depth_half_extent(center: DVec3, strike: DVec3, forward: DVec3, half_width: f64, bounds: Option<(DVec3, DVec3)>) -> f64 {
+    let mut tilt_depth: f64 = 0.0;
+    if let Some((min, max)) = bounds {
+        for i in 0..8 {
+            let corner = DVec3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            );
+            let delta = corner - center;
+            let depth = delta.dot(strike) * strike.dot(forward) + delta.z * forward.z;
+            tilt_depth = tilt_depth.max(depth.abs());
+        }
+    }
+    half_width + tilt_depth + 1.0
+}
+
 pub(super) struct BlockModelTransparencyTargets {
     pub(super) _accum_textures: Vec<wgpu::Texture>,
     pub(super) accum_views: Vec<wgpu::TextureView>,

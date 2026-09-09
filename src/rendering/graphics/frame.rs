@@ -119,12 +119,11 @@ impl<'a> Graphics<'a> {
             let origin_z = self.scene_origin.z;
             let exaggeration = self.vertical_exaggeration;
             let display_z = |z: f64| origin_z + (z - origin_z) * exaggeration;
-            let scene_vertical_half_spread = self
+            let bounds = self
                 .cached_scene_bounds
-                .map(|(min, max)| (display_z(min.z) - slice.center.z).abs().max((display_z(max.z) - slice.center.z).abs()));
-            let vertical_extent = scene_vertical_half_spread.map_or(self.projection.zoom, |spread| self.projection.zoom.max(spread));
-            let tilt_depth = slice_visible_half_length * strike.dot(forward).abs() + vertical_extent * forward.z.abs();
-            self.projection.set_symmetric_depth_extent(slice.width * 0.5 + tilt_depth);
+                .map(|(min, max)| (DVec3::new(min.x, min.y, display_z(min.z)), DVec3::new(max.x, max.y, display_z(max.z))));
+            self.projection
+                .set_symmetric_depth_extent(slice_depth_half_extent(slice.center, strike, forward, slice.width * 0.5, bounds));
             editor.slice_center = [slice.center.x, slice.center.y, slice.center.z];
             editor.slice_direction = [slice.direction.x, slice.direction.y];
             editor.slice_half_length = slice_visible_half_length;

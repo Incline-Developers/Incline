@@ -1133,9 +1133,12 @@ impl<'a> Graphics<'a> {
         // near/far we are about to compute, so this is not circular.
         // Build the frustum from the scene-origin-relative view-projection the
         // GPU uses (small coordinates → good f32 precision), and test the same
-        // scene-relative AABBs. This lags the live camera by at most one frame,
-        // which the depth-range padding absorbs. Only the lateral planes are
-        // read, so it does not depend on the near/far we are about to set.
+        // scene-relative AABBs. Refresh from the live camera: slice previews
+        // change their camera before fitting and may cache the resulting frame,
+        // so using their previous uniform can leave visible objects clipped.
+        // Only the lateral planes are read, so the old near/far do not matter.
+        self.camera_uniform
+            .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
         let frustum = Frustum::from_view_proj(glam::Mat4::from_cols_array_2d(&self.camera_uniform.view_proj));
         let scene_origin = self.scene_origin;
         let mut min_depth = f64::INFINITY;
