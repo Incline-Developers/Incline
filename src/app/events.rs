@@ -1115,6 +1115,7 @@ impl<'a> App<'a> {
             &self.editor.frozen_handles,
             &self.scene_document,
             &self.snap_index,
+            self.editor.z_level,
         );
         graphics.begin_right_orbit_drag();
         self.right_orbit_active = true;

@@ -743,8 +743,13 @@ impl<'a> Graphics<'a> {
     }
 
     /// Begin an orbit with the anchor at the surface or geometry point under the cursor.
-    /// Falls back to the current-target depth when nothing is hit.
+    /// With nothing under the cursor the anchor is the point on the working
+    /// plane at `working_plane_z` instead, the plane a click would draw on, so
+    /// the view turns about something the user can see rather than about a
+    /// depth left behind by the last fit or zoom. The camera-target depth is
+    /// kept only for a view that looks along that plane and cannot meet it.
     /// Called from the app level where triangulations are available.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_orbit_at_surface(
         &mut self,
         triangulations: &[OpenTriangulation],
@@ -753,6 +758,7 @@ impl<'a> Graphics<'a> {
         frozen: &HashSet<SceneEntityId>,
         document: &Document,
         snap_index: &crate::model::spatial::ObjectSnapIndex,
+        working_plane_z: f64,
     ) {
         // Prefer snapping to a nearby document vertex so the orbit pivot lands
         // on actual geometry (lines, polylines, points) when one is close.
@@ -802,10 +808,18 @@ impl<'a> Graphics<'a> {
                 .min_by(|a, b| (*a - ray_origin).dot(direction).total_cmp(&(*b - ray_origin).dot(direction)))
                 .unwrap_or_else(|| {
                     // No asset surface hit - try picking any document object
-                    // near the cursor so the pivot lands on visible geometry rather than
-                    // at the (possibly stale) camera-target depth.
+                    // near the cursor so the pivot lands on visible geometry,
+                    // then the working plane under the cursor, and only then
+                    // the camera-target depth, which is a view that looks
+                    // along the working plane and cannot meet it.
                     self.pick_at_cursor(SNAP_THRESHOLD_PX, triangulations, hidden, frozen, false)
                         .map(|(_, world)| world)
+                        .or_else(|| {
+                            // A tilted view can have the working plane behind
+                            // it; a pivot there would sit behind the viewer.
+                            self.cursor_world(working_plane_z)
+                                .filter(|point| (self.exaggerate_point(*point) - self.camera.position).dot(self.camera.forward()) > 0.0)
+                        })
                         .unwrap_or_else(|| self.unexaggerate_point(self.cursor_world_at_target_depth()))
                 })
         };
