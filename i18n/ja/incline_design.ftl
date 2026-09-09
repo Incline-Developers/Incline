@@ -1061,7 +1061,7 @@ literal-no-triangulations-bb471fe9d2cff952 = 三角網がありません
 literal-source-name-77b9162735795441 =
     ソース: %name%
 literal-id-triangulation-id-source-cc1068a000d7c3e9 = ID: triangulation:%id%%source%
-literal-no-image-textures-6406e1c080390be1 = 画像テクスチャがありません
+explorer-no-rasters = ラスターがありません
 literal-no-point-clouds-d0ab5ccd45a05366 = 点群がありません
 literal-no-block-models-2e310099263f058f = ブロックモデルがありません
 literal-no-drill-holes-9641fcc0c51b6618 = 削孔がありません

@@ -21,7 +21,8 @@ const CHECK_COLUMN: f32 = 16.0;
 const CONTENT_HORIZONTAL_MARGIN: i8 = 6;
 const CONTENT_VERTICAL_MARGIN: i8 = 4;
 const CORNER_RADIUS: u8 = 3;
-const FIELD_WIDTH: f32 = 108.0;
+pub(crate) const FIELD_WIDTH: f32 = 108.0;
+const ROW_HORIZONTAL_PADDING: i8 = 4;
 
 // Keep the legacy draggable-menu positioning API compiled even though the
 // context-menu callers moved here. Other draggable-menu behavior remains
@@ -213,7 +214,7 @@ impl ContextMenuAction {
                     .size()
                     .x
             });
-            let text_left = if checked.is_some() { CHECK_COLUMN } else { 4.0 };
+            let text_left = if checked.is_some() { CHECK_COLUMN } else { f32::from(ROW_HORIZONTAL_PADDING) };
             let right_padding = if submenu { 14.0 } else { 4.0 };
             let shortcut_gap = if shortcut.is_some() { 16.0 } else { 0.0 };
             let natural_width = text_left + label_width + shortcut_gap + shortcut_width + right_padding;
@@ -270,6 +271,14 @@ impl ContextMenuAction {
         })
         .inner
     }
+}
+
+/// Inset editable rows and section labels to the same text edges as actions.
+pub(crate) fn context_menu_fields<R>(ui: &mut egui::Ui, add_fields: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(ROW_HORIZONTAL_PADDING, 0))
+        .show(ui, add_fields)
+        .inner
 }
 
 /// Add a narrow Blender-style divider between groups of context rows.

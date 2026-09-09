@@ -542,7 +542,7 @@ fn draw_ui(
     // column, the tools and the scene all start below it.
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
-    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
+    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, commands);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -550,12 +550,8 @@ fn draw_ui(
     let console_rect = editor.show_console.then(|| {
         let available_height = root_ui.available_height();
         let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-        let (properties_min, properties_max) = elements::properties::height_limits(available_height);
-        // The properties panel and this two-region stack share a bottom edge.
-        // Offset both properties limits by the toolbar so the top of the
-        // toolbar lands on the properties panel's top at either drag limit.
-        let console_min = (properties_min - toolbar_height).max(0.0);
-        let console_max = (properties_max - toolbar_height).max(console_min);
+        let console_min = (120.0_f32.min(available_height) - toolbar_height).max(0.0);
+        let console_max = (available_height - 72.0 - toolbar_height).max(console_min);
         elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
@@ -894,6 +890,8 @@ fn draw_ui(
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
+    elements::properties::draw_preferences(root_ui, editor, commands);
+    elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open
@@ -1079,7 +1077,6 @@ fn draw_ui(
         [
             viewport_bar_rect,
             explorer.tree,
-            explorer.properties,
             left_toolbar_rect,
             bottom_toolbar_rect,
             console_claimed,
@@ -1087,13 +1084,11 @@ fn draw_ui(
             scene_claimed,
         ],
     );
-    // The explorer's column is dragged as a whole, so its grip is centred on
-    // the tree and the properties panel together rather than on either.
+    // Centre the explorer resize grip on its full-height column.
     chrome::paint_grips(
         &ctx,
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-            chrome::Grip::new(explorer.properties, chrome::Edge::Top, elements::properties::PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
             chrome::Grip::new(products_claimed, chrome::Edge::Left, elements::products::PANEL_ID),
         ],

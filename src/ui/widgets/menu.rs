@@ -428,7 +428,15 @@ impl<'open> DragableMenu<'open> {
                         let close_slot_width = if show_close_button { TITLE_BAR_HEIGHT } else { TITLE_BAR_HORIZONTAL_PADDING };
                         let minimum_width = title_width + TITLE_BAR_HORIZONTAL_PADDING + close_slot_width;
                         let width = fixed_size.map_or(min_width.max(minimum_width), |size| size.x);
-                        ui.allocate_exact_size(egui::vec2(width, TITLE_BAR_HEIGHT), egui::Sense::hover()).0
+                        // A flush body must meet the title bar without the normal
+                        // inter-widget gap (for example a full-height navigation list).
+                        let spacing = ui.spacing().item_spacing.y;
+                        if inner_margin.top == 0 {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                        }
+                        let rect = ui.allocate_exact_size(egui::vec2(width, TITLE_BAR_HEIGHT), egui::Sense::hover()).0;
+                        ui.spacing_mut().item_spacing.y = spacing;
+                        rect
                     });
 
                     let inner = egui::Frame::NONE

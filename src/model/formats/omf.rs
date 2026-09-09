@@ -1235,7 +1235,6 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         AssetSummary {
                             primary_count: vertices,
                             secondary_count: faces,
-                            bounds: None,
                         },
                     )),
                     loaded: LoadedTriangulation {
@@ -1313,7 +1312,6 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         AssetSummary {
                             primary_count: count,
                             secondary_count: variable_count,
-                            bounds: None,
                         },
                     )),
                     loaded: LoadedBlockModel {

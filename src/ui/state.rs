@@ -920,7 +920,9 @@ pub(crate) struct EditorState {
     pub(crate) show_scale_bar: bool,
     /// Linear RGBA clear colour used behind the rendered scene.
     pub(crate) renderer_background_color: [f32; 4],
-    /// Values the properties panel's settings tabs are editing.
+    /// Whether the Preferences window is open.
+    pub(crate) show_preferences: bool,
+    /// Values the Preferences window is editing.
     ///
     /// Settings apply as each edit lands, so this only differs from the live
     /// preferences while a `DragValue` is mid-drag - which is exactly why it
@@ -1093,17 +1095,9 @@ pub(crate) struct EditorState {
     /// Physical-pixel position where the canvas context menu was opened.
     pub(crate) canvas_context_menu_px: Option<(f32, f32)>,
     /// Selected polylines and the in-progress line-weight value for the
-    /// Design properties tab. The value must survive across frames while its
+    /// selection appearance menu. The value must survive across frames while its
     /// `DragValue` is being dragged.
     pub(crate) design_line_weight_input: Option<(Vec<ObjectId>, f32)>,
-    /// Objects described by the explorer's Design properties tab: whatever the
-    /// last non-empty selection held, kept after that selection is cleared so
-    /// the tab stays put. Entries are dropped once the object is gone.
-    pub(crate) property_objects: Vec<ObjectId>,
-    /// Scene entities described by the generic Object properties tab. Like
-    /// the type-specific memories, this keeps the last non-empty selection so
-    /// the panel does not go blank merely because the canvas was deselected.
-    pub(crate) property_entities: Vec<SceneEntityId>,
     pub(crate) move_to_layer_dialog: Option<MoveToLayerDialog>,
     pub(crate) move_to_axis_dialog: Option<crate::ui::dialogs::MoveToAxisDialog>,
     /// Whether the selected polylines cross anywhere, refreshed by
@@ -1439,15 +1433,8 @@ pub(crate) struct EditorState {
 
     // Block Models
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
-    /// Block model described by the explorer's Block Model properties tab. Set
-    /// by the last non-empty selection and kept after that selection is
-    /// cleared, until the model is closed or another selection replaces it.
+    /// Model edited by the viewport filter controls; retained after deselection.
     pub(crate) viewport_block_model_id: Option<BlockModelId>,
-    /// Triangulation described by the explorer's Triangulation properties tab.
-    /// Kept after the selection that set it is cleared, exactly as
-    /// `viewport_block_model_id` is, until the surface is closed or another
-    /// selection replaces it.
-    pub(crate) viewport_triangulation_id: Option<TriangulationId>,
     pub(crate) block_model_variable_ranges: HashMap<(BlockModelId, String), Option<(f64, f64)>>,
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
@@ -1535,7 +1522,7 @@ pub(crate) struct EditorState {
     /// Which CP handle is hovered (0 = cp1, 1 = cp2), None if neither.
     pub(crate) bezier_hover_cp: Option<u8>,
     pub(crate) bezier_dialog_open: bool,
-    /// Which section the explorer's properties panel is showing.
+    /// Selected Preferences section.
     pub(crate) active_property_tab: PropertyTab,
     /// The workspace tab selected in the menu bar.
     pub(crate) active_workspace: Workspace,
@@ -1785,8 +1772,6 @@ impl EditorState {
         self.canvas_context_menu_open = false;
         self.canvas_context_menu_px = None;
         self.design_line_weight_input = None;
-        self.property_objects.clear();
-        self.property_entities.clear();
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
@@ -1963,6 +1948,7 @@ impl EditorState {
             show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
+            show_preferences: false,
             preferences_draft: None,
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
@@ -2053,8 +2039,6 @@ impl EditorState {
             canvas_context_menu_open: false,
             canvas_context_menu_px: None,
             design_line_weight_input: None,
-            property_objects: Vec::new(),
-            property_entities: Vec::new(),
             move_to_layer_dialog: None,
             move_to_axis_dialog: None,
             selection_has_intersections: false,
@@ -2236,7 +2220,6 @@ impl EditorState {
             point_cloud_tin_hole_fill: 0.0,
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
-            viewport_triangulation_id: None,
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
@@ -2292,7 +2275,7 @@ impl EditorState {
             bezier_dragging_cp: None,
             bezier_hover_cp: None,
             bezier_dialog_open: false,
-            active_property_tab: PropertyTab::Object,
+            active_property_tab: PropertyTab::Interface,
             active_workspace: Workspace::Production,
             workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
@@ -2734,6 +2717,7 @@ pub(crate) enum UiCommand {
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     SetStandardView(StandardView),
+    OpenPreferences,
     ApplyPreferences(PreferencesDraft),
     ReorderWorkspace {
         workspace: Workspace,
@@ -2746,7 +2730,7 @@ pub(crate) enum UiCommand {
     /// current value rather than the UI sending one, so the row and the
     /// Interface tab cannot disagree about what is being toggled.
     ToggleViewOption(ViewToggle),
-    /// Make one block model the selection, so its properties tab is shown.
+    /// Select a block model and show its viewport filter controls.
     SelectBlockModel(BlockModelId),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3054,6 +3038,7 @@ impl UiCommand {
             | Self::CancelOffset
             | Self::ConfirmDrapeSelection
             | Self::CancelRelimit
+            | Self::OpenPreferences
             | Self::ApplyPreferences(_)
             | Self::ReorderWorkspace { .. }
             | Self::ToggleViewOption(_)
@@ -3421,7 +3406,6 @@ pub(crate) struct UiPointCloudEntry {
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
     pub(crate) point_count: usize,
-    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -3446,11 +3430,8 @@ pub(crate) struct UiTriangulationEntry {
     pub(crate) is_active: bool,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
-    /// Face colour, shown and edited by the Triangulation properties tab.
+    /// Face colour edited in the context menu.
     pub(crate) color: [f32; 4],
-    pub(crate) vertex_count: usize,
-    pub(crate) triangle_count: usize,
-    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -3462,7 +3443,6 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) dirty: bool,
     pub(crate) _block_count: usize,
     pub(crate) variable_count: usize,
-    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 #[derive(Clone, Debug)]
@@ -3474,7 +3454,6 @@ pub(crate) struct UiDrillHoleEntry {
     pub(crate) dirty: bool,
     pub(crate) hole_count: usize,
     pub(crate) field_count: usize,
-    pub(crate) bounds: Option<(DVec3, DVec3)>,
 }
 
 /// Active triangulation id and face colour, as surfaced to the canvas context menu.
@@ -3695,21 +3674,13 @@ pub(crate) fn builtin_delay_products() -> Vec<DelayProduct> {
     delay_products_from_stored(&crate::app::io::default_delay_products())
 }
 
-/// A section of the explorer's properties panel.
-///
-/// The first four are the application settings. Object is always available
-/// and describes the last selection; the last three add type-specific fields
-/// and only appear while there is something they apply to.
+/// A section of the Preferences window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
     Developer,
-    Object,
-    BlockModel,
-    Triangulation,
-    Design,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

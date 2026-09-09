@@ -1067,7 +1067,7 @@ literal-no-triangulations-bb471fe9d2cff952 = Немає тріангуляцій
 literal-source-name-77b9162735795441 =
     Джерело: %name%
 literal-id-triangulation-id-source-cc1068a000d7c3e9 = ID: triangulation:%id%%source%
-literal-no-image-textures-6406e1c080390be1 = Немає текстур зображень
+explorer-no-rasters = Немає растрів
 literal-no-point-clouds-d0ab5ccd45a05366 = Немає хмар точок
 literal-no-block-models-2e310099263f058f = Немає блочних моделей
 literal-no-drill-holes-9641fcc0c51b6618 = Немає свердловин
