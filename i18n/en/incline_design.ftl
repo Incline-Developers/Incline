@@ -336,6 +336,12 @@ literal-exit-incline-design-b11cdc542f0e84ef = Exit Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Exit Without Saving
 literal-exit-slice-ec67c9da3a320e5f = Exit slice
 slice-reset-view = Reset Slice View
+literal-set-section-grid-0317412c52213ca8 = Set Section Grid
+literal-hide-rl-grid-5777afd90dcfdfef = Hide RL Grid
+literal-show-rl-grid-87a5e28c30f9ca36 = Show RL Grid
+literal-e-08faea07b5959400 = E
+literal-n-09208c07b5b5c383 = N
+literal-set-section-grid-enabled-4477cb755937abe4 = Set section grid = %enabled%
 literal-export-293aa6a6446fb153 = Export
 literal-export-block-model-csv-3755a5af2dbb71af = Export Block Model CSV
 literal-export-csv-block-model-5c2ba2182ac51797 = Export CSV Block Model
