@@ -149,8 +149,10 @@ pub(crate) fn projected_relimit_candidate_nearest_cursor(
             TrimEnd::Start => source_start,
             TrimEnd::End => source_end,
         };
-        let from = crate::rendering::pick::world_to_screen(view_proj, moving, screen)?;
-        let to = crate::rendering::pick::world_to_screen(view_proj, candidate.target, screen)?;
+        // Extension targets can lie beyond the committed scene's depth range.
+        // This foreground guide must remain selectable there, like offset previews.
+        let from = crate::rendering::pick::world_to_screen_unclipped_depth(view_proj, moving, screen)?;
+        let to = crate::rendering::pick::world_to_screen_unclipped_depth(view_proj, candidate.target, screen)?;
         Some((index, ((from.x as f32, from.y as f32), (to.x as f32, to.y as f32))))
     });
     nearest_screen_segment(cursor, projected)

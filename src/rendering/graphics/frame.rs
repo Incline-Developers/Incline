@@ -117,7 +117,7 @@ impl<'a> Graphics<'a> {
             editor.slice_half_length = slice_visible_half_length;
         } else {
             self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
-            self.include_pending_stroke_in_depth(editor);
+            self.include_tool_previews_in_depth(editor);
             self.include_batter_berm_preview_in_depth(editor);
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
