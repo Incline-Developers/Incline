@@ -15,11 +15,7 @@ impl<'a> App<'a> {
     /// slice mode. Z of the picks only seeds the initial view elevation -
     /// the line is flat in XY by construction.
     pub(crate) fn slice_line_click(&mut self) {
-        if matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-        ) && !self.editor.cursor_snapped
-        {
+        if self.editor.snapping_active() && !self.editor.cursor_snapped {
             return;
         }
         let Some(point) = self.editor.cursor_world else {
@@ -88,15 +84,27 @@ impl<'a> App<'a> {
             return;
         }
         self.editor.slice_mode_enabled = false;
+        let discarded_vertices = self.editor.pending_stroke.len();
+        let discarded_measurement = self.editor.measurement_start.is_some() || !self.editor.batter_angle_points.is_empty();
+        self.discard_stroke();
         self.editor.slice_preview_detached = false;
         self.editor.slice_preview_navigation.reset();
         self.slice_preview_cursor_px = None;
         self.slice_preview_middle_down = false;
+        self.editor.selection_box_start_px = None;
+        self.editor.selection_box_current_px = None;
+        self.pending_selection_click = None;
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.close_slice_preview();
             graphics.exit_slice_mode();
         }
         self.redraw_requested = true;
         userspace_log!("{}", tr!(literal = "Exited slice view"));
+        if discarded_vertices > 0 {
+            userspace_log!("{}", tr!("slice-discarded-vertices", count = discarded_vertices));
+        }
+        if discarded_measurement {
+            userspace_log!("{}", tr!(literal = "Discarded the measurement picked on the section"));
+        }
     }
 }

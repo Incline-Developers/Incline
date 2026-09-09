@@ -738,6 +738,12 @@ impl<'a> Graphics<'a> {
         self.slice_view = Some(slice);
     }
 
+    /// Whether the section is about to move on its own: held W/S/Q/E, a middle-drag pan, or a scroll.
+    /// `update` consumes those deltas, so callers that must react ask before it runs.
+    pub(crate) fn slice_view_moving(&self) -> bool {
+        self.slice_view.as_ref().is_some_and(SliceViewState::has_pending_updates)
+    }
+
     /// Leave slice mode and restore the camera saved on entry. The clip
     /// planes are refit to the scene on the next frame.
     pub(crate) fn exit_slice_mode(&mut self) {

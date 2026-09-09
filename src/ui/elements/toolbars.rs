@@ -7,7 +7,7 @@
 //! [`crate::ui::elements::viewport_bar`].
 
 use crate::{
-    i18n::tr,
+    i18n::{tr, tr_format},
     ui::{
         EditorState, UiProjectView,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
@@ -41,6 +41,8 @@ struct LeftTool {
     action: LeftToolAction,
     /// Whether the tool can be used at all this frame.
     enabled: bool,
+    /// Said on hover in place of `tooltip` while the view, not the project, greys the cell.
+    hint: Option<String>,
 }
 
 /// The drawing tools in the order they are drawn: the project action, the
@@ -50,11 +52,16 @@ struct LeftTool {
 /// One flat list rather than clusters: the column is a single run of cells, so
 /// what a tool belongs to is its neighbours' business, not a tile's.
 fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
-    let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| LeftTool {
-        icon: egui::Image::new(icon),
-        tooltip,
-        action: LeftToolAction::Tool(tool),
-        enabled: editing_enabled && (!tool.requires_active_layer() || editor.active_layer.is_some()),
+    let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| {
+        let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some();
+        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
+        LeftTool {
+            icon: egui::Image::new(icon),
+            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr_format!(literal = "%tool% - not available in the section view", tool = tooltip.as_str())),
+            tooltip,
+            action: LeftToolAction::Tool(tool),
+            enabled: editing_enabled && layer_ok && !blocked_by_section,
+        }
     };
     vec![
         LeftTool {
@@ -62,6 +69,7 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
             tooltip: tr!(literal = "New Layer"),
             action: LeftToolAction::NewLayer,
             enabled: project_active,
+            hint: None,
         },
         tool(themed_icon!(ui, "create_point.svg"), tr!(literal = "Create Point"), ActiveTool::MakePoint),
         tool(themed_icon!(ui, "create_line.svg"), tr!(literal = "Create Line"), ActiveTool::MakeLine),
@@ -101,12 +109,14 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     let has_active_dataset = editor
         .active_drill_hole
         .is_some_and(|id| project.drill_holes.iter().any(|dataset| dataset.id == id && dataset.is_loaded));
+    let editing_enabled = editing_enabled && !editor.slice_mode_enabled;
     vec![
         LeftTool {
             icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
             tooltip: tr!(literal = "Create Drill Pattern"),
             action: LeftToolAction::DrillPattern,
             enabled: project_active,
+            hint: None,
         },
         LeftTool {
             // The same mark production's Move Design carries: one translate
@@ -115,6 +125,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             tooltip: tr!(literal = "Move Collar"),
             action: LeftToolAction::Tool(ActiveTool::MoveCollar),
             enabled: editing_enabled,
+            hint: None,
         },
         LeftTool {
             // Move Collar's counterpart: the same holes, turned instead of
@@ -123,18 +134,21 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             tooltip: tr!(literal = "Rotate Collar"),
             action: LeftToolAction::Tool(ActiveTool::RotateCollar),
             enabled: editing_enabled,
+            hint: None,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
             tooltip: tr!(literal = "Tie Holes"),
             action: LeftToolAction::Tool(ActiveTool::TieHoles),
             enabled: editing_enabled && has_active_dataset,
+            hint: None,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
             tooltip: tr!(literal = "Set Initiation Point"),
             action: LeftToolAction::Tool(ActiveTool::SetInitiationPoint),
             enabled: editing_enabled && has_active_dataset,
+            hint: None,
         },
     ]
 }
@@ -153,7 +167,11 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
         .selected(selected);
-    if !ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner.clicked() {
+    let mut response = ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner;
+    if let Some(hint) = tool.hint.as_deref() {
+        response = response.on_disabled_hover_text(hint);
+    }
+    if !response.clicked() {
         return;
     }
     match tool.action {

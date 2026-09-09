@@ -6,7 +6,14 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::{app::App, i18n::tr_format, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error};
+use crate::{
+    app::App,
+    i18n::{tr, tr_format},
+    logging::CommandReportSpec,
+    rendering::graphics::RenderSurfaceError,
+    ui::state::ActiveTool,
+    userspace_error, userspace_warn,
+};
 
 const RIGHT_CLICK_DRAG_THRESHOLD_PX: f32 = 3.0;
 
@@ -84,9 +91,7 @@ impl<'a> App<'a> {
         if !gui_consumed {
             let canvas_pick_mode_active =
                 self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick;
-            let measurement_tool_active = matches!(self.editor.active_tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
-            let suppress_view_mode_canvas_click = (self.editor.fly_mode_enabled || (self.editor.slice_mode_enabled && !measurement_tool_active))
-                && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
+            let suppress_view_mode_canvas_click = self.editor.view_mode_owns_left_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
                 self.handle_mouse_release(&event);
@@ -191,7 +196,16 @@ impl<'a> App<'a> {
                             self.editor.smoothed_frame_interval = Some(interval);
                             self.editor.measured_fps = (interval > 0.0).then(|| 1.0 / interval);
                         }
+                        let slice_moving = self.editor.slice_mode_enabled && graphics.slice_view_moving();
                         graphics.update(dt, self.editor.block_model_interaction_resolution_divisor);
+                        if slice_moving
+                            && let Some(world) = graphics.cursor_world(self.editor.z_level)
+                            && self.editor.cursor_world != Some(world)
+                        {
+                            self.editor.cursor_world = Some(world);
+                            self.editor.cursor_snapped = false;
+                            self.redraw_requested = true;
+                        }
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
@@ -378,12 +392,8 @@ impl<'a> App<'a> {
                             | ActiveTool::VerticalSlice
                     );
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
-                    let snap_mode_enabled = matches!(
-                        self.editor.cursor_mode,
-                        crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-                    );
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
-                    let snap_eligible = is_drawing_tool && snap_mode_enabled && !camera_active && !is_scrolling;
+                    let snap_eligible = is_drawing_tool && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
                     let snap_poll_due = self
                         .last_snap_poll_instant
@@ -966,11 +976,11 @@ impl<'a> App<'a> {
     }
 
     fn handle_right_release(&mut self, event: &WindowEvent) {
-        let measurement_tool_active = matches!(self.editor.active_tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
-        if self.editor.fly_mode_enabled || (self.editor.slice_mode_enabled && !measurement_tool_active) {
+        let slice_tool_active = self.editor.active_tool.works_in_slice_view();
+        if self.editor.fly_mode_enabled || (self.editor.slice_mode_enabled && !slice_tool_active) {
             // View modes do not open the canvas context menu. Slice mode still
             // lets a quick right click reach the cancellation path while one
-            // of its supported measurement tools is active.
+            // of the tools it supports is active.
             self.right_press_px = None;
             self.right_orbit_active = false;
             return;
@@ -1255,7 +1265,7 @@ impl<'a> App<'a> {
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
                     self.invalidate_geometry();
-                } else if self.editor.slice_mode_enabled {
+                } else if self.editor.slice_mode_enabled && self.editor.active_tool == ActiveTool::None && self.editor.pending_stroke.is_empty() {
                     self.set_slice_mode_enabled(false);
                 } else if self.editor.active_tool == ActiveTool::VerticalSlice {
                     self.editor.slice_pending_start = None;
@@ -1437,8 +1447,11 @@ impl<'a> App<'a> {
             self.editor.close_drill_pattern();
             self.invalidate_geometry();
         }
-        let allowed_in_slice = matches!(tool, ActiveTool::None | ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
-        if (self.editor.fly_mode_enabled && tool != ActiveTool::None) || (self.editor.slice_mode_enabled && !allowed_in_slice) {
+        if self.editor.fly_mode_enabled && tool != ActiveTool::None {
+            return;
+        }
+        if self.editor.slice_mode_enabled && tool.section_refuses() {
+            userspace_warn!("{}", tr!(literal = "That tool is not available in the section view"));
             return;
         }
         if tool != self.editor.active_tool

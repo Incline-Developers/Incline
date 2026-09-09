@@ -447,6 +447,7 @@ impl<'a> Graphics<'a> {
         // under the cursor shifts the clickable region on sloping triangles.
         let document_hit = document_hit.filter(|hit| xray_enabled || !SceneQuery::surface_occludes_pick(triangulations, hidden, &view_proj, self.scene_origin, hit.world));
         let hit = document_hit.map(|hit| (hit.entity, hit.world)).or(surface_hit);
+        let hit = hit.filter(|(_, world)| self.slab_contains(*world, &view_proj));
         if xray_enabled {
             return hit;
         }
@@ -508,6 +509,7 @@ impl<'a> Graphics<'a> {
             .chain(drill_hole)
             .chain(block_model.map(plain))
             .chain(point_cloud.map(plain))
+            .filter(|pick| self.slab_contains(pick.world, &view_proj))
             .min_by(|a, b| (a.world - ray_origin).dot(ray_direction).total_cmp(&(b.world - ray_origin).dot(ray_direction)))
     }
 
@@ -524,7 +526,12 @@ impl<'a> Graphics<'a> {
         let hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction)?;
         let view_proj = self.view_proj();
         let screen = self.screen_size();
-        (!self.nonselectable_asset_occludes(hit.1, hidden, &view_proj, screen)).then_some(hit)
+        (self.slab_contains(hit.1, &view_proj) && !self.nonselectable_asset_occludes(hit.1, hidden, &view_proj, screen)).then_some(hit)
+    }
+
+    /// Whether `world` is in the depth range the view draws: only the slice view clips to a slab.
+    fn slab_contains(&self, world: DVec3, view_proj: &DMat4) -> bool {
+        self.slice_view.is_none() || crate::rendering::pick::world_to_screen(view_proj, world, self.screen_size()).is_some()
     }
 
     fn nonselectable_asset_occludes(&self, candidate: DVec3, hidden: &HashSet<SceneEntityId>, view_proj: &DMat4, screen: Size) -> bool {
@@ -1342,13 +1349,11 @@ impl<'a> Graphics<'a> {
 
     pub(super) fn cursor_world_at_target_depth(&self) -> DVec3 {
         let forward = self.camera.forward();
-        let right = forward.cross(self.camera.up()).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
         let screen = self.screen_size();
-        let mouse_ndc = crate::rendering::camera::point(self.camera_controller.mouse_loc.0, self.camera_controller.mouse_loc.1, screen);
         let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
         let focal_dist = (self.camera.target() - self.camera.position).dot(forward).abs();
-        self.camera.position + forward * focal_dist + right * mouse_ndc.x * aspect * self.projection.zoom + up * mouse_ndc.y * self.projection.zoom
+        let offset = crate::rendering::camera::view_plane_offset(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc);
+        self.camera.position + forward * focal_dist + offset
     }
 
     pub(crate) fn orbit_marker_screen_pos(&self) -> Option<(f32, f32)> {

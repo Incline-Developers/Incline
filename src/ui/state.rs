@@ -1063,7 +1063,7 @@ pub(crate) struct EditorState {
     pub(crate) editing_labels_id: Option<ObjectId>,
 
     // Cursor & snapping
-    /// Z plane used for all placement operations (point, line, poly vertices).
+    /// Z plane used for plan-view placement operations (point, line, poly vertices).
     pub(crate) z_level: f64,
     /// Editable Z level value used by the toolbar and Design > Move to > Set Z.
     pub(crate) z_input: f64,
@@ -1601,6 +1601,16 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
+    /// Whether a placement click has to land on a snap target to count. Not in
+    /// the slice view, where a snap would drag the point off the section plane.
+    pub(crate) fn snapping_active(&self) -> bool {
+        self.cursor_mode.snaps() && !self.slice_mode_enabled
+    }
+
+    pub(crate) fn view_mode_owns_left_click(&self) -> bool {
+        self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses())
+    }
+
     /// Dialogs that take Enter as their confirm shortcut.
     ///
     /// The GUI only reports a key press as consumed when a text field holds
@@ -2334,9 +2344,11 @@ impl EditorState {
     }
 
     /// Left-click that landed on entity geometry: selects it and reports the
-    /// picked world point (with the geometry's true Z).
+    /// picked world point (with the geometry's true Z), except in the slice view.
     pub(crate) fn on_canvas_pick(&mut self, handle: SceneEntityId, world: DVec3, mode: SelectionMode) {
-        self.cursor_world = Some(world);
+        if !self.slice_mode_enabled {
+            self.cursor_world = Some(world);
+        }
         match mode {
             SelectionMode::Replace => self.replace_selection(handle),
             SelectionMode::Add => self.add_selection(handle),
@@ -2347,7 +2359,9 @@ impl EditorState {
     /// Left-click that landed on one drill hole, in a workspace that works a
     /// hole at a time: selects the hole rather than the dataset holding it.
     pub(crate) fn on_drill_hole_pick(&mut self, hole: DrillHoleRef, world: DVec3, mode: SelectionMode) {
-        self.cursor_world = Some(world);
+        if !self.slice_mode_enabled {
+            self.cursor_world = Some(world);
+        }
         match mode {
             SelectionMode::Replace => {
                 self.clear_scene_selection();
@@ -2525,6 +2539,16 @@ impl ActiveTool {
     pub(crate) fn acts_on_collars(self) -> bool {
         matches!(self, Self::MoveCollar | Self::RotateCollar)
     }
+
+    /// The tools a vertical section supports: its camera offers a cursor only on the section plane.
+    pub(crate) fn works_in_slice_view(self) -> bool {
+        matches!(self, Self::MeasureDistance | Self::MeasureBatterAngle | Self::MakePoint | Self::MakeLine | Self::MakePoly)
+    }
+
+    /// Whether a tool is armed and the section cannot serve it; `None` is not a tool to refuse.
+    pub(crate) fn section_refuses(self) -> bool {
+        self != Self::None && !self.works_in_slice_view()
+    }
 }
 
 /// Immediate commands applied to the current selection (or whole drawing).
@@ -2543,6 +2567,10 @@ pub(crate) enum CursorMode {
 }
 
 impl CursorMode {
+    pub(crate) fn snaps(self) -> bool {
+        matches!(self, CursorMode::SnapToPoint | CursorMode::SnapToLine | CursorMode::SnapToSurface)
+    }
+
     pub(crate) fn next(self) -> Self {
         match self {
             CursorMode::Select => CursorMode::SnapToSurface,

@@ -1199,6 +1199,7 @@ impl<'a> App<'a> {
         if self.editor.text_editing_enabled {
             self.cancel_text_edit();
         }
+        self.set_slice_mode_enabled(false);
         self.editor.clear_project_transients();
         self.pending_selection_click = None;
         // Clear any in-progress gesture so it cannot bleed into the new project.

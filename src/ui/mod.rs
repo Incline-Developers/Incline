@@ -339,7 +339,12 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     if editor.slice_mode_enabled {
-        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!(literal = "middle-drag pan · W/S move slab · Q/E rotate · Esc exit")));
+        let gestures = tr!(literal = "middle-drag pan · W/S move slab · Q/E rotate · Esc exit");
+        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(if editor.cursor_mode.snaps() {
+            tr_format!(literal = "no snapping · %gestures%", gestures = gestures.as_str())
+        } else {
+            gestures
+        }));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
@@ -518,7 +523,7 @@ fn draw_ui(
 
     // --- Panel layout: compute rects for all fixed panels ---
     let project_active = project.has_active_project;
-    let editing_enabled = project.has_active_project && !editor.fly_mode_enabled && !editor.slice_mode_enabled;
+    let editing_enabled = project.has_active_project && !editor.fly_mode_enabled;
 
     // On macOS the File and Project dropdowns are in the system menu bar
     // (`mac.rs`) instead, but the bar itself is still drawn: the mark and the

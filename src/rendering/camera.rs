@@ -797,6 +797,15 @@ pub(crate) fn point(x: f32, y: f32, screen: Size) -> DVec3 {
     DVec3::new(new_x, new_y, 0.)
 }
 
+/// World-space offset from the view centre to `mouse_px`, on any plane perpendicular to the view.
+pub(super) fn view_plane_offset(camera: &Camera, zoom: f64, aspect: f64, screen: Size, mouse_px: (f32, f32)) -> DVec3 {
+    let rel = point(mouse_px.0, mouse_px.1, screen);
+    let forward = camera.forward();
+    let right = forward.cross(camera.up()).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    right * rel.x * aspect * zoom + up * rel.y * zoom
+}
+
 /// Unproject a screen pixel to a world point on the plane `z = plane_z`.
 ///
 /// The projection is orthographic, so every view ray is parallel to the camera
@@ -805,11 +814,8 @@ pub(crate) fn point(x: f32, y: f32, screen: Size) -> DVec3 {
 /// `zoom` is `Projection::zoom`, which equals the camera-to-target distance.
 /// Returns `None` when the view direction is parallel to the plane.
 pub(crate) fn screen_to_world_on_plane(camera: &Camera, zoom: f64, aspect: f64, screen: Size, mouse_px: (f32, f32), plane_z: f64) -> Option<DVec3> {
-    let rel = point(mouse_px.0, mouse_px.1, screen);
     let forward = camera.forward();
-    let right = forward.cross(camera.up()).normalize_or_zero();
-    let up = right.cross(forward).normalize_or_zero();
-    let focal = camera.position + forward * zoom + right * rel.x * aspect * zoom + up * rel.y * zoom;
+    let focal = camera.position + forward * zoom + view_plane_offset(camera, zoom, aspect, screen, mouse_px);
     if forward.z.abs() <= f64::EPSILON {
         return None;
     }
@@ -832,14 +838,10 @@ pub(crate) fn screen_to_world_on_plane(camera: &Camera, zoom: f64, aspect: f64, 
 /// which is what keeps the result exactly coplanar with the section rather than
 /// a zoom-dependent step in front of it.
 pub(crate) fn screen_to_world_on_view_plane(camera: &Camera, zoom: f64, aspect: f64, screen: Size, mouse_px: (f32, f32)) -> DVec3 {
-    let rel = point(mouse_px.0, mouse_px.1, screen);
-    let forward = camera.forward();
-    let right = forward.cross(camera.up()).normalize_or_zero();
-    let up = right.cross(forward).normalize_or_zero();
     // A section camera is built from a horizontal strike and world Z, so the
     // basis is never degenerate. If it ever were, every pixel would map to the
     // camera position and the whole stroke would pile up on one point without
     // anything looking wrong on screen.
-    debug_assert!(right != DVec3::ZERO && up != DVec3::ZERO, "degenerate slice camera basis");
-    camera.position + right * rel.x * aspect * zoom + up * rel.y * zoom
+    debug_assert!(camera.forward().cross(camera.up()) != DVec3::ZERO, "degenerate slice camera basis");
+    camera.position + view_plane_offset(camera, zoom, aspect, screen, mouse_px)
 }
