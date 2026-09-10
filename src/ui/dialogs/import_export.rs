@@ -7,14 +7,14 @@ use crate::{
         block_model::BlockModelId,
         formats::{
             MeshFormat,
-            csv_block_model::{CsvColumnRole, validate_mapping},
+            csv_block_model::{CsvColumnRole, FixedDimension, validate_mapping},
             csv_drill_hole::{CsvDrillColumnRole, CsvDrillFileRole},
         },
         triangulation::TriangulationId,
     },
     ui::{
         state::{DataMenu, EditorState, UiCommand, UiProjectView},
-        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldFilePicker},
+        widgets::menu::{self, DragableMenu, MenuButton, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldFilePicker},
     },
 };
 
@@ -331,6 +331,29 @@ fn draw_import_csv_block_model(ui: &mut egui::Ui, editor: &mut EditorState, comm
             }
         });
     });
+    let unmapped_dimensions: Vec<CsvColumnRole> = [CsvColumnRole::Dx, CsvColumnRole::Dy, CsvColumnRole::Dz]
+        .into_iter()
+        .filter(|role| !preview.mapping.roles.contains(role))
+        .collect();
+    if !unmapped_dimensions.is_empty() {
+        menu::menu_section(ui, tr!(literal = "Fixed block size"));
+        ui.small(tr!(literal = "No column is mapped to these axes - every block uses this size instead."));
+        egui::Grid::new("csv_fixed_dimensions").min_col_width(110.0).show(ui, |ui| {
+            for role in unmapped_dimensions {
+                let fixed = match role {
+                    CsvColumnRole::Dx => &mut preview.mapping.fixed_dx,
+                    CsvColumnRole::Dy => &mut preview.mapping.fixed_dy,
+                    CsvColumnRole::Dz => &mut preview.mapping.fixed_dz,
+                    _ => unreachable!("filtered to Dx/Dy/Dz above"),
+                };
+                let mut value = fixed.map_or(1.0, |fixed| fixed.0);
+                if MenuFieldF64::new(role.label(), &mut value, 0.0..=1.0e9).suffix("m".to_owned()).show_inline(ui).changed() || fixed.is_none() {
+                    *fixed = Some(FixedDimension(value));
+                }
+                ui.end_row();
+            }
+        });
+    }
     if let Err(error) = validate_mapping(&preview.mapping, preview.headers.len()) {
         ui.colored_label(ui.visuals().error_fg_color, error.to_string());
     }

@@ -59,9 +59,50 @@ impl CsvColumnRole {
     }
 }
 
+/// A block dimension the CSV doesn't carry a column for, entered by hand
+/// instead (e.g. every block is a fixed 30m x 30m x 30m). Wraps `f64` with a
+/// bit-pattern `Eq`/`Ord`/`Hash` so `CsvColumnMapping` keeps deriving them -
+/// it's part of `BlockModelSource`, used as a job-dedup key.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub(crate) struct FixedDimension(pub(crate) f64);
+
+impl PartialEq for FixedDimension {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for FixedDimension {}
+
+impl PartialOrd for FixedDimension {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FixedDimension {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.to_bits().cmp(&other.0.to_bits())
+    }
+}
+
+impl std::hash::Hash for FixedDimension {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct CsvColumnMapping {
     pub(crate) roles: Vec<CsvColumnRole>,
+    /// Fixed block sizes for the `Dx`/`Dy`/`Dz` axes, used when no column is
+    /// mapped to that role - for models whose CSV only carries centroids.
+    #[serde(default)]
+    pub(crate) fixed_dx: Option<FixedDimension>,
+    #[serde(default)]
+    pub(crate) fixed_dy: Option<FixedDimension>,
+    #[serde(default)]
+    pub(crate) fixed_dz: Option<FixedDimension>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -164,7 +205,12 @@ pub(crate) fn auto_mapping(headers: &[String]) -> CsvColumnMapping {
             }
         })
         .collect();
-    CsvColumnMapping { roles }
+    CsvColumnMapping {
+        roles,
+        fixed_dx: None,
+        fixed_dy: None,
+        fixed_dz: None,
+    }
 }
 
 pub(crate) fn validate_mapping(mapping: &CsvColumnMapping, column_count: usize) -> Result<(), CsvBlockModelError> {
@@ -174,18 +220,30 @@ pub(crate) fn validate_mapping(mapping: &CsvColumnMapping, column_count: usize) 
             mapping.roles.len()
         )));
     }
-    for required in [
-        CsvColumnRole::X,
-        CsvColumnRole::Y,
-        CsvColumnRole::Z,
-        CsvColumnRole::Dx,
-        CsvColumnRole::Dy,
-        CsvColumnRole::Dz,
-    ] {
+    for required in [CsvColumnRole::X, CsvColumnRole::Y, CsvColumnRole::Z] {
         let count = mapping.roles.iter().filter(|role| **role == required).count();
         if count != 1 {
             return Err(CsvBlockModelError::Invalid(format!(
                 "Select exactly one '{}' column (currently selected {count})",
+                required.label()
+            )));
+        }
+    }
+    for (required, fixed) in [
+        (CsvColumnRole::Dx, mapping.fixed_dx),
+        (CsvColumnRole::Dy, mapping.fixed_dy),
+        (CsvColumnRole::Dz, mapping.fixed_dz),
+    ] {
+        let count = mapping.roles.iter().filter(|role| **role == required).count();
+        if count > 1 {
+            return Err(CsvBlockModelError::Invalid(format!(
+                "Select at most one '{}' column (currently selected {count})",
+                required.label()
+            )));
+        }
+        if count == 0 && !fixed.is_some_and(|fixed| fixed.0.is_finite() && fixed.0 > 0.0) {
+            return Err(CsvBlockModelError::Invalid(format!(
+                "Select a '{}' column, or set a fixed size greater than zero",
                 required.label()
             )));
         }
@@ -244,8 +302,21 @@ pub(crate) fn parse(bytes: &[u8], mapping: &CsvColumnMapping) -> Result<ParsedCs
             let index = role_indices[&role];
             parse_required_number(record.get(index).map(String::as_str).unwrap_or(""), record_number, &headers[index])
         };
+        let dimension = |role, fixed: Option<FixedDimension>| -> Result<f64, CsvBlockModelError> {
+            if role_indices.contains_key(&role) {
+                value(role)
+            } else {
+                // Validated by `validate_mapping` above: a role with no mapped
+                // column always has a fixed size set.
+                Ok(fixed.expect("validate_mapping requires a fixed size when the column is unmapped").0)
+            }
+        };
         let center = DVec3::new(value(CsvColumnRole::X)?, value(CsvColumnRole::Y)?, value(CsvColumnRole::Z)?);
-        let size = DVec3::new(value(CsvColumnRole::Dx)?, value(CsvColumnRole::Dy)?, value(CsvColumnRole::Dz)?);
+        let size = DVec3::new(
+            dimension(CsvColumnRole::Dx, mapping.fixed_dx)?,
+            dimension(CsvColumnRole::Dy, mapping.fixed_dy)?,
+            dimension(CsvColumnRole::Dz, mapping.fixed_dz)?,
+        );
         if !center.is_finite() {
             return Err(CsvBlockModelError::Invalid(format!("CSV row {record_number} contains a non-finite block position")));
         }
