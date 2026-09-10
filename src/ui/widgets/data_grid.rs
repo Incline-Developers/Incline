@@ -19,6 +19,12 @@ fn grid_row_height(ui: &egui::Ui) -> f32 {
     row_height(ui) + 3.0
 }
 
+/// Height a [`PropertyTable`] needs to show its title strip plus `rows` rows
+/// without clipping the last one.
+pub(crate) fn property_table_height(ui: &egui::Ui, rows: usize) -> f32 {
+    TITLE_STRIP + rows as f32 * grid_row_height(ui)
+}
+
 /// Paint the recessed fill, title strip and border shared by both surfaces,
 /// then run `content` clipped to `rect` with zero vertical row spacing.
 fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
@@ -214,6 +220,14 @@ impl PropertyRows<'_> {
     /// A calculated value is rendered directly in the table cell with an optional unit.
     pub(crate) fn readonly(&mut self, key: &str, value: &str, unit: Option<&str>, error: Option<&str>) -> egui::Response {
         self.value_field(key, &mut value.to_owned(), unit, error, true)
+    }
+
+    /// An editable boolean, drawn as a checkbox in the value column.
+    pub(crate) fn checkbox(&mut self, key: &str, value: &mut bool) -> egui::Response {
+        let (rect, split) = self.begin_row(false);
+        self.ui
+            .put(self.key_rect(rect, split, false), egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min));
+        self.ui.put(self.value_rect(rect, split), egui::Checkbox::new(value, ""))
     }
 
     fn value_field(&mut self, key: &str, value: &mut String, unit: Option<&str>, error: Option<&str>, readonly: bool) -> egui::Response {

@@ -9,6 +9,7 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
+    ReserveAggregation, ReserveField, ReserveFieldId,
     formats::{block_model_data::BlockModelData, csv_block_model::CsvColumnMapping},
     project::ProjectItemState,
 };
@@ -896,6 +897,105 @@ impl BlockModelSlice {
     }
 }
 
+/// Where one [`ReserveFieldMapping`] gets its per-block values from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) enum ReserveMappingSource {
+    /// Name of one of this model's own numeric variables.
+    Column(String),
+    /// Fixed value applied to every block, for a model that has no matching
+    /// column - e.g. `0` for a waste model with no grade data.
+    Constant(f64),
+}
+
+/// This block model's mapping of one project [`crate::model::ReserveField`]
+/// onto its own data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ReserveFieldMapping {
+    pub(crate) field: ReserveFieldId,
+    pub(crate) source: ReserveMappingSource,
+}
+
+/// One field's per-block values, resolved from its [`ReserveFieldMapping`].
+/// A constant never materializes a `n_blocks`-long array.
+enum ResolvedReserveValues {
+    Column(Vec<f64>),
+    Constant(f64, usize),
+}
+
+impl ResolvedReserveValues {
+    fn len(&self) -> usize {
+        match self {
+            Self::Column(values) => values.len(),
+            Self::Constant(_, count) => *count,
+        }
+    }
+
+    fn get(&self, index: usize) -> f64 {
+        match self {
+            Self::Column(values) => values[index],
+            Self::Constant(value, _) => *value,
+        }
+    }
+
+    fn sum(&self) -> f64 {
+        match self {
+            Self::Column(values) => values.iter().copied().filter(|value| value.is_finite()).sum(),
+            Self::Constant(value, count) if value.is_finite() => *value * *count as f64,
+            Self::Constant(..) => 0.0,
+        }
+    }
+}
+
+/// Compute this model's reserve totals for every field it has a mapping for.
+/// A field with no mapping - or a weighted-average field whose weight field
+/// has none - is simply absent from the result rather than reported as zero.
+///
+/// Uses the model's full block set, not [`RenderableBlockIndices`]: that
+/// reflects render-time visibility/ore filtering, not reserve scope.
+pub(crate) fn compute_reserve_totals(model: &BlockModelData, fields: &[ReserveField], mapping: &[ReserveFieldMapping]) -> HashMap<ReserveFieldId, f64> {
+    let n_blocks = model.metadata.n_blocks;
+    let resolve = |field_id: ReserveFieldId| -> Option<ResolvedReserveValues> {
+        let source = &mapping.iter().find(|entry| entry.field == field_id)?.source;
+        Some(match source {
+            ReserveMappingSource::Column(name) => ResolvedReserveValues::Column(model.numeric_values(name).ok()?),
+            ReserveMappingSource::Constant(value) => ResolvedReserveValues::Constant(*value, n_blocks),
+        })
+    };
+
+    let mut totals = HashMap::new();
+    // Sum fields resolve first; a weighted-average field's weight is always
+    // one of them, so no field ever needs its own average resolved.
+    let mut sums = HashMap::new();
+    for field in fields {
+        if matches!(field.aggregation, ReserveAggregation::Sum)
+            && let Some(values) = resolve(field.id)
+        {
+            totals.insert(field.id, values.sum());
+            sums.insert(field.id, values);
+        }
+    }
+    for field in fields {
+        if let ReserveAggregation::WeightedAverage { weight_field } = field.aggregation {
+            let (Some(values), Some(weights)) = (resolve(field.id), sums.get(&weight_field)) else {
+                continue;
+            };
+            let len = values.len().min(weights.len());
+            let (mut weighted_sum, mut weight_sum) = (0.0, 0.0);
+            for index in 0..len {
+                let (value, weight) = (values.get(index), weights.get(index));
+                if value.is_finite() && weight.is_finite() {
+                    weighted_sum += value * weight;
+                    weight_sum += weight;
+                }
+            }
+            if weight_sum != 0.0 {
+                totals.insert(field.id, weighted_sum / weight_sum);
+            }
+        }
+    }
+    totals
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct OpenBlockModel {
     pub(crate) id: BlockModelId,
@@ -929,6 +1029,16 @@ pub(crate) struct OpenBlockModel {
     /// scene-bounds queries read this instead of re-walking every block's
     /// eight rotated corners.
     pub(crate) world_bounds: Option<(DVec3, DVec3)>,
+    /// This model's mapping of the project's Reserves field list onto its
+    /// own columns/constants; see [`ReserveFieldMapping`].
+    pub(crate) reserve_mapping: Vec<ReserveFieldMapping>,
+    /// Whether this model is opted into the project's Reserves. Defaults to
+    /// `false` - a newly loaded or imported model is excluded until checked
+    /// in, matching the checkbox in the Block Models step.
+    pub(crate) included_in_reserves: bool,
+    /// Computed reserve totals, keyed by field id. Session-only: derived from
+    /// `reserve_mapping` and recomputed whenever it or the field list changes.
+    pub(crate) reserve_totals: HashMap<ReserveFieldId, f64>,
 }
 
 pub(crate) type ActiveValuesCache = RefCell<Option<ActiveValuesCacheEntry>>;

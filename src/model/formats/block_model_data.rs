@@ -228,6 +228,13 @@ impl BlockModelData {
         self.metadata.variables.iter().filter(|variable| is_color_type(&variable.physical_type)).collect()
     }
 
+    /// Named/categorical columns - e.g. rock type - as opposed to
+    /// [`Self::numeric_variables`]'s plain numbers. Used to map a Reserves
+    /// [`crate::model::ReserveAggregation::Category`] field.
+    pub(crate) fn categorical_variables(&self) -> Vec<&BlockVariable> {
+        self.metadata.variables.iter().filter(|variable| matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort")).collect()
+    }
+
     pub(crate) fn color_values(&self, name: &str) -> Result<Vec<f64>, BlockModelDataError> {
         self.values_range(name, 0, self.metadata.n_blocks, is_color_type, "colour")
     }

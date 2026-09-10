@@ -232,6 +232,9 @@ impl<'a> App<'a> {
             hide_empty_color_values: true,
             active_values_cache: loaded.active_values_cache,
             world_bounds: loaded.world_bounds,
+            reserve_mapping: Vec::new(),
+            included_in_reserves: false,
+            reserve_totals: std::collections::HashMap::new(),
         };
         open_model.ensure_color_transfer_for_active_variable();
         self.block_models.push(open_model);

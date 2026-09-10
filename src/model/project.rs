@@ -531,6 +531,10 @@ impl ProjectStore {
                     }),
                 );
             }
+            // Not geometry, but this composite is what UI code reads project
+            // data through (see `App::render`'s `document` parameter) - the
+            // Reserves Field List needs to survive the rebuild too.
+            scene.clone_reserve_fields_from(document);
         }
         scene.rebuild_object_index();
         scene

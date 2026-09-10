@@ -1665,12 +1665,14 @@ impl<'a> App<'a> {
                 source_name: model.state.source_name.clone(),
                 is_loaded: model.state.loaded,
                 dirty: model.state.is_dirty(),
-                _block_count: model
+                block_count: model
                     .state
                     .summary
                     .as_ref()
                     .map_or_else(|| model.renderable_block_indices.len(), |summary| summary.primary_count),
                 variable_count: model.model.color_variables().into_iter().filter(|variable| !variable.special).count(),
+                lower: model.world_bounds.map_or(model.model.metadata.lower, |(lower, _)| lower),
+                upper: model.world_bounds.map_or(model.model.metadata.upper, |(_, upper)| upper),
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self

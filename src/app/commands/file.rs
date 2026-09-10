@@ -2342,6 +2342,9 @@ impl<'a> App<'a> {
             let bundle = formats::omf::from_bytes(&source_name, bytes, &progress.phase(0.0, 1.0))?;
             let mut design = project::new_empty(Some(path.clone()));
             design.metadata.name = bundle.project_name;
+            for imported in &bundle.designs {
+                design.document.merge_reserve_fields_from(&imported.document);
+            }
             for imported in bundle.designs {
                 project::merge_document_preserve_ids(&mut design.document, &imported.document);
             }

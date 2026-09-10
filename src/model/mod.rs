@@ -76,6 +76,39 @@ pub(crate) struct Layer {
     pub(crate) elevation: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct ReserveFieldId(pub(crate) u64);
+
+/// How a [`ReserveField`] combines a block model's per-block values into one
+/// project-wide reserve figure.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) enum ReserveAggregation {
+    /// The mapped column (or constant, multiplied by block count) is summed.
+    Sum,
+    /// The mapped column is averaged, weighted by another field's own
+    /// resolved per-block values. That field is always a [`Self::Sum`] one,
+    /// so this never needs to resolve a weighted average of its own.
+    WeightedAverage { weight_field: ReserveFieldId },
+    /// Not aggregated to a number - a grouping label (e.g. "Rock Type") each
+    /// block model maps onto one of its own categorical columns, so a future
+    /// breakdown can report `Sum`/`WeightedAverage` totals per category.
+    Category,
+}
+
+/// One named reserve column - e.g. "Tonnes" (summed) or "Fe" (weighted
+/// average by Tonnes) - that every block model in the project can map one of
+/// its own columns, or a constant, onto. Defined once per project on the
+/// [`Document`] and referenced by id from each block model's
+/// [`crate::model::block_model::ReserveFieldMapping`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReserveField {
+    pub(crate) id: ReserveFieldId,
+    pub(crate) name: String,
+    pub(crate) aggregation: ReserveAggregation,
+}
+
 /// Fill style for closed polylines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum FillStyle {
@@ -405,6 +438,11 @@ pub(crate) struct Document {
     object_index: HashMap<ObjectId, usize>,
     next_layer_id: u64,
     next_object_id: u64,
+    /// Project-wide Reserves field list; see [`ReserveField`].
+    #[serde(default)]
+    reserve_fields: Vec<ReserveField>,
+    #[serde(default)]
+    next_reserve_field_id: u64,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -521,8 +559,10 @@ impl Document {
     pub(crate) fn recompute_id_counters(&mut self) {
         let max_layer = self.layers.iter().map(|layer| layer.id.0).max();
         let max_object = self.objects.iter().map(|object| object.id().0).max();
+        let max_reserve_field = self.reserve_fields.iter().map(|field| field.id.0).max();
         self.next_layer_id = max_layer.map_or(0, |id| id.saturating_add(1));
         self.next_object_id = max_object.map_or(0, |id| id.saturating_add(1));
+        self.next_reserve_field_id = max_reserve_field.map_or(0, |id| id.saturating_add(1));
         self.next_object_id = self
             .next_object_id
             .max(self.deferred_layers.values().map(|stored| stored.max_object_id + 1).max().unwrap_or(0));
@@ -765,6 +805,79 @@ impl Document {
             layer.name = new_name;
             self.touch();
         }
+    }
+
+    pub(crate) fn reserve_fields(&self) -> &[ReserveField] {
+        &self.reserve_fields
+    }
+
+    /// Copy the reserve field list (ids intact) from `source` onto this
+    /// document. Used to carry it onto the render-scene composite built by
+    /// [`crate::model::project::ProjectStore::scene_document`], which
+    /// otherwise starts from an empty `Document` and only copies loaded
+    /// layers/objects.
+    /// Add every `source` field absent from this document (by id). Used when
+    /// opening an OMF: [`crate::app::App::apply_opened_omf_bundle`] merges
+    /// each decoded "designs" element into a fresh, empty target `Document`
+    /// via `project::merge_document_preserve_ids` - which only carries
+    /// layers/objects across - so the Field List has to be merged alongside
+    /// it explicitly, or a save/reopen round-trip silently drops it.
+    pub(crate) fn merge_reserve_fields_from(&mut self, source: &Document) {
+        for field in &source.reserve_fields {
+            if !self.reserve_fields.iter().any(|existing| existing.id == field.id) {
+                self.reserve_fields.push(field.clone());
+            }
+        }
+    }
+
+    pub(crate) fn clone_reserve_fields_from(&mut self, source: &Document) {
+        self.reserve_fields = source.reserve_fields.clone();
+        self.next_reserve_field_id = source.next_reserve_field_id;
+    }
+
+    /// Install a Field List read back from a save file. Not marked dirty -
+    /// `next_reserve_field_id` is re-derived by [`Document::recompute_id_counters`],
+    /// called once after the whole document is loaded.
+    pub(crate) fn restore_reserve_fields(&mut self, reserve_fields: Vec<ReserveField>) {
+        self.reserve_fields = reserve_fields;
+    }
+
+    pub(crate) fn reserve_field(&self, id: ReserveFieldId) -> Option<&ReserveField> {
+        self.reserve_fields.iter().find(|field| field.id == id)
+    }
+
+    pub(crate) fn add_reserve_field(&mut self, name: String, aggregation: ReserveAggregation) -> ReserveFieldId {
+        let id = ReserveFieldId(self.next_reserve_field_id);
+        self.next_reserve_field_id += 1;
+        self.reserve_fields.push(ReserveField { id, name, aggregation });
+        self.touch();
+        id
+    }
+
+    pub(crate) fn rename_reserve_field(&mut self, id: ReserveFieldId, new_name: String) {
+        if let Some(field) = self.reserve_fields.iter_mut().find(|field| field.id == id) {
+            field.name = new_name;
+            self.touch();
+        }
+    }
+
+    /// Remove a reserve field, falling back any weighted-average field that
+    /// weighted by it to a plain sum. Returns false if it did not exist.
+    pub(crate) fn remove_reserve_field(&mut self, id: ReserveFieldId) -> bool {
+        let before = self.reserve_fields.len();
+        self.reserve_fields.retain(|field| field.id != id);
+        let removed = self.reserve_fields.len() < before;
+        if removed {
+            for field in &mut self.reserve_fields {
+                if let ReserveAggregation::WeightedAverage { weight_field } = field.aggregation
+                    && weight_field == id
+                {
+                    field.aggregation = ReserveAggregation::Sum;
+                }
+            }
+            self.touch();
+        }
+        removed
     }
 
     /// Set a layer's viewport visibility. Returns the new state, or `None`

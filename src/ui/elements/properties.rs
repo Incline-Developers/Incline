@@ -251,7 +251,7 @@ pub(crate) fn draw_block_model_controls(ui: &mut egui::Ui, editor: &mut EditorSt
 /// Preferences are written to the config file as they are applied, and object
 /// edits become undo entries, so a drag must land once rather than on every
 /// frame it moves.
-fn committed(response: &egui::Response) -> bool {
+pub(crate) fn committed(response: &egui::Response) -> bool {
     response.drag_stopped() || (response.changed() && !response.dragged())
 }
 

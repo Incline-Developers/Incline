@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use crate::{
     i18n::{tr, tr_format},
     model::{
-        Document, FillStyle, Layer, Object, ObjectColor, PolyVertex,
+        Document, FillStyle, Layer, Object, ObjectColor, PolyVertex, ReserveField,
         block_model::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             opaque_irregular_surface_block_count, opaque_surface_block_count,
@@ -49,6 +49,7 @@ const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
 const META_DRILL_HOLE: &str = "incline:drill_hole";
+const META_RESERVE_FIELDS: &str = "incline:reserve_fields";
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
@@ -126,6 +127,8 @@ pub(crate) struct ImportedBlockModel {
     /// ramp invented at load from the data.
     pub(crate) color_transfers: BTreeMap<String, ColorTransferFunction>,
     pub(crate) hide_empty_color_values: bool,
+    pub(crate) reserve_mapping: Vec<crate::model::block_model::ReserveFieldMapping>,
+    pub(crate) reserve_included: bool,
 }
 
 pub(crate) struct ImportedPointCloud {
@@ -417,6 +420,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     }
     let mut element = omf_crate::Element::new("Designs", omf_crate::Composite::new(layers));
     put(&mut element, META_KIND, "designs");
+    put(&mut element, META_RESERVE_FIELDS, serde_json::to_value(document.reserve_fields())?);
     Ok(element)
 }
 
@@ -746,6 +750,8 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
             "slice": open.slice,
             "active_color_variable": open.active_color_variable,
             "hide_empty_color_values": open.hide_empty_color_values,
+            "reserve_mapping": open.reserve_mapping,
+            "reserve_included": open.included_in_reserves,
         }),
     );
     Ok(element)
@@ -1335,6 +1341,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     slice: style_value(style, "slice"),
                     color_transfers: BTreeMap::new(),
                     hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
+                    reserve_mapping: style_value(style, "reserve_mapping").unwrap_or_default(),
+                    reserve_included: style_bool(style, "reserve_included").unwrap_or(false),
                 });
             }
             _ => return Ok(false),
@@ -1353,6 +1361,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_ID,
             META_DRILL_HOLE,
             META_TIE_INS,
+            META_RESERVE_FIELDS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
@@ -1472,6 +1481,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
                 self.append_design_geometry(&mut document, layer_id, object_element)?;
             }
+        }
+        if let Some(reserve_fields) = element
+            .metadata
+            .get(META_RESERVE_FIELDS)
+            .cloned()
+            .and_then(|value| serde_json::from_value::<Vec<ReserveField>>(value).ok())
+        {
+            document.restore_reserve_fields(reserve_fields);
         }
         document.validate().with_context(|| format!("validate designs '{}'", element.name))?;
         let unloaded: Vec<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();
@@ -1799,6 +1816,8 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             slice: style_value(style, "slice"),
             color_transfers,
             hide_empty_color_values: style_bool(style, "hide_empty_color_values").unwrap_or(true),
+            reserve_mapping: style_value(style, "reserve_mapping").unwrap_or_default(),
+            reserve_included: style_bool(style, "reserve_included").unwrap_or(false),
         });
         Ok(())
     }

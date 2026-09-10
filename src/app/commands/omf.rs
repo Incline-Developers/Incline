@@ -94,6 +94,9 @@ impl<'a> App<'a> {
         }
         design.metadata.coordinate_reference_system = coordinate_reference_system;
         design.metadata.units = units;
+        for imported in &designs {
+            design.document.merge_reserve_fields_from(&imported.document);
+        }
         for imported in designs {
             project::merge_document_preserve_ids(&mut design.document, &imported.document);
         }
@@ -195,6 +198,8 @@ impl<'a> App<'a> {
                 }
                 open.color_transfers.extend(imported.color_transfers);
                 open.hide_empty_color_values = imported.hide_empty_color_values;
+                open.reserve_mapping = imported.reserve_mapping;
+                open.included_in_reserves = imported.reserve_included;
             }
         }
         for imported in drill_holes {

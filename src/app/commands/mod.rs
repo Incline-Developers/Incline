@@ -10,6 +10,7 @@ pub(crate) mod products; // Handles the Drill & Blast workspace's stored product
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
 pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
+pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
 pub(crate) mod residency;
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
@@ -112,6 +113,10 @@ impl<'a> App<'a> {
                 | UiCommand::OpenCreateTriangulation
                 | UiCommand::OpenCreateBlockModel(_)
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::AddReserveField { .. }
+                | UiCommand::DeleteReserveField(_)
+                | UiCommand::SetReserveMapping { .. }
+                | UiCommand::SetReserveModelIncluded { .. }
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -324,6 +329,22 @@ impl<'a> App<'a> {
                 self.delete_delay_product(id);
                 Ok(())
             }
+            UiCommand::AddReserveField { name, aggregation } => {
+                self.add_reserve_field(name, aggregation);
+                Ok(())
+            }
+            UiCommand::DeleteReserveField(id) => {
+                self.delete_reserve_field(id);
+                Ok(())
+            }
+            UiCommand::SetReserveMapping { block_model, field, source } => {
+                self.set_reserve_mapping(block_model, field, source);
+                Ok(())
+            }
+            UiCommand::SetReserveModelIncluded { block_model, included } => {
+                self.set_reserve_model_included(block_model, included);
+                Ok(())
+            }
             UiCommand::SetInitiation { target, delay_ms } => {
                 self.set_initiation(target, delay_ms);
                 Ok(())
@@ -366,6 +387,7 @@ impl<'a> App<'a> {
                         self.activate_project_for_layer(layer_id);
                         self.rename_layer(layer_id, new_name);
                     }
+                    crate::ui::state::RenameTarget::ReserveField(id) => self.rename_reserve_field(id, new_name),
                     _ => self.rename_project_item(target, new_name),
                 }
                 self.editor.renaming_item = None;

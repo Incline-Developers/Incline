@@ -554,9 +554,13 @@ fn draw_ui(
             elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
-        let details = elements::planning_setup::draw_details(root_ui, editor.planning_page);
+        let planning_page = editor.planning_page;
+        let details = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
         dialogs::about::draw_about_dialog(root_ui, editor);
         elements::properties::draw_preferences(root_ui, editor, commands);
+        if editor.renaming_item.is_some() {
+            dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
+        }
         #[cfg(target_arch = "wasm32")]
         if editor.new_project_dialog_open {
             dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, details);

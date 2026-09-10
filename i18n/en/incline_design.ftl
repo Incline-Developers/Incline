@@ -1638,6 +1638,11 @@ planning-page-haulage = Haulage
 planning-subpage-layout = Layout
 planning-subpage-animate = Animate
 
+## Solids Reserves setup
+
+planning-field-list = Field List
+planning-block-models = Block Models
+
 preferences-title = Preferences
 
 context-text-colour = Text colour

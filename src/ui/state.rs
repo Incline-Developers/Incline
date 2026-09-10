@@ -847,6 +847,9 @@ pub(crate) enum RenameTarget {
     PointCloud(PointCloudId),
     BlockModel(BlockModelId),
     DrillHole(DrillHoleId),
+    /// A Solids Reserves setup Field List entry. Not undoable, like the rest
+    /// of that config - see `App::rename_reserve_field`.
+    ReserveField(crate::model::ReserveFieldId),
 }
 
 impl RenameTarget {
@@ -858,6 +861,7 @@ impl RenameTarget {
             Self::PointCloud(_) => tr!(literal = "Point Cloud"),
             Self::BlockModel(_) => tr!(literal = "Block Model"),
             Self::DrillHole(_) => tr!(literal = "Drill Holes"),
+            Self::ReserveField(_) => tr!(literal = "Field"),
         }
     }
 
@@ -871,8 +875,20 @@ impl RenameTarget {
             Self::PointCloud(id) => UiCommand::RemovePointCloud(id),
             Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
             Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
+            Self::ReserveField(id) => UiCommand::DeleteReserveField(id),
         }
     }
+}
+
+/// Draft "type" choice in the Solids Setup's New Field dialog - the UI-only
+/// counterpart of [`crate::model::ReserveAggregation`], which additionally
+/// carries a `Sum` field's own id once "Weighted Average" is picked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReserveFieldKind {
+    Sum,
+    WeightedAverage,
+    /// A grouping label, e.g. "Rock Type" - see [`crate::model::ReserveAggregation::Category`].
+    Category,
 }
 
 /// Central mutable editor state.
@@ -1544,6 +1560,14 @@ pub(crate) struct EditorState {
     pub(crate) active_workspace: Workspace,
     pub(crate) planning_page: PlanningPage,
     pub(crate) schedule_subpage: PlanningSubpage,
+    /// Selected row in the Solids Setup subpage's Block Models step.
+    pub(crate) planning_selected_block_model: Option<BlockModelId>,
+    /// Whether the New Field dialog (Solids Setup's Field List step) is open,
+    /// and its draft contents.
+    pub(crate) new_reserve_field_open: bool,
+    pub(crate) new_reserve_field_name: String,
+    pub(crate) new_reserve_field_kind: ReserveFieldKind,
+    pub(crate) new_reserve_field_weight_field: Option<crate::model::ReserveFieldId>,
     pub(crate) workspace_order: [Workspace; 4],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -2297,6 +2321,11 @@ impl EditorState {
             active_workspace: Workspace::Production,
             planning_page: PlanningPage::Solids,
             schedule_subpage: PlanningSubpage::Setup,
+            planning_selected_block_model: None,
+            new_reserve_field_open: false,
+            new_reserve_field_name: String::new(),
+            new_reserve_field_kind: ReserveFieldKind::Sum,
+            new_reserve_field_weight_field: None,
             workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -2722,6 +2751,25 @@ pub(crate) enum UiCommand {
     },
     /// Drop one stored product from that palette.
     DeleteDelayProduct(DelayProductId),
+    /// Add a field to the Solids Reserves setup's Field List, as the New
+    /// Field dialog filled it in.
+    AddReserveField {
+        name: String,
+        aggregation: crate::model::ReserveAggregation,
+    },
+    DeleteReserveField(crate::model::ReserveFieldId),
+    /// Map one block model's own column, or a constant, onto one Reserves
+    /// field. `None` clears an existing mapping.
+    SetReserveMapping {
+        block_model: BlockModelId,
+        field: crate::model::ReserveFieldId,
+        source: Option<crate::model::block_model::ReserveMappingSource>,
+    },
+    /// Opt one block model in or out of the project's Reserves.
+    SetReserveModelIncluded {
+        block_model: BlockModelId,
+        included: bool,
+    },
     /// Apply or remove one collar's initiation delay after its dialog closes.
     SetInitiation {
         target: DrillHoleRef,
@@ -3104,7 +3152,9 @@ impl UiCommand {
             | Self::SetBlockModelSlice { .. }
             | Self::ChooseImportSourceFiles(_)
             | Self::RequestDeleteLayer(_)
-            | Self::RequestDeleteItem(_) => None,
+            | Self::RequestDeleteItem(_)
+            | Self::SetReserveMapping { .. }
+            | Self::SetReserveModelIncluded { .. } => None,
 
             #[cfg(target_arch = "wasm32")]
             Self::ClearBrowserImportSelection(_) => None,
@@ -3158,6 +3208,8 @@ impl UiCommand {
             Self::SaveAndExit => report(tr!(literal = "Save and Exit"), tr!(literal = "Saving the current project")),
             Self::ExitWithoutSaving => report(tr!(literal = "Exit Without Saving"), tr!(literal = "Discarding unsaved changes")),
             Self::CreateLayer { name } => report(tr!(literal = "Create Layer"), name.clone()),
+            Self::AddReserveField { name, .. } => report(tr!(literal = "Add Field"), name.clone()),
+            Self::DeleteReserveField(id) => report(tr!(literal = "Delete Field"), format!("{id:?}")),
             Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
             Self::DeleteDelayProduct(id) => report(tr!(literal = "Delete Product"), format!("{id:?}")),
             Self::FinishPolyClose => report(tr!(literal = "Create Polyline"), tr!(literal = "Finish closed polyline")),
@@ -3465,8 +3517,10 @@ pub(crate) struct UiBlockModelEntry {
     pub(crate) source_name: Option<String>,
     pub(crate) is_loaded: bool,
     pub(crate) dirty: bool,
-    pub(crate) _block_count: usize,
+    pub(crate) block_count: usize,
     pub(crate) variable_count: usize,
+    pub(crate) lower: glam::DVec3,
+    pub(crate) upper: glam::DVec3,
 }
 
 #[derive(Clone, Debug)]
