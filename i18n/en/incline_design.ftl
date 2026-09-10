@@ -1074,7 +1074,7 @@ literal-no-triangulations-bb471fe9d2cff952 = No triangulations
 literal-source-name-77b9162735795441 =
     Source: %name%
 literal-id-triangulation-id-source-cc1068a000d7c3e9 = ID: triangulation:%id%%source%
-literal-no-image-textures-6406e1c080390be1 = No image textures
+explorer-no-rasters = No rasters
 literal-no-point-clouds-d0ab5ccd45a05366 = No point clouds
 literal-no-block-models-2e310099263f058f = No block models
 literal-no-drill-holes-9641fcc0c51b6618 = No drill holes
@@ -1637,3 +1637,10 @@ planning-page-solids = Solids
 planning-page-haulage = Haulage
 planning-subpage-layout = Layout
 planning-subpage-animate = Animate
+
+preferences-title = Preferences
+
+context-text-colour = Text colour
+
+context-polylines = Polylines
+context-points = Points

@@ -1059,7 +1059,7 @@ literal-no-triangulations-bb471fe9d2cff952 = Không có lưới tam giác
 literal-source-name-77b9162735795441 =
     Nguồn: %name%
 literal-id-triangulation-id-source-cc1068a000d7c3e9 = ID: triangulation:%id%%source%
-literal-no-image-textures-6406e1c080390be1 = Không có kết cấu ảnh
+explorer-no-rasters = Không có ảnh raster
 literal-no-point-clouds-d0ab5ccd45a05366 = Không có đám mây điểm
 literal-no-block-models-2e310099263f058f = Không có mô hình khối
 literal-no-drill-holes-9641fcc0c51b6618 = Không có lỗ khoan

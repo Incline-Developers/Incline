@@ -3,7 +3,7 @@ use crate::{
     i18n::tr,
     ui::{
         chrome,
-        widgets::data_grid::{GridRow, PropertyTable, grid_row},
+        widgets::data_grid::PropertyTable,
     },
 };
 
@@ -15,18 +15,6 @@ fn records() -> [String; 3] {
 
 fn selected(ui: &egui::Ui) -> usize {
     ui.data(|data| data.get_temp::<usize>(egui::Id::new("planning_reserve_selected"))).unwrap_or(0).min(2)
-}
-
-pub(crate) fn draw_records(ui: &mut egui::Ui) {
-    ui.strong(tr!("planning-reserves-dumps"));
-    ui.label(egui::RichText::new(tr!("planning-placeholder")).weak());
-    let mut selection = selected(ui);
-    for (index, name) in records().iter().enumerate() {
-        if grid_row(ui, GridRow::new(name).selected(selection == index)).clicked() {
-            selection = index;
-        }
-    }
-    ui.data_mut(|data| data.insert_temp(egui::Id::new("planning_reserve_selected"), selection));
 }
 
 pub(crate) fn draw_data_panel(ui: &mut egui::Ui) -> egui::Rect {

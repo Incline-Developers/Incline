@@ -2,9 +2,9 @@
 
 use crate::{
     i18n::{tr, tr_format},
-    model::{Axis, Document, ObjectId},
+    model::{Axis, Document},
     ui::{
-        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, MoveToLayerDialog, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
+        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, TrimEnd, UiCommand, UiProjectView},
         themed_icon, unthemed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator},
@@ -104,46 +104,16 @@ pub(crate) fn draw_right_click_context(
     let pos = egui::pos2(px / ppp + 4.0, py / ppp + 4.0);
     let title = canvas_context_menu_title(editor, document);
     ContextMenu::new("canvas_properties", title).position(pos).width(220.0).show(ui.ctx(), |ui| {
-        // Gather selected document objects
-        let selected_obj_ids: Vec<ObjectId> = editor
-            .selected_handles
-            .iter()
-            .filter_map(|&h| match h {
-                crate::model::SceneEntityId::Object(id) => Some(id),
-                _ => None,
-            })
-            .collect();
-
+        crate::ui::elements::properties::draw_selection_appearance(ui, editor, project, document, commands, geometry_dirty);
         let selected_drill_hole = editor.selected_handles.iter().find_map(|&h| match h {
             crate::model::SceneEntityId::DrillHole(id) => Some(id),
             _ => None,
         });
 
-        let has_doc_objects = !selected_obj_ids.is_empty();
-
         // --- Drill hole colouring ---
         if let Some(drill_hole_id) = selected_drill_hole {
             if ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenDrillHoleColorDialog(drill_hole_id));
-                commands.push(UiCommand::CloseCanvasContextMenu);
-            }
-
-            context_menu_separator(ui);
-        }
-
-        if has_doc_objects {
-            if ContextMenuAction::new(tr!(literal = "Move to Layer...")).show(ui).clicked() {
-                let target_layer = project
-                    .projects
-                    .iter()
-                    .find(|entry| entry.is_active)
-                    .and_then(|entry| entry.layers.first())
-                    .map(|layer| layer.id);
-                editor.move_to_layer_dialog = Some(MoveToLayerDialog {
-                    object_ids: selected_obj_ids.clone(),
-                    target_layer,
-                    copy: false,
-                });
                 commands.push(UiCommand::CloseCanvasContextMenu);
             }
 

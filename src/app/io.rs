@@ -19,7 +19,7 @@ pub(crate) fn default_language() -> LanguageChoice {
 }
 
 pub(crate) const fn default_snap_poll_rate() -> u32 {
-    30
+    60
 }
 
 /// Present in step with the display. The frame rate cap below only applies

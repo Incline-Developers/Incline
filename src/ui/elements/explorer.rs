@@ -2,10 +2,9 @@
 
 use crate::{
     i18n::{tr, tr_format},
-    model::{Document, SceneEntityId, block_model::OpenBlockModel},
+    model::SceneEntityId,
     ui::{
         EditorState, UiCommand, UiProjectView,
-        elements::properties::draw_properties,
         fonts::bold,
         state::{ExplorerSection, RenameTarget},
         unthemed_icon,
@@ -62,569 +61,650 @@ fn section_heading_menu(response: &egui::Response, section: ExplorerSection, ite
 /// which reads the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "explorer_panel";
 
-/// What the explorer column claimed, and the two regions drawn inside it.
+/// The explorer column and its tree surface.
 pub(crate) struct ExplorerLayout {
     /// The whole column, gaps included: what the panels drawn after it lay out
     /// against.
     pub(crate) column: egui::Rect,
     /// What the data tree claimed.
     pub(crate) tree: egui::Rect,
-    /// What the properties panel below the tree claimed.
-    pub(crate) properties: egui::Rect,
 }
 
-/// Draw the left explorer panel.
-///
-/// Shows the open project's collapsible data sections and the properties panel
-/// below them; every section starts open and stays exactly as the user leaves
-/// it thereafter. The column itself has no surface: the tree and
-/// the properties are separate regions inside it, with the window background
-/// showing through the seam between them. The project actions that used to
-/// head the column are in the viewport bar now.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn draw_explorer(
-    ui: &mut egui::Ui,
-    editor: &mut EditorState,
-    project: &UiProjectView,
-    block_models: &[OpenBlockModel],
-    document: &Document,
-    commands: &mut Vec<UiCommand>,
-    geometry_dirty: &mut bool,
-) -> ExplorerLayout {
-    // The tree's lit rows are the properties panel's background, so the two
-    // halves of the side panel share one palette.
+/// Draw the full-height project explorer.
+pub(crate) fn draw_explorer(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) -> ExplorerLayout {
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
     let column = egui::Panel::left(PANEL_ID)
         .resizable(true)
         .show_separator_line(crate::ui::chrome::show_separator_line(ui))
         .default_size(280.0)
-        // The properties panel below the tree lays its fields out at a fixed
-        // minimum width; keep the panel wide enough to hold them rather than
-        // clipping their right-hand controls.
         .min_size(220.0)
-        // The column is only a container for the two regions inside it; each
-        // of those carries its own surface, rounding and gap.
         .frame(egui::Frame::NONE)
         .show(ui, |ui| {
             // Prevent content from forcing the panel wider than the user has dragged it.
             ui.set_max_width(ui.available_width());
 
-            // Claimed from the bottom, before the tree fills what is left
-            // above it.
-            let properties_rect = draw_properties(ui, editor, project, block_models, document, commands, geometry_dirty);
+            crate::ui::chrome::region_frame(ui)
+                .fill(surface)
+                .inner_margin(egui::Margin::ZERO)
+                .show(ui, |ui| {
+                    if editor.is_planning_setup() {
+                        super::planning_setup::draw_steps(ui, editor.planning_page);
+                        return;
+                    }
 
-            let tree_rect = crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
+                    // The tree only reads editor state. Destructuring here keeps the
+                    // row closures below from capturing `editor` mutably, which the
+                    // borrow checker would otherwise reject against these shared reads.
+                    let EditorState {
+                        active_layer,
+                        selected_handles,
+                        locked_layers,
+                        locked_rasters,
+                        frozen_handles,
+                        ..
+                    } = &*editor;
 
-            if editor.is_planning_setup() {
-                super::planning_setup::draw_steps(ui, editor.planning_page);
-                return;
-            }
+                    // Keep the scroll area's contents as wide as the side panel even
+                    // when every section is collapsed. `ScrollArea` otherwise shrinks
+                    // horizontally to the headers' intrinsic width; a visible
+                    // `ExplorerEntry` masks that by requesting all available width,
+                    // which made panel resizing depend on whether an entry existed.
+                    //
+                    // Vertical shrinking is off so the banding below the last row has
+                    // the full panel height to run into: see `paint_fixed_stripes`.
+                    egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
+                        // Empty-state messages should behave like explorer entries at
+                        // narrow widths: stay on one line and end with an ellipsis.
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                        // Rows carry their own height and butt up against each other,
+                        // so the stripes tile the list without gaps.
+                        ui.spacing_mut().item_spacing.y = 0.0;
 
-            // The tree only reads editor state. Destructuring here keeps the
-            // row closures below from capturing `editor` mutably, which the
-            // borrow checker would otherwise reject against these shared reads.
-            let EditorState {
-                active_layer,
-                selected_handles,
-                locked_layers,
-                locked_rasters,
-                frozen_handles,
-                ..
-            } = &*editor;
+                        // Reserved before any row is laid out, and filled once the
+                        // tree's final height is known below: see `paint_fixed_stripes`.
+                        let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
 
-            // Keep the scroll area's contents as wide as the side panel even
-            // when every section is collapsed. `ScrollArea` otherwise shrinks
-            // horizontally to the headers' intrinsic width; a visible
-            // `ExplorerEntry` masks that by requesting all available width,
-            // which made panel resizing depend on whether an entry existed.
-            //
-            // Vertical shrinking is off so the banding below the last row has
-            // the full panel height to run into: see `paint_fixed_stripes`.
-            // A `ScrollArea` claims 64pt of height by default even when less
-            // than that is left, and paints its rows over whatever is below -
-            // here, the properties panel. Let it shrink to what the properties
-            // panel leaves it instead.
-            egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
-                // Empty-state messages should behave like explorer entries at
-                // narrow widths: stay on one line and end with an ellipsis.
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                // Rows carry their own height and butt up against each other,
-                // so the stripes tile the list without gaps.
-                ui.spacing_mut().item_spacing.y = 0.0;
-
-                // Reserved before any row is laid out, and filled once the
-                // tree's final height is known below: see `paint_fixed_stripes`.
-                let (stripes_slot, stripes_top) = reserve_fixed_stripes(ui);
-
-                let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
-                let (designs_header_toggle, designs_header, _) = ExplorerHeader::new(egui::Id::new("designs_collapse"), tr!(literal = "Designs"))
-                    .icon(unthemed_icon!("layer.svg"))
-                    .color(HEADER_DESIGNS)
-                    .dirty(designs_dirty)
-                    .show(ui, |ui| {
-                        let Some(entry) = project.projects.first() else {
-                            explorer_note(ui, tr!(literal = "No open project"));
-                            return;
-                        };
-                        if entry.layers.is_empty() {
-                            explorer_note(ui, tr!(literal = "No design layers"));
-                        }
-                        for layer in &entry.layers {
-                            let layer_id = layer.id;
-                            let is_active = *active_layer == Some(layer_id);
-                            let layer_locked = locked_layers.contains(&layer_id);
-                            let layer_name = if layer.dirty { format!("{} *", layer.name) } else { layer.name.clone() };
-                            let layer_label = if layer.is_loaded {
-                                bold(&layer_name)
-                            } else {
-                                bold(&layer_name).color(INACTIVE_TEXT_COLOR)
-                            };
-                            // Named `row` rather than `entry`: `entry` is the
-                            // enclosing project this layer belongs to.
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
-                                .selected(is_active)
-                                .toggles(EntryToggles {
-                                    visible: layer.is_loaded,
-                                    locked: layer_locked,
-                                })
-                                .show(ui);
-                            if row.visibility_clicked {
-                                commands.push(if layer.is_loaded { UiCommand::UnloadLayer(layer_id) } else { UiCommand::LoadLayer(layer_id) });
-                            }
-                            if row.lock_clicked {
-                                commands.push(UiCommand::ToggleLayerLocked(layer_id));
-                            }
-                            let layer_resp = row.response;
-
-                            context_menu_popup(&layer_resp, layer.name.as_str(), |ui| {
-                                if ContextMenuAction::new(if layer_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                    commands.push(UiCommand::ToggleLayerLocked(layer_id));
-                                    ui.close();
+                        let designs_dirty = project.projects.first().is_some_and(|entry| entry.designs_dirty);
+                        let (designs_header_toggle, designs_header, _) = ExplorerHeader::new(egui::Id::new("designs_collapse"), tr!(literal = "Designs"))
+                            .icon(unthemed_icon!("layer.svg"))
+                            .color(HEADER_DESIGNS)
+                            .dirty(designs_dirty)
+                            .show(ui, |ui| {
+                                let Some(entry) = project.projects.first() else {
+                                    explorer_note(ui, tr!(literal = "No open project"));
+                                    return;
+                                };
+                                if entry.layers.is_empty() {
+                                    explorer_note(ui, tr!(literal = "No design layers"));
                                 }
-                                if layer.is_loaded {
-                                    if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::UnloadLayer(layer_id));
-                                        ui.close();
+                                for layer in &entry.layers {
+                                    let layer_id = layer.id;
+                                    let is_active = *active_layer == Some(layer_id);
+                                    let layer_locked = locked_layers.contains(&layer_id);
+                                    let layer_name = if layer.dirty { format!("{} *", layer.name) } else { layer.name.clone() };
+                                    let layer_label = if layer.is_loaded {
+                                        bold(&layer_name)
+                                    } else {
+                                        bold(&layer_name).color(INACTIVE_TEXT_COLOR)
+                                    };
+                                    // Named `row` rather than `entry`: `entry` is the
+                                    // enclosing project this layer belongs to.
+                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_layer", layer_id)), layer_label)
+                                        .selected(is_active)
+                                        .toggles(EntryToggles {
+                                            visible: layer.is_loaded,
+                                            locked: layer_locked,
+                                        })
+                                        .show(ui);
+                                    if row.visibility_clicked {
+                                        commands.push(if layer.is_loaded {
+                                            UiCommand::UnloadLayer(layer_id)
+                                        } else {
+                                            UiCommand::LoadLayer(layer_id)
+                                        });
                                     }
-                                    if ContextMenuAction::new(tr!(literal = "Select All Objects")).show(ui).clicked() {
-                                        commands.push(UiCommand::SelectAllObjectsInLayer(layer_id));
-                                        ui.close();
+                                    if row.lock_clicked {
+                                        commands.push(UiCommand::ToggleLayerLocked(layer_id));
                                     }
-                                } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadLayer(layer_id));
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!layer_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Layer(layer_id)));
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!(literal = "Duplicate")).show(ui).clicked() {
-                                    commands.push(UiCommand::DuplicateLayer(layer_id));
-                                    ui.close();
-                                }
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if layer.dirty && entry.path.is_some() && ContextMenuAction::new(tr!(literal = "Discard Changes...")).enabled(!layer_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDiscardLayerChanges(layer_id));
-                                    ui.close();
-                                }
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!layer_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteLayer(layer_id));
-                                    ui.close();
+                                    let layer_resp = row.response;
+
+                                    context_menu_popup(&layer_resp, layer.name.as_str(), |ui| {
+                                        if ContextMenuAction::new(if layer_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })
+                                            .show(ui)
+                                            .clicked()
+                                        {
+                                            commands.push(UiCommand::ToggleLayerLocked(layer_id));
+                                            ui.close();
+                                        }
+                                        if layer.is_loaded {
+                                            if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
+                                                commands.push(UiCommand::UnloadLayer(layer_id));
+                                                ui.close();
+                                            }
+                                            if ContextMenuAction::new(tr!(literal = "Select All Objects")).show(ui).clicked() {
+                                                commands.push(UiCommand::SelectAllObjectsInLayer(layer_id));
+                                                ui.close();
+                                            }
+                                        } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
+                                            commands.push(UiCommand::LoadLayer(layer_id));
+                                            ui.close();
+                                        }
+                                        if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!layer_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::Layer(layer_id)));
+                                            ui.close();
+                                        }
+                                        if ContextMenuAction::new(tr!(literal = "Duplicate")).show(ui).clicked() {
+                                            commands.push(UiCommand::DuplicateLayer(layer_id));
+                                            ui.close();
+                                        }
+                                        #[cfg(not(target_arch = "wasm32"))]
+                                        if layer.dirty
+                                            && entry.path.is_some()
+                                            && ContextMenuAction::new(tr!(literal = "Discard Changes...")).enabled(!layer_locked).show(ui).clicked()
+                                        {
+                                            commands.push(UiCommand::RequestDiscardLayerChanges(layer_id));
+                                            ui.close();
+                                        }
+                                        context_menu_separator(ui);
+                                        if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!layer_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::RequestDeleteLayer(layer_id));
+                                            ui.close();
+                                        }
+                                    });
                                 }
                             });
-                        }
-                    });
-                section_heading_menu(&designs_header_toggle.union(designs_header.inner), ExplorerSection::Designs, project.projects.first().map_or(0, |entry| entry.layers.len()), commands);
+                        section_heading_menu(
+                            &designs_header_toggle.union(designs_header.inner),
+                            ExplorerSection::Designs,
+                            project.projects.first().map_or(0, |entry| entry.layers.len()),
+                            commands,
+                        );
 
-                let triangulations_dirty = project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.dirty);
-                let (triangulations_header_toggle, triangulations_header, _) = ExplorerHeader::new(egui::Id::new("triangulations_collapse"), tr!(literal = "Triangulations"))
-                    .icon(unthemed_icon!("triangulation.svg"))
-                    .color(HEADER_TRIANGULATIONS)
-                    .dirty(triangulations_dirty)
-                    .show(ui, |ui| {
-                        if project.triangulations.is_empty() {
-                            explorer_note(ui, tr!(literal = "No triangulations"));
-                        }
-
-                        // Helper closure: render one tri entry row and attach its context menu.
-                        let render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, tri: &crate::ui::UiTriangulationEntry| {
-                            let source_suffix = tri.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
-                            let tri_path = tr_format!(literal = "ID: triangulation:%id%%source%", id = tri.id.0, source = source_suffix);
-                            let tri_id = tri.id;
-
-                            let dirty_marker = if tri.dirty { " *" } else { "" };
-                            let stats = format!("{}{}", tri.name, dirty_marker);
-                            let label = if tri.is_loaded { bold(&stats) } else { bold(&stats).color(INACTIVE_TEXT_COLOR) };
-
-                            let tri_locked = frozen_handles.contains(&SceneEntityId::Triangulation(tri_id));
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
-                                .selected(tri.is_active)
-                                .toggles(EntryToggles {
-                                    visible: tri.is_loaded,
-                                    locked: tri_locked,
-                                })
-                                .show(ui);
-                            if row.visibility_clicked {
-                                commands.push(if tri.is_loaded { UiCommand::CloseTriangulation(tri_id) } else { UiCommand::LoadTriangulation(tri_id) });
-                            }
-                            if row.lock_clicked {
-                                commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
-                            }
-                            let response = row.response.on_hover_text(&tri_path);
-
-                            if response.clicked() && tri.is_loaded {
-                                commands.push(UiCommand::ActivateTriangulation(tri_id));
-                            }
-
-                            let tri_loaded = tri.is_loaded;
-                            context_menu_popup(&response, tri.name.as_str(), |ui| {
-                                if ContextMenuAction::new(if tri_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
-                                    ui.close();
-                                }
-                                if tri_loaded {
-                                    if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::CloseTriangulation(tri_id));
-                                        ui.close();
+                        let triangulations_dirty = project.triangulations_membership_dirty || project.triangulations.iter().any(|item| item.dirty);
+                        let (triangulations_header_toggle, triangulations_header, _) =
+                            ExplorerHeader::new(egui::Id::new("triangulations_collapse"), tr!(literal = "Triangulations"))
+                                .icon(unthemed_icon!("triangulation.svg"))
+                                .color(HEADER_TRIANGULATIONS)
+                                .dirty(triangulations_dirty)
+                                .show(ui, |ui| {
+                                    if project.triangulations.is_empty() {
+                                        explorer_note(ui, tr!(literal = "No triangulations"));
                                     }
-                                } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadTriangulation(tri_id));
-                                    ui.close();
+
+                                    // Helper closure: render one tri entry row and attach its context menu.
+                                    let render_tri_entry = |ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, tri: &crate::ui::UiTriangulationEntry| {
+                                        let source_suffix = tri
+                                            .source_name
+                                            .as_deref()
+                                            .map(|name| tr_format!(literal = "\nSource: %name%", name = name))
+                                            .unwrap_or_default();
+                                        let tri_path = tr_format!(literal = "ID: triangulation:%id%%source%", id = tri.id.0, source = source_suffix);
+                                        let tri_id = tri.id;
+
+                                        let dirty_marker = if tri.dirty { " *" } else { "" };
+                                        let stats = format!("{}{}", tri.name, dirty_marker);
+                                        let label = if tri.is_loaded { bold(&stats) } else { bold(&stats).color(INACTIVE_TEXT_COLOR) };
+
+                                        let tri_locked = frozen_handles.contains(&SceneEntityId::Triangulation(tri_id));
+                                        let row = ExplorerEntry::new(egui::Id::new(("explorer_triangulation", tri.id)), label)
+                                            .selected(tri.is_active)
+                                            .toggles(EntryToggles {
+                                                visible: tri.is_loaded,
+                                                locked: tri_locked,
+                                            })
+                                            .show(ui);
+                                        if row.visibility_clicked {
+                                            commands.push(if tri.is_loaded {
+                                                UiCommand::CloseTriangulation(tri_id)
+                                            } else {
+                                                UiCommand::LoadTriangulation(tri_id)
+                                            });
+                                        }
+                                        if row.lock_clicked {
+                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
+                                        }
+                                        let response = row.response.on_hover_text(&tri_path);
+
+                                        if response.clicked() && tri.is_loaded {
+                                            commands.push(UiCommand::ActivateTriangulation(tri_id));
+                                        }
+
+                                        let tri_loaded = tri.is_loaded;
+                                        context_menu_popup(&response, tri.name.as_str(), |ui| {
+                                            if tri_loaded {
+                                                let mut color = crate::rendering::color::rgba_to_color32(tri.color);
+                                                if crate::ui::widgets::menu::MenuFieldColor32::new(tr!(literal = "Face colour"), &mut color).show(ui).changed() {
+                                                    let targets: Vec<_> = if selected_handles.contains(&SceneEntityId::Triangulation(tri_id)) {
+                                                        project
+                                                            .triangulations
+                                                            .iter()
+                                                            .filter(|item| item.is_loaded && selected_handles.contains(&SceneEntityId::Triangulation(item.id)))
+                                                            .map(|item| item.id)
+                                                            .collect()
+                                                    } else {
+                                                        vec![tri_id]
+                                                    };
+                                                    for id in targets {
+                                                        commands.push(UiCommand::SetTriangulationColor(id, crate::rendering::color::color32_to_rgba(color)));
+                                                    }
+                                                }
+                                                context_menu_separator(ui);
+                                            }
+                                            if ContextMenuAction::new(if tri_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })
+                                                .show(ui)
+                                                .clicked()
+                                            {
+                                                commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
+                                                ui.close();
+                                            }
+                                            if tri_loaded {
+                                                if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
+                                                    commands.push(UiCommand::CloseTriangulation(tri_id));
+                                                    ui.close();
+                                                }
+                                            } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
+                                                commands.push(UiCommand::LoadTriangulation(tri_id));
+                                                ui.close();
+                                            }
+                                            #[cfg(target_arch = "wasm32")]
+                                            if ContextMenuAction::new(tr!(literal = "Download")).show(ui).clicked() {
+                                                commands.push(UiCommand::ExportTriangulationAs(tri_id, crate::model::formats::MeshFormat::Obj));
+                                                ui.close();
+                                            }
+                                            if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!tri_locked).show(ui).clicked() {
+                                                commands.push(UiCommand::BeginRenameItem(RenameTarget::Triangulation(tri_id)));
+                                                ui.close();
+                                            }
+                                            context_menu_separator(ui);
+                                            if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!tri_locked).show(ui).clicked() {
+                                                commands.push(UiCommand::RequestDeleteItem(RenameTarget::Triangulation(tri_id)));
+                                                ui.close();
+                                            }
+                                        });
+                                    };
+
+                                    for triangulation in &project.triangulations {
+                                        render_tri_entry(ui, commands, triangulation);
+                                    }
+                                });
+                        section_heading_menu(
+                            &triangulations_header_toggle.union(triangulations_header.inner),
+                            ExplorerSection::Triangulations,
+                            project.triangulations.len(),
+                            commands,
+                        );
+
+                        let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
+                        let (rasters_header_toggle, rasters_header, _) = ExplorerHeader::new("rasters_collapse".into(), tr!(literal = "Rasters"))
+                            .icon(unthemed_icon!("raster.svg"))
+                            .color(HEADER_RASTERS)
+                            .dirty(rasters_dirty)
+                            .show(ui, |ui| {
+                                if project.raster_textures.is_empty() {
+                                    explorer_note(ui, tr!("explorer-no-rasters"));
                                 }
-                                #[cfg(target_arch = "wasm32")]
-                                if ContextMenuAction::new(tr!(literal = "Download")).show(ui).clicked() {
-                                    commands.push(UiCommand::ExportTriangulationAs(tri_id, crate::model::formats::MeshFormat::Obj));
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!tri_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Triangulation(tri_id)));
-                                    ui.close();
-                                }
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!tri_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::Triangulation(tri_id)));
-                                    ui.close();
+                                for raster in &project.raster_textures {
+                                    let raster_label = if raster.dirty { format!("{} *", raster.name) } else { raster.name.clone() };
+                                    let label = if raster.is_loaded {
+                                        bold(&raster_label)
+                                    } else {
+                                        bold(&raster_label).color(INACTIVE_TEXT_COLOR)
+                                    };
+                                    let source_suffix = raster
+                                        .source_name
+                                        .as_deref()
+                                        .map(|name| tr_format!(literal = "\nSource: %name%", name = name))
+                                        .unwrap_or_default();
+                                    let details = tr_format!(
+                                        literal = "ID: raster:%id%%source%\n%driver% · %width% × %height%\n%projection%",
+                                        id = raster.id.0,
+                                        source = source_suffix,
+                                        driver = raster.driver_name,
+                                        width = raster.source_size[0],
+                                        height = raster.source_size[1],
+                                        projection = raster.projection
+                                    );
+                                    let raster_locked = locked_rasters.contains(&raster.id);
+                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
+                                        .selected(raster.is_draped)
+                                        .toggles(EntryToggles {
+                                            visible: raster.is_loaded,
+                                            locked: raster_locked,
+                                        })
+                                        .show(ui);
+                                    if row.visibility_clicked {
+                                        commands.push(if raster.is_loaded {
+                                            UiCommand::UnloadRaster(raster.id)
+                                        } else {
+                                            UiCommand::LoadRaster(raster.id)
+                                        });
+                                    }
+                                    if row.lock_clicked {
+                                        commands.push(UiCommand::ToggleRasterLocked(raster.id));
+                                    }
+                                    let response = row.response.on_hover_text(&details);
+
+                                    context_menu_popup(&response, raster.name.as_str(), |ui| {
+                                        if ContextMenuAction::new(if raster_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })
+                                            .show(ui)
+                                            .clicked()
+                                        {
+                                            commands.push(UiCommand::ToggleRasterLocked(raster.id));
+                                            ui.close();
+                                        }
+                                        if raster.is_loaded {
+                                            if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
+                                                commands.push(UiCommand::UnloadRaster(raster.id));
+                                                ui.close();
+                                            }
+                                            if ContextMenuAction::new(tr!(literal = "Drape Over Surface")).enabled(!raster_locked).show(ui).clicked() {
+                                                commands.push(UiCommand::DrapeRaster(raster.id));
+                                                ui.close();
+                                            }
+                                        } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
+                                            commands.push(UiCommand::LoadRaster(raster.id));
+                                            ui.close();
+                                        }
+                                        // Unloading a raster keeps its drape, so offer the undrape in both states.
+                                        if raster.is_draped && ContextMenuAction::new(tr!(literal = "Undrape All")).enabled(!raster_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::UndrapeRaster(raster.id));
+                                            ui.close();
+                                        }
+                                        if project.active_triangulation_for_menu.is_some()
+                                            && ContextMenuAction::new(tr!(literal = "Clear Active Triangulation Texture")).show(ui).clicked()
+                                        {
+                                            commands.push(UiCommand::ClearActiveTriangulationRaster);
+                                            ui.close();
+                                        }
+                                        if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!raster_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::Raster(raster.id)));
+                                            ui.close();
+                                        }
+                                        context_menu_separator(ui);
+                                        if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!raster_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::Raster(raster.id)));
+                                            ui.close();
+                                        }
+                                    });
                                 }
                             });
-                        };
+                        section_heading_menu(
+                            &rasters_header_toggle.union(rasters_header.inner),
+                            ExplorerSection::Rasters,
+                            project.raster_textures.len(),
+                            commands,
+                        );
 
-                        for triangulation in &project.triangulations {
-                            render_tri_entry(ui, commands, triangulation);
-                        }
-                    });
-                section_heading_menu(&triangulations_header_toggle.union(triangulations_header.inner), ExplorerSection::Triangulations, project.triangulations.len(), commands);
-
-                let rasters_dirty = project.rasters_membership_dirty || project.raster_textures.iter().any(|item| item.dirty);
-                let (rasters_header_toggle, rasters_header, _) = ExplorerHeader::new("rasters_collapse".into(), tr!(literal = "Rasters"))
-                    .icon(unthemed_icon!("raster.svg"))
-                    .color(HEADER_RASTERS)
-                    .dirty(rasters_dirty)
-                    .show(ui, |ui| {
-                        if project.raster_textures.is_empty() {
-                            explorer_note(ui, tr!(literal = "No image textures"));
-                        }
-                        for raster in &project.raster_textures {
-                            let raster_label = if raster.dirty { format!("{} *", raster.name) } else { raster.name.clone() };
-                            let label = if raster.is_loaded {
-                                bold(&raster_label)
-                            } else {
-                                bold(&raster_label).color(INACTIVE_TEXT_COLOR)
-                            };
-                            let source_suffix = raster.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
-                            let details = tr_format!(
-                                literal = "ID: raster:%id%%source%\n%driver% · %width% × %height%\n%projection%",
-                                id = raster.id.0,
-                                source = source_suffix,
-                                driver = raster.driver_name,
-                                width = raster.source_size[0],
-                                height = raster.source_size[1],
-                                projection = raster.projection
-                            );
-                            let raster_locked = locked_rasters.contains(&raster.id);
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_raster", raster.id)), label)
-                                .selected(raster.is_draped)
-                                .toggles(EntryToggles {
-                                    visible: raster.is_loaded,
-                                    locked: raster_locked,
-                                })
-                                .show(ui);
-                            if row.visibility_clicked {
-                                commands.push(if raster.is_loaded { UiCommand::UnloadRaster(raster.id) } else { UiCommand::LoadRaster(raster.id) });
-                            }
-                            if row.lock_clicked {
-                                commands.push(UiCommand::ToggleRasterLocked(raster.id));
-                            }
-                            let response = row.response.on_hover_text(&details);
-
-                            context_menu_popup(&response, raster.name.as_str(), |ui| {
-                                if ContextMenuAction::new(if raster_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                    commands.push(UiCommand::ToggleRasterLocked(raster.id));
-                                    ui.close();
+                        let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
+                        let (point_clouds_header_toggle, point_clouds_header, _) = ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), tr!(literal = "Point Clouds"))
+                            .icon(unthemed_icon!("section_point_clouds.svg"))
+                            .color(HEADER_POINT_CLOUDS)
+                            .dirty(point_clouds_dirty)
+                            .show(ui, |ui| {
+                                if project.point_clouds.is_empty() {
+                                    explorer_note(ui, tr!(literal = "No point clouds"));
                                 }
-                                if raster.is_loaded {
-                                    if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::UnloadRaster(raster.id));
-                                        ui.close();
+                                for point_cloud in &project.point_clouds {
+                                    let dirty_marker = if point_cloud.dirty { " *" } else { "" };
+                                    let label_text = format!("{}{dirty_marker}", point_cloud.name);
+                                    let label = if point_cloud.is_loaded {
+                                        bold(&label_text)
+                                    } else {
+                                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
+                                    };
+                                    let source_suffix = point_cloud
+                                        .source_name
+                                        .as_deref()
+                                        .map(|name| tr_format!(literal = "\nSource: %name%", name = name))
+                                        .unwrap_or_default();
+                                    let tooltip = tr_format!(
+                                        literal = "ID: point-cloud:%id%%source%\n%count% point(s)",
+                                        id = point_cloud.id.0,
+                                        source = source_suffix,
+                                        count = point_cloud.point_count
+                                    );
+                                    let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
+                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
+                                        .toggles(EntryToggles {
+                                            visible: point_cloud.is_loaded,
+                                            locked: cloud_locked,
+                                        })
+                                        .show(ui);
+                                    if row.visibility_clicked {
+                                        commands.push(if point_cloud.is_loaded {
+                                            UiCommand::ClosePointCloud(point_cloud.id)
+                                        } else {
+                                            UiCommand::LoadPointCloud(point_cloud.id)
+                                        });
                                     }
-                                    if ContextMenuAction::new(tr!(literal = "Drape Over Surface")).enabled(!raster_locked).show(ui).clicked() {
-                                        commands.push(UiCommand::DrapeRaster(raster.id));
-                                        ui.close();
+                                    if row.lock_clicked {
+                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
                                     }
-                                } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadRaster(raster.id));
-                                    ui.close();
-                                }
-                                // Unloading a raster keeps its drape, so offer the undrape in both states.
-                                if raster.is_draped && ContextMenuAction::new(tr!(literal = "Undrape All")).enabled(!raster_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::UndrapeRaster(raster.id));
-                                    ui.close();
-                                }
-                                if project.active_triangulation_for_menu.is_some() && ContextMenuAction::new(tr!(literal = "Clear Active Triangulation Texture")).show(ui).clicked() {
-                                    commands.push(UiCommand::ClearActiveTriangulationRaster);
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!raster_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::Raster(raster.id)));
-                                    ui.close();
-                                }
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!raster_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::Raster(raster.id)));
-                                    ui.close();
+                                    let response = row.response.on_hover_text(&tooltip);
+
+                                    context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
+                                        if ContextMenuAction::new(if cloud_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })
+                                            .show(ui)
+                                            .clicked()
+                                        {
+                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
+                                            ui.close();
+                                        }
+                                        if point_cloud.is_loaded {
+                                            if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
+                                                commands.push(UiCommand::ClosePointCloud(point_cloud.id));
+                                                ui.close();
+                                            }
+                                        } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
+                                            commands.push(UiCommand::LoadPointCloud(point_cloud.id));
+                                            ui.close();
+                                        }
+                                        if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!cloud_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::PointCloud(point_cloud.id)));
+                                            ui.close();
+                                        }
+                                        context_menu_separator(ui);
+                                        if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!cloud_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::PointCloud(point_cloud.id)));
+                                            ui.close();
+                                        }
+                                    });
                                 }
                             });
-                        }
-                    });
-                section_heading_menu(&rasters_header_toggle.union(rasters_header.inner), ExplorerSection::Rasters, project.raster_textures.len(), commands);
+                        section_heading_menu(
+                            &point_clouds_header_toggle.union(point_clouds_header.inner),
+                            ExplorerSection::PointClouds,
+                            project.point_clouds.len(),
+                            commands,
+                        );
 
-                let point_clouds_dirty = project.point_clouds_membership_dirty || project.point_clouds.iter().any(|item| item.dirty);
-                let (point_clouds_header_toggle, point_clouds_header, _) = ExplorerHeader::new(egui::Id::new("point_clouds_collapse"), tr!(literal = "Point Clouds"))
-                    .icon(unthemed_icon!("section_point_clouds.svg"))
-                    .color(HEADER_POINT_CLOUDS)
-                    .dirty(point_clouds_dirty)
-                    .show(ui, |ui| {
-                        if project.point_clouds.is_empty() {
-                            explorer_note(ui, tr!(literal = "No point clouds"));
-                        }
-                        for point_cloud in &project.point_clouds {
-                            let dirty_marker = if point_cloud.dirty { " *" } else { "" };
-                            let label_text = format!("{}{dirty_marker}", point_cloud.name);
-                            let label = if point_cloud.is_loaded {
-                                bold(&label_text)
-                            } else {
-                                bold(&label_text).color(INACTIVE_TEXT_COLOR)
-                            };
-                            let source_suffix = point_cloud.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
-                            let tooltip = tr_format!(
-                                literal = "ID: point-cloud:%id%%source%\n%count% point(s)",
-                                id = point_cloud.id.0,
-                                source = source_suffix,
-                                count = point_cloud.point_count
-                            );
-                            let cloud_locked = frozen_handles.contains(&SceneEntityId::PointCloud(point_cloud.id));
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_point_cloud", point_cloud.id)), label)
-                                .toggles(EntryToggles {
-                                    visible: point_cloud.is_loaded,
-                                    locked: cloud_locked,
-                                })
-                                .show(ui);
-                            if row.visibility_clicked {
-                                commands.push(if point_cloud.is_loaded { UiCommand::ClosePointCloud(point_cloud.id) } else { UiCommand::LoadPointCloud(point_cloud.id) });
-                            }
-                            if row.lock_clicked {
-                                commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
-                            }
-                            let response = row.response.on_hover_text(&tooltip);
-
-
-
-                            context_menu_popup(&response, point_cloud.name.as_str(), |ui| {
-                                if ContextMenuAction::new(if cloud_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
-                                    ui.close();
+                        let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
+                        let (block_models_header_toggle, block_models_header, _) = ExplorerHeader::new(egui::Id::new("block_models_collapse"), tr!(literal = "Block Models"))
+                            .icon(unthemed_icon!("section_block_models.svg"))
+                            .color(HEADER_BLOCK_MODELS)
+                            .dirty(block_models_dirty)
+                            .show(ui, |ui| {
+                                if project.block_models.is_empty() {
+                                    explorer_note(ui, tr!(literal = "No block models"));
                                 }
-                                if point_cloud.is_loaded {
-                                    if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::ClosePointCloud(point_cloud.id));
-                                        ui.close();
+                                for block_model in &project.block_models {
+                                    let is_selected = selected_handles.contains(&SceneEntityId::BlockModel(block_model.id));
+                                    let dirty_marker = if block_model.dirty { " *" } else { "" };
+                                    let label_text = format!("{}{dirty_marker}", block_model.name);
+                                    let label = if block_model.is_loaded {
+                                        bold(&label_text)
+                                    } else {
+                                        bold(&label_text).color(INACTIVE_TEXT_COLOR)
+                                    };
+                                    let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
+                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
+                                        .selected(is_selected)
+                                        .toggles(EntryToggles {
+                                            visible: block_model.is_loaded,
+                                            locked: model_locked,
+                                        })
+                                        .show(ui);
+                                    if row.visibility_clicked {
+                                        commands.push(if block_model.is_loaded {
+                                            UiCommand::CloseBlockModel(block_model.id)
+                                        } else {
+                                            UiCommand::LoadBlockModel(block_model.id)
+                                        });
                                     }
-                                } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadPointCloud(point_cloud.id));
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!cloud_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::PointCloud(point_cloud.id)));
-                                    ui.close();
-                                }
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!cloud_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::PointCloud(point_cloud.id)));
-                                    ui.close();
+                                    if row.lock_clicked {
+                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
+                                    }
+                                    let block_model_source_suffix = block_model
+                                        .source_name
+                                        .as_deref()
+                                        .map(|name| tr_format!(literal = "\nSource: %name%", name = name))
+                                        .unwrap_or_default();
+                                    let response = row.response.on_hover_text(tr_format!(
+                                        literal = "ID: block-model:%id%%source%\n%count% colour variable(s)",
+                                        id = block_model.id.0,
+                                        source = block_model_source_suffix,
+                                        count = block_model.variable_count
+                                    ));
+                                    if response.clicked() && block_model.is_loaded {
+                                        // Selecting here is what reveals the model's
+                                        // viewport controls, the same as picking it in
+                                        // the viewport does.
+                                        commands.push(UiCommand::SelectBlockModel(block_model.id));
+                                    }
+
+                                    context_menu_popup(&response, block_model.name.as_str(), |ui| {
+                                        if ContextMenuAction::new(if model_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })
+                                            .show(ui)
+                                            .clicked()
+                                        {
+                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
+                                            ui.close();
+                                        }
+                                        if block_model.is_loaded {
+                                            if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
+                                                commands.push(UiCommand::CloseBlockModel(block_model.id));
+                                                ui.close();
+                                            }
+                                        } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
+                                            commands.push(UiCommand::LoadBlockModel(block_model.id));
+                                            ui.close();
+                                        }
+                                        if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!model_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::BlockModel(block_model.id)));
+                                            ui.close();
+                                        }
+                                        context_menu_separator(ui);
+                                        if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!model_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::BlockModel(block_model.id)));
+                                            ui.close();
+                                        }
+                                    });
                                 }
                             });
-                        }
-                    });
-                section_heading_menu(&point_clouds_header_toggle.union(point_clouds_header.inner), ExplorerSection::PointClouds, project.point_clouds.len(), commands);
+                        section_heading_menu(
+                            &block_models_header_toggle.union(block_models_header.inner),
+                            ExplorerSection::BlockModels,
+                            project.block_models.len(),
+                            commands,
+                        );
 
-                let block_models_dirty = project.block_models_membership_dirty || project.block_models.iter().any(|item| item.dirty);
-                let (block_models_header_toggle, block_models_header, _) = ExplorerHeader::new(egui::Id::new("block_models_collapse"), tr!(literal = "Block Models"))
-                    .icon(unthemed_icon!("section_block_models.svg"))
-                    .color(HEADER_BLOCK_MODELS)
-                    .dirty(block_models_dirty)
-                    .show(ui, |ui| {
-                        if project.block_models.is_empty() {
-                            explorer_note(ui, tr!(literal = "No block models"));
-                        }
-                        for block_model in &project.block_models {
-                            let is_selected = selected_handles.contains(&SceneEntityId::BlockModel(block_model.id));
-                            let dirty_marker = if block_model.dirty { " *" } else { "" };
-                            let label_text = format!("{}{dirty_marker}", block_model.name);
-                            let label = if block_model.is_loaded {
-                                bold(&label_text)
-                            } else {
-                                bold(&label_text).color(INACTIVE_TEXT_COLOR)
-                            };
-                            let model_locked = frozen_handles.contains(&SceneEntityId::BlockModel(block_model.id));
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_block_model", block_model.id)), label)
-                                .selected(is_selected)
-                                .toggles(EntryToggles {
-                                    visible: block_model.is_loaded,
-                                    locked: model_locked,
-                                })
-                                .show(ui);
-                            if row.visibility_clicked {
-                                commands.push(if block_model.is_loaded { UiCommand::CloseBlockModel(block_model.id) } else { UiCommand::LoadBlockModel(block_model.id) });
-                            }
-                            if row.lock_clicked {
-                                commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
-                            }
-                            let block_model_source_suffix = block_model.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
-                            let response = row.response.on_hover_text(tr_format!(
-                                literal = "ID: block-model:%id%%source%\n%count% colour variable(s)",
-                                id = block_model.id.0,
-                                source = block_model_source_suffix,
-                                count = block_model.variable_count
-                            ));
-                            if response.clicked() && block_model.is_loaded {
-                                // Selecting here is what reveals the model's
-                                // properties tab, the same as picking it in
-                                // the viewport does.
-                                commands.push(UiCommand::SelectBlockModel(block_model.id));
-                            }
-
-                            context_menu_popup(&response, block_model.name.as_str(), |ui| {
-                                if ContextMenuAction::new(if model_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::BlockModel(block_model.id)));
-                                    ui.close();
+                        let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
+                        let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), tr!(literal = "Drill Holes"))
+                            .icon(unthemed_icon!("drill_hole.svg"))
+                            .color(HEADER_DRILL_HOLES)
+                            .dirty(drill_holes_dirty)
+                            .show(ui, |ui| {
+                                if project.drill_holes.is_empty() {
+                                    explorer_note(ui, tr!(literal = "No drill holes"));
                                 }
-                                if block_model.is_loaded {
-                                    if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::CloseBlockModel(block_model.id));
-                                        ui.close();
+                                for dataset in &project.drill_holes {
+                                    let dataset_label = if dataset.dirty { format!("{} *", dataset.name) } else { dataset.name.clone() };
+                                    let label = if dataset.is_loaded {
+                                        bold(&dataset_label)
+                                    } else {
+                                        bold(&dataset_label).color(INACTIVE_TEXT_COLOR)
+                                    };
+                                    let source_suffix = dataset
+                                        .source_name
+                                        .as_deref()
+                                        .map(|name| tr_format!(literal = "\nSource: %name%", name = name))
+                                        .unwrap_or_default();
+                                    let tooltip = tr_format!(
+                                        literal = "ID: drill-holes:%id%%source%\n%holes% hole(s)\n%fields% colour field(s)",
+                                        id = dataset.id.0,
+                                        source = source_suffix,
+                                        holes = dataset.hole_count,
+                                        fields = dataset.field_count
+                                    );
+                                    let dataset_locked = frozen_handles.contains(&SceneEntityId::DrillHole(dataset.id));
+                                    let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
+                                        .toggles(EntryToggles {
+                                            visible: dataset.is_loaded,
+                                            locked: dataset_locked,
+                                        })
+                                        .show(ui);
+                                    if row.visibility_clicked {
+                                        commands.push(if dataset.is_loaded {
+                                            UiCommand::CloseDrillHole(dataset.id)
+                                        } else {
+                                            UiCommand::LoadDrillHole(dataset.id)
+                                        });
                                     }
-                                } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadBlockModel(block_model.id));
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!model_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::BlockModel(block_model.id)));
-                                    ui.close();
-                                }
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!model_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::BlockModel(block_model.id)));
-                                    ui.close();
+                                    if row.lock_clicked {
+                                        commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
+                                    }
+                                    let response = row.response.on_hover_text(&tooltip);
+
+                                    context_menu_popup(&response, dataset.name.as_str(), |ui| {
+                                        if ContextMenuAction::new(if dataset_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") })
+                                            .show(ui)
+                                            .clicked()
+                                        {
+                                            commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
+                                            ui.close();
+                                        }
+                                        if dataset.is_loaded {
+                                            if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
+                                                commands.push(UiCommand::CloseDrillHole(dataset.id));
+                                                ui.close();
+                                            }
+                                            if ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked() {
+                                                commands.push(UiCommand::OpenDrillHoleColorDialog(dataset.id));
+                                                ui.close();
+                                            }
+                                        } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
+                                            commands.push(UiCommand::LoadDrillHole(dataset.id));
+                                            ui.close();
+                                        }
+                                        if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!dataset_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::BeginRenameItem(RenameTarget::DrillHole(dataset.id)));
+                                            ui.close();
+                                        }
+                                        context_menu_separator(ui);
+                                        if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!dataset_locked).show(ui).clicked() {
+                                            commands.push(UiCommand::RequestDeleteItem(RenameTarget::DrillHole(dataset.id)));
+                                            ui.close();
+                                        }
+                                    });
                                 }
                             });
-                        }
+                        section_heading_menu(
+                            &drill_holes_header_toggle.union(drill_holes_header.inner),
+                            ExplorerSection::DrillHoles,
+                            project.drill_holes.len(),
+                            commands,
+                        );
+
+                        paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
                     });
-                section_heading_menu(&block_models_header_toggle.union(block_models_header.inner), ExplorerSection::BlockModels, project.block_models.len(), commands);
-
-                let drill_holes_dirty = project.drill_holes_membership_dirty || project.drill_holes.iter().any(|item| item.dirty);
-                let (drill_holes_header_toggle, drill_holes_header, _) = ExplorerHeader::new(egui::Id::new("drill_holes_collapse"), tr!(literal = "Drill Holes"))
-                    .icon(unthemed_icon!("drill_hole.svg"))
-                    .color(HEADER_DRILL_HOLES)
-                    .dirty(drill_holes_dirty)
-                    .show(ui, |ui| {
-                        if project.drill_holes.is_empty() {
-                            explorer_note(ui, tr!(literal = "No drill holes"));
-                        }
-                        for dataset in &project.drill_holes {
-                            let dataset_label = if dataset.dirty { format!("{} *", dataset.name) } else { dataset.name.clone() };
-                            let label = if dataset.is_loaded {
-                                bold(&dataset_label)
-                            } else {
-                                bold(&dataset_label).color(INACTIVE_TEXT_COLOR)
-                            };
-                            let source_suffix = dataset.source_name.as_deref().map(|name| tr_format!(literal = "\nSource: %name%", name = name)).unwrap_or_default();
-                            let tooltip = tr_format!(
-                                literal = "ID: drill-holes:%id%%source%\n%holes% hole(s)\n%fields% colour field(s)",
-                                id = dataset.id.0,
-                                source = source_suffix,
-                                holes = dataset.hole_count,
-                                fields = dataset.field_count
-                            );
-                            let dataset_locked = frozen_handles.contains(&SceneEntityId::DrillHole(dataset.id));
-                            let row = ExplorerEntry::new(egui::Id::new(("explorer_drill_hole", dataset.id)), label)
-                                .toggles(EntryToggles {
-                                    visible: dataset.is_loaded,
-                                    locked: dataset_locked,
-                                })
-                                .show(ui);
-                            if row.visibility_clicked {
-                                commands.push(if dataset.is_loaded { UiCommand::CloseDrillHole(dataset.id) } else { UiCommand::LoadDrillHole(dataset.id) });
-                            }
-                            if row.lock_clicked {
-                                commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
-                            }
-                            let response = row.response.on_hover_text(&tooltip);
-
-                            context_menu_popup(&response, dataset.name.as_str(), |ui| {
-                                if ContextMenuAction::new(if dataset_locked { tr!(literal = "Unlock") } else { tr!(literal = "Lock") }).show(ui).clicked() {
-                                    commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
-                                    ui.close();
-                                }
-                                if dataset.is_loaded {
-                                    if ContextMenuAction::new(tr!(literal = "Unload")).show(ui).clicked() {
-                                        commands.push(UiCommand::CloseDrillHole(dataset.id));
-                                        ui.close();
-                                    }
-                                    if ContextMenuAction::new(tr!(literal = "Colour by...")).show(ui).clicked() {
-                                        commands.push(UiCommand::OpenDrillHoleColorDialog(dataset.id));
-                                        ui.close();
-                                    }
-                                } else if ContextMenuAction::new(tr!(literal = "Load")).show(ui).clicked() {
-                                    commands.push(UiCommand::LoadDrillHole(dataset.id));
-                                    ui.close();
-                                }
-                                if ContextMenuAction::new(tr!(literal = "Rename")).enabled(!dataset_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::BeginRenameItem(RenameTarget::DrillHole(dataset.id)));
-                                    ui.close();
-                                }
-                                context_menu_separator(ui);
-                                if ContextMenuAction::new(tr!(literal = "Delete from Project")).enabled(!dataset_locked).show(ui).clicked() {
-                                    commands.push(UiCommand::RequestDeleteItem(RenameTarget::DrillHole(dataset.id)));
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
-                section_heading_menu(&drill_holes_header_toggle.union(drill_holes_header.inner), ExplorerSection::DrillHoles, project.drill_holes.len(), commands);
-
-                paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
-            });
-            })
-            .response
-            .rect;
-
-            (tree_rect, properties_rect)
+                })
+                .response
+                .rect
         });
 
-    let (tree, properties) = column.inner;
+    let tree = column.inner;
     ExplorerLayout {
         column: column.response.rect,
         tree,
-        properties,
     }
 }

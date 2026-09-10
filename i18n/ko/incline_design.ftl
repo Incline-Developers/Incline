@@ -1059,7 +1059,7 @@ literal-no-triangulations-bb471fe9d2cff952 = 삼각망 없음
 literal-source-name-77b9162735795441 =
     출처: %name%
 literal-id-triangulation-id-source-cc1068a000d7c3e9 = ID: triangulation:%id%%source%
-literal-no-image-textures-6406e1c080390be1 = 이미지 텍스처 없음
+explorer-no-rasters = 래스터 없음
 literal-no-point-clouds-d0ab5ccd45a05366 = 포인트 클라우드 없음
 literal-no-block-models-2e310099263f058f = 블록 모델 없음
 literal-no-drill-holes-9641fcc0c51b6618 = 시추공 없음

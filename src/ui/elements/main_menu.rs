@@ -480,6 +480,10 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
             ui.close();
         }
         context_menu_separator(ui);
+        if ContextMenuAction::new(tr!("preferences-title")).show(ui).clicked() {
+            commands.push(UiCommand::OpenPreferences);
+            ui.close();
+        }
         if ContextMenuAction::new(tr!("menu-file-about", app = crate::APP_NAME)).show(ui).clicked() {
             editor.show_about = true;
             ui.close();

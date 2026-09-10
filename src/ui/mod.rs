@@ -166,7 +166,7 @@ impl Gui {
             console_snapshot: &console_snapshot,
         };
         let mut canvas_rect_logical = egui::Rect::NOTHING;
-        let full_output = self.ctx.run_ui(raw_input, |ui| {
+        let mut full_output = self.ctx.run_ui(raw_input, |ui| {
             geometry_dirty |= draw_ui(
                 ui,
                 editor,
@@ -189,8 +189,10 @@ impl Gui {
         mirror_copy_text_to_browser_clipboard(&full_output.platform_output);
         self.state.handle_platform_output(window, full_output.platform_output);
 
-        for (id, image_delta) in &full_output.textures_delta.set {
-            self.renderer.update_texture(device, queue, *id, image_delta);
+        for (id, image_deltas) in full_output.textures_delta.set.drain() {
+            for image_delta in image_deltas {
+                self.renderer.update_texture(device, queue, id, &image_delta);
+            }
         }
 
         let pixels_per_point = full_output.pixels_per_point;
@@ -230,8 +232,8 @@ impl Gui {
             self.renderer.render(&mut render_pass.forget_lifetime(), &paint_jobs, &screen_descriptor);
         }
 
-        for id in &full_output.textures_delta.free {
-            self.renderer.free_texture(id);
+        for id in full_output.textures_delta.free.drain() {
+            self.renderer.free_texture(&id);
         }
 
         let canvas_rect = if editor.is_planning_setup() {
@@ -543,15 +545,18 @@ fn draw_ui(
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
     if editor.is_planning_setup() {
-        let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
-        let console = if editor.show_console {
-            let (min, max) = elements::properties::height_limits(root_ui.available_height());
-            elements::console::draw_console(root_ui, min, max, frame_context.console_snapshot)
-        } else {
-            egui::Rect::NOTHING
-        };
+        let explorer = elements::explorer::draw_explorer(root_ui, editor, project, commands);
+        let console_rect = editor.show_console.then(|| {
+            let available_height = root_ui.available_height();
+            let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
+            let console_min = (120.0_f32.min(available_height) - toolbar_height).max(0.0);
+            let console_max = (available_height - 72.0 - toolbar_height).max(console_min);
+            elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
+        });
+        let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let details = elements::planning_setup::draw_details(root_ui, editor.planning_page);
         dialogs::about::draw_about_dialog(root_ui, editor);
+        elements::properties::draw_preferences(root_ui, editor, commands);
         #[cfg(target_arch = "wasm32")]
         if editor.new_project_dialog_open {
             dialogs::editing::draw_create_project_dialog(root_ui, commands, editor, details);
@@ -567,19 +572,18 @@ fn draw_ui(
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        chrome::paint_regions(ctx, [viewport_bar_rect, explorer.tree, explorer.properties, console, details]);
+        chrome::paint_regions(ctx, [viewport_bar_rect, explorer.tree, console, details]);
         chrome::paint_grips(
             ctx,
             [
                 chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-                chrome::Grip::new(explorer.properties, chrome::Edge::Top, elements::properties::PANEL_ID),
                 chrome::Grip::new(console, chrome::Edge::Top, elements::console::PANEL_ID),
             ],
         );
         return geometry_dirty;
     }
 
-    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, block_models, document, commands, &mut geometry_dirty);
+    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, commands);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -587,12 +591,8 @@ fn draw_ui(
     let console_rect = editor.show_console.then(|| {
         let available_height = root_ui.available_height();
         let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-        let (properties_min, properties_max) = elements::properties::height_limits(available_height);
-        // The properties panel and this two-region stack share a bottom edge.
-        // Offset both properties limits by the toolbar so the top of the
-        // toolbar lands on the properties panel's top at either drag limit.
-        let console_min = (properties_min - toolbar_height).max(0.0);
-        let console_max = (properties_max - toolbar_height).max(console_min);
+        let console_min = (120.0_f32.min(available_height) - toolbar_height).max(0.0);
+        let console_max = (available_height - 72.0 - toolbar_height).max(console_min);
         elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
@@ -935,6 +935,8 @@ fn draw_ui(
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
+    elements::properties::draw_preferences(root_ui, editor, commands);
+    elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
 
     // --- Canvas right-click context menu ---
     if editor.canvas_context_menu_open
@@ -1120,7 +1122,6 @@ fn draw_ui(
         [
             viewport_bar_rect,
             explorer.tree,
-            explorer.properties,
             left_toolbar_rect,
             bottom_toolbar_rect,
             console_claimed,
@@ -1128,13 +1129,11 @@ fn draw_ui(
             scene_claimed,
         ],
     );
-    // The explorer's column is dragged as a whole, so its grip is centred on
-    // the tree and the properties panel together rather than on either.
+    // Centre the explorer resize grip on its full-height column.
     chrome::paint_grips(
         &ctx,
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-            chrome::Grip::new(explorer.properties, chrome::Edge::Top, elements::properties::PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
             chrome::Grip::new(
                 products_claimed,
