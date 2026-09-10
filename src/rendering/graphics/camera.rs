@@ -223,47 +223,65 @@ fn pick_record_bounds_may_touch_rect(record: &PickRecord, view_proj: &DMat4, scr
     crate::model::spatial::projected_box_overlaps(record.world_bounds.0, record.world_bounds.1, view_proj, screen, cursor, threshold)
 }
 
+/// Where the middle-drag pan takes its deltas from. Native uses device
+/// motion; the web differences cursor positions instead, since Chromium's
+/// first movement value after a press can jump the view by a page-sized step.
+const MIDDLE_PAN_FROM_CURSOR: bool = cfg!(target_arch = "wasm32");
+
 impl<'a> Graphics<'a> {
     pub(crate) fn process_mouse_motion(&mut self, dx: f64, dy: f64) -> bool {
         if self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right) {
             self.fly_camera_controller.process_mouse_motion(dx, dy);
             return true;
         }
+        if MIDDLE_PAN_FROM_CURSOR || self.mouse_pressed != Some(MouseButton::Middle) {
+            return false;
+        }
+        self.pan_by(dx, dy)
+    }
 
-        if self.mouse_pressed == Some(MouseButton::Middle)
-            && let Some(slice) = self.slice_view.as_mut()
-        {
+    /// Accumulate a middle-drag pan.
+    fn pan_by(&mut self, dx: f64, dy: f64) -> bool {
+        if self.fly_mode_enabled {
+            return false;
+        }
+        if let Some(slice) = self.slice_view.as_mut() {
             // Same accumulation convention as the camera controller's pan so
             // the drag feel matches; consumed by `update_slice_camera`.
             slice.pan.x += -dx;
             slice.pan.y += dy;
             return true;
         }
+        self.camera_controller.process_mouse(Some(MouseButton::Middle), dx, dy)
+    }
 
-        if !self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Middle) {
-            return self.camera_controller.process_mouse(self.mouse_pressed, dx, dy);
-        }
-
-        false
+    /// On the web every cursor move reaches the camera, even one egui claims,
+    /// so the tracked position doesn't go stale while the pointer crosses a panel.
+    pub(crate) fn track_cursor_through_gui(&mut self, mouse_loc: (f32, f32)) -> bool {
+        MIDDLE_PAN_FROM_CURSOR && self.set_mouse_location(mouse_loc)
     }
 
     pub(crate) fn set_mouse_location(&mut self, mouse_loc: (f32, f32)) -> bool {
         let mouse_loc = self.window_to_viewport_px(mouse_loc);
         let previous_mouse_loc = self.camera_controller.mouse_loc;
         self.camera_controller.mouse_loc = mouse_loc;
+        let dx = f64::from(mouse_loc.0 - previous_mouse_loc.0);
+        let dy = f64::from(mouse_loc.1 - previous_mouse_loc.1);
+
+        if MIDDLE_PAN_FROM_CURSOR && self.mouse_pressed == Some(MouseButton::Middle) {
+            return self.pan_by(dx, dy);
+        }
 
         if self.mouse_pressed == Some(MouseButton::Right) && !self.fly_mode_enabled {
-            let dx = mouse_loc.0 - previous_mouse_loc.0;
-            let dy = mouse_loc.1 - previous_mouse_loc.1;
             if let Some(slice) = self.slice_view.as_mut() {
                 // Rebuilt from slice state each tick, so a rotation here would be overwritten; it accumulates on slice state instead (see `begin_slice_orbit_drag`).
                 if !slice.orbit_dragging {
                     return false;
                 }
-                slice.orbit += DVec2::new(dx.into(), dy.into());
+                slice.orbit += DVec2::new(dx, dy);
                 return true;
             }
-            return self.camera_controller.process_mouse(self.mouse_pressed, dx.into(), dy.into());
+            return self.camera_controller.process_mouse(self.mouse_pressed, dx, dy);
         }
 
         false

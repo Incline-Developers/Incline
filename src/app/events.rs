@@ -150,6 +150,14 @@ impl<'a> App<'a> {
                 consumed
             });
         let input_consumed = gui_consumed || graphics_consumed;
+        // Moves egui claimed skip the arm below; the camera still tracks them
+        // on the web (see `track_cursor_through_gui`).
+        if input_consumed
+            && let WindowEvent::CursorMoved { position, .. } = &event
+            && self.graphics.as_mut().is_some_and(|g| g.track_cursor_through_gui((*position).into()))
+        {
+            self.redraw_requested = true;
+        }
 
         if !input_consumed {
             match event {
