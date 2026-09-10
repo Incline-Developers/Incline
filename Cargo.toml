@@ -50,7 +50,7 @@ tiff = { version = "0.11.3", features = ["deflate", "fax", "jpeg", "lzw"], defau
 toml = "1.1.5"
 twox-hash = "2.1.4"
 unic-langid = { version = "0.9.6", features = ["macros"] }
-uuid = { version = "1.26.0", features = ["js", "serde", "v4"] }
+uuid = { version = "1.26.1", features = ["js", "serde", "v4"] }
 web-time = "1.1.0"
 wgpu = "30.0.1"
 winit = "0.30.13"
