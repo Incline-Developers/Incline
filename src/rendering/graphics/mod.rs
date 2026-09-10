@@ -445,6 +445,10 @@ pub(crate) struct SliceViewState {
     /// Camera and ortho zoom to restore on exit.
     pub(super) saved_camera: Camera,
     pub(super) saved_zoom: f64,
+    /// Where the eye sits relative to `center`: a fixed centre of rotation turns
+    /// the eye about itself, and the section line stays where it was cut, even
+    /// after the centre is released.
+    pub(super) view_offset: DVec3,
 }
 
 impl SliceViewState {
@@ -464,6 +468,13 @@ impl SliceViewState {
     /// construction. Chosen so that screen-right equals `+direction`.
     pub(super) fn normal(&self) -> DVec3 {
         slice_view_forward(self.direction)
+    }
+
+    /// The eye: `center` plus `view_offset`, which a fixed rotation centre
+    /// can pull off the section plane (see the depth-extent widening in
+    /// `frame.rs`).
+    pub(super) fn camera_position(&self) -> DVec3 {
+        self.center + self.view_offset
     }
 
     pub(super) fn camera_basis(&self) -> (DVec3, DVec3, DVec3) {
@@ -500,12 +511,6 @@ fn settled_viewing_side(was_front: bool, incidence: f64) -> bool {
 /// from the front side, `-normal` from the back.
 fn walk_direction(normal: DVec3, viewing_from_front: bool) -> DVec3 {
     if viewing_from_front { normal } else { -normal }
-}
-
-/// Camera `right`/`up` flattened into the section plane (`normal`); pan and
-/// zoom-anchor move along these, and the flattened right vanishes edge-on.
-fn plane_screen_axes(right: DVec3, up: DVec3, normal: DVec3) -> (DVec3, DVec3) {
-    (right - normal * right.dot(normal), up - normal * up.dot(normal))
 }
 
 /// Wheel delta as `(x, y)` pixels; one notch is 100 px on either axis.
@@ -842,6 +847,7 @@ impl<'a> Graphics<'a> {
             viewing_from_front: true,
             saved_camera,
             saved_zoom,
+            view_offset: DVec3::ZERO,
         };
         let (forward, _, up) = slice.camera_basis();
         self.camera.look_to(slice.center, forward, up, self.projection.zoom);
@@ -888,17 +894,26 @@ impl<'a> Graphics<'a> {
         self.slice_view.as_ref().map(SliceViewState::slab)
     }
 
-    pub(crate) fn reset_slice_view(&mut self) -> bool {
+    pub(crate) fn reset_slice_view(&mut self, rotation_centre: Option<DVec3>) -> bool {
+        let fixed_centre = rotation_centre.map(|centre| self.exaggerate_point(centre));
         let Some(slice) = self.slice_view.as_mut() else {
             return false;
         };
+        // Squaring up is a turn like any other: a fixed centre keeps its pixel through it.
+        let anchored = fixed_centre.map(|centre| (centre, camera::eye_offset_from(centre, slice.camera_position(), slice.camera_basis())));
         slice.yaw = 0.0;
         slice.pitch = 0.0;
         slice.orbit = DVec2::ZERO;
         slice.orbit_dragging = false;
         slice.viewing_from_front = true;
-        let (forward, _, up) = slice.camera_basis();
-        self.camera.look_to(slice.center, forward, up, self.projection.zoom.max(1.0));
+        let (forward, right, up) = slice.camera_basis();
+        let eye = match anchored {
+            Some((centre, (screen_x, screen_y, depth))) => camera::eye_keeping_centre(centre, screen_x, screen_y, depth, (forward, right, up)),
+            None => slice.camera_position(),
+        };
+        // Square-on, the view meets the plane head-on, so the eye always lands back on it.
+        slice.view_offset = camera::slide_onto_plane(eye, slice.center, forward, slice.normal()) - slice.center;
+        self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
         true
     }
 

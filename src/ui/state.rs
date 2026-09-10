@@ -1465,6 +1465,9 @@ pub(crate) struct EditorState {
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
     /// Model edited by the viewport filter controls; retained after deselection.
     pub(crate) viewport_block_model_id: Option<BlockModelId>,
+    /// The fixed centre of rotation while one is set (world space);
+    /// transient, cleared on section exit and project open.
+    pub(crate) rotation_centre: Option<DVec3>,
     pub(crate) block_model_variable_ranges: HashMap<(BlockModelId, String), Option<(f64, f64)>>,
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
@@ -1622,9 +1625,11 @@ impl EditorState {
         !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
     }
 
-    /// Never true in the slice view: its cursor is already pinned to the section plane, not snapped.
+    /// In the slice view only while the rotation-centre pick is armed: the
+    /// cursor is otherwise pinned to the section plane, not snapped. Armed, it
+    /// snaps to strings inside the slab, though the click picks again on its own.
     pub(crate) fn snapping_active(&self) -> bool {
-        self.cursor_mode.snaps() && !self.slice_mode_enabled
+        self.cursor_mode.snaps() && (!self.slice_mode_enabled || self.active_tool == ActiveTool::PickRotationCentre)
     }
 
     pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
@@ -2272,6 +2277,7 @@ impl EditorState {
             point_cloud_tin_hole_fill: 0.0,
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
+            rotation_centre: None,
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
@@ -2527,6 +2533,8 @@ pub(crate) enum ActiveTool {
     /// Drill & Blast's initiation tool: a click puts the point a round starts
     /// at on the hole under the cursor, at the delay the products panel holds.
     SetInitiationPoint,
+    /// One click fixes the centre both views orbit about.
+    PickRotationCentre,
     Chamfer,
     BatterBermOffset,
     Bezier,
@@ -2566,7 +2574,10 @@ impl ActiveTool {
     }
 
     pub(crate) fn works_in_slice_view(self) -> bool {
-        matches!(self, Self::MeasureDistance | Self::MeasureBatterAngle | Self::MakePoint | Self::MakeLine | Self::MakePoly)
+        matches!(
+            self,
+            Self::MeasureDistance | Self::MeasureBatterAngle | Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::PickRotationCentre
+        )
     }
 
     pub(crate) fn section_refuses(self) -> bool {
@@ -2784,6 +2795,8 @@ pub(crate) enum UiCommand {
     ResetView,
     /// Squares the camera to the section plane without leaving slice mode or changing the section itself, unlike `ResetView`.
     ResetSliceView,
+    /// Arm a click that fixes the centre of rotation, or release the one that is set.
+    ToggleRotationCentre,
     /// Show or hide the world grid ruled across the section.
     SetSliceGridEnabled(bool),
     SetTopologyWireframes(bool),
@@ -3225,6 +3238,7 @@ impl UiCommand {
             Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
             Self::ResetView => report(tr!(literal = "Reset View"), tr!(literal = "Fit to extents")),
             Self::ResetSliceView => report(tr!(literal = "Reset Section View"), tr!(literal = "Camera square to the section")),
+            Self::ToggleRotationCentre => report(tr!(literal = "Centre of Rotation"), tr!(literal = "Fix or release the centre both views orbit about")),
             Self::SetTopologyWireframes(enabled) => report(
                 tr!(literal = "Set Topology Wireframes"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },

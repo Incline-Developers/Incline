@@ -593,6 +593,10 @@ impl<'a> App<'a> {
                 self.cancel_relimit();
                 Ok(())
             }
+            UiCommand::ToggleRotationCentre => {
+                self.toggle_rotation_centre();
+                Ok(())
+            }
             UiCommand::ResetView => {
                 self.leave_slice_mode();
                 self.reset_view();

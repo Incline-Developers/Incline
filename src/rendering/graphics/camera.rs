@@ -228,6 +228,48 @@ fn pick_record_bounds_may_touch_rect(record: &PickRecord, view_proj: &DMat4, scr
 /// first movement value after a press can jump the view by a page-sized step.
 const MIDDLE_PAN_FROM_CURSOR: bool = cfg!(target_arch = "wasm32");
 
+/// How far, in physical pixels, a click may miss a string or trace and still
+/// fix the centre on it: twice the snap glyph's reach.
+const ROTATION_CENTRE_PICK_PX: f32 = SNAP_THRESHOLD_PX * 2.0;
+
+/// Where the eye sits after a rigid turn about a fixed `centre`: the same
+/// offset (`screen_x` right, `screen_y` up, `depth` forward) in the new basis.
+pub(super) fn eye_keeping_centre(centre: DVec3, screen_x: f64, screen_y: f64, depth: f64, basis: (DVec3, DVec3, DVec3)) -> DVec3 {
+    let (forward, right, up) = basis;
+    centre - right * screen_x - up * screen_y - forward * depth
+}
+
+/// The eye slid along the view onto the section plane through `center`, which
+/// an orthographic view cannot see; left alone when the view runs along it.
+pub(super) fn slide_onto_plane(eye: DVec3, center: DVec3, forward: DVec3, normal: DVec3) -> DVec3 {
+    let incidence = forward.dot(normal);
+    if incidence.abs() < crate::rendering::camera::MIN_SECTION_INCIDENCE.sin() {
+        return eye;
+    }
+    eye - forward * ((eye - center).dot(normal) / incidence)
+}
+
+/// The move within a vertical section plane that shifts the view by `dx` along
+/// screen right and `dy` up, so a drag tracks the hand at any orbit.
+pub(super) fn in_plane_screen_move(dx: f64, dy: f64, right: DVec3, up: DVec3, normal: DVec3) -> Option<DVec3> {
+    let strike = DVec3::Z.cross(normal).normalize_or(DVec3::X);
+    let (a, b, c, d) = (strike.dot(right), DVec3::Z.dot(right), strike.dot(up), DVec3::Z.dot(up));
+    let determinant = a * d - b * c;
+    if determinant.abs() < 1.0e-9 {
+        return None;
+    }
+    let along = (dx * d - dy * b) / determinant;
+    let rise = (dy * a - dx * c) / determinant;
+    Some(strike * along + DVec3::Z * rise)
+}
+
+/// The inverse of `eye_keeping_centre`: the eye's offset from a fixed `centre`.
+pub(super) fn eye_offset_from(centre: DVec3, eye: DVec3, basis: (DVec3, DVec3, DVec3)) -> (f64, f64, f64) {
+    let (forward, right, up) = basis;
+    let to_centre = centre - eye;
+    (to_centre.dot(right), to_centre.dot(up), to_centre.dot(forward))
+}
+
 impl<'a> Graphics<'a> {
     pub(crate) fn process_mouse_motion(&mut self, dx: f64, dy: f64) -> bool {
         if self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right) {
@@ -847,28 +889,58 @@ impl<'a> Graphics<'a> {
         document: &Document,
         snap_index: &crate::model::spatial::ObjectSnapIndex,
         working_plane_z: f64,
+        rotation_centre: Option<DVec3>,
     ) {
         // Prefer snapping to a nearby document vertex so the orbit pivot lands
         // on actual geometry (lines, polylines, points) when one is close.
-        let view_proj = self.view_proj();
-        let screen = self.screen_size();
-        let snap_pt = SceneQuery::snap(
+        let pt = rotation_centre.unwrap_or_else(|| {
+            self.snap_under_cursor(document, snap_index, triangulations, hidden, frozen)
+                .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z, SNAP_THRESHOLD_PX))
+        });
+        self.camera.sync_angles_from_forward();
+        self.camera_controller.begin_orbit(self.exaggerate_point(pt));
+        self.orbit_marker = rotation_centre.is_none().then_some(pt);
+    }
+
+    /// The vertex within snap reach of the cursor, if any.
+    fn snap_under_cursor(
+        &self,
+        document: &Document,
+        snap_index: &crate::model::spatial::ObjectSnapIndex,
+        triangulations: &[OpenTriangulation],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Option<DVec3> {
+        SceneQuery::snap(
             document,
             snap_index,
             triangulations,
             hidden,
             frozen,
             &CursorMode::SnapToPoint,
-            &view_proj,
-            screen,
+            &self.view_proj(),
+            self.screen_size(),
             self.camera_controller.mouse_loc,
             SNAP_THRESHOLD_PX,
             false,
-        );
+        )
+    }
 
-        let pt = if let Some(p) = snap_pt {
-            p
-        } else {
+    /// The plan-view pivot when nothing snapped: the nearest asset under the
+    /// cursor, else an object within `pick_px`, the working plane, or the eye's depth.
+    #[allow(clippy::too_many_arguments)]
+    fn orbit_point_under_cursor(
+        &self,
+        triangulations: &[OpenTriangulation],
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        working_plane_z: f64,
+        pick_px: f32,
+    ) -> DVec3 {
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
             let drill_hole_hit =
@@ -899,20 +971,168 @@ impl<'a> Graphics<'a> {
                     // No asset surface hit - try picking any document object
                     // near the cursor, then the working plane under it, then
                     // the camera-target depth if the view can't meet the plane.
-                    self.pick_at_cursor(SNAP_THRESHOLD_PX, triangulations, hidden, frozen, false)
+                    self.pick_at_cursor(pick_px, triangulations, hidden, frozen, false)
                         .map(|(_, world)| world)
                         .or_else(|| {
                             // Reject a working-plane hit behind the viewer (a tilted view can put the plane there).
-                            self.cursor_world(working_plane_z)
-                                .filter(|point| (self.exaggerate_point(*point) - self.camera.position).dot(self.camera.forward()) > 0.0)
+                            self.cursor_world(working_plane_z).filter(|point| self.in_front_of_eye(*point))
                         })
                         .unwrap_or_else(|| self.unexaggerate_point(self.cursor_world_at_target_depth()))
                 })
-        };
+        }
+    }
 
-        self.camera.sync_angles_from_forward();
-        self.camera_controller.begin_orbit(self.exaggerate_point(pt));
-        self.orbit_marker = Some(pt);
+    /// The point a click fixes as the centre: the nearest string or drill trace
+    /// on screen within reach, since the eye aims at the line and not the
+    /// surface above it; else the section plane under the cursor, or in plan
+    /// the pivot an orbit would take.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn pick_rotation_centre(
+        &self,
+        triangulations: &[OpenTriangulation],
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        document: &Document,
+        snap_index: &crate::model::spatial::ObjectSnapIndex,
+        working_plane_z: f64,
+    ) -> Option<DVec3> {
+        let string = self.string_point_near_cursor(document, snap_index, hidden, frozen, ROTATION_CENTRE_PICK_PX);
+        let trace = self.trace_point_near_cursor(drill_holes, hidden, frozen, ROTATION_CENTRE_PICK_PX);
+        if let Some((point, _)) = [string, trace].into_iter().flatten().min_by(|a, b| a.1.total_cmp(&b.1)) {
+            return Some(point);
+        }
+        if self.slice_view.is_some() {
+            return self.section_point_at_px(self.camera_controller.mouse_loc);
+        }
+        Some(self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z, ROTATION_CENTRE_PICK_PX))
+    }
+
+    /// Screen position of a fixed centre; `None` behind a perspective eye.
+    pub(crate) fn rotation_centre_screen_pos(&self, centre: DVec3) -> Option<(f32, f32)> {
+        if self.projection.is_perspective() && !self.in_front_of_eye(centre) {
+            return None;
+        }
+        self.world_to_window_px_unclipped_depth(&self.view_proj(), centre)
+    }
+
+    /// Whether a true world point lies ahead of the eye, not behind it.
+    fn in_front_of_eye(&self, world: DVec3) -> bool {
+        (self.exaggerate_point(world) - self.camera.position).dot(self.camera.forward()) > 0.0
+    }
+
+    /// The nearest of `segments` to the cursor on screen, clipped to the slab
+    /// when one is up, within `threshold_px`; a lone point is a zero-length one.
+    fn nearest_on_screen(
+        &self,
+        view_proj: &DMat4,
+        cursor: DVec2,
+        slab: Option<crate::rendering::camera::SectionSlab>,
+        threshold_px: f32,
+        segments: impl Iterator<Item = (DVec3, DVec3)>,
+        best: &mut Option<(DVec3, f64)>,
+    ) {
+        use crate::rendering::pick::{closest_t_on_segment, perspective_correct_segment_point, slab_clipped_segment, world_to_screen_unclipped_depth};
+        let screen = self.screen_size();
+        let perspective = self.projection.is_perspective();
+        let mut best_distance = best.map_or(f64::from(threshold_px).powi(2), |(_, distance)| distance);
+        for (a, b) in segments {
+            // The slab's normal is horizontal, so it clips true world points as it
+            // clips displayed ones.
+            let Some((a, b)) = slab_clipped_segment(slab, a, b) else {
+                continue;
+            };
+            // Unclipped depth: what is drawn can be picked from either side of the
+            // plane; only a perspective eye has a behind, where a projection would mirror.
+            if perspective && !(self.in_front_of_eye(a) && self.in_front_of_eye(b)) {
+                continue;
+            }
+            let (Some(sa), Some(sb)) = (world_to_screen_unclipped_depth(view_proj, a, screen), world_to_screen_unclipped_depth(view_proj, b, screen)) else {
+                continue;
+            };
+            let t = closest_t_on_segment(cursor, sa, sb);
+            let distance = (sa + (sb - sa) * t).distance_squared(cursor);
+            if distance < best_distance {
+                best_distance = distance;
+                *best = Some((perspective_correct_segment_point(view_proj, a, b, t), distance));
+            }
+        }
+    }
+
+    /// The string point nearest the cursor on screen within `threshold_px`,
+    /// vertex or body alike, arcs included, with its squared screen distance.
+    fn string_point_near_cursor(
+        &self,
+        document: &Document,
+        snap_index: &crate::model::spatial::ObjectSnapIndex,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        threshold_px: f32,
+    ) -> Option<(DVec3, f64)> {
+        let view_proj = self.view_proj();
+        let cursor = DVec2::new(f64::from(self.camera_controller.mouse_loc.0), f64::from(self.camera_controller.mouse_loc.1));
+        let slab = self.section_slab();
+        let mut best = None;
+        let mut arc = Vec::new();
+        for index in snap_index.candidates(&view_proj, self.screen_size(), cursor, f64::from(threshold_px)) {
+            let object = &document.objects()[index];
+            let entity = SceneEntityId::Object(object.id());
+            if hidden.contains(&entity) || frozen.contains(&entity) || !document.layer(object.layer()).is_none_or(|layer| layer.loaded) {
+                continue;
+            }
+            match object {
+                crate::model::Object::Point { pos, .. } => self.nearest_on_screen(&view_proj, cursor, slab, threshold_px, std::iter::once((*pos, *pos)), &mut best),
+                crate::model::Object::Polyline { verts, closed, .. } => {
+                    let count = verts.len();
+                    let segments = if *closed { count } else { count.saturating_sub(1) };
+                    for k in 0..segments {
+                        let (a, b, bulge) = (verts[k].pos, verts[(k + 1) % count].pos, verts[k].bulge);
+                        if bulge.abs() <= f64::EPSILON {
+                            self.nearest_on_screen(&view_proj, cursor, slab, threshold_px, std::iter::once((a, b)), &mut best);
+                        } else {
+                            arc.clear();
+                            arc.extend(crate::model::geometry::tessellate_bulge_segment(a, b, bulge));
+                            self.nearest_on_screen(&view_proj, cursor, slab, threshold_px, arc.windows(2).map(|pair| (pair[0], pair[1])), &mut best);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        best
+    }
+
+    /// The drill-trace point nearest the cursor on screen within `threshold_px`,
+    /// drawn intervals only, measured as a string is so the two feel alike.
+    fn trace_point_near_cursor(
+        &self,
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        threshold_px: f32,
+    ) -> Option<(DVec3, f64)> {
+        let view_proj = self.view_proj();
+        let cursor = DVec2::new(f64::from(self.camera_controller.mouse_loc.0), f64::from(self.camera_controller.mouse_loc.1));
+        let slab = self.section_slab();
+        let mut best = None;
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded) {
+            let entity = dataset.entity_id();
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
+            for hole in &dataset.dataset.holes {
+                let drawn =
+                    |from: f64, to: f64| hole.render_ranges.is_empty() || hole.render_ranges.iter().any(|(start, end)| *start <= (from + to) * 0.5 && (from + to) * 0.5 < *end);
+                let legs = hole
+                    .trace
+                    .windows(2)
+                    .filter(|pair| drawn(pair[0].depth, pair[1].depth))
+                    .map(|pair| (pair[0].position, pair[1].position));
+                let collar = (hole.trace.len() == 1).then(|| (hole.collar_position(), hole.collar_position()));
+                self.nearest_on_screen(&view_proj, cursor, slab, threshold_px, legs.chain(collar), &mut best);
+            }
+        }
+        best
     }
 
     /// Find the nearest snap target for the current cursor position.
@@ -930,6 +1150,12 @@ impl<'a> Graphics<'a> {
     ) -> Option<DVec3> {
         if *mode == CursorMode::Select {
             return None;
+        }
+        if self.slice_view.is_some() {
+            // A section snaps to strings only, inside its slab, whatever the mode.
+            return self
+                .string_point_near_cursor(document, snap_index, hidden, frozen, SNAP_THRESHOLD_PX)
+                .map(|(point, _)| point);
         }
         let view_proj = self.view_proj();
         let screen = self.screen_size();
@@ -1370,9 +1596,10 @@ impl<'a> Graphics<'a> {
     /// and Q/E rotation, consume accumulated pan/scroll deltas, then derive
     /// the camera from the slice state (which stays the single source of
     /// truth).
-    fn update_slice_camera(&mut self, dt: Duration) {
+    fn update_slice_camera(&mut self, dt: Duration, rotation_centre: Option<DVec3>) {
         let screen = self.screen_size();
         let mouse_loc = self.camera_controller.mouse_loc;
+        let fixed_centre = rotation_centre.map(|centre| self.exaggerate_point(centre));
         let Some(slice) = self.slice_view.as_mut() else {
             return;
         };
@@ -1388,12 +1615,23 @@ impl<'a> Graphics<'a> {
         if rotate_amount != 0.0 {
             let angle = rotate_amount * slice.rotate_speed * step;
             slice.direction = DVec2::from_angle(angle).rotate(slice.direction).normalize_or(slice.direction);
+            // Turn about the fixed centre when set, else the anchor; the eye rides along.
+            let turn = DVec2::from_angle(angle);
+            if let Some(centre) = fixed_centre {
+                let arm = turn.rotate((slice.center - centre).truncate());
+                slice.center = DVec3::new(centre.x + arm.x, centre.y + arm.y, slice.center.z);
+            }
+            let eye = turn.rotate(slice.view_offset.truncate());
+            slice.view_offset = DVec3::new(eye.x, eye.y, slice.view_offset.z);
         }
 
         // Right-drag orbits only the eye, so the plane being drawn on never moves under a stroke (Q/E turn the section itself); settled before the walk/pan/zoom below since those act on this orientation.
         if !slice.orbit_dragging || self.mouse_pressed != Some(MouseButton::Right) {
             slice.orbit_dragging = false;
         }
+        let anchored = fixed_centre
+            .filter(|_| slice.orbit != DVec2::ZERO)
+            .map(|centre| (centre, eye_offset_from(centre, slice.camera_position(), slice.camera_basis())));
         if slice.orbit != DVec2::ZERO {
             let angles = self.camera_controller.orbit_angles(slice.orbit.x, slice.orbit.y);
             // Matches the plan view's sign: it rotates the camera position by the negated horizontal angle, so forward turns by its negative.
@@ -1407,6 +1645,11 @@ impl<'a> Graphics<'a> {
         let normal = slice.normal();
         let (forward, right, up) = slice.camera_basis();
         slice.update_viewing_side(forward);
+        if let Some((centre, (screen_x, screen_y, depth))) = anchored {
+            // The eye turns about the centre, not the section: the cut line and slab stay put.
+            let eye = eye_keeping_centre(centre, screen_x, screen_y, depth, (forward, right, up));
+            slice.view_offset = slide_onto_plane(eye, slice.center, forward, normal) - slice.center;
+        }
 
         // W/S and Shift+wheel both walk the slab along its normal, in the same metres, added together and applied once; forward is away from the eye, not `+normal`.
         let held_seconds = (f64::from(i8::from(slice.input.forward)) - f64::from(i8::from(slice.input.backward))) * step;
@@ -1416,11 +1659,13 @@ impl<'a> Graphics<'a> {
             slice.center += super::walk_direction(normal, slice.viewing_from_front) * (held_seconds + walked_seconds) * slice.move_speed;
         }
 
-        let (screen_right, screen_up) = super::plane_screen_axes(right, up, normal);
-
+        // Pan and zoom move the section anchor within its plane by the move
+        // that tracks the hand on screen.
         if slice.pan != DVec2::ZERO {
             let world_per_pixel = (2.0 * self.projection.zoom / screen.1.max(1.0) as f64).max(0.0);
-            slice.center += (screen_right * slice.pan.x + screen_up * slice.pan.y) * world_per_pixel;
+            if let Some(shift) = in_plane_screen_move(slice.pan.x * world_per_pixel, slice.pan.y * world_per_pixel, right, up, normal) {
+                slice.center += shift;
+            }
             slice.pan = DVec2::ZERO;
         }
 
@@ -1434,18 +1679,20 @@ impl<'a> Graphics<'a> {
             let zoom_factor = self.projection.zoom * zoom_scale;
             let mouse_ndc = crate::rendering::camera::point(mouse_loc.0, mouse_loc.1, screen);
             let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
-            slice.center += (screen_right * mouse_ndc.x * aspect + screen_up * mouse_ndc.y) * zoom_factor;
+            if let Some(shift) = in_plane_screen_move(mouse_ndc.x * aspect * zoom_factor, mouse_ndc.y * zoom_factor, right, up, normal) {
+                slice.center += shift;
+            }
             self.projection.zoom = (self.projection.zoom - zoom_factor).max(1.0e-4);
             slice.scroll = 0.0;
         }
 
         // The camera sits on the section plane, so the znear/zfar range stays centred on it; the shown slab is the shader clip, not this range, so orbiting only changes the angle, not what's cut.
-        self.camera.look_to(slice.center, forward, up, self.projection.zoom.max(1.0));
+        self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
     }
 
-    pub(crate) fn update(&mut self, dt: Duration, interaction_resolution_divisor: u32) {
+    pub(crate) fn update(&mut self, dt: Duration, interaction_resolution_divisor: u32, rotation_centre: Option<DVec3>) {
         if self.slice_view.is_some() {
-            self.update_slice_camera(dt);
+            self.update_slice_camera(dt, rotation_centre);
         } else if self.camera_controller.has_view_transition() {
             self.camera_controller.update_view_transition(&mut self.camera, &mut self.projection, dt);
         } else if self.fly_mode_enabled {
@@ -1525,13 +1772,11 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn orbit_marker_screen_pos(&self) -> Option<(f32, f32)> {
         let marker = self.orbit_marker?;
-        let view_proj = self.view_proj();
-        let screen = self.screen_size();
         // The marker is a foreground interaction overlay, not scene geometry.
         // In a near-horizontal view the scene-fitted depth slab may exclude a
         // void fallback pivot even though its screen X/Y is perfectly valid.
         // Project without the geometry helper's depth-range rejection so the
         // marker remains visible throughout the orbit.
-        crate::rendering::pick::world_to_screen_unclipped_depth(&view_proj, marker, screen).map(|v| self.viewport_to_window_px((v.x as f32, v.y as f32)))
+        self.world_to_window_px_unclipped_depth(&self.view_proj(), marker)
     }
 }

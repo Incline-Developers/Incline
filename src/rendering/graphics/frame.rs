@@ -123,7 +123,7 @@ impl<'a> Graphics<'a> {
                 .cached_scene_bounds
                 .map(|(min, max)| (DVec3::new(min.x, min.y, display_z(min.z)), DVec3::new(max.x, max.y, display_z(max.z))));
             self.projection
-                .set_symmetric_depth_extent(slice_depth_half_extent(slice.center, strike, forward, slice.width * 0.5, bounds));
+                .set_symmetric_depth_extent(slice_depth_half_extent(slice.center, strike, forward, slice.width * 0.5, bounds) + slice.view_offset.dot(forward).abs());
             editor.slice_center = [slice.center.x, slice.center.y, slice.center.z];
             editor.slice_direction = [slice.direction.x, slice.direction.y];
             editor.slice_half_length = slice_visible_half_length;
@@ -429,6 +429,7 @@ impl<'a> Graphics<'a> {
         self.update_tool_projections(editor, document, drill_holes);
 
         let orbit_marker_screen = self.orbit_marker_screen_pos();
+        let rotation_centre_screen = editor.rotation_centre.and_then(|centre| self.rotation_centre_screen_pos(centre));
         let camera_active = self.is_camera_active();
         let camera_forward = self.camera.forward();
         let camera_up = self.camera.up();
@@ -446,6 +447,7 @@ impl<'a> Graphics<'a> {
             drill_holes,
             [self.size.width, self.size.height],
             orbit_marker_screen,
+            rotation_centre_screen,
             camera_active,
             [camera_forward.x as f32, camera_forward.y as f32, camera_forward.z as f32],
             [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],

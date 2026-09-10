@@ -132,19 +132,47 @@ pub(crate) fn draw_orientation_gizmo(
         .rect
 }
 
-pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: egui::Rect) {
+/// A foreground painter for a marker at window pixel (`x`, `y`), clipped to the
+/// viewport; `None` when the point is outside it.
+fn marker_painter(ui: &egui::Ui, x: f32, y: f32, clip_rect: egui::Rect, id: &str) -> Option<(egui::Painter, egui::Pos2)> {
     let ppp = ui.ctx().pixels_per_point();
-    let pos = egui::pos2(ox / ppp, oy / ppp);
+    let pos = egui::pos2(x / ppp, y / ppp);
     if !clip_rect.contains(pos) {
-        return;
+        return None;
     }
-    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("orbit_marker")));
+    let mut painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new(id)));
     painter.set_clip_rect(clip_rect);
+    Some((painter, pos))
+}
+
+pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: egui::Rect) {
+    let Some((painter, pos)) = marker_painter(ui, ox, oy, clip_rect, "orbit_marker") else {
+        return;
+    };
     let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 220));
     let r = 4.0;
     painter.circle_stroke(pos, r, stroke);
     painter.line_segment([pos - egui::vec2(r + 4.0, 0.0), pos + egui::vec2(r + 4.0, 0.0)], stroke);
     painter.line_segment([pos - egui::vec2(0.0, r + 4.0), pos + egui::vec2(0.0, r + 4.0)], stroke);
+}
+
+/// The fixed centre of rotation: a ringed dot with four ticks, in the orbit
+/// marker's colour so the two read as one family, and it stays up between drags.
+pub(crate) fn draw_rotation_centre_marker(ui: &mut egui::Ui, cx: f32, cy: f32, clip_rect: egui::Rect) {
+    let Some((painter, pos)) = marker_painter(ui, cx, cy, clip_rect, "rotation_centre_marker") else {
+        return;
+    };
+    let halo = egui::Stroke::new(3.2, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140));
+    let core = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 235));
+    let r = 6.0;
+    for stroke in [halo, core] {
+        painter.circle_stroke(pos, r, stroke);
+        for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            let dir = egui::vec2(dx, dy);
+            painter.line_segment([pos + dir * (r + 2.0), pos + dir * (r + 7.0)], stroke);
+        }
+    }
+    painter.circle_filled(pos, 1.8, core.color);
 }
 
 /// Half-width of the cursor's crosshair arms, in points.

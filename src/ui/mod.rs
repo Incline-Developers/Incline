@@ -129,6 +129,7 @@ impl Gui {
         drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
         screen_size: [u32; 2],
         orbit_marker: Option<(f32, f32)>,
+        rotation_centre: Option<(f32, f32)>,
         camera_active: bool,
         camera_forward: [f32; 3],
         camera_up: [f32; 3],
@@ -159,6 +160,7 @@ impl Gui {
         let console_snapshot = crate::logging::console_snapshot();
         let frame_context = UiFrameContext {
             orbit_marker,
+            rotation_centre,
             camera_active,
             camera_forward,
             camera_up,
@@ -286,6 +288,8 @@ fn mirror_copy_text_to_browser_clipboard(platform_output: &egui::PlatformOutput)
 #[derive(Clone, Copy)]
 struct UiFrameContext<'a> {
     orbit_marker: Option<(f32, f32)>,
+    /// Screen position of the fixed centre of rotation, while one is set.
+    rotation_centre: Option<(f32, f32)>,
     /// Whether the camera is being driven by the pointer right now (a
     /// right-button drag). The drawn cursor stands down for a fly-mode look,
     /// where the pointer is grabbed to the window and has no position to sit at.
@@ -366,6 +370,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
         ActiveTool::RotateCollar => ViewportMessage::text(tr!(literal = "Drag a ring, or type an azimuth and dip")).minor(tr!(literal = "each hole turns about its own collar")),
         ActiveTool::SetInitiationPoint => ViewportMessage::text(tr!(literal = "Click a collar to add or edit an initiation point")),
+        ActiveTool::PickRotationCentre => ViewportMessage::text(tr!(literal = "Click a point to fix the centre of rotation")),
         // The palette selects its first product for you, so the only way to
         // reach the tool with nothing to tie with is to have deleted them
         // all. Say so up front rather than only in the console warning the
@@ -1054,6 +1059,9 @@ fn draw_ui(
     // Orbit marker (clipped to the 3D viewport)
     if let Some((ox, oy)) = frame_context.orbit_marker {
         elements::cursors::draw_orbit_marker(root_ui, ox, oy, canvas_rect);
+    }
+    if let Some((cx, cy)) = frame_context.rotation_centre {
+        elements::cursors::draw_rotation_centre_marker(root_ui, cx, cy, canvas_rect);
     }
 
     if editor.show_world_axis_gizmo {

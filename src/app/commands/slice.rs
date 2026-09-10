@@ -102,13 +102,14 @@ impl<'a> App<'a> {
             graphics.exit_slice_mode();
         }
         self.end_right_orbit();
+        self.clear_rotation_centre();
         self.redraw_requested = true;
         userspace_log!("{}", tr!(literal = "Exited slice view"));
     }
 
     /// Squares the section camera to its plane; undoes only the orbit, leaving direction, slab position, pan and zoom untouched.
     pub(crate) fn reset_slice_view(&mut self) {
-        if !self.graphics.as_mut().is_some_and(|graphics| graphics.reset_slice_view()) {
+        if !self.graphics.as_mut().is_some_and(|graphics| graphics.reset_slice_view(self.editor.rotation_centre)) {
             return;
         }
         self.end_right_orbit();

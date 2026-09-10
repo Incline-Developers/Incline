@@ -446,6 +446,28 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     if reset.clicked() {
         commands.push(UiCommand::ResetView);
     }
+
+    // Fixed centre of rotation: one click arms a pick, the next click on the
+    // button releases the centre; lit while armed or set.
+    let armed = editor.active_tool == ActiveTool::PickRotationCentre;
+    let centre = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("rotation_centre.svg")),
+            if editor.rotation_centre.is_some() {
+                format!("{} (C)", tr!(literal = "Release Centre of Rotation"))
+            } else if armed {
+                tr!(literal = "Click a point to fix the centre of rotation")
+            } else {
+                format!("{} (C)", tr!(literal = "Fix Centre of Rotation"))
+            },
+        )
+        .id_salt("rotation_centre")
+        .button_side(side)
+        .selected(armed || editor.rotation_centre.is_some()),
+    );
+    if centre.clicked() {
+        commands.push(UiCommand::ToggleRotationCentre);
+    }
 }
 
 /// How the scene is drawn and got at, which every workspace carries.

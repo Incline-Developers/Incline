@@ -390,10 +390,15 @@ impl<'a> Graphics<'a> {
         let half_length = slice_visible_half_length(self.projection.zoom, screen);
         let half_height = self.projection.zoom;
 
+        // Ruled around the plane point the view looks at, not the section's
+        // anchor: a fixed centre of rotation moves the eye about, and the grid
+        // has to cover what is on screen.
+        let (forward, _, _) = slice.camera_basis();
+        let foot = super::camera::slide_onto_plane(slice.camera_position(), slice.center, forward, slice.normal());
         // half_height is display units (exaggerated); bottom/top are true
         // metres via unexaggeration - eastings/northings need no such step.
-        let bottom = self.unexaggerate_point(slice.center - DVec3::Z * half_height).z;
-        let top = self.unexaggerate_point(slice.center + DVec3::Z * half_height).z;
+        let bottom = self.unexaggerate_point(foot - DVec3::Z * half_height).z;
+        let top = self.unexaggerate_point(foot + DVec3::Z * half_height).z;
 
         let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
         let points_per_pixel = 1.0 / self.window.scale_factor();
@@ -406,7 +411,7 @@ impl<'a> Graphics<'a> {
         let elevation_spacing = section_grid::grid_spacing(top - bottom, height_pt);
 
         let view_proj = self.view_proj();
-        let center_xy = slice.center.truncate();
+        let center_xy = foot.truncate();
         // Unclipped depth: a line must not vanish for reaching outside the section's thin depth slab.
         let project =
             |along_strike: f64, elevation: f64| self.world_to_window_px_unclipped_depth(&view_proj, section_grid::plane_point(center_xy, slice.direction, along_strike, elevation));

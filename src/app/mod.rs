@@ -1185,6 +1185,7 @@ impl<'a> App<'a> {
     }
 
     fn clear_editor_transient_state(&mut self) {
+        self.clear_rotation_centre();
         // Resolve document-backed drafts while their source identity is still
         // available. These helpers locate the owning project explicitly, so
         // this is also safe when a newly opened project has already become

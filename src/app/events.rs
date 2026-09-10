@@ -234,7 +234,7 @@ impl<'a> App<'a> {
                         }
                         // Ask before `update`, which consumes the section's move deltas.
                         slice_moving = graphics.slice_view_moving();
-                        graphics.update(dt, self.editor.block_model_interaction_resolution_divisor);
+                        graphics.update(dt, self.editor.block_model_interaction_resolution_divisor, self.editor.rotation_centre);
                     }
                     // cursor_world is otherwise only written from CursorMoved; re-project after a keyboard-driven move.
                     if slice_moving {
@@ -426,6 +426,7 @@ impl<'a> App<'a> {
                             | ActiveTool::MeasureDistance
                             | ActiveTool::MeasureBatterAngle
                             | ActiveTool::VerticalSlice
+                            | ActiveTool::PickRotationCentre
                     );
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
@@ -955,6 +956,7 @@ impl<'a> App<'a> {
                     }
                 }
                 ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
+                ActiveTool::PickRotationCentre => self.pick_rotation_centre_at_cursor(),
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
@@ -1200,6 +1202,7 @@ impl<'a> App<'a> {
             &self.scene_document,
             &self.snap_index,
             self.editor.z_level,
+            self.editor.rotation_centre,
         );
         graphics.begin_right_orbit_drag();
         self.right_orbit_active = true;
@@ -1211,6 +1214,7 @@ impl<'a> App<'a> {
             event: KeyEvent {
                 state,
                 physical_key: PhysicalKey::Code(key),
+                repeat,
                 ..
             },
             ..
@@ -1219,6 +1223,8 @@ impl<'a> App<'a> {
             return;
         };
         match state {
+            // A held C is one press: the toggle must not chatter with the key's auto-repeat.
+            ElementState::Pressed if *repeat && *key == KeyCode::KeyC => {}
             ElementState::Pressed => self.handle_key_code(*key),
             ElementState::Released => {
                 // Once the Enter that opened the polyline finish dialog is
@@ -1391,6 +1397,10 @@ impl<'a> App<'a> {
                 } else if !self.editor.pending_stroke.is_empty() || self.editor.active_tool != ActiveTool::None {
                     self.discard_stroke();
                 }
+            }
+            // C: the centre of rotation, on and off, the same as its toolbar button.
+            KeyCode::KeyC if !self.editor.text_editing_enabled && !self.modifiers.control_key() && !self.modifiers.super_key() && !self.modifiers.alt_key() => {
+                self.toggle_rotation_centre();
             }
             KeyCode::Backquote => {
                 let picked = self.graphics.as_ref().and_then(|graphics| {
@@ -1629,6 +1639,9 @@ impl<'a> App<'a> {
             } else {
                 self.cancel_active_tool();
             }
+            // A fly look is not an orbit: a fixed centre has no part in it and its
+            // marker would mislead.
+            self.clear_rotation_centre();
             // Fly and slice modes are mutually exclusive: both claim W/S and
             // right-drag.
             self.leave_slice_mode();
