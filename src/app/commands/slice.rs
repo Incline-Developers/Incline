@@ -137,16 +137,15 @@ impl<'a> App<'a> {
         self.editor.slice_mode_enabled && !self.right_orbit_active
     }
 
-    /// The RL grid in a section, the XY grid in plan via its View menu toggle.
+    /// The RL grid in a section, the XY grid in plan. One button drives both,
+    /// so which one it means is decided here.
     pub(crate) fn set_grid_shown(&mut self, shown: bool) -> anyhow::Result<()> {
         if self.editor.slice_mode_enabled {
             self.set_slice_grid_enabled(shown);
-            Ok(())
         } else if self.editor.show_xy_grid != shown {
-            self.toggle_view_option(crate::ui::state::ViewToggle::XyGrid)
-        } else {
-            Ok(())
+            self.set_xy_grid_shown(shown);
         }
+        Ok(())
     }
 
     /// Toggles the section grid: elevation levels plus easting/northing lines where the cut face crosses them. Not persisted with the project.

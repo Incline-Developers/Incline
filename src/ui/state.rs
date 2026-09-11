@@ -47,7 +47,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) show_console: bool,
     pub(crate) panel_chrome: bool,
     pub(crate) show_world_axis_gizmo: bool,
-    pub(crate) show_xy_grid: bool,
     pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
     pub(crate) vsync_enabled: bool,
@@ -88,7 +87,6 @@ impl Default for PreferencesDraft {
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
@@ -1049,7 +1047,9 @@ pub(crate) struct EditorState {
     pub(crate) panel_chrome: bool,
     /// Show the world-space axis gizmo in the top-right of the viewport.
     pub(crate) show_world_axis_gizmo: bool,
-    /// Show the construction grid on the world XY plane at Z=0.
+    /// Show the construction grid on the world XY plane at Z=0. Per-session
+    /// like the other view toggles above: shown at the start of every run and
+    /// never written to the config.
     pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     pub(crate) show_scale_bar: bool,
@@ -2068,7 +2068,6 @@ impl EditorState {
             show_console: self.show_console,
             panel_chrome: self.panel_chrome,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
-            show_xy_grid: self.show_xy_grid,
             show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
             vsync_enabled: self.vsync_enabled,
@@ -2118,7 +2117,7 @@ impl EditorState {
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: crate::app::io::default_show_xy_grid(),
+            show_xy_grid: true,
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             show_preferences: false,
@@ -2793,7 +2792,6 @@ impl ToolHatch {
 pub(crate) enum ViewToggle {
     Console,
     DarkMode,
-    XyGrid,
 }
 
 impl ViewToggle {
@@ -2801,24 +2799,16 @@ impl ViewToggle {
         match self {
             Self::Console => tr!(literal = "Show Console"),
             Self::DarkMode => tr!(literal = "Dark Mode"),
-            Self::XyGrid => tr!(literal = "XY Grid"),
         }
     }
 
-    /// Read this toggle out of a preferences snapshot.
-    pub(crate) fn get(self, preferences: &PreferencesDraft) -> bool {
+    /// Read this toggle's live value. Taken off the editor, which applying
+    /// the preferences keeps in step with them, rather than off a whole
+    /// [`PreferencesDraft`] built to read one bool out of.
+    pub(crate) fn get(self, editor: &EditorState) -> bool {
         match self {
-            Self::Console => preferences.show_console,
-            Self::DarkMode => preferences.dark_mode,
-            Self::XyGrid => preferences.show_xy_grid,
-        }
-    }
-
-    pub(crate) fn set(self, preferences: &mut PreferencesDraft, value: bool) {
-        match self {
-            Self::Console => preferences.show_console = value,
-            Self::DarkMode => preferences.dark_mode = value,
-            Self::XyGrid => preferences.show_xy_grid = value,
+            Self::Console => editor.show_console,
+            Self::DarkMode => editor.dark_mode,
         }
     }
 }

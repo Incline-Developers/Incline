@@ -598,7 +598,6 @@ impl<'a> App<'a> {
         self.editor.show_console = config.show_console;
         self.editor.panel_chrome = config.panel_chrome;
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
-        self.editor.show_xy_grid = config.show_xy_grid;
         self.editor.show_scale_bar = config.show_scale_bar;
         self.editor.renderer_background_color = config.renderer_background_color;
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);

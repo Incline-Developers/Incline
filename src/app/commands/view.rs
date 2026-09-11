@@ -94,13 +94,29 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Flip one view preference and save it, exactly as the Interface tab
+    /// Show or hide the construction grid on the world XY plane.
+    ///
+    /// Deliberately not persisted: this is a per-session view toggle, shown
+    /// again at the start of every run. Reached from the viewport bar alone -
+    /// see [`Self::set_grid_shown`], which picks it or the section's RL grid.
+    pub(crate) fn set_xy_grid_shown(&mut self, enabled: bool) {
+        self.editor.show_xy_grid = enabled;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr_format!(literal = "Set XY grid = %enabled%", enabled = enabled));
+    }
+
+    /// Flip one View menu switch and save it, exactly as the Interface tab
     /// would: the View menu is a shortcut to those settings, not a second
     /// place they are stored.
     pub(crate) fn toggle_view_option(&mut self, option: crate::ui::state::ViewToggle) -> anyhow::Result<()> {
+        use crate::ui::state::ViewToggle;
+
+        let value = !option.get(&self.editor);
         let mut preferences = self.editor.current_preferences();
-        let value = !option.get(&preferences);
-        option.set(&mut preferences, value);
+        match option {
+            ViewToggle::Console => preferences.show_console = value,
+            ViewToggle::DarkMode => preferences.dark_mode = value,
+        }
         self.apply_preferences(preferences)
     }
 
@@ -141,7 +157,6 @@ impl<'a> App<'a> {
         self.editor.show_console = preferences.show_console;
         self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
-        self.editor.show_xy_grid = preferences.show_xy_grid;
         self.editor.show_scale_bar = preferences.show_scale_bar;
         self.editor.renderer_background_color = preferences.renderer_background_color;
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
@@ -292,7 +307,6 @@ pub(crate) fn config_from(
         show_console: preferences.show_console,
         panel_chrome: preferences.panel_chrome,
         show_world_axis_gizmo: preferences.show_world_axis_gizmo,
-        show_xy_grid: preferences.show_xy_grid,
         show_scale_bar: preferences.show_scale_bar,
         renderer_background_color: preferences.renderer_background_color,
         snap_poll_rate: preferences.snap_poll_rate,

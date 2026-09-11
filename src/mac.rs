@@ -89,8 +89,8 @@ pub(crate) enum MacMenuAction {
 }
 
 /// The View menu's rows, in the order they are drawn. The egui menu bar draws
-/// the same three - see [`crate::ui::elements::main_menu`].
-pub(crate) const VIEW_TOGGLES: [ViewToggle; 3] = [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid];
+/// the same two - see [`crate::ui::elements::main_menu`].
+pub(crate) const VIEW_TOGGLES: [ViewToggle; 2] = [ViewToggle::Console, ViewToggle::DarkMode];
 
 /// Tags name the discipline root items that come and go with the workspace, so
 /// [`set_workspace_menus`] finds them without matching on a translated title.
@@ -586,10 +586,7 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
         has_selection_intersections: editor.selection_has_intersections,
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
-        view_toggles: {
-            let preferences = editor.current_preferences();
-            VIEW_TOGGLES.map(|toggle| toggle.get(&preferences))
-        },
+        view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
         recent: project.recent_projects().map(|entry| (entry.name.clone(), entry.path.clone())).collect(),
     };
     let Some(mtm) = MainThreadMarker::new() else {

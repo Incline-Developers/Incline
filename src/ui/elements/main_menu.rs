@@ -448,11 +448,10 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 /// piece of state, so a change here shows in that tab and is saved with it.
 #[cfg(not(target_os = "macos"))]
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    let preferences = editor.current_preferences();
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        for toggle in [ViewToggle::Console, ViewToggle::DarkMode, ViewToggle::XyGrid] {
-            if ContextMenuAction::new(toggle.label()).checked(toggle.get(&preferences)).show(ui).clicked() {
+        for toggle in [ViewToggle::Console, ViewToggle::DarkMode] {
+            if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();
             }

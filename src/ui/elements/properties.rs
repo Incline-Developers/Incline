@@ -313,7 +313,6 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     draft.show_console = defaults.show_console;
     draft.panel_chrome = defaults.panel_chrome;
     draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
-    draft.show_xy_grid = defaults.show_xy_grid;
     draft.show_scale_bar = defaults.show_scale_bar;
 }
 
@@ -377,7 +376,6 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Show console"), &mut draft.show_console).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Panel chrome"), &mut draft.panel_chrome).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "World axis gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "XY grid"), &mut draft.show_xy_grid).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Scale bar"), &mut draft.show_scale_bar).show(ui));
             changed
         },

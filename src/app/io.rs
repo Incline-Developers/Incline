@@ -52,10 +52,6 @@ pub(crate) const fn default_show_world_axis_gizmo() -> bool {
     true
 }
 
-pub(crate) const fn default_show_xy_grid() -> bool {
-    true
-}
-
 pub(crate) const fn default_show_scale_bar() -> bool {
     true
 }
@@ -185,8 +181,6 @@ pub(crate) struct Config {
     pub(crate) frame_counter_enabled: bool,
     #[serde(default = "default_show_world_axis_gizmo")]
     pub(crate) show_world_axis_gizmo: bool,
-    #[serde(default = "default_show_xy_grid")]
-    pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     #[serde(default = "default_show_scale_bar")]
     pub(crate) show_scale_bar: bool,
@@ -242,7 +236,6 @@ impl Default for Config {
             downscale_raster_previews: default_downscale_raster_previews(),
             frame_counter_enabled: false,
             show_world_axis_gizmo: default_show_world_axis_gizmo(),
-            show_xy_grid: default_show_xy_grid(),
             show_scale_bar: default_show_scale_bar(),
             debug_chunk_coloring: false,
             debug_clip_planes: false,
