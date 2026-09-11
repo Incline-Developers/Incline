@@ -84,75 +84,139 @@ pub(crate) fn draw_steps(ui: &mut egui::Ui, editor: &mut EditorState, page: Plan
 fn draw_solids_steps(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     let mut step = editor.planning_solids_step;
     striped_list(ui, |ui| {
+        let mut markers = Vec::with_capacity(SolidsStep::ALL.len());
         for entry in SolidsStep::ALL {
             let status = &editor.planning_stages[entry.index()];
             ui.horizontal(|ui| {
                 ui.add_space(ui.spacing().indent);
-                let response = ExplorerEntry::new(egui::Id::new(entry.tree_id()), bold(&entry.label()))
+                let entry_response = ExplorerEntry::new(egui::Id::new(entry.tree_id()), bold(&entry.label()))
                     .leading_icon(step_icon(status.state), stage_tint(ui, status.state))
                     .header_aligned_icon()
                     .selected(step == entry)
-                    .show(ui)
-                    .response;
+                    .show(ui);
+                if let Some(rect) = entry_response.icon_rect {
+                    markers.push((rect, status.state));
+                }
+                let response = entry_response.response;
                 if response.clicked() {
                     step = entry;
                 }
-                // The marker says where the stage stands; the tooltip says why,
-                // including the diagnostics underneath a completed run.
-                let response = response.on_hover_ui(|ui| stage_tooltip(ui, status));
-                draw_stage_menu(&response, entry, status.state, editor.planning_run_active, commands);
+                draw_stage_menu(&response, entry, editor.planning_run_active, commands);
             });
+        }
+        // Paint after all rows so their backgrounds cannot cover the links.
+        // Green reaches the first red or yellow badge. Red then reaches the
+        // first yellow badge, where the connecting line stops.
+        let mut failed = false;
+        for pair in markers.windows(2) {
+            use crate::app::planning_pipeline::StageState;
+            let (previous, state) = pair[0];
+            let (next, _) = pair[1];
+            failed |= matches!(state, StageState::Failed | StageState::Blocked);
+            if !matches!(state, StageState::Complete | StageState::Failed | StageState::Blocked) {
+                break;
+            }
+            let color = if failed {
+                egui::Color32::from_rgb(0xDC, 0x45, 0x45)
+            } else {
+                egui::Color32::from_rgb(0x2E, 0xAD, 0x62)
+            };
+            // The circular badges occupy 12.2 px inside their 16 px SVGs.
+            let start = previous.center() + egui::vec2(0.0, 6.1);
+            let end = next.center() - egui::vec2(0.0, 6.1);
+            if end.y > start.y {
+                ui.painter().line_segment([start, end], egui::Stroke::new(2.0, color));
+            }
         }
     });
     editor.planning_solids_step = step;
 }
 
-/// Run controls for the whole pipeline, under the step list.
-pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
-    use crate::app::planning_pipeline::StageState;
+/// Run Step and Run All: a light muted green, filled for the one and outlined
+/// for the other.
+const RUN_STEP_TINT: egui::Color32 = egui::Color32::from_rgb(0x76, 0xC3, 0x8D);
+/// Run All: the same green as Run - the pair is one control, told apart by
+/// the filled head against the outlined pair rather than by shade.
+const RUN_ALL_TINT: egui::Color32 = RUN_STEP_TINT;
+/// Cancel: a soft red, muted well below the error red the failed stages carry
+/// so it is a button rather than an alarm.
+const CANCEL_TINT: egui::Color32 = egui::Color32::from_rgb(0xCB, 0x63, 0x63);
 
-    // View has no step tree of its own, so Run Step has no step to mean; it
-    // offers Run All and Cancel only.
-    let stepwise = !editor.is_solids_view();
-    ui.horizontal(|ui| {
-        ui.add_space(ui.spacing().indent);
+/// Contents of the separate run-control island at the top of the sidebar.
+pub(crate) fn draw_solids_run_controls(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
+    use crate::{app::planning_pipeline::StageState, ui::widgets::toolbar::ToolbarButton};
+
+    // The icons are white line art, so the tint is the button's whole colour.
+    // A disabled run is dimmed rather than greyed: the colour still says which
+    // button it is while it waits for the run to finish.
+    let run_enabled = !editor.planning_run_active;
+    let tint = |color: egui::Color32, enabled: bool| if enabled { color } else { color.gamma_multiply(0.35) };
+
+    let side = ui.available_height();
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         let step = editor.planning_solids_step;
-        let status = &editor.planning_stages[step.index()];
-        let can_run_step = stepwise && !editor.planning_run_active && status.blocked_by.is_none();
-        if stepwise && ui.add_enabled(can_run_step, egui::Button::new(tr!("stage-run-step"))).clicked() {
+        if !editor.is_solids_view()
+            && ui
+                .add_enabled(
+                    !editor.planning_run_active,
+                    ToolbarButton::new(
+                        egui::Image::new(crate::ui::unthemed_icon!("play.svg")).tint(tint(RUN_STEP_TINT, run_enabled)),
+                        tr!("stage-run-step"),
+                    )
+                    .button_side(side)
+                    .id_salt("planning_run_through"),
+                )
+                .clicked()
+        {
             commands.push(UiCommand::RunPlanningStage(step));
         }
-        if ui.add_enabled(!editor.planning_run_active, egui::Button::new(tr!("stage-run-all"))).clicked() {
+        if ui
+            .add_enabled(
+                !editor.planning_run_active,
+                ToolbarButton::new(
+                    egui::Image::new(crate::ui::unthemed_icon!("play_all.svg")).tint(tint(RUN_ALL_TINT, run_enabled)),
+                    tr!("stage-run-all"),
+                )
+                .button_side(side)
+                .id_salt("planning_run_all"),
+            )
+            .clicked()
+        {
             commands.push(UiCommand::RunAllPlanningStages);
         }
-        if editor.planning_run_active && ui.button(tr!("stage-cancel")).clicked() {
+        if ui
+            .add_enabled(
+                editor.planning_run_active,
+                ToolbarButton::new(
+                    egui::Image::new(crate::ui::unthemed_icon!("stop.svg")).tint(tint(CANCEL_TINT, editor.planning_run_active)),
+                    tr!("stage-cancel"),
+                )
+                .button_side(side)
+                .id_salt("planning_run_cancel"),
+            )
+            .clicked()
+        {
             commands.push(UiCommand::CancelPlanningRun);
         }
-    });
-    // What the step in question is waiting on, or what stopped it. In View
-    // that is the pipeline's terminal stage, which is what View reads.
-    let reported = if stepwise { editor.planning_solids_step } else { SolidsStep::DigStrips };
-    let status = &editor.planning_stages[reported.index()];
-    let line = match (&status.message, status.state) {
-        (Some(message), _) => message.clone(),
-        (None, StageState::Complete) => status.last_success.as_ref().map_or_else(
-            || status.state.label(),
-            |summary| tr!("stage-last-run", generation = summary.generation.to_string(), entities = summary.entities.to_string()),
-        ),
-        (None, StageState::NotRun) => tr!("stage-never-run"),
-        (None, state) => state.label(),
-    };
-    ui.horizontal(|ui| {
-        ui.add_space(ui.spacing().indent);
-        ui.label(egui::RichText::new(line).color(ui.visuals().weak_text_color()));
-    });
-    // What a scheduler asking for this project right now would be handed.
-    if !editor.planning_snapshot_status.is_empty() {
-        ui.horizontal(|ui| {
-            ui.add_space(ui.spacing().indent);
-            ui.label(egui::RichText::new(format!("{}: {}", tr!("planning-snapshot-label"), editor.planning_snapshot_status)).color(ui.visuals().weak_text_color()));
+        let completed = editor.planning_stages.iter().filter(|stage| stage.state == StageState::Complete).count();
+        let active = SolidsStep::ALL.into_iter().find(|step| editor.planning_stages[step.index()].state == StageState::Running);
+        let reported = active.unwrap_or(if editor.is_solids_view() { SolidsStep::DigStrips } else { step });
+        let status = &editor.planning_stages[reported.index()];
+        let label = tr!("stage-progress", done = completed, total = SolidsStep::ALL.len());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::ui::widgets::progress::draw_planning_progress(ui, &label, completed as f32 / SolidsStep::ALL.len() as f32);
+        })
+        .response
+        .on_hover_ui(|ui| {
+            ui.label(reported.label());
+            stage_tooltip(ui, status);
+            if !editor.planning_snapshot_status.is_empty() {
+                ui.separator();
+                ui.label(&editor.planning_snapshot_status);
+            }
         });
-    }
+    });
 }
 
 fn step_icon(state: crate::app::planning_pipeline::StageState) -> egui::ImageSource<'static> {
@@ -163,14 +227,12 @@ fn step_icon(state: crate::app::planning_pipeline::StageState) -> egui::ImageSou
     }
 }
 
-/// A stale or running stage reads as pending but is not the same thing as one
-/// that has never run, so the marker is dimmed rather than given a fourth icon.
+/// Preserve the SVG colours for pending and completed badges.
 fn stage_tint(ui: &egui::Ui, state: crate::app::planning_pipeline::StageState) -> egui::Color32 {
     use crate::app::planning_pipeline::StageState;
     match state {
         StageState::Complete => egui::Color32::WHITE,
         StageState::Failed | StageState::Blocked => ui.visuals().error_fg_color,
-        StageState::NotRun => ui.visuals().weak_text_color(),
         _ => egui::Color32::WHITE,
     }
 }
@@ -204,14 +266,9 @@ fn stage_tooltip(ui: &mut egui::Ui, status: &crate::ui::state::PlanningStageView
     }
 }
 
-fn draw_stage_menu(response: &egui::Response, stage: SolidsStep, state: crate::app::planning_pipeline::StageState, running: bool, commands: &mut Vec<UiCommand>) {
-    use crate::app::planning_pipeline::StageState;
+fn draw_stage_menu(response: &egui::Response, stage: SolidsStep, running: bool, commands: &mut Vec<UiCommand>) {
     context_menu_popup(response, stage.label(), |ui| {
-        if ContextMenuAction::new(tr!("stage-run-step"))
-            .enabled(!running && state != StageState::Blocked)
-            .show(ui)
-            .clicked()
-        {
+        if ContextMenuAction::new(tr!("stage-run-step")).enabled(!running).show(ui).clicked() {
             commands.push(UiCommand::RunPlanningStage(stage));
             ui.close();
         }
@@ -221,10 +278,6 @@ fn draw_stage_menu(response: &egui::Response, stage: SolidsStep, state: crate::a
         }
         if ContextMenuAction::new(tr!("stage-cancel")).enabled(running).show(ui).clicked() {
             commands.push(UiCommand::CancelPlanningRun);
-            ui.close();
-        }
-        if ContextMenuAction::new(tr!("stage-force-rebuild")).enabled(!running).show(ui).clicked() {
-            commands.push(UiCommand::ForceRebuildPlanning);
             ui.close();
         }
     });
@@ -636,7 +689,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
                 ui.painter().image(texture_id, image_rect, uv, egui::Color32::WHITE);
             }
             _ => {
-                ui.painter().rect_filled(image_rect, 0.0, ui.visuals().extreme_bg_color);
+                ui.painter().rect_filled(image_rect, 0.0, crate::ui::widgets::tree_row_colors(ui).1);
             }
         }
         let response = ui.interact(image_rect, ui.id().with("solid_preview_view"), egui::Sense::click_and_drag());
@@ -790,7 +843,7 @@ pub(crate) fn draw_solid_render(ui: &mut egui::Ui, rect: egui::Rect, editor: &mu
 fn framed_render_pane(ui: &mut egui::Ui, rect: egui::Rect, title: &str, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
     ui.scope_builder(egui::UiBuilder::new().id_salt(("planning_framed_pane", title.to_owned())).max_rect(rect), |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(rect));
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        ui.painter().rect_filled(rect, 0.0, crate::ui::widgets::tree_row_colors(ui).1);
         let title_height = property_table_height(ui, 0);
         let title_rect = egui::Rect::from_min_size(rect.min + egui::vec2(8.0, 0.0), egui::vec2((rect.width() - 8.0).max(0.0), title_height));
         ui.put(title_rect, egui::Label::new(bold(title)).truncate().halign(egui::Align::Min));
@@ -802,113 +855,118 @@ fn framed_render_pane(ui: &mut egui::Ui, rect: egui::Rect, title: &str, content:
     });
 }
 
-/// Width of a draggable column seam, and of the gap it sits in.
-const SEAM_WIDTH: f32 = 8.0;
-
-/// A draggable seam between two columns. Returns the width change to apply to
-/// the column on its left, in points.
-fn drag_seam(ui: &mut egui::Ui, id: &str, seam: egui::Rect) -> f32 {
-    let response = ui.interact(seam, egui::Id::new(id), egui::Sense::drag());
-    if response.hovered() || response.dragged() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        let grip = egui::Rect::from_center_size(seam.center(), egui::vec2(2.0, (seam.height() * 0.3).min(60.0)));
-        ui.painter().rect_filled(grip, 1.0, ui.visuals().widgets.hovered.fg_stroke.color);
-    }
-    response.drag_delta().x
+/// Regions and native panel resize handles painted after the workspace.
+pub(crate) struct PlanningLayout {
+    pub(crate) rect: egui::Rect,
+    pub(crate) regions: Vec<egui::Rect>,
+    pub(crate) grips: Vec<chrome::Grip>,
 }
 
-/// The Solids step's object tab: the project data tree, on the far right of
-/// the page and collapsed by default.
-///
-/// The Setup pages give the explorer column over to their step tree, which
-/// otherwise leaves nowhere to see - or load - the surfaces and design strings
-/// the preview draws alongside the solid.
-fn draw_solid_objects_tab(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    let open = editor.planning_solid_objects_open;
-    let title = tr!(literal = "Objects");
-    if !open {
-        // Collapsed: a narrow spine carrying the title down the page.
-        let response = ui.interact(rect, ui.id().with("solid_objects_tab"), egui::Sense::click());
-        let fill = if response.hovered() {
-            ui.visuals().widgets.hovered.bg_fill
-        } else {
-            ui.visuals().extreme_bg_color
-        };
-        ui.painter().rect_filled(rect, 0.0, fill);
-        ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
-        let galley = ui.painter().layout_no_wrap(title.clone(), egui::FontId::proportional(11.0), ui.visuals().text_color());
-        // Rotated a quarter turn so the label reads up the spine.
-        let text_shape = egui::epaint::TextShape::new(
-            egui::pos2(rect.center().x - galley.size().y * 0.5, rect.top() + 12.0 + galley.size().x),
-            galley,
-            ui.visuals().text_color(),
-        )
-        .with_angle(-std::f32::consts::FRAC_PI_2);
-        ui.painter().with_clip_rect(rect).add(text_shape);
-        if response.clicked() {
-            editor.planning_solid_objects_open = true;
+impl Default for PlanningLayout {
+    fn default() -> Self {
+        Self {
+            rect: egui::Rect::NOTHING,
+            regions: Vec::new(),
+            grips: Vec::new(),
         }
-        response.on_hover_text(tr!(literal = "Show the project's objects"));
-        return;
     }
-    framed_render_pane(ui, rect, &title, |ui, body| {
-        let close = ui.put(
-            egui::Rect::from_min_size(egui::pos2(rect.right() - 24.0, rect.top() + 6.0), egui::vec2(18.0, 18.0)),
-            egui::Button::new("×").frame(false),
-        );
-        if close.clicked() {
-            editor.planning_solid_objects_open = false;
-        }
-        ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(body));
-            ui.set_min_size(body.size());
-            crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
+}
+
+fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, width: f32, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> R {
+    let response = egui::Panel::left(id)
+        .resizable(true)
+        .default_size(width)
+        .min_size(120.0)
+        .show_separator_line(chrome::show_separator_line(ui))
+        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+        .show(ui, |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+            content(ui, ui.available_rect_before_wrap())
         });
-    });
+    layout.regions.push(response.response.rect);
+    layout.grips.push(chrome::Grip::new(response.response.rect, chrome::Edge::Right, id));
+    response.inner
 }
 
-fn draw_solids_step(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
-    // Columns are laid out left to right, each seam moving the boundary
-    // between the two it sits between; the preview takes whatever is left.
-    let objects_width = if editor.planning_solid_objects_open { 280.0 } else { 26.0 };
-    let objects_span = objects_width + SEAM_WIDTH;
-    // Both grids stay readable, and the preview keeps a usable minimum, so the
-    // seams cannot be dragged into hiding one another.
-    let flexible = (rect.width() - objects_span - SEAM_WIDTH * 2.0 - 160.0).max(0.0);
-    let list_width = editor.planning_solid_list_width.clamp(160.0, (flexible - 200.0).max(160.0));
-    let properties_width = editor.planning_solid_properties_width.clamp(200.0, (flexible - list_width).max(200.0));
-    editor.planning_solid_list_width = list_width;
-    editor.planning_solid_properties_width = properties_width;
+fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
+    let response = egui::CentralPanel::default()
+        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+        .show(ui, |ui| content(ui, ui.available_rect_before_wrap()));
+    layout.regions.push(response.response.rect);
+}
 
-    let mut x = rect.left();
-    let list = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(list_width, rect.height()));
-    x = list.right();
-    let list_seam = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(SEAM_WIDTH, rect.height()));
-    x = list_seam.right();
-    let properties = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(properties_width, rect.height()));
-    x = properties.right();
-    let properties_seam = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(SEAM_WIDTH, rect.height()));
-    x = properties_seam.right();
-    let objects = egui::Rect::from_min_size(egui::pos2(rect.right() - objects_width, rect.top()), egui::vec2(objects_width, rect.height()));
-    let render = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2((objects.left() - SEAM_WIDTH).max(x), rect.bottom()));
+fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    let id = "planning_objects_island";
+    let frame = chrome::region_frame(ui).inner_margin(egui::Margin::ZERO);
+    let separator = chrome::show_separator_line(ui);
+    let collapsed = egui::Panel::right("planning_objects_collapsed")
+        .resizable(true)
+        .exact_size(26.0)
+        .frame(frame)
+        .show_separator_line(separator);
+    let expanded = egui::Panel::right(id)
+        .resizable(true)
+        .default_size(280.0)
+        .min_size(140.0)
+        .frame(frame)
+        .show_separator_line(separator);
+    let title = tr!(literal = "Objects");
+    let mut open = editor.planning_solid_objects_open;
+    // Clicking the collapsed spine opens it as well, which the resize handle's
+    // drag and double-click cannot advertise on their own.
+    let mut clicked = false;
+    let response = egui::Panel::show_switched(ui, &mut open, collapsed, expanded, |ui, expanded| {
+        let rect = ui.available_rect_before_wrap();
+        ui.set_clip_rect(ui.clip_rect().intersect(rect));
+        if expanded {
+            framed_render_pane(ui, rect, &title, |ui, body| {
+                ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(body));
+                    ui.set_min_size(body.size());
+                    ui.painter().rect_filled(body, 0.0, crate::ui::widgets::tree_row_colors(ui).0);
+                    crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
+                });
+            });
+        } else {
+            // Collapsed: a narrow spine carrying the title down the page, so
+            // the strip still says what dragging it back open would show.
+            let response = ui.interact(rect, ui.id().with("planning_objects_spine"), egui::Sense::click());
+            if response.hovered() {
+                ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill);
+            }
+            let galley = ui.painter().layout_no_wrap(title.clone(), egui::FontId::proportional(11.0), ui.visuals().text_color());
+            // Rotated a quarter turn so the label reads up the spine.
+            let text = egui::epaint::TextShape::new(
+                egui::pos2(rect.center().x - galley.size().y * 0.5, rect.top() + 12.0 + galley.size().x),
+                galley,
+                ui.visuals().text_color(),
+            )
+            .with_angle(-std::f32::consts::FRAC_PI_2);
+            ui.painter().with_clip_rect(rect).add(text);
+            if response.clicked() {
+                clicked = true;
+            }
+        }
+    });
+    editor.planning_solid_objects_open = open || clicked;
+    layout.regions.push(response.response.rect);
+    layout.grips.push(chrome::Grip::new(response.response.rect, chrome::Edge::Left, id));
+}
 
-    draw_solid_list(ui, list, editor, document, commands);
-    match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
-        Some(solid) => draw_solid_properties(ui, properties, project, solid, commands),
-        None => PropertyTable::new("planning_solid_properties_empty", properties, &tr!("planning-properties")).show(ui, |rows| {
-            rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        }),
-    }
-    if render.width() > 120.0 {
-        draw_solid_render(ui, render, editor, commands);
-    }
-    draw_solid_objects_tab(ui, objects, editor, project, commands);
-
-    // Seams are claimed after the panes, so their drag wins over whatever the
-    // pane beside them would otherwise do with the same pixels.
-    editor.planning_solid_list_width += drag_seam(ui, "planning_solid_list_seam", list_seam);
-    editor.planning_solid_properties_width += drag_seam(ui, "planning_solid_properties_seam", properties_seam);
-
+fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
+    objects_island(ui, layout, editor, project, commands);
+    island(ui, layout, "planning_solids_list_island", 240.0, |ui, rect| {
+        draw_solid_list(ui, rect, editor, document, commands)
+    });
+    island(ui, layout, "planning_solids_properties_island", 320.0, |ui, rect| {
+        match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
+            Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
+            None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
+                rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            }),
+        }
+    });
+    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
 }
 
@@ -1134,63 +1192,71 @@ const BAND_EPSILON: f64 = 1e-3;
 /// rather than collapsed onto it. Its heights are the plan's own defaults.
 const DEFAULT_RANGE_DEPTH: f64 = 120.0;
 
-fn draw_benching_step(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
-    let objects_width = if editor.planning_solid_objects_open { 280.0 } else { 26.0 };
-    let lists = ((rect.width() - objects_width - SEAM_WIDTH * 4.0 - 200.0) / 3.0).clamp(150.0, 260.0);
-    let mut x = rect.left();
-    let column = |width: f32, x: &mut f32| {
-        let column = egui::Rect::from_min_size(egui::pos2(*x, rect.top()), egui::vec2(width, rect.height()));
-        *x = column.right() + SEAM_WIDTH;
-        column
-    };
-    let solids = column(lists, &mut x);
-    let settings = column(lists, &mut x);
-    let results = column(lists, &mut x);
-    let split = settings.top() + (settings.height() - SEAM_WIDTH) * 0.4;
-    let benching = egui::Rect::from_min_max(settings.min, egui::pos2(settings.right(), split));
-    let flitching = egui::Rect::from_min_max(egui::pos2(settings.left(), split + SEAM_WIDTH), settings.max);
-    let objects = egui::Rect::from_min_size(egui::pos2(rect.right() - objects_width, rect.top()), egui::vec2(objects_width, rect.height()));
-    let render = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2((objects.left() - SEAM_WIDTH).max(x), rect.bottom()));
-
-    draw_solid_list(ui, solids, editor, document, commands);
-    // The remaining panes keep their places with nothing selected, so picking a
-    // solid fills them in rather than reflowing the whole step.
+fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
+    objects_island(ui, layout, editor, project, commands);
+    island(ui, layout, "planning_bench_solids_island", 240.0, |ui, rect| {
+        draw_solid_list(ui, rect, editor, document, commands)
+    });
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
     let solid_id = selected.map(|solid| solid.id);
     let solid_color = selected.map_or([1.0; 4], |solid| solid.color);
     let mut plan = selected.map(|solid| solid.benching.clone()).unwrap_or_default();
-
     let mut changed = false;
-    match solid_id {
-        Some(_) => {
-            draw_benching_list(ui, benching, &mut plan, &mut changed);
-            draw_flitching_list(ui, flitching, &mut plan, solid_color, &mut changed);
-            draw_bench_results(ui, results, &plan, editor);
-        }
-        None => {
-            PropertyTable::new("planning_benching_empty", benching, &tr!("planning-benching")).show(ui, |rows| {
-                rows.header(&tr!("planning-property"), &tr!("planning-value"));
-                rows.readonly(&tr!("planning-solids"), &tr!("planning-select-solid"), None, None);
-            });
-            PropertyTable::new("planning_flitching_empty", flitching, &tr!(literal = "Flitching")).show(ui, |rows| {
-                rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            });
-            PropertyTable::new("planning_bench_results_empty", results, &tr!(literal = "Results")).show(ui, |rows| {
-                rows.header(&tr!("planning-property"), &tr!("planning-value"));
-            });
-        }
-    }
-    if render.width() > 120.0 {
-        draw_solid_render(ui, render, editor, commands);
-    }
-    draw_solid_objects_tab(ui, objects, editor, project, commands);
-    crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
 
+    // This column only arranges two independent islands; it has no shared frame.
+    let settings_id = "planning_bench_settings_column";
+    let settings = egui::Panel::left(settings_id)
+        .resizable(true)
+        .default_size(240.0)
+        .min_size(140.0)
+        .show_separator_line(chrome::show_separator_line(ui))
+        .frame(egui::Frame::NONE)
+        .show(ui, |ui| {
+            let flitch_id = "planning_flitching_island";
+            let flitch = egui::Panel::bottom(flitch_id)
+                .resizable(true)
+                .default_size(ui.available_height() * 0.6)
+                .min_size(100.0)
+                .show_separator_line(chrome::show_separator_line(ui))
+                .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+                .show(ui, |ui| {
+                    let rect = ui.available_rect_before_wrap();
+                    if solid_id.is_some() {
+                        draw_flitching_list(ui, rect, &mut plan, solid_color, &mut changed);
+                    } else {
+                        PropertyTable::new("planning_flitching_empty", rect, &tr!(literal = "Flitching")).show(ui, |rows| {
+                            rows.header(&tr!("planning-property"), &tr!("planning-value"));
+                        });
+                    }
+                });
+            layout.regions.push(flitch.response.rect);
+            layout.grips.push(chrome::Grip::new(flitch.response.rect, chrome::Edge::Top, flitch_id));
+            central_island(ui, layout, |ui, rect| {
+                if solid_id.is_some() {
+                    draw_benching_list(ui, rect, &mut plan, &mut changed);
+                } else {
+                    PropertyTable::new("planning_benching_empty", rect, &tr!("planning-benching")).show(ui, |rows| {
+                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+                        rows.readonly(&tr!("planning-solids"), &tr!("planning-select-solid"), None, None);
+                    });
+                }
+            });
+        });
+    layout.grips.push(chrome::Grip::new(settings.response.rect, chrome::Edge::Right, settings_id));
+    island(ui, layout, "planning_bench_results_island", 240.0, |ui, rect| {
+        if solid_id.is_some() {
+            draw_bench_results(ui, rect, &plan, editor);
+        } else {
+            PropertyTable::new("planning_bench_results_empty", rect, &tr!(literal = "Results")).show(ui, |rows| {
+                rows.header(&tr!("planning-property"), &tr!("planning-value"));
+            });
+        }
+    });
+    central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
+    crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
     if let Some(solid_id) = solid_id
         && changed
     {
-        // Ranges are held top down; retyping an RL past its neighbour sorts it
-        // back into place rather than leaving an inverted range behind.
         plan.intervals.sort_by(|a, b| b.base.total_cmp(&a.base));
         commands.push(UiCommand::UpdateSolid {
             solid: solid_id,
@@ -1201,7 +1267,7 @@ fn draw_benching_step(ui: &mut egui::Ui, rect: egui::Rect, editor: &mut EditorSt
 
 fn draw_solids_details(
     ui: &mut egui::Ui,
-    rect: egui::Rect,
+    layout: &mut PlanningLayout,
     editor: &mut EditorState,
     project: &UiProjectView,
     document: &Document,
@@ -1209,41 +1275,25 @@ fn draw_solids_details(
     commands: &mut Vec<UiCommand>,
 ) {
     match editor.planning_solids_step {
-        // Blasting frames the viewport instead of owning the window, so it is
-        // drawn from the viewport layout path, not here.
-        SolidsStep::Blasting | SolidsStep::DigStrips => {
-            ui.allocate_rect(rect, egui::Sense::hover());
-            return;
+        SolidsStep::Blasting | SolidsStep::DigStrips => {}
+        // One table with nothing beside it, so it is the workspace rather
+        // than a column of it.
+        SolidsStep::FieldList => central_island(ui, layout, |ui, rect| draw_field_list(ui, rect, editor, document, commands)),
+        SolidsStep::Solids => draw_solids_step(ui, layout, editor, project, document, commands),
+        SolidsStep::Benching => draw_benching_step(ui, layout, editor, project, document, commands),
+        SolidsStep::BlockModels => {
+            island(ui, layout, "planning_models_island", 280.0, |ui, rect| draw_block_model_list(ui, rect, editor, project));
+            central_island(ui, layout, |ui, rect| {
+                if let Some(model) = editor.planning_selected_block_model.and_then(|id| block_models.iter().find(|model| model.id == id)) {
+                    draw_block_model_mapping(ui, rect, document, model, commands);
+                } else {
+                    PropertyTable::new("reserve_block_model_mapping_empty", rect, &tr!("planning-block-models")).show(ui, |rows| {
+                        rows.header(&tr!("planning-property"), &tr!("planning-value"));
+                    });
+                }
+            });
         }
-        SolidsStep::FieldList => {
-            let table = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width().min(560.0), rect.height()));
-            draw_field_list(ui, table, editor, document, commands);
-            ui.allocate_rect(rect, egui::Sense::hover());
-            return;
-        }
-        SolidsStep::Solids => {
-            draw_solids_step(ui, rect, editor, project, document, commands);
-            return;
-        }
-        SolidsStep::Benching => {
-            draw_benching_step(ui, rect, editor, project, document, commands);
-            return;
-        }
-        SolidsStep::BlockModels => {}
     }
-    let gap = 12.0;
-    let left_width = (rect.width() * 0.3).clamp(200.0, 320.0);
-    let left = egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + left_width, rect.bottom()));
-    let right = egui::Rect::from_min_max(egui::pos2(left.right() + gap, rect.top()), rect.max);
-    draw_block_model_list(ui, left, editor, project);
-    if let Some(model) = editor.planning_selected_block_model.and_then(|id| block_models.iter().find(|model| model.id == id)) {
-        draw_block_model_mapping(ui, right, document, model, commands);
-    } else {
-        PropertyTable::new("reserve_block_model_mapping_empty", right, &tr!("planning-block-models")).show(ui, |rows| {
-            rows.header(&tr!("planning-property"), &tr!("planning-value"));
-        });
-    }
-    ui.allocate_rect(rect, egui::Sense::hover());
 }
 
 fn category_labels() -> [String; 4] {
@@ -1312,38 +1362,24 @@ pub(crate) fn draw_details(
     block_models: &[OpenBlockModel],
     commands: &mut Vec<UiCommand>,
     page: PlanningPage,
-) -> egui::Rect {
-    egui::CentralPanel::default()
-        .frame(chrome::region_frame(ui))
-        .show(ui, |ui| {
-            let available = ui.available_rect_before_wrap();
-            let area = available.shrink2(egui::vec2(0.0, 10.0_f32.min(available.height() * 0.5)));
-            if page == PlanningPage::Solids {
-                draw_solids_details(ui, area, editor, project, document, block_models, commands);
-                return;
-            }
-            let configuration = ui
-                .data(|data| data.get_temp::<bool>(egui::Id::new(("planning_configuration_selected", page))))
-                .unwrap_or(false);
-            if configuration {
-                let table = egui::Rect::from_min_size(area.min, egui::vec2(area.width().min(520.0), area.height()));
-                draw_configuration(ui, table, page);
-                ui.allocate_rect(area, egui::Sense::hover());
-                return;
-            }
-            let gap = 12.0;
-            let column_space = (area.width() - gap * 2.0).max(0.0);
-            let left_width = (column_space * 0.25).min(260.0);
-            let left = egui::Rect::from_min_max(area.min, egui::pos2(area.left() + left_width, area.bottom()));
-            let middle = egui::Rect::from_min_size(egui::pos2(left.right() + gap, area.top()), egui::vec2((column_space * 0.32).min(360.0), area.height()));
-            let properties_origin = egui::pos2(middle.right() + gap, area.top());
-            let properties = egui::Rect::from_min_size(properties_origin, egui::vec2((area.right() - properties_origin.x).clamp(0.0, 440.0), area.height()));
-
-            let category = draw_content_categories(ui, left, page);
-            draw_items(ui, middle, category);
-            draw_item_properties(ui, properties);
-            ui.allocate_rect(area, egui::Sense::hover());
-        })
-        .response
-        .rect
+) -> PlanningLayout {
+    let mut layout = PlanningLayout::default();
+    let response = egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+        if page == PlanningPage::Solids {
+            draw_solids_details(ui, &mut layout, editor, project, document, block_models, commands);
+            return;
+        }
+        let configuration = ui
+            .data(|data| data.get_temp::<bool>(egui::Id::new(("planning_configuration_selected", page))))
+            .unwrap_or(false);
+        if configuration {
+            central_island(ui, &mut layout, |ui, rect| draw_configuration(ui, rect, page));
+            return;
+        }
+        let category = island(ui, &mut layout, "planning_categories_island", 260.0, |ui, rect| draw_content_categories(ui, rect, page));
+        island(ui, &mut layout, "planning_items_island", 320.0, |ui, rect| draw_items(ui, rect, category));
+        central_island(ui, &mut layout, draw_item_properties);
+    });
+    layout.rect = response.response.rect;
+    layout
 }

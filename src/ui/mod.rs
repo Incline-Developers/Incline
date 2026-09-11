@@ -555,10 +555,12 @@ fn draw_ui(
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let planning_page = editor.planning_page;
+        let mut planning_layout = elements::planning_setup::PlanningLayout::default();
         let details = if editor.is_solids_view() {
             elements::solids_view::draw_details(root_ui, editor, project, document, commands)
         } else {
-            elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page)
+            planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
+            planning_layout.rect
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
         elements::properties::draw_preferences(root_ui, editor, commands);
@@ -580,7 +582,14 @@ fn draw_ui(
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        chrome::paint_regions(ctx, [viewport_bar_rect, explorer.tree, console, details]);
+        let details_region = if editor.is_solids_view() { details } else { egui::Rect::NOTHING };
+        chrome::paint_regions(
+            ctx,
+            [viewport_bar_rect, explorer.tree, explorer.run_controls, console, details_region]
+                .into_iter()
+                .chain(planning_layout.regions),
+        );
+        chrome::paint_grips(ctx, planning_layout.grips);
         chrome::paint_grips(
             ctx,
             [
@@ -1161,6 +1170,8 @@ fn draw_ui(
         [
             viewport_bar_rect,
             explorer.tree,
+            explorer.run_controls,
+            explorer.steps,
             left_toolbar_rect,
             bottom_toolbar_rect,
             console_claimed,
@@ -1173,6 +1184,7 @@ fn draw_ui(
         &ctx,
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
+            chrome::Grip::new(explorer.steps, chrome::Edge::Bottom, elements::explorer::CUT_STEPS_PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
             chrome::Grip::new(
                 products_claimed,

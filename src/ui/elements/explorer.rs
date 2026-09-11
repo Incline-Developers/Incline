@@ -61,6 +61,9 @@ fn section_heading_menu(response: &egui::Response, section: ExplorerSection, ite
 /// which reads the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "explorer_panel";
 
+/// Id of the step-list island the cut steps put above the bench tree.
+pub(crate) const CUT_STEPS_PANEL_ID: &str = "planning_cut_steps";
+
 /// The explorer column and its tree surface.
 pub(crate) struct ExplorerLayout {
     /// The whole column, gaps included: what the panels drawn after it lay out
@@ -68,6 +71,11 @@ pub(crate) struct ExplorerLayout {
     pub(crate) column: egui::Rect,
     /// What the data tree claimed.
     pub(crate) tree: egui::Rect,
+    /// Separate run-control island at the top of the planning column.
+    pub(crate) run_controls: egui::Rect,
+    /// Separate step-list island, when the step tree shares the column with
+    /// the bench tree beneath it.
+    pub(crate) steps: egui::Rect,
 }
 
 /// Draw the full-height project explorer.
@@ -88,8 +96,45 @@ pub(crate) fn draw_explorer(
         .show(ui, |ui| {
             // Prevent content from forcing the panel wider than the user has dragged it.
             ui.set_max_width(ui.available_width());
+            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
 
-            crate::ui::chrome::region_frame(ui)
+            let show_run_controls =
+                editor.is_solids_view() || editor.is_planning_cut_step() || (editor.is_planning_setup() && editor.planning_page == crate::ui::state::PlanningPage::Solids);
+            let run_controls = if show_run_controls {
+                egui::Panel::top("planning_run_controls")
+                    .resizable(false)
+                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .exact_size(super::toolbars::bottom_toolbar_height(ui.ctx()))
+                    .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| super::planning_setup::draw_solids_run_controls(ui, editor, commands))
+                    .response
+                    .rect
+            } else {
+                egui::Rect::NOTHING
+            };
+
+            // Blasting and Dig Strips frame the viewport, so their step tree
+            // shares the column with the benches it divides. The two are
+            // separate islands: the steps take the rows they need, the bench
+            // tree fills what is left, and the seam between them drags.
+            let steps = if editor.is_planning_cut_step() {
+                // The benches are the working list here, so the steps open at
+                // their quarter of the column and never take more than three.
+                let shared = ui.available_height();
+                egui::Panel::top(CUT_STEPS_PANEL_ID)
+                    .resizable(true)
+                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .default_size(shared * 0.25)
+                    .size_range(shared * 0.25..=shared * 0.75)
+                    .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands))
+                    .response
+                    .rect
+            } else {
+                egui::Rect::NOTHING
+            };
+
+            let tree = crate::ui::chrome::region_frame(ui)
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
@@ -97,32 +142,15 @@ pub(crate) fn draw_explorer(
                     // other full-window planning page lists its own steps.
                     if editor.is_solids_view() {
                         super::solids_view::tree_heading(ui);
-                        // View inspects a completed run and never finishes one
-                        // by being opened, so it carries the run controls too -
-                        // otherwise there would be no way to start from here.
-                        super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        ui.separator();
                         super::solids_view::draw_tree(ui, editor, document);
                         return;
                     }
                     if editor.is_planning_setup() {
                         let page = editor.planning_page;
                         super::planning_setup::draw_steps(ui, editor, page, commands);
-                        if page == crate::ui::state::PlanningPage::Solids {
-                            super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        }
                         return;
                     }
-                    // Blasting frames the viewport, so its step tree shares the
-                    // column with the benches it divides. The steps take only
-                    // the rows they need; the benches scroll in what is left.
                     if editor.is_planning_cut_step() {
-                        let steps = crate::ui::widgets::explorer::row_height(ui) * crate::ui::state::SolidsStep::ALL.len() as f32;
-                        ui.allocate_ui(egui::vec2(ui.available_width(), steps.min(ui.available_height())), |ui| {
-                            super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands);
-                        });
-                        super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        ui.separator();
                         super::solids_view::bench_tree_heading(ui);
                         if editor.is_dig_strips_step() {
                             super::solids_view::draw_flitch_tree(ui, editor, document);
@@ -135,13 +163,16 @@ pub(crate) fn draw_explorer(
                     draw_object_tree(ui, editor, project, commands);
                 })
                 .response
-                .rect
+                .rect;
+            (tree, run_controls, steps)
         });
 
-    let tree = column.inner;
+    let tree = column.inner.0.intersect(column.response.rect);
     ExplorerLayout {
         column: column.response.rect,
         tree,
+        run_controls: column.inner.1,
+        steps: column.inner.2,
     }
 }
 

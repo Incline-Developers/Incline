@@ -217,3 +217,8 @@ fn paint_arc(painter: &egui::Painter, center: egui::Pos2, radius: f32, start: f3
     painter.circle_filled(points[steps], stroke.width / 2.0, stroke.color);
     painter.add(egui::Shape::line(points, stroke));
 }
+
+/// Pipeline completion uses the same readout as background tasks.
+pub(crate) fn draw_planning_progress(ui: &mut egui::Ui, label: &str, fraction: f32) {
+    draw_ring(ui, label, "", RingFill::Fraction(fraction));
+}

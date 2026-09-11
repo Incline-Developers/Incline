@@ -25,7 +25,7 @@ pub(crate) fn property_table_height(ui: &egui::Ui, rows: usize) -> f32 {
     TITLE_STRIP + rows as f32 * grid_row_height(ui)
 }
 
-/// Paint the recessed fill, title strip and border shared by both surfaces,
+/// Paint the tree-stripe background, title strip and border shared by both surfaces,
 /// then run `content` clipped to `rect` with zero vertical row spacing.
 fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let mut out = None;
@@ -33,7 +33,7 @@ fn framed_pane<R>(ui: &mut egui::Ui, id: &str, rect: egui::Rect, title: &str, co
         ui.set_clip_rect(ui.clip_rect().intersect(rect));
         ui.set_min_size(rect.size());
         ui.spacing_mut().item_spacing.y = 0.0;
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        ui.painter().rect_filled(rect, 0.0, super::tree_row_colors(ui).1);
         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), TITLE_STRIP), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.add_space(8.0);
             ui.label(bold(title));
@@ -99,7 +99,7 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
     } else if response.hovered() {
         visuals.widgets.hovered.bg_fill
     } else {
-        visuals.extreme_bg_color
+        super::tree_row_colors(ui).1
     };
     let stroke = visuals.widgets.noninteractive.bg_stroke;
     let text_color = if selected { visuals.selection.stroke.color } else { visuals.text_color() };
@@ -162,7 +162,7 @@ pub(crate) fn grid_number_row(
     } else if response.hovered() {
         visuals.widgets.hovered.bg_fill
     } else {
-        visuals.extreme_bg_color
+        super::tree_row_colors(ui).1
     };
     let stroke = visuals.widgets.noninteractive.bg_stroke;
     let split = rect.left() + rect.width() * 0.5;
@@ -221,7 +221,7 @@ pub(crate) fn grid_style_row(
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
     let (fill, rule, label_color) = {
         let visuals = ui.visuals();
-        (visuals.extreme_bg_color, visuals.widgets.noninteractive.bg_stroke, visuals.weak_text_color())
+        (super::tree_row_colors(ui).1, visuals.widgets.noninteractive.bg_stroke, visuals.weak_text_color())
     };
     ui.painter().rect_filled(rect, 0.0, fill);
     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], rule);

@@ -247,6 +247,7 @@ pub(crate) enum Edge {
     Left,
     Right,
     Top,
+    Bottom,
 }
 
 /// A draggable seam between two regions, marked with three dots.
@@ -340,6 +341,7 @@ pub(crate) fn paint_grips(ctx: &egui::Context, grips: impl IntoIterator<Item = G
             Edge::Left => (egui::pos2(grip.claimed.left(), grip.claimed.center().y), egui::vec2(0.0, GRIP_DOT_SPACING)),
             Edge::Right => (egui::pos2(grip.claimed.right(), grip.claimed.center().y), egui::vec2(0.0, GRIP_DOT_SPACING)),
             Edge::Top => (egui::pos2(grip.claimed.center().x, grip.claimed.top()), egui::vec2(GRIP_DOT_SPACING, 0.0)),
+            Edge::Bottom => (egui::pos2(grip.claimed.center().x, grip.claimed.bottom()), egui::vec2(GRIP_DOT_SPACING, 0.0)),
         };
         for step in -1..=1 {
             painter.circle_filled(center + along * step as f32, GRIP_DOT_RADIUS, color);

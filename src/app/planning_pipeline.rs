@@ -2,7 +2,7 @@
 //! produces, and whether what it produced is still current.
 //!
 //! The pipeline is *explicitly executed*. Opening a page, selecting a blast or
-//! moving a camera never finishes a calculation; Run Step and Run All do. What
+//! moving a camera never finishes a calculation; Run to Step and Run All do. What
 //! a page does is show the stage status and the artifacts that are already
 //! there, so a scheduler can consume a completed run without any page having
 //! been opened at all.
@@ -127,7 +127,7 @@ pub(crate) struct PlanningPipeline {
     stages: [StageStatus; SolidsStep::ALL.len()],
     /// Input fingerprints as of the last refresh.
     fingerprints: [u64; SolidsStep::ALL.len()],
-    /// Increments on every Run Step or Run All.
+    /// Increments on every Run to Step or Run All.
     generation: u64,
     /// Stages a Run All still has to reach, earliest first.
     queue: Vec<SolidsStep>,
@@ -187,9 +187,19 @@ impl PlanningPipeline {
         self.stages[stage.index()].completed_inputs == Some(self.fingerprints[stage.index()])
     }
 
-    /// The earliest stage that is not current, which is where Run All starts.
-    pub(crate) fn first_stale(&self) -> Option<SolidsStep> {
-        SolidsStep::ALL.into_iter().find(|stage| !self.stages[stage.index()].state.is_current())
+    /// Begin a fresh run through the selected step, retiring all previous statuses.
+    fn restart_through(&mut self, stage: SolidsStep) -> bool {
+        if self.is_running() {
+            return false;
+        }
+        self.stages = Default::default();
+        self.demand = None;
+        self.generation += 1;
+        self.queue = SolidsStep::ALL.into_iter().take(stage.index() + 1).collect();
+        for stage in self.queue.clone() {
+            self.status_mut(stage).state = StageState::Queued;
+        }
+        true
     }
 
     /// The stage that has to run before `stage` can, if any.
@@ -527,59 +537,25 @@ impl crate::app::App<'_> {
         [field_list, block_models, solids_stage, benching_stage, blasting_stage, dig_stage]
     }
 
-    /// Run one stage, if the stages before it are current.
+    /// Reset the pipeline and run from the first step through the selected step.
     pub(crate) fn run_planning_stage(&mut self, stage: SolidsStep) {
         self.sync_planning_pipeline();
         let Some(pipeline) = self.planning_pipeline.as_mut() else {
             return;
         };
-        if let Some(blocker) = pipeline.blocked_by(stage) {
-            let status = pipeline.status_mut(stage);
-            status.state = StageState::Blocked;
-            status.message = Some(tr!("stage-blocked-by", stage = blocker.label()));
-            crate::userspace_warn!("{}", tr!("stage-blocked-by", stage = blocker.label()));
+        if pipeline.is_running() {
             return;
         }
-        pipeline.generation += 1;
-        pipeline.queue = vec![stage];
+        if !pipeline.restart_through(stage) {
+            return;
+        }
         self.retry_failed_solid_requests();
         self.advance_planning_run();
     }
 
-    /// Run every stage from the earliest that is not current through Dig
-    /// Strips, skipping the ones whose artifacts are already current.
+    /// Restart all six stages, including those already complete.
     pub(crate) fn run_all_planning_stages(&mut self) {
-        self.sync_planning_pipeline();
-        let Some(pipeline) = self.planning_pipeline.as_mut() else {
-            return;
-        };
-        let Some(first) = pipeline.first_stale() else {
-            crate::userspace_log!("{}", tr!("stage-all-current"));
-            return;
-        };
-        pipeline.generation += 1;
-        pipeline.queue = SolidsStep::ALL.into_iter().skip(first.index()).collect();
-        for stage in pipeline.queue.clone() {
-            pipeline.status_mut(stage).state = StageState::Queued;
-        }
-        self.retry_failed_solid_requests();
-        self.advance_planning_run();
-    }
-
-    /// Rebuild every stage from the Field List down, whatever their artifacts
-    /// currently say. Separate from Run All, which skips current stages.
-    pub(crate) fn force_rebuild_planning(&mut self) {
-        self.solid_view_cache.clear();
-        self.solid_view_body.clear();
-        self.solid_view_body_key = None;
-        self.cancel_jobs(|job| matches!(job, crate::app::jobs::JobKey::SolidArtifact { .. }));
-        self.recompute_all_reserve_totals();
-        if let Some(pipeline) = self.planning_pipeline.as_mut() {
-            for stage in SolidsStep::ALL {
-                *pipeline.status_mut(stage) = StageStatus::default();
-            }
-        }
-        self.run_all_planning_stages();
+        self.run_planning_stage(SolidsStep::DigStrips);
     }
 
     pub(crate) fn cancel_planning_run(&mut self) {

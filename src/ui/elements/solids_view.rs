@@ -45,7 +45,16 @@ pub(crate) fn draw_bench_tree(ui: &mut egui::Ui, editor: &mut EditorState, docum
 /// the benching plan names but the body never reaches has no flitch to draw
 /// strips on, so it is left out rather than opening onto nothing.
 pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, document: &Document) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    // Banded and full-height like every other tree: its island is a region of
+    // its own, so a short list has to fill it rather than shrink it away.
+    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+    egui::ScrollArea::vertical().auto_shrink([false; 2]).min_scrolled_height(0.0).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let (slot, top) = reserve_fixed_stripes(ui);
+        if document.solids().is_empty() {
+            explorer_note(ui, tr!(literal = "No solids yet - add one on the Setup page"));
+        }
         for solid in document.solids() {
             let occupied = editor.solid_view_bands.get(&solid.id);
             let benches: Vec<_> = solid
@@ -90,6 +99,7 @@ pub(crate) fn draw_flitch_tree(ui: &mut egui::Ui, editor: &mut EditorState, docu
                 }
             });
         }
+        paint_fixed_stripes(ui, slot, top, crate::ui::widgets::tree_row_colors(ui).1);
     });
 }
 
