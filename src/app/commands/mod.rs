@@ -598,12 +598,13 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ResetView => {
-                self.leave_slice_mode();
-                self.reset_view();
-                Ok(())
-            }
-            UiCommand::ResetSliceView => {
-                self.reset_slice_view();
+                // Sliced, the section is the view: squaring up to it and
+                // fitting is the reset, rather than dropping the mode.
+                if self.editor.slice_mode_enabled {
+                    self.reset_slice_view();
+                } else {
+                    self.reset_view();
+                }
                 Ok(())
             }
             UiCommand::SetSliceGridEnabled(enabled) => {
@@ -727,7 +728,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
-                self.leave_slice_mode();
+                // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();
                 Ok(())
             }

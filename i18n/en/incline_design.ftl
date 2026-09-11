@@ -335,7 +335,6 @@ literal-exit-application-206c61fdca9522f7 = Exit Application
 literal-exit-incline-design-b11cdc542f0e84ef = Exit Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Exit Without Saving
 literal-exit-slice-ec67c9da3a320e5f = Exit slice
-slice-reset-view = Reset Slice View
 literal-set-section-grid-0317412c52213ca8 = Set Section Grid
 literal-hide-rl-grid-5777afd90dcfdfef = Hide RL Grid
 literal-show-rl-grid-87a5e28c30f9ca36 = Show RL Grid

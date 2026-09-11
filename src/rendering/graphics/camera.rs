@@ -1277,6 +1277,10 @@ impl<'a> Graphics<'a> {
         let Some((min, max)) = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden) else {
             return;
         };
+        if self.slice_view.is_some() {
+            self.zoom_slice_to_extents(min, max);
+            return;
+        }
         let center = (min + max) * 0.5;
         let forward = self.camera.forward();
         let right = forward.cross(self.camera.up()).normalize_or_zero();
@@ -1321,6 +1325,51 @@ impl<'a> Graphics<'a> {
         self.geometry_dirty = true;
         // Update znear/zfar immediately so snap/pick work before the first render.
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Zoom to extents within a section: the zoom and the in-plane anchor
+    /// move, the section itself does not. Its direction and where the slab
+    /// sits along its normal are what the view is *of*, so framing must not
+    /// quietly cut somewhere else.
+    ///
+    /// Bounds arrive in model elevations and the section works in displayed
+    /// ones, so they are stretched by the vertical exaggeration first.
+    fn zoom_slice_to_extents(&mut self, min: DVec3, max: DVec3) {
+        let screen = self.screen_size();
+        let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
+        let corners = std::array::from_fn::<DVec3, 8, _>(|i| {
+            self.exaggerate_point(DVec3::new(
+                if (i & 1) == 0 { min.x } else { max.x },
+                if (i & 2) == 0 { min.y } else { max.y },
+                if (i & 4) == 0 { min.z } else { max.z },
+            ))
+        });
+        let target = self.exaggerate_point((min + max) * 0.5);
+        let Some(slice) = self.slice_view.as_mut() else {
+            return;
+        };
+        let (forward, right, up) = slice.camera_basis();
+
+        // The section cuts the scene box at whatever angle it runs, so measure the corners along the view's own axes rather than the box's.
+        let (mut half_width, mut half_height) = (0.0_f64, 0.0_f64);
+        for corner in corners {
+            let offset = corner - target;
+            half_width = half_width.max(offset.dot(right).abs());
+            half_height = half_height.max(offset.dot(up).abs());
+        }
+        self.projection.zoom = if half_width <= 1e-9 && half_height <= 1e-9 {
+            default_zoom(aspect)
+        } else {
+            // 10 % padding, matching the plan view's fit.
+            (half_height.max(half_width / aspect) * 1.1).max(1e-4)
+        };
+
+        // Slide the anchor within the plane until the scene's centre is the screen's; ortho, so the eye's depth off the plane doesn't enter into it.
+        let offset = target - slice.camera_position();
+        if let Some(shift) = in_plane_screen_move(offset.dot(right), offset.dot(up), right, up, slice.normal()) {
+            slice.center += shift;
+        }
+        self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
     }
 
     pub(crate) fn set_standard_view(&mut self, view: crate::ui::state::StandardView) {
