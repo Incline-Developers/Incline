@@ -24,6 +24,10 @@ pub(crate) fn orientation_gizmo_rect(canvas_rect: egui::Rect) -> egui::Rect {
 
 /// Draw the world-axis gizmo in the viewport's top-right corner.
 ///
+/// `horizontal_only` drops the Z arms: a vertical section can be turned to
+/// face any compass axis, but never straight up or down, and an arm that
+/// cannot be honoured is better not drawn than drawn dead.
+///
 /// Returns the rect it occupies, or [`egui::Rect::NOTHING`] when the viewport
 /// is too small to draw it.
 pub(crate) fn draw_orientation_gizmo(
@@ -31,6 +35,7 @@ pub(crate) fn draw_orientation_gizmo(
     canvas_rect: egui::Rect,
     camera_forward: [f32; 3],
     camera_up: [f32; 3],
+    horizontal_only: bool,
     commands: &mut Vec<crate::ui::state::UiCommand>,
 ) -> egui::Rect {
     let gizmo_rect = orientation_gizmo_rect(canvas_rect);
@@ -57,6 +62,7 @@ pub(crate) fn draw_orientation_gizmo(
 
             let mut nodes: Vec<_> = axis_defs
                 .into_iter()
+                .filter(|(axis, _, _)| !horizontal_only || axis[2] == 0.0)
                 .flat_map(|(axis, label, color)| {
                     [1.0_f32, -1.0].into_iter().map(move |sign| {
                         let signed_axis = [axis[0] * sign, axis[1] * sign, axis[2] * sign];

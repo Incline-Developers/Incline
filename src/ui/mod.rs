@@ -1066,7 +1066,14 @@ fn draw_ui(
     }
 
     if editor.show_world_axis_gizmo {
-        elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands);
+        elements::cursors::draw_orientation_gizmo(
+            root_ui,
+            canvas_rect,
+            frame_context.camera_forward,
+            frame_context.camera_up,
+            editor.slice_mode_enabled,
+            commands,
+        );
     }
 
     // The drawn cursor, and with it the decision to hide the system pointer.

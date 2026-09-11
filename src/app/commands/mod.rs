@@ -626,15 +626,21 @@ impl<'a> App<'a> {
             }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
             UiCommand::SetStandardView(view) => {
-                // The slice camera is derived from the slice state each frame;
-                // a standard-view transition would silently queue and fire on
-                // exit, so ignore it while sliced.
-                if self.editor.slice_mode_enabled {
-                    return Ok(());
-                }
+                // The slice camera is derived from the slice state each frame,
+                // so a standard-view transition would silently queue and fire
+                // on exit; sliced, the section turns to face the view instead.
+                let sliced = self.editor.slice_mode_enabled;
                 if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.set_standard_view(view);
+                    if sliced {
+                        graphics.set_slice_standard_view(view);
+                    } else {
+                        graphics.set_standard_view(view);
+                    }
                     self.redraw_requested = true;
+                }
+                if sliced {
+                    // No mouse event behind this camera swap; ending any orbit lets the cursor land back on the section.
+                    self.end_right_orbit();
                 }
                 Ok(())
             }

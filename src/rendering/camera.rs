@@ -428,6 +428,9 @@ impl CameraController {
         DVec2::new(dx * self.rotate_sensitivity * horizontal_sign, dy * self.rotate_sensitivity * vertical_sign)
     }
 
+    /// Ease the camera onto a standard view. A section turns itself instead
+    /// (`Graphics::set_slice_standard_view`), over this same duration, so
+    /// clicking the gizmo reads as one gesture in either view.
     pub(crate) fn begin_view_transition(&mut self, camera: &Camera, forward: DVec3, up_hint: DVec3, target_distance: f64) {
         let end_forward = forward.normalize_or(camera.forward());
         let end_up = orthonormal_up(end_forward, up_hint);
@@ -438,7 +441,7 @@ impl CameraController {
             target: camera.target(),
             distance: target_distance.max(MIN_ORTHO_ZOOM),
             elapsed: Duration::ZERO,
-            duration: Duration::from_millis(280),
+            duration: VIEW_TRANSITION_DURATION,
         });
     }
 
@@ -611,7 +614,7 @@ struct ViewTransition {
     duration: Duration,
 }
 
-fn ease_out_cubic(t: f64) -> f64 {
+pub(super) fn ease_out_cubic(t: f64) -> f64 {
     1.0 - (1.0 - t).powi(3)
 }
 
@@ -886,6 +889,9 @@ impl SectionSlab {
         (enter <= leave).then_some((enter, leave))
     }
 }
+
+/// How long a click on the orientation gizmo takes to bring its view up.
+pub(super) const VIEW_TRANSITION_DURATION: Duration = Duration::from_millis(280);
 
 /// Minimum angle, in radians, from edge-on before the section cursor disappears (about 5 degrees).
 pub(crate) const MIN_SECTION_INCIDENCE: f64 = 0.087;

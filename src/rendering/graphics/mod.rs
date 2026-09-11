@@ -496,11 +496,58 @@ pub(crate) struct SliceViewState {
     /// The eye's offset from `center`, along the normal only: the depth the
     /// slide onto the plane could not remove near edge-on, zero otherwise.
     pub(super) view_offset: DVec3,
+    /// An in-flight turn to a standard view, eased over a moment.
+    pub(super) turn_to: Option<SliceTurn>,
+}
+
+/// A section on its way to a standard view: the gizmo's counterpart to the
+/// plan view's camera transition, held on the slice state because the section
+/// camera is rebuilt from that state every frame - a camera transition would
+/// simply be overwritten.
+#[derive(Debug)]
+pub(super) struct SliceTurn {
+    /// Total turn of the section line, radians, and how much of it is spent.
+    angle: f64,
+    turned: f64,
+    /// The orbit to unwind on the way: every standard view a section can be
+    /// turned to is square-on, so both of these ease to zero.
+    start_yaw: f64,
+    start_pitch: f64,
+    elapsed: Duration,
 }
 
 impl SliceViewState {
+    /// Whether the section still has work in hand: navigation the next tick
+    /// must consume, or a turn to finish. Drives the redraw loop, so a turn
+    /// counts even though nothing is touching the mouse.
     pub(super) fn has_pending_updates(&self) -> bool {
+        self.has_pending_input() || self.turn_to.is_some()
+    }
+
+    fn has_pending_input(&self) -> bool {
         self.input.any() || self.pan != DVec2::ZERO || self.scroll != 0.0 || self.orbit != DVec2::ZERO || self.walk != 0.0
+    }
+
+    /// Advance an in-flight turn: the section line's step for this tick and
+    /// the yaw/pitch to hold. `None` when no turn is running - and navigation
+    /// input takes over from one at once, as it does from the plan view's
+    /// transition.
+    pub(super) fn advance_turn(&mut self, dt: Duration) -> Option<(f64, f64, f64)> {
+        if self.has_pending_input() {
+            self.turn_to = None;
+        }
+        let turn = self.turn_to.as_mut()?;
+        turn.elapsed += dt;
+        let linear = (turn.elapsed.as_secs_f64() / crate::rendering::camera::VIEW_TRANSITION_DURATION.as_secs_f64()).clamp(0.0, 1.0);
+        let eased = crate::rendering::camera::ease_out_cubic(linear);
+        // The line is turned by steps rather than set outright, so each step goes through `turn` and keeps the eye and a fixed centre with it.
+        let step = turn.angle * eased - turn.turned;
+        turn.turned += step;
+        let (start_yaw, start_pitch) = (turn.start_yaw, turn.start_pitch);
+        if linear >= 1.0 {
+            self.turn_to = None;
+        }
+        Some((step, start_yaw * (1.0 - eased), start_pitch * (1.0 - eased)))
     }
 
     pub(super) fn slab(&self) -> SectionSlab {
@@ -533,6 +580,20 @@ impl SliceViewState {
 
     pub(super) fn camera_basis(&self) -> (DVec3, DVec3, DVec3) {
         camera_frame(self.normal(), self.yaw, self.pitch)
+    }
+
+    /// Turn the section line `angle` radians about `fixed_centre` when one is
+    /// set, else about the anchor, carrying the eye with it. A rigid turn
+    /// about a vertical axis, so a fixed centre keeps its pixel through it.
+    pub(super) fn turn(&mut self, angle: f64, fixed_centre: Option<DVec3>) {
+        let turn = DVec2::from_angle(angle);
+        self.direction = turn.rotate(self.direction).normalize_or(self.direction);
+        if let Some(centre) = fixed_centre {
+            let arm = turn.rotate((self.center - centre).truncate());
+            self.center = DVec3::new(centre.x + arm.x, centre.y + arm.y, self.center.z);
+        }
+        let eye = turn.rotate(self.view_offset.truncate());
+        self.view_offset = DVec3::new(eye.x, eye.y, self.view_offset.z);
     }
 
     pub(super) fn update_viewing_side(&mut self, forward: DVec3) {
@@ -902,6 +963,7 @@ impl<'a> Graphics<'a> {
             saved_camera,
             saved_zoom,
             view_offset: DVec3::ZERO,
+            turn_to: None,
         };
         let (forward, _, up) = slice.camera_basis();
         self.camera.look_to(slice.center, forward, up, self.projection.zoom);
@@ -948,11 +1010,42 @@ impl<'a> Graphics<'a> {
         self.slice_view.as_ref().map(SliceViewState::slab)
     }
 
+    /// Turn the section camera to a standard view: the section line itself
+    /// turns, so the camera ends square-on looking along that axis - the turn
+    /// Q/E make, taken in one eased step.
+    ///
+    /// Straight up and down are refused. A vertical section cannot be turned
+    /// to face them, and a view that grazes the plane has no point under the
+    /// cursor, so the gizmo drops those arms while sliced rather than offer a
+    /// turn that lands nowhere.
+    pub(crate) fn set_slice_standard_view(&mut self, view: crate::ui::state::StandardView) -> bool {
+        let (forward, _) = camera::standard_view_basis(view);
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        let Some(target) = forward.truncate().try_normalize() else {
+            return false;
+        };
+        // The turn runs on the update tick, which reads the live rotation centre; the shortest way round, since `angle_to` never exceeds half a turn.
+        slice.turn_to = Some(SliceTurn {
+            angle: slice.normal().truncate().angle_to(target),
+            turned: 0.0,
+            start_yaw: slice.yaw,
+            start_pitch: slice.pitch,
+            elapsed: Duration::ZERO,
+        });
+        true
+    }
+
+    /// Squares the section camera to its plane; undoes only the orbit,
+    /// leaving direction, slab position, pan and zoom untouched.
     pub(crate) fn reset_slice_view(&mut self, rotation_centre: Option<DVec3>) -> bool {
         let fixed_centre = rotation_centre.map(|centre| self.exaggerate_point(centre));
         let Some(slice) = self.slice_view.as_mut() else {
             return false;
         };
+        // Squaring up outright takes over from a turn still in flight.
+        slice.turn_to = None;
         // Squaring up is a turn like any other: a fixed centre keeps its pixel through it.
         let anchored = fixed_centre.map(|centre| (centre, camera::eye_offset_from(centre, slice.camera_position(), slice.camera_basis())));
         slice.yaw = 0.0;
