@@ -42,18 +42,20 @@ impl SceneQuery {
     }
 
     /// Test a rendered document pick at its own screen position. Frozen
-    /// surfaces still hide geometry, even though they cannot be selected.
+    /// surfaces still hide geometry, even though they cannot be selected; one
+    /// the slab clips away is not drawn, so it hides nothing.
     pub(crate) fn surface_occludes_pick(
         triangulations: &[OpenTriangulation],
         hidden: &HashSet<SceneEntityId>,
         view_projection: &DMat4,
         scene_origin: DVec3,
         candidate: DVec3,
+        slab: Option<SectionSlab>,
     ) -> bool {
         let Some((origin, direction)) = ray_through_world_point(view_projection, candidate) else {
             return false;
         };
-        let Some((_, surface)) = Self::nearest_surface(triangulations, hidden, None, origin, direction) else {
+        let Some(surface) = nearest_drawn_surface(triangulations, hidden, origin, direction, slab) else {
             return false;
         };
         // Pick vertices come from rebased f32 render buffers, whereas the BVH
@@ -63,6 +65,30 @@ impl SceneQuery {
         let surface_depth = (surface - origin).dot(direction);
         let tolerance = 1.0e-5_f64.max(rounding).max(surface_depth.abs() * 1.0e-9);
         (candidate - surface).dot(direction) > tolerance
+    }
+
+    /// Whether an opaque filled polyline is drawn in front of a candidate and
+    /// hides it. A fill is the one document primitive that occludes; strokes
+    /// and text are drawn over what they cross, so they never do.
+    pub(crate) fn opaque_fill_occludes_pick(
+        document: &Document,
+        snap_index: &ObjectSnapIndex,
+        hidden: &HashSet<SceneEntityId>,
+        view_projection: &DMat4,
+        candidate: DVec3,
+        slab: Option<SectionSlab>,
+    ) -> bool {
+        let Some((origin, direction)) = ray_through_world_point(view_projection, candidate) else {
+            return false;
+        };
+        // Only the nearest fill is known here, so a farther one inside the slab
+        // is missed: that lets a pick through, the safe way to be wrong.
+        let Some(fill) = nearest_opaque_document_fill(document, snap_index, hidden, origin, direction).filter(|point| slab.is_none_or(|slab| slab.contains(*point))) else {
+            return false;
+        };
+        let fill_depth = (fill - origin).dot(direction);
+        let tolerance = 1.0e-5_f64.max(fill_depth.abs() * 1.0e-9);
+        (candidate - fill).dot(direction) > tolerance
     }
 
     /// Nearest selectable drill hole under a ray, named down to the hole

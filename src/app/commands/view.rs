@@ -47,6 +47,7 @@ impl<'a> App<'a> {
                 &self.scene_document,
                 &self.snap_index,
                 self.editor.z_level,
+                self.editor.xray_enabled,
             ) else {
                 userspace_warn!("{}", tr!(literal = "No point under the cursor to fix the centre of rotation on"));
                 return;

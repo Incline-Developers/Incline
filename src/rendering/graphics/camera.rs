@@ -228,8 +228,14 @@ fn pick_record_bounds_may_touch_rect(record: &PickRecord, view_proj: &DMat4, scr
 /// first movement value after a press can jump the view by a page-sized step.
 const MIDDLE_PAN_FROM_CURSOR: bool = cfg!(target_arch = "wasm32");
 
-/// How far, in physical pixels, a click may miss a string or trace and still
-/// fix the centre on it: twice the snap glyph's reach.
+/// How far, in physical pixels, the cursor may miss a string or trace and
+/// still take the centre from it. Deliberately tighter than the snap glyph's
+/// reach: a line takes the pivot from a surface at the same depth, so a wide
+/// band would let every design line and drill trace on screen capture an orbit.
+const ROTATION_CENTRE_LINE_PX: f32 = 10.0;
+
+/// How far, in physical pixels, a centre pick may miss a cloud splat or a
+/// document object and still land on it: twice the snap glyph's reach.
 const ROTATION_CENTRE_PICK_PX: f32 = SNAP_THRESHOLD_PX * 2.0;
 
 /// Where the eye sits after a rigid turn about a fixed `centre`: the same
@@ -587,7 +593,8 @@ impl<'a> Graphics<'a> {
         // A hit within the pick radius can be several pixels from the cursor.
         // Test its visibility at the line itself: comparing against the surface
         // under the cursor shifts the clickable region on sloping triangles.
-        let document_hit = document_hit.filter(|hit| xray_enabled || !SceneQuery::surface_occludes_pick(triangulations, hidden, &view_proj, self.scene_origin, hit.world));
+        let document_hit =
+            document_hit.filter(|hit| xray_enabled || !SceneQuery::surface_occludes_pick(triangulations, hidden, &view_proj, self.scene_origin, hit.world, self.section_slab()));
         let hit = document_hit.map(|hit| (hit.entity, hit.world)).or(surface_hit);
         // Reject before either return path: x-ray skips the occlusion filter that would otherwise catch a surface hit far behind the section.
         let hit = hit.filter(|(_, world)| self.slab_contains(*world));
@@ -904,8 +911,9 @@ impl<'a> Graphics<'a> {
         snap_index: &crate::model::spatial::ObjectSnapIndex,
         working_plane_z: f64,
         rotation_centre: Option<DVec3>,
+        xray_enabled: bool,
     ) {
-        let pt = rotation_centre.unwrap_or_else(|| self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z));
+        let pt = rotation_centre.unwrap_or_else(|| self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled));
         self.camera.sync_angles_from_forward();
         self.camera_controller.begin_orbit(self.exaggerate_point(pt));
         self.orbit_marker = rotation_centre.is_none().then_some(pt);
@@ -975,17 +983,19 @@ impl<'a> Graphics<'a> {
         document: &Document,
         snap_index: &crate::model::spatial::ObjectSnapIndex,
         working_plane_z: f64,
+        xray_enabled: bool,
     ) -> Option<DVec3> {
         if self.slice_view.is_some() {
             return self
-                .string_or_trace_near_cursor(drill_holes, hidden, frozen, document, snap_index)
+                .string_or_trace_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
                 .or_else(|| self.section_point_at_px(self.camera_controller.mouse_loc));
         }
-        Some(self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z))
+        Some(self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z, xray_enabled))
     }
 
-    /// Nearest string or trace point within reach, since the eye aims at the
-    /// line and not the surface above it, else the surface under the cursor.
+    /// Nearest string or trace point the eye can see within reach, since it
+    /// aims at the line and not the surface above it, else the surface under
+    /// the cursor.
     #[allow(clippy::too_many_arguments)]
     fn plan_pivot_near_cursor(
         &self,
@@ -996,23 +1006,56 @@ impl<'a> Graphics<'a> {
         document: &Document,
         snap_index: &crate::model::spatial::ObjectSnapIndex,
         working_plane_z: f64,
+        xray_enabled: bool,
     ) -> DVec3 {
-        self.string_or_trace_near_cursor(drill_holes, hidden, frozen, document, snap_index)
+        self.string_or_trace_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, xray_enabled)
             .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z))
     }
 
-    /// The nearer of the closest string and trace points within reach.
+    /// The nearer of the closest string and trace points within reach, kept
+    /// only while the eye sees it there. A line drawn over the surface it lies
+    /// on still takes the centre; one buried behind a surface, a block model or
+    /// a cloud leaves it to whatever is drawn in front of it - unless x-ray is
+    /// on, which is how the eye sees a buried line in the first place.
+    #[allow(clippy::too_many_arguments)]
     fn string_or_trace_near_cursor(
         &self,
+        triangulations: &[OpenTriangulation],
         drill_holes: &[OpenDrillHoleDataset],
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
         document: &Document,
         snap_index: &crate::model::spatial::ObjectSnapIndex,
+        xray_enabled: bool,
     ) -> Option<DVec3> {
-        let string = self.string_point_near_cursor(document, snap_index, hidden, frozen, ROTATION_CENTRE_PICK_PX);
-        let trace = self.trace_point_near_cursor(drill_holes, hidden, frozen, ROTATION_CENTRE_PICK_PX);
-        [string, trace].into_iter().flatten().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(point, _)| point)
+        let string = self.string_point_near_cursor(document, snap_index, hidden, frozen, ROTATION_CENTRE_LINE_PX);
+        let trace = self.trace_point_near_cursor(drill_holes, hidden, frozen, ROTATION_CENTRE_LINE_PX);
+        [string, trace]
+            .into_iter()
+            .flatten()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(point, _)| point)
+            .filter(|point| xray_enabled || self.centre_candidate_drawn(*point, triangulations, document, snap_index, hidden))
+    }
+
+    /// Whether a centre candidate is drawn where it sits, against everything
+    /// that can stand in front of it: a surface, a block model, a cloud, or an
+    /// opaque fill. Tested on the candidate's own ray, not the cursor's: it can
+    /// be several pixels from the cursor, where a sloping triangle sits at a
+    /// wholly different depth.
+    fn centre_candidate_drawn(
+        &self,
+        point: DVec3,
+        triangulations: &[OpenTriangulation],
+        document: &Document,
+        snap_index: &crate::model::spatial::ObjectSnapIndex,
+        hidden: &HashSet<SceneEntityId>,
+    ) -> bool {
+        let view_proj = self.view_proj();
+        let slab = self.section_slab();
+        !SceneQuery::surface_occludes_pick(triangulations, hidden, &view_proj, self.scene_origin, point, slab)
+            && !SceneQuery::opaque_fill_occludes_pick(document, snap_index, hidden, &view_proj, point, slab)
+            && !self.nonselectable_asset_occludes(point, hidden, &view_proj, self.screen_size())
     }
 
     /// Screen position of a fixed centre; `None` behind a perspective eye.

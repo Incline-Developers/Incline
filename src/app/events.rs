@@ -1206,6 +1206,7 @@ impl<'a> App<'a> {
             &self.snap_index,
             self.editor.z_level,
             self.editor.rotation_centre,
+            self.editor.xray_enabled,
         );
         graphics.begin_right_orbit_drag();
         self.right_orbit_active = true;
