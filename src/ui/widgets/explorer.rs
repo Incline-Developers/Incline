@@ -166,6 +166,13 @@ impl ExplorerEntry {
         self
     }
 
+    /// Leave room for a collapsing arrow this row does not have, so a leaf
+    /// lines up with the rows beside it that do open.
+    pub(crate) fn reserve_toggle_gutter(mut self, reserve: bool) -> Self {
+        self.reserve_toggle_gutter = reserve;
+        self
+    }
+
     /// Draw `icon`, tinted `color`, in the gutter the label is indented past.
     ///
     /// The gutter is the same width whether or not a row fills it, so marking
@@ -324,6 +331,12 @@ pub(crate) struct ExplorerHeader {
     color: Option<egui::Color32>,
     /// Whether the section starts open the first time it is drawn.
     default_open: bool,
+    /// Whether clicking the heading itself collapses the section. The arrow
+    /// always does; turning this off frees the heading to carry a click of
+    /// its own, such as selecting everything the section holds.
+    collapse_on_click: bool,
+    /// Draw the heading with the selected highlight its entries use.
+    selected: bool,
 }
 
 impl ExplorerHeader {
@@ -335,7 +348,22 @@ impl ExplorerHeader {
             dirty: false,
             color: None,
             default_open: true,
+            collapse_on_click: true,
+            selected: false,
         }
+    }
+
+    /// Let the heading act on its own click instead of collapsing the
+    /// section. The arrow beside it still collapses.
+    pub(crate) fn collapse_on_click(mut self, collapse_on_click: bool) -> Self {
+        self.collapse_on_click = collapse_on_click;
+        self
+    }
+
+    /// Highlight the heading the way a selected entry is highlighted.
+    pub(crate) fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
     }
 
     /// Show `icon` ahead of the heading text. The section's entries are plain
@@ -373,6 +401,8 @@ impl ExplorerHeader {
             dirty,
             color,
             default_open,
+            collapse_on_click,
+            selected,
         } = self;
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
         if dirty && !state.is_open() {
@@ -400,6 +430,7 @@ impl ExplorerHeader {
                             egui::Button::new("")
                                 .left_text(text)
                                 .frame(false)
+                                .selected(selected)
                                 .sense(egui::Sense::click())
                                 .min_size(egui::vec2(ui.available_width(), height)),
                         );
@@ -412,7 +443,7 @@ impl ExplorerHeader {
                 })
                 .body(add_contents);
 
-            if header_response.inner.clicked() {
+            if collapse_on_click && header_response.inner.clicked() {
                 let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
                 state.toggle(ui);
                 state.store(ui.ctx());

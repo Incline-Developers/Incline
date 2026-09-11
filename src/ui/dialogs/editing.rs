@@ -789,6 +789,11 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
         return;
     }
 
+    if editor.is_planning_cut_step() {
+        draw_planning_offset_dialog(ui, commands, editor, viewport_rect);
+        return;
+    }
+
     ViewportDockPanel::new("offset_element_panel", tr!(literal = "Offset Element"), viewport_rect)
         .min_width(350.0)
         .show(ui.ctx(), |ui| {
@@ -866,6 +871,48 @@ pub(crate) fn draw_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand
                 let pick_side_clicked = ui.add(MenuButton::new(tr!(literal = "Pick Side")).enabled(can_pick_side)).clicked();
                 if can_pick_side && (pick_side_clicked || enter_pressed) {
                     queue_begin_offset_pick(commands, editor);
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
+                    commands.push(UiCommand::CancelOffset);
+                }
+            });
+        });
+}
+
+/// The Blasting and Dig Strips version of the offset tool.
+///
+/// Cuts are drawn flat on one bench or flitch, so slope, height and the
+/// triangulation clamp have nothing to act on and are left out: all that is
+/// left is a spacing, repeated out to wherever the side is picked, which is
+/// how a run of strips or blast blocks gets drawn in one gesture.
+fn draw_planning_offset_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
+    ViewportDockPanel::new("planning_offset_panel", tr!(literal = "Offset Cut"), viewport_rect)
+        .min_width(300.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldF64::new(tr!(literal = "Spacing"), &mut editor.offset_value_input, 0.0..=f64::MAX)
+                .help_text(tr!(
+                    literal = "Distance between cuts. Picking a side fills the ground between the source and the cursor with cuts this far apart."
+                ))
+                .speed(0.1)
+                .suffix(tr!(literal = "m"))
+                .show(ui);
+
+            ui.add_space(8.0);
+            let can_pick_side = editor.offset_value_input.abs() > 1e-9;
+            let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let pick_side_clicked = ui.add(MenuButton::new(tr!(literal = "Pick Side")).enabled(can_pick_side)).clicked();
+                if can_pick_side && (pick_side_clicked || enter_pressed) {
+                    // Built here rather than through `queue_begin_offset_pick` so
+                    // the full tool's remembered angle, measure and clamp survive
+                    // a trip through this one.
+                    commands.push(UiCommand::BeginOffsetPick {
+                        object_ids: editor.offset_target_ids.clone(),
+                        horiz_dist: editor.offset_value_input,
+                        z_delta: 0.0,
+                        project_to_rl: None,
+                        collide_with_triangulation: editor.offset_collide_with_triangulation,
+                    });
                 }
                 if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
                     commands.push(UiCommand::CancelOffset);

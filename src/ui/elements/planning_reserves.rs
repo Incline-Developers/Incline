@@ -1,10 +1,7 @@
 //! Session-only reserves layout scaffold. Sample records do not modify project data.
 use crate::{
     i18n::tr,
-    ui::{
-        chrome,
-        widgets::data_grid::PropertyTable,
-    },
+    ui::{chrome, widgets::data_grid::PropertyTable},
 };
 
 pub(crate) const PANEL_ID: &str = "planning_reserves_data";

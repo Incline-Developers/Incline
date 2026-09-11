@@ -404,6 +404,9 @@ pub(crate) enum VertexPickFilter {
     AnyEditable,
     /// Vertices that can be removed without invalidating a polyline.
     DeletablePolyline,
+    /// Every stored polyline vertex, including those a stored shape could not
+    /// lose. Planning cuts open or retire instead of refusing the edit.
+    PlanningPolyline,
 }
 
 /// Spatially accelerated design-vertex pick. The index must have been built
@@ -463,7 +466,7 @@ fn pick_nearest_vertex_from_indices(
                     }
                 }
             }
-            Object::Polyline { verts, closed, .. } if filter == VertexPickFilter::AnyEditable || verts.len() > if *closed { 3 } else { 2 } => {
+            Object::Polyline { verts, closed, .. } if filter != VertexPickFilter::DeletablePolyline || verts.len() > if *closed { 3 } else { 2 } => {
                 for (i, vert) in verts.iter().enumerate() {
                     if let Some(sp) = world_to_screen(view_proj, vert.pos, screen) {
                         let d = sp.distance(cursor);

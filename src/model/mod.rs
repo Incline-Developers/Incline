@@ -5,6 +5,7 @@ pub(crate) mod asset_storage;
 pub(crate) mod history_storage;
 pub(crate) mod layer_residency;
 
+pub(crate) mod arrangement;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod atomic_file;
 pub(crate) mod block_model;
@@ -20,6 +21,7 @@ pub(crate) mod point_cloud;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
+pub(crate) mod solid_reserves;
 pub(crate) mod spatial;
 pub(crate) mod triangulation;
 
@@ -76,7 +78,7 @@ pub(crate) struct Layer {
     pub(crate) elevation: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct ReserveFieldId(pub(crate) u64);
 
 /// How a [`ReserveField`] combines a block model's per-block values into one
@@ -109,6 +111,522 @@ pub(crate) struct ReserveField {
     pub(crate) aggregation: ReserveAggregation,
 }
 
+/// Why one reserve field produced no number for a given block model.
+///
+/// Every dash the Reserves panels draw comes from one of these, so a missing
+/// figure can say what is wrong with it instead of looking like a zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReserveFieldIssue {
+    /// The model maps nothing onto this field.
+    Unmapped,
+    /// A constant mapping whose value is not a finite number.
+    ConstantNotFinite,
+    /// The mapped column is not in the model at all.
+    MissingColumn(String),
+    /// The column exists but is of the wrong kind for this field's
+    /// aggregation - a category field needs a categorical column, and a
+    /// summed or averaged one needs a numeric column.
+    WrongColumnKind { column: String, wanted_categorical: bool },
+    /// The column is declared but its values are not in memory. Listing a
+    /// column in the metadata does not prove its values were loaded.
+    ColumnNotResident(String),
+    /// The column's values do not cover every block.
+    LengthMismatch { column: String, values: usize, blocks: usize },
+    /// A weighted average whose weight field is no longer in the list.
+    WeightFieldMissing,
+    /// A weighted average whose weight field does not sum.
+    WeightNotSummed(String),
+    /// A weighted average whose weight field has a problem of its own.
+    WeightUnresolved,
+    /// Every block that contributed was missing a value for this field.
+    AllValuesMissing,
+    /// The model is deliberately excluded from the project's reserves.
+    ModelExcluded,
+}
+
+impl ReserveFieldIssue {
+    /// One line saying what is wrong, for a panel to show beside the dash.
+    pub(crate) fn describe(&self) -> String {
+        use crate::i18n::tr;
+        match self {
+            Self::Unmapped => tr!("reserve-issue-unmapped"),
+            Self::ConstantNotFinite => tr!("reserve-issue-constant"),
+            Self::MissingColumn(column) => tr!("reserve-issue-missing-column", column = column.clone()),
+            Self::WrongColumnKind { column, wanted_categorical } => {
+                if *wanted_categorical {
+                    tr!("reserve-issue-wants-category", column = column.clone())
+                } else {
+                    tr!("reserve-issue-wants-numeric", column = column.clone())
+                }
+            }
+            Self::ColumnNotResident(column) => tr!("reserve-issue-not-resident", column = column.clone()),
+            Self::LengthMismatch { column, values, blocks } => tr!("reserve-issue-length", column = column.clone(), values = values.to_string(), blocks = blocks.to_string()),
+            Self::WeightFieldMissing => tr!("reserve-issue-weight-missing"),
+            Self::WeightNotSummed(name) => tr!("reserve-issue-weight-not-summed", name = name.clone()),
+            Self::WeightUnresolved => tr!("reserve-issue-weight-unresolved"),
+            Self::AllValuesMissing => tr!("reserve-issue-all-missing"),
+            Self::ModelExcluded => tr!("reserve-issue-model-excluded"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct SolidId(pub(crate) u64);
+
+/// Stable identity for one derived dig block.
+///
+/// Allocated when a block first appears and carried across reruns whose
+/// topology is unchanged, so a scheduler can name a block and still find it
+/// after the strips around it are redrawn. Deliberately not derived from RL
+/// bits, mesh ids or interior anchors: all three move under an edit that
+/// leaves the block itself alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) struct DigBlockId(pub(crate) u64);
+
+/// What a [`Solid`] represents on site, which decides how its volume is
+/// reserved: a pit is mined out of the ground and so always carries the block
+/// model its reserves come from, while a dump or stockpile is material placed
+/// on it and may have none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) enum SolidKind {
+    #[default]
+    Pit,
+    Dump,
+    Stockpile,
+}
+
+impl SolidKind {
+    pub(crate) const ALL: [Self; 3] = [Self::Pit, Self::Dump, Self::Stockpile];
+
+    /// Whether a solid of this kind needs a block model to reserve against.
+    /// Dumps and stockpiles are placed material, so theirs stays optional.
+    pub(crate) fn requires_block_model(self) -> bool {
+        matches!(self, Self::Pit)
+    }
+}
+
+/// One closed volume the Solids workspace reserves against: the space between
+/// a design surface (a pit shell or dump design) and the topography it cuts
+/// into or sits on, together with the block model that fills it.
+///
+/// The two surfaces and the block model are held as ids into the open project
+/// items rather than by name, so renaming either keeps the solid intact; a
+/// reference whose item is gone reads back as unset.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Solid {
+    pub(crate) id: SolidId,
+    pub(crate) name: String,
+    pub(crate) kind: SolidKind,
+    /// The design surface - the pit or dump design itself.
+    pub(crate) surface: Option<triangulation::TriangulationId>,
+    /// The topography the surface is measured against.
+    pub(crate) topography: Option<triangulation::TriangulationId>,
+    /// The block model this solid reserves against. Always `None`-able:
+    /// dumps and stockpiles need none, and a pit may be set up before its
+    /// model is imported.
+    pub(crate) block_model: Option<block_model::BlockModelId>,
+    /// The colour this solid is drawn in. Also the colour a selected bench or
+    /// flitch is picked out in, against the rest of the solid in grey.
+    #[serde(default = "default_solid_color")]
+    pub(crate) color: [f32; 4],
+    /// How this solid is benched and flitched; see [`BenchingPlan`].
+    #[serde(default)]
+    pub(crate) benching: BenchingPlan,
+    /// How each bench is divided into blasts; see [`BlastingPlan`].
+    #[serde(default)]
+    pub(crate) blasting: BlastingPlan,
+}
+
+/// The blast shapes each bench of a solid is divided into.
+///
+/// The shapes themselves are not stored. They are the faces the bench outline
+/// is cut into by the lines drawn across it, re-derived whenever those lines
+/// move. What is stored is only what cannot be re-derived: which name belongs
+/// to which face, held against a point inside that face so a name follows its
+/// ground rather than an index that a new cut would shuffle.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BlastingPlan {
+    #[serde(default)]
+    pub(crate) benches: Vec<BenchBlasts>,
+    /// Flitch-owned strip drawing; derived dig blocks have no stored names.
+    #[serde(default)]
+    pub(crate) dig_strips: Vec<BenchBlasts>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BenchBlasts {
+    /// RL at the bottom of the bench these blasts divide, which is also what
+    /// names it in the tree.
+    pub(crate) base: f64,
+    /// Legacy design-layer reference, migrated to bench-owned data on open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cut_layer: Option<LayerId>,
+    /// Drawing style and tool routing; absent from the project layer list.
+    #[serde(default)]
+    pub(crate) planning_layer: Option<Layer>,
+    #[serde(default)]
+    pub(crate) cuts: Vec<Object>,
+    pub(crate) blasts: Vec<BlastShape>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BlastShape {
+    pub(crate) name: String,
+    /// A point known to lie inside the face this name belongs to. Not a
+    /// centroid: a concave blast's centroid can fall outside it.
+    pub(crate) anchor: [f64; 2],
+}
+
+impl BlastingPlan {
+    pub(crate) fn drawing(&self, base: f64, flitch: bool) -> Option<&BenchBlasts> {
+        if flitch {
+            self.dig_strips.iter().find(|entry| (entry.base - base).abs() <= Self::BENCH_EPSILON)
+        } else {
+            self.bench(base)
+        }
+    }
+    pub(crate) fn drawing_mut(&mut self, base: f64, flitch: bool) -> &mut BenchBlasts {
+        if !flitch {
+            return self.bench_mut(base);
+        }
+        let index = self
+            .dig_strips
+            .iter()
+            .position(|entry| (entry.base - base).abs() <= Self::BENCH_EPSILON)
+            .unwrap_or_else(|| {
+                self.dig_strips.push(BenchBlasts {
+                    base,
+                    cut_layer: None,
+                    planning_layer: None,
+                    cuts: Vec::new(),
+                    blasts: Vec::new(),
+                });
+                self.dig_strips.len() - 1
+            });
+        &mut self.dig_strips[index]
+    }
+
+    /// Tolerance for matching a stored bench to a generated one. Bench RLs
+    /// come from the same arithmetic either side, so this only absorbs the
+    /// round trip through the file.
+    const BENCH_EPSILON: f64 = 1e-6;
+
+    pub(crate) fn bench(&self, base: f64) -> Option<&BenchBlasts> {
+        self.benches.iter().find(|bench| (bench.base - base).abs() <= Self::BENCH_EPSILON)
+    }
+
+    pub(crate) fn bench_mut(&mut self, base: f64) -> &mut BenchBlasts {
+        match self.benches.iter().position(|bench| (bench.base - base).abs() <= Self::BENCH_EPSILON) {
+            Some(index) => &mut self.benches[index],
+            None => {
+                self.benches.push(BenchBlasts {
+                    base,
+                    cut_layer: None,
+                    planning_layer: None,
+                    cuts: Vec::new(),
+                    blasts: Vec::new(),
+                });
+                self.benches.last_mut().expect("just pushed")
+            }
+        }
+    }
+}
+
+impl BenchBlasts {
+    /// The lowest positive integer this bench is not already using.
+    ///
+    /// Numbering restarts per bench, so a blast is named by its RL and its
+    /// number together. A blast renamed to something that is not a number -
+    /// a real blast number like 4269 is still a number, but "North cut" is
+    /// not - simply never collides with the counter.
+    pub(crate) fn next_number(&self) -> u64 {
+        let mut used: Vec<u64> = self.blasts.iter().filter_map(|blast| blast.name.parse().ok()).collect();
+        used.sort_unstable();
+        let mut next = 1;
+        for value in used {
+            match value.cmp(&next) {
+                std::cmp::Ordering::Less => {}
+                std::cmp::Ordering::Equal => next += 1,
+                std::cmp::Ordering::Greater => break,
+            }
+        }
+        next
+    }
+}
+
+/// Linear-space default for a new solid; displays as a mid slate blue.
+pub(crate) fn default_solid_color() -> [f32; 4] {
+    [0.21, 0.35, 0.52, 1.0]
+}
+
+/// One elevation range of a solid's benching plan: everything from `base` up
+/// to the next range's base (or the plan's top, for the highest range) is
+/// benched and flitched at these heights.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BenchInterval {
+    /// RL at the bottom of the range.
+    pub(crate) base: f64,
+    /// Bench height within the range.
+    pub(crate) bench: f64,
+    /// Flitch height within each of those benches. A bench height that is not
+    /// a whole number of flitches is a mistake the page reports rather than
+    /// silently rounds - see [`BenchInterval::flitch_divides_bench`].
+    pub(crate) flitch: f64,
+    /// How each flitch position in the bench is drawn, from the top down.
+    /// Kept the length of [`BenchInterval::flitch_count`] by the page that
+    /// edits it; anything missing falls back to the default for its position.
+    #[serde(default)]
+    pub(crate) styles: Vec<FlitchStyle>,
+}
+
+impl BenchInterval {
+    /// How many flitches divide one of this range's benches. A range whose
+    /// heights do not divide evenly still reports the count it would need,
+    /// rounded up, so the page has a row per flitch to style.
+    pub(crate) fn flitch_count(&self) -> usize {
+        if self.flitch <= 0.0 || self.bench <= 0.0 || self.flitch >= self.bench {
+            return 1;
+        }
+        ((self.bench / self.flitch).ceil() as usize).clamp(1, 64)
+    }
+
+    /// The style of one flitch position, counted from the top of the bench.
+    pub(crate) fn style(&self, position: usize, solid_color: [f32; 4]) -> FlitchStyle {
+        self.styles
+            .get(position)
+            .copied()
+            .unwrap_or_else(|| FlitchStyle::default_for(solid_color, position, self.flitch_count()))
+    }
+
+    /// Whether the bench height is a whole number of flitches.
+    pub(crate) fn flitch_divides_bench(&self) -> bool {
+        if self.flitch <= 0.0 || self.bench <= 0.0 {
+            return false;
+        }
+        let count = self.bench / self.flitch;
+        // A tolerance in the ratio, not in metres: 12/4 and 10.5/3.5 both come
+        // out of floating point a hair off a whole number.
+        (count - count.round()).abs() < 1e-6
+    }
+}
+
+/// How one flitch position inside a bench is drawn.
+///
+/// The position, not the flitch: every bench in a range is flitched the same
+/// way, so the top flitch of each of them shares one style.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FlitchStyle {
+    pub(crate) color: [f32; 4],
+    pub(crate) pattern: FillStyle,
+    pub(crate) pattern_color: [f32; 4],
+}
+
+impl FlitchStyle {
+    /// The patterns a range cycles through, so neighbouring flitches are told
+    /// apart by more than shade alone.
+    const PATTERN_CYCLE: [FillStyle; 3] = [FillStyle::Crosses, FillStyle::Slashes, FillStyle::Clear];
+
+    /// The style a flitch position starts with: a shade of the solid's own
+    /// colour, lightest at the top of the bench and darkest at the bottom,
+    /// patterned in a darker tone of itself.
+    ///
+    /// `position` counts from the top of the bench, so 0 is the top flitch.
+    pub(crate) fn default_for(solid_color: [f32; 4], position: usize, count: usize) -> Self {
+        // Spread across the range even when there is only one flitch, which
+        // then sits in the middle of it rather than at an extreme.
+        let spread = if count > 1 { position as f64 / (count - 1) as f64 } else { 0.5 };
+        let color = shift_toward(solid_color, 0.35 - 0.7 * spread);
+        Self {
+            color,
+            pattern: Self::PATTERN_CYCLE[position % Self::PATTERN_CYCLE.len()],
+            // Dark enough to read against its own flitch at any shade.
+            pattern_color: shift_toward(color, -0.45),
+        }
+    }
+}
+
+/// Mix a colour toward white (positive) or black (negative), leaving alpha be.
+fn shift_toward(color: [f32; 4], amount: f64) -> [f32; 4] {
+    let amount = amount.clamp(-1.0, 1.0) as f32;
+    let target = if amount >= 0.0 { 1.0 } else { 0.0 };
+    let weight = amount.abs();
+    [
+        color[0] + (target - color[0]) * weight,
+        color[1] + (target - color[1]) * weight,
+        color[2] + (target - color[2]) * weight,
+        color[3],
+    ]
+}
+
+/// A solid's benching plan: the RL it is benched down from, and the ranges of
+/// bench and flitch heights beneath it.
+///
+/// Ranges are held top down, so `intervals[0]` sits directly under `top` and
+/// each one after it under the base of the one before.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BenchingPlan {
+    /// RL the topmost range runs up to.
+    pub(crate) top: f64,
+    pub(crate) intervals: Vec<BenchInterval>,
+}
+
+/// One bench of a plan, with the flitches inside it.
+///
+/// Both are named from the bottom: a 12 m bench at RL 580 is the solid from
+/// 580 to 592, and its 4 m flitches are 580, 584 and 588.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Bench {
+    pub(crate) base: f64,
+    pub(crate) height: f64,
+    /// Which range of the plan benched this, so its flitch styles can be
+    /// looked up.
+    pub(crate) interval: usize,
+    /// Bottom up, as they are named.
+    pub(crate) flitches: Vec<Flitch>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Flitch {
+    pub(crate) base: f64,
+    pub(crate) height: f64,
+}
+
+impl Bench {
+    pub(crate) fn top(&self) -> f64 {
+        self.base + self.height
+    }
+}
+
+impl Flitch {
+    pub(crate) fn top(&self) -> f64 {
+        self.base + self.height
+    }
+}
+
+impl BenchingPlan {
+    /// Heights a plan starts at, and the interval its RLs are snapped to.
+    pub(crate) const DEFAULT_BENCH: f64 = 12.0;
+    pub(crate) const DEFAULT_FLITCH: f64 = 4.0;
+
+    /// The plan a solid starts with, covering the whole of a surface that runs
+    /// between `lowest` and `highest`.
+    ///
+    /// The RLs are snapped out to whole benches either side of the surface:
+    /// down to the multiple below its floor and up to the one above its crest.
+    /// The first bench boundary a reader sees is then a round number, and the
+    /// plan covers every part of the design without them having to widen it.
+    pub(crate) fn covering(lowest: f64, highest: f64) -> Self {
+        let bench = Self::DEFAULT_BENCH;
+        let base = (lowest / bench).floor() * bench;
+        let top = (highest / bench).ceil() * bench;
+        Self {
+            // A surface with no height at all still gets one bench, so the
+            // list is something to edit rather than an empty pane.
+            top: if top > base { top } else { base + bench },
+            intervals: vec![BenchInterval {
+                base,
+                bench,
+                flitch: Self::DEFAULT_FLITCH,
+                styles: Vec::new(),
+            }],
+        }
+    }
+
+    /// The RL each range runs up to, paired with the range itself, top down.
+    pub(crate) fn ranges(&self) -> impl Iterator<Item = (f64, &BenchInterval)> {
+        std::iter::once(self.top)
+            .chain(self.intervals.iter().map(|interval| interval.base))
+            .zip(self.intervals.iter())
+    }
+
+    /// Every bench the plan describes, bottom up, each with its flitches.
+    ///
+    /// Benches are laid from the bottom of their range upwards, so the range's
+    /// base is always a bench floor. A range whose height is not a whole
+    /// number of benches ends in a short one rather than overshooting into the
+    /// range above, and the same holds for a flitch inside a bench.
+    pub(crate) fn benches(&self) -> Vec<Bench> {
+        let mut benches = Vec::new();
+        for (index, (range_top, interval)) in self.ranges().enumerate() {
+            if !interval.bench.is_finite() || !interval.base.is_finite() || !range_top.is_finite() || interval.bench <= 0.0 || range_top <= interval.base {
+                continue;
+            }
+            // Guard against a plan that would generate an unusable number of
+            // rows - a millimetre bench over a kilometre of pit, say.
+            let count = ((range_top - interval.base) / interval.bench).ceil();
+            if !count.is_finite() || count > MAX_BENCHES_PER_RANGE {
+                continue;
+            }
+            for step in 0..count as usize {
+                let base = interval.base + step as f64 * interval.bench;
+                if base >= range_top - Self::EPSILON {
+                    break;
+                }
+                let height = interval.bench.min(range_top - base);
+                benches.push(Bench {
+                    base,
+                    height,
+                    interval: index,
+                    flitches: Self::flitches(base, height, interval.flitch),
+                });
+            }
+        }
+        benches.sort_by(|a, b| a.base.total_cmp(&b.base));
+        benches
+    }
+
+    fn flitches(base: f64, height: f64, flitch: f64) -> Vec<Flitch> {
+        if !flitch.is_finite() || flitch <= 0.0 || flitch >= height || (height / flitch).ceil() > 64.0 {
+            return Vec::new();
+        }
+        let mut flitches = Vec::new();
+        for step in 0..(height / flitch).ceil() as usize {
+            let at = base + step as f64 * flitch;
+            if at >= base + height - Self::EPSILON {
+                break;
+            }
+            flitches.push(Flitch {
+                base: at,
+                height: flitch.min(base + height - at),
+            });
+        }
+        flitches
+    }
+
+    /// Millimetre tolerance, so a range that divides exactly does not trail a
+    /// hairline bench off the end of the floating-point arithmetic.
+    const EPSILON: f64 = 1e-3;
+}
+
+/// Ceiling on the benches one range may produce, so a mistyped height cannot
+/// lock the page up building rows nobody asked for.
+const MAX_BENCHES_PER_RANGE: f64 = 10_000.0;
+
+/// One field of a [`Solid`], as the Solids step's property table edits it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SolidEdit {
+    Kind(SolidKind),
+    Color([f32; 4]),
+    /// The whole benching plan at once. Plans are a handful of ranges, and
+    /// replacing one wholesale keeps the page from having to describe every
+    /// edit - insert, delete, retype an RL - as its own command.
+    Benching(BenchingPlan),
+    Surface(Option<triangulation::TriangulationId>),
+    Topography(Option<triangulation::TriangulationId>),
+    BlockModel(Option<block_model::BlockModelId>),
+    /// The whole blasting plan at once, for the same reason as
+    /// [`SolidEdit::Benching`].
+    Blasting(BlastingPlan),
+}
+
 /// Fill style for closed polylines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum FillStyle {
@@ -117,6 +635,10 @@ pub(crate) enum FillStyle {
     Crosses,
     Slashes,
     Solid,
+}
+
+impl FillStyle {
+    pub(crate) const ALL: [Self; 4] = [Self::Clear, Self::Crosses, Self::Slashes, Self::Solid];
 }
 
 /// How an object's colour is determined.
@@ -443,6 +965,11 @@ pub(crate) struct Document {
     reserve_fields: Vec<ReserveField>,
     #[serde(default)]
     next_reserve_field_id: u64,
+    /// Project-wide solids; see [`Solid`].
+    #[serde(default)]
+    solids: Vec<Solid>,
+    #[serde(default)]
+    next_solid_id: u64,
     #[serde(skip)]
     revision: u64,
     /// Document revision at which each object was last mutated. Lets the
@@ -459,6 +986,16 @@ impl Document {
 
     pub(crate) fn layers(&self) -> &[Layer] {
         &self.layers
+    }
+
+    pub(crate) fn planning_benches(&self) -> impl Iterator<Item = &BenchBlasts> {
+        self.solids.iter().flat_map(|solid| solid.blasting.benches.iter().chain(&solid.blasting.dig_strips))
+    }
+
+    fn planning_benches_mut(&mut self) -> impl Iterator<Item = &mut BenchBlasts> {
+        self.solids
+            .iter_mut()
+            .flat_map(|solid| solid.blasting.benches.iter_mut().chain(&mut solid.blasting.dig_strips))
     }
 
     pub(crate) fn objects(&self) -> &[Object] {
@@ -517,7 +1054,7 @@ impl Document {
         const LOCAL_MASK: u64 = u32::MAX as u64;
 
         let mut layer_ids = std::collections::HashSet::with_capacity(self.layers.len());
-        for layer in &self.layers {
+        for layer in self.layers.iter().chain(self.planning_benches().filter_map(|bench| bench.planning_layer.as_ref())) {
             if layer.id.0 > LOCAL_MASK {
                 bail!("layer '{}' has id {} outside the 32-bit project id range", layer.name, layer.id.0);
             }
@@ -533,7 +1070,7 @@ impl Document {
         }
 
         let mut object_ids = std::collections::HashSet::with_capacity(self.objects.len());
-        for object in &self.objects {
+        for object in self.objects.iter().chain(self.planning_benches().flat_map(|bench| &bench.cuts)) {
             let id = object.id();
             if id.0 > LOCAL_MASK {
                 bail!("{} object has id {} outside the 32-bit project id range", object.kind_name(), id.0);
@@ -557,12 +1094,23 @@ impl Document {
     /// Recompute the id counters from the actual ids present, instead of
     /// trusting serialized counters that may be stale or malicious.
     pub(crate) fn recompute_id_counters(&mut self) {
-        let max_layer = self.layers.iter().map(|layer| layer.id.0).max();
-        let max_object = self.objects.iter().map(|object| object.id().0).max();
+        let max_layer = self
+            .layers
+            .iter()
+            .chain(self.planning_benches().filter_map(|bench| bench.planning_layer.as_ref()))
+            .map(|layer| layer.id.0)
+            .max();
+        let max_object = self
+            .objects
+            .iter()
+            .chain(self.planning_benches().flat_map(|bench| &bench.cuts))
+            .map(|object| object.id().0)
+            .max();
         let max_reserve_field = self.reserve_fields.iter().map(|field| field.id.0).max();
         self.next_layer_id = max_layer.map_or(0, |id| id.saturating_add(1));
         self.next_object_id = max_object.map_or(0, |id| id.saturating_add(1));
         self.next_reserve_field_id = max_reserve_field.map_or(0, |id| id.saturating_add(1));
+        self.next_solid_id = self.solids.iter().map(|solid| solid.id.0).max().map_or(0, |id| id.saturating_add(1));
         self.next_object_id = self
             .next_object_id
             .max(self.deferred_layers.values().map(|stored| stored.max_object_id + 1).max().unwrap_or(0));
@@ -624,6 +1172,15 @@ impl Document {
     pub(crate) fn insert_object(&mut self, object: Object) {
         let id = object.id();
         self.bump_next_object_id(id);
+        let planning = self
+            .planning_benches_mut()
+            .find(|bench| bench.planning_layer.as_ref().is_some_and(|layer| layer.id == object.layer()));
+        if let Some(bench) = planning {
+            bench.cuts.retain(|cut| cut.id() != id);
+            bench.cuts.push(object);
+            self.touch_object(id);
+            return;
+        }
         if let Some(index) = self.object_position(id)
             && let Some(existing) = self.objects.get_mut(index)
         {
@@ -640,6 +1197,13 @@ impl Document {
     /// delete, so the object returns below whatever it was drawn under).
     pub(crate) fn insert_object_at(&mut self, index: usize, object: Object) {
         let id = object.id();
+        if self
+            .planning_benches()
+            .any(|bench| bench.planning_layer.as_ref().is_some_and(|layer| layer.id == object.layer()))
+        {
+            self.insert_object(object);
+            return;
+        }
         if self.object_position(id).is_some() {
             self.replace_object(object);
             return;
@@ -664,6 +1228,13 @@ impl Document {
 
     /// Replace an object in place, preserving draw order.
     pub(crate) fn replace_object(&mut self, object: Object) -> bool {
+        let id = object.id();
+        let planning = self.planning_benches_mut().flat_map(|bench| &mut bench.cuts).find(|cut| cut.id() == id);
+        if let Some(cut) = planning {
+            *cut = object;
+            self.touch_object(id);
+            return true;
+        }
         let Some(index) = self.object_position(object.id()) else {
             return false;
         };
@@ -680,6 +1251,13 @@ impl Document {
 
     /// Remove the object with `id`, returning it if present.
     pub(crate) fn remove_object(&mut self, id: ObjectId) -> Option<Object> {
+        let planning = self.planning_benches_mut().find(|bench| bench.cuts.iter().any(|cut| cut.id() == id));
+        if let Some(bench) = planning {
+            let index = bench.cuts.iter().position(|cut| cut.id() == id)?;
+            let cut = bench.cuts.remove(index);
+            self.touch_object(id);
+            return Some(cut);
+        }
         let index = self.object_position(id)?;
         self.object_index.remove(&id);
         self.object_revisions.remove(&id);
@@ -745,7 +1323,10 @@ impl Document {
     }
 
     pub(crate) fn layer(&self, id: LayerId) -> Option<&Layer> {
-        self.layers.iter().find(|layer| layer.id == id)
+        self.layers
+            .iter()
+            .chain(self.planning_benches().filter_map(|bench| bench.planning_layer.as_ref()))
+            .find(|layer| layer.id == id)
     }
 
     fn insert_layer_at(&mut self, index: usize, layer: Layer) {
@@ -880,6 +1461,135 @@ impl Document {
         removed
     }
 
+    pub(crate) fn solids(&self) -> &[Solid] {
+        &self.solids
+    }
+
+    pub(crate) fn solid(&self, id: SolidId) -> Option<&Solid> {
+        self.solids.iter().find(|solid| solid.id == id)
+    }
+
+    /// Add every `source` solid absent from this document (by id), the way
+    /// [`Document::merge_reserve_fields_from`] carries the Field List across
+    /// an OMF open into a fresh target document.
+    pub(crate) fn merge_solids_from(&mut self, source: &Document) {
+        for solid in &source.solids {
+            if !self.solids.iter().any(|existing| existing.id == solid.id) {
+                self.solids.push(solid.clone());
+            }
+        }
+        self.recompute_id_counters();
+    }
+
+    /// Copy the solid list (ids intact) onto the render-scene composite - see
+    /// [`Document::clone_reserve_fields_from`], which the Solids setup reads
+    /// its data through the same way.
+    pub(crate) fn clone_solids_from(&mut self, source: &Document) {
+        self.solids = source.solids.clone();
+        self.next_solid_id = source.next_solid_id;
+    }
+
+    /// Install solids read back from a save file. Not marked dirty -
+    /// `next_solid_id` is re-derived by [`Document::recompute_id_counters`].
+    pub(crate) fn restore_solids(&mut self, solids: Vec<Solid>) {
+        self.solids = solids;
+    }
+
+    pub(crate) fn add_solid(
+        &mut self,
+        name: String,
+        kind: SolidKind,
+        surface: Option<triangulation::TriangulationId>,
+        topography: Option<triangulation::TriangulationId>,
+        block_model: Option<block_model::BlockModelId>,
+    ) -> SolidId {
+        let id = SolidId(self.next_solid_id);
+        self.next_solid_id += 1;
+        self.solids.push(Solid {
+            id,
+            name,
+            kind,
+            surface,
+            topography,
+            block_model,
+            color: default_solid_color(),
+            benching: BenchingPlan::default(),
+            blasting: BlastingPlan::default(),
+        });
+        self.touch();
+        id
+    }
+
+    pub(crate) fn rename_solid(&mut self, id: SolidId, new_name: String) {
+        if let Some(solid) = self.solids.iter_mut().find(|solid| solid.id == id) {
+            solid.name = new_name;
+            self.touch();
+        }
+    }
+
+    pub(crate) fn remove_solid(&mut self, id: SolidId) -> bool {
+        let before = self.solids.len();
+        self.solids.retain(|solid| solid.id != id);
+        let removed = self.solids.len() < before;
+        if removed {
+            self.touch();
+        }
+        removed
+    }
+
+    /// Apply one edit from the Solids step's property table. Returns whether
+    /// anything actually changed, so a per-frame combo that hands back its
+    /// unchanged value does not dirty the project.
+    pub(crate) fn update_solid(&mut self, id: SolidId, edit: SolidEdit) -> bool {
+        let Some(solid) = self.solids.iter_mut().find(|solid| solid.id == id) else {
+            return false;
+        };
+        let changed = match edit {
+            SolidEdit::Kind(kind) => std::mem::replace(&mut solid.kind, kind) != kind,
+            SolidEdit::Color(color) => std::mem::replace(&mut solid.color, color) != color,
+            SolidEdit::Benching(benching) => std::mem::replace(&mut solid.benching, benching.clone()) != benching,
+            SolidEdit::Surface(surface) => std::mem::replace(&mut solid.surface, surface) != surface,
+            SolidEdit::Topography(topography) => std::mem::replace(&mut solid.topography, topography) != topography,
+            SolidEdit::BlockModel(block_model) => std::mem::replace(&mut solid.block_model, block_model) != block_model,
+            SolidEdit::Blasting(blasting) => std::mem::replace(&mut solid.blasting, blasting.clone()) != blasting,
+        };
+        if changed {
+            self.touch();
+        }
+        changed
+    }
+
+    /// Clear every solid reference to a triangulation that is going away, so
+    /// a later import reusing the id cannot silently adopt the reference.
+    pub(crate) fn forget_solid_triangulation(&mut self, id: triangulation::TriangulationId) {
+        let mut changed = false;
+        for solid in &mut self.solids {
+            for reference in [&mut solid.surface, &mut solid.topography] {
+                if *reference == Some(id) {
+                    *reference = None;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.touch();
+        }
+    }
+
+    /// Block-model counterpart of [`Document::forget_solid_triangulation`].
+    pub(crate) fn forget_solid_block_model(&mut self, id: block_model::BlockModelId) {
+        let mut changed = false;
+        for solid in &mut self.solids {
+            if solid.block_model == Some(id) {
+                solid.block_model = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.touch();
+        }
+    }
+
     /// Set a layer's viewport visibility. Returns the new state, or `None`
     /// when the layer no longer exists.
     pub(crate) fn set_layer_loaded(&mut self, id: LayerId, loaded: bool) -> Option<bool> {
@@ -907,6 +1617,24 @@ impl Document {
     /// Assign every layer and object a runtime namespace. Project ids are local
     /// to a file; namespacing makes them safe to combine in one scene.
     pub(crate) fn apply_runtime_namespace(&mut self, namespace: u32) {
+        let legacy: Vec<_> = self.planning_benches().filter_map(|bench| bench.cut_layer).collect();
+        for id in legacy {
+            let Some(index) = self.layers.iter().position(|layer| (layer.id.0 as u32) == (id.0 as u32)) else {
+                continue;
+            };
+            let layer = self.layers.remove(index);
+            let cuts: Vec<_> = self.objects.iter().filter(|object| object.layer() == layer.id).cloned().collect();
+            self.objects.retain(|object| object.layer() != layer.id);
+            for cut in &cuts {
+                self.hidden_objects.remove(&cut.id());
+            }
+            if let Some(bench) = self.planning_benches_mut().find(|bench| bench.cut_layer == Some(id)) {
+                bench.cut_layer = None;
+                bench.planning_layer = Some(layer);
+                bench.cuts.extend(cuts);
+            }
+        }
+        self.rebuild_object_index();
         self.apply_runtime_namespace_inner(namespace);
         self.touch();
     }
@@ -920,6 +1648,17 @@ impl Document {
         let prefix = u64::from(namespace) << 32;
         let runtime_id = |id: u64| prefix | (id & LOCAL_MASK);
 
+        for bench in self.planning_benches_mut() {
+            bench.cut_layer = bench.cut_layer.map(|id| LayerId(runtime_id(id.0)));
+            if let Some(layer) = &mut bench.planning_layer {
+                layer.id = LayerId(runtime_id(layer.id.0));
+            }
+            bench.cuts = bench
+                .cuts
+                .iter()
+                .map(|object| object.with_id_and_layer(ObjectId(runtime_id(object.id().0)), LayerId(runtime_id(object.layer().0))))
+                .collect();
+        }
         for layer in &mut self.layers {
             layer.id = LayerId(runtime_id(layer.id.0));
         }
@@ -939,7 +1678,7 @@ impl Document {
 
     /// Append a layer and its objects while retaining their runtime ids.
     pub(crate) fn append_layer_snapshot<'a>(&mut self, layer: &Layer, objects: impl Iterator<Item = &'a Object>) {
-        if self.layer(layer.id).is_none() {
+        if !self.layers.iter().any(|stored| stored.id == layer.id) {
             self.next_layer_id = self.next_layer_id.max(layer.id.0.saturating_add(1));
             self.layers.push(layer.clone());
         }
@@ -956,7 +1695,7 @@ impl Document {
     /// unique ids (runtime namespacing does, across projects) and call
     /// [`Self::rebuild_object_index`] once after the final append.
     pub(crate) fn append_layer_snapshot_unindexed<'a>(&mut self, layer: &Layer, objects: impl Iterator<Item = (&'a Object, u64)>) {
-        if self.layer(layer.id).is_none() {
+        if !self.layers.iter().any(|stored| stored.id == layer.id) {
             self.next_layer_id = self.next_layer_id.max(layer.id.0.saturating_add(1));
             self.layers.push(layer.clone());
         }
@@ -979,11 +1718,17 @@ impl Document {
         // is corrupt; surface that in debug builds instead of hiding it
         // behind O(N) lookups.
         debug_assert!(slow.is_none(), "object_index out of sync for {id:?}");
-        slow
+        slow.or_else(|| self.planning_benches().flat_map(|bench| &bench.cuts).find(|object| object.id() == id))
     }
 
     /// Translate the object with `id` by `delta`. Returns `true` if found.
     pub(crate) fn translate_object(&mut self, id: ObjectId, delta: DVec3) -> bool {
+        let planning = self.planning_benches_mut().flat_map(|bench| &mut bench.cuts).find(|cut| cut.id() == id);
+        if let Some(cut) = planning {
+            cut.translate(delta);
+            self.touch_object(id);
+            return true;
+        }
         let Some(index) = self.object_position(id) else {
             return false;
         };
@@ -1924,7 +2669,11 @@ impl Command {
                 target.effects.document_changed = true;
             }
             Command::Batch(cmds) => {
-                if !cmds.is_empty() && cmds.iter().all(|command| matches!(command, Command::DeleteObject { .. })) {
+                if !cmds.is_empty()
+                    && cmds
+                        .iter()
+                        .all(|command| matches!(command, Command::DeleteObject { object, .. } if target.document.object_position(object.id()).is_some()))
+                {
                     let ids: std::collections::HashSet<_> = cmds
                         .iter()
                         .filter_map(|command| match command {
@@ -2007,7 +2756,7 @@ impl Command {
                 target.effects.document_changed = true;
             }
             Command::Batch(cmds) => {
-                if !cmds.is_empty() && cmds.iter().all(|command| matches!(command, Command::DeleteObject { .. })) {
+                if !cmds.is_empty() && cmds.iter().all(|command| matches!(command, Command::DeleteObject { object, .. } if !target.document.planning_benches().any(|bench| bench.planning_layer.as_ref().is_some_and(|layer| layer.id == object.layer())))) {
                     let inserts = cmds
                         .iter()
                         .filter_map(|command| match command {

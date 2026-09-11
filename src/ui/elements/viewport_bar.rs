@@ -241,6 +241,10 @@ fn draw_centre_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &U
     if editor.is_planning_setup() {
         return;
     }
+    if editor.is_planning_cut_step() {
+        draw_blasting_settings(ui, editor, project);
+        return;
+    }
     match editor.active_workspace {
         Workspace::Production => draw_drawing_settings(ui, editor, project),
         Workspace::DrillAndBlast => {
@@ -336,6 +340,35 @@ fn draw_blast_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &Ui
         // A tie-in runs between holes of one dataset, so it goes with it.
         editor.end_tie_chain();
         editor.initiation_dialog = None;
+    }
+}
+
+/// What the Blasting step's tools will use next.
+///
+/// The layer is shown rather than offered: a cut line is a cut line because it
+/// is on the selected bench's cut layer, so letting the user aim the tools at
+/// another layer would only produce lines that cut nothing. It reads "None"
+/// until the first tool is armed, which is when the layer is created. The
+/// elevation stays editable - the shapes are worked out in plan, so a cut line
+/// off the bench plane still cuts, and being able to lift one is occasionally
+/// how a user gets a snap they want.
+fn draw_blasting_settings(ui: &mut egui::Ui, editor: &mut EditorState, _project: &UiProjectView) {
+    ui.spacing_mut().item_spacing.x = CENTRE_LABEL_GAP;
+    ui.label(tr!(literal = "Bench:"));
+    ui.label(
+        editor
+            .planning_cut_target()
+            .map_or_else(|| tr!(literal = "None"), |(_, band)| super::solids_view::format_rl(band.base)),
+    );
+
+    centre_part(ui);
+    draw_z_setting(ui, editor);
+
+    centre_part(ui);
+    ui.label(tr!(literal = "Color:"));
+    let mut line_c32 = rgba_to_color32(editor.tool_line_color);
+    if ColorSquarePicker::new(&mut line_c32).show(ui).changed() {
+        editor.tool_line_color = color32_to_rgba(line_c32);
     }
 }
 

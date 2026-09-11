@@ -28,6 +28,11 @@ pub(crate) struct OverlaySceneBuildInput<'a> {
     pub(crate) scale_factor: f32,
 }
 
+/// Blast outlines sit under the cut lines that will divide them, so they are
+/// drawn a shade heavier than ordinary design geometry to read as a boundary
+/// rather than as one more line on the bench.
+const BLAST_OUTLINE_WIDTH: f32 = 2.5;
+
 /// How many pieces a leg replacing an existing connector is broken into. Odd,
 /// so a dashed run starts and ends on a mark rather than on a gap.
 const TIE_OVERWRITE_DASHES: usize = 9;
@@ -98,6 +103,38 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         scene_origin,
         scale_factor,
     };
+
+    // Blast outlines are derived from the bench, not stored objects, so they
+    // are drawn here rather than through the scene's document geometry.
+    for outline in editor.blasting_outlines.iter().filter(|_| editor.is_blasting_step()) {
+        let selected = editor.selected_blast == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+        for ring in &outline.rings {
+            let verts: Vec<crate::model::PolyVertex> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
+            tessellate_polyline_stroke(
+                &mut overlay,
+                &verts,
+                true,
+                if selected { BLAST_OUTLINE_WIDTH * 2.5 } else { BLAST_OUTLINE_WIDTH },
+                if selected { [1.0, 0.7, 0.1, 1.0] } else { PREVIEW_COLOR },
+            );
+        }
+    }
+
+    if editor.is_planning_cut_step() {
+        for outline in &editor.dig_outlines {
+            let selected = editor.selected_dig_block == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+            for ring in &outline.rings {
+                let verts: Vec<_> = ring.iter().map(|point| crate::model::PolyVertex::straight(*point)).collect();
+                tessellate_polyline_stroke(
+                    &mut overlay,
+                    &verts,
+                    true,
+                    if selected { 4.0 } else { 1.5 },
+                    if selected { [1.0, 0.7, 0.1, 1.0] } else { [0.2, 0.9, 0.8, 1.0] },
+                );
+            }
+        }
+    }
 
     let stroke_preview = editor.pending_stroke.clone();
     for pair in stroke_preview.windows(2) {

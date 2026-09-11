@@ -1,4 +1,6 @@
+pub(crate) mod blasting;
 pub(crate) mod block_model;
+mod dig_strips;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
@@ -14,6 +16,8 @@ pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field
 pub(crate) mod residency;
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
+pub(crate) mod solids; // Handles the Solids workspace's Solids setup (per-solid surfaces, kind, block model).
+pub(crate) mod solids_view;
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
 pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
@@ -117,6 +121,14 @@ impl<'a> App<'a> {
                 | UiCommand::DeleteReserveField(_)
                 | UiCommand::SetReserveMapping { .. }
                 | UiCommand::SetReserveModelIncluded { .. }
+                | UiCommand::AddSolid { .. }
+                | UiCommand::DeleteSolid(_)
+                | UiCommand::SaveSolidPreviewToProject
+                | UiCommand::UpdateSolid { .. }
+                | UiCommand::RecomputeReserveStats(_)
+                | UiCommand::RunPlanningStage(_)
+                | UiCommand::RunAllPlanningStages
+                | UiCommand::ForceRebuildPlanning
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -345,6 +357,72 @@ impl<'a> App<'a> {
                 self.set_reserve_model_included(block_model, included);
                 Ok(())
             }
+            UiCommand::AddSolid {
+                name,
+                kind,
+                surface,
+                topography,
+                block_model,
+            } => {
+                self.add_solid(name, kind, surface, topography, block_model);
+                Ok(())
+            }
+            UiCommand::CopyDigStrips => {
+                self.copy_dig_strips();
+                Ok(())
+            }
+            UiCommand::PasteDigStrips => {
+                self.paste_dig_strips();
+                Ok(())
+            }
+            UiCommand::SelectDigBlock(block) => {
+                self.editor.selected_dig_block = Some(block);
+                self.invalidate_overlay();
+                Ok(())
+            }
+            UiCommand::SelectBlast(blast) => {
+                self.editor.selected_blast = blast;
+                self.invalidate_overlay();
+                Ok(())
+            }
+            UiCommand::ResetBlastName(blast) => {
+                self.reset_blast_name(blast);
+                Ok(())
+            }
+            UiCommand::DeleteSolid(id) => {
+                self.delete_solid(id);
+                Ok(())
+            }
+            UiCommand::SaveSolidPreviewToProject => self.save_solid_preview_to_project(),
+            UiCommand::ResetSolidPreviewView => {
+                self.editor.solid_preview_view = crate::ui::state::SolidPreviewView::default();
+                Ok(())
+            }
+            UiCommand::RecomputeReserveStats(block_model) => {
+                self.recompute_reserve_totals(block_model);
+                self.request_reserve_stats(block_model);
+                Ok(())
+            }
+            UiCommand::RunPlanningStage(stage) => {
+                self.run_planning_stage(stage);
+                Ok(())
+            }
+            UiCommand::RunAllPlanningStages => {
+                self.run_all_planning_stages();
+                Ok(())
+            }
+            UiCommand::CancelPlanningRun => {
+                self.cancel_planning_run();
+                Ok(())
+            }
+            UiCommand::ForceRebuildPlanning => {
+                self.force_rebuild_planning();
+                Ok(())
+            }
+            UiCommand::UpdateSolid { solid, edit } => {
+                self.update_solid(solid, edit);
+                Ok(())
+            }
             UiCommand::SetInitiation { target, delay_ms } => {
                 self.set_initiation(target, delay_ms);
                 Ok(())
@@ -388,6 +466,8 @@ impl<'a> App<'a> {
                         self.rename_layer(layer_id, new_name);
                     }
                     crate::ui::state::RenameTarget::ReserveField(id) => self.rename_reserve_field(id, new_name),
+                    crate::ui::state::RenameTarget::Solid(id) => self.rename_solid(id, new_name),
+                    crate::ui::state::RenameTarget::BlastShape(blast) => self.rename_blast(blast, new_name),
                     _ => self.rename_project_item(target, new_name),
                 }
                 self.editor.renaming_item = None;
@@ -649,8 +729,10 @@ impl<'a> App<'a> {
             }
             UiCommand::SetPlanningSubpage(subpage) => {
                 if self.editor.planning_page.subpages().contains(&subpage) {
-                    if self.editor.planning_page == crate::ui::state::PlanningPage::Schedule {
-                        self.editor.schedule_subpage = subpage;
+                    match self.editor.planning_page {
+                        crate::ui::state::PlanningPage::Schedule => self.editor.schedule_subpage = subpage,
+                        crate::ui::state::PlanningPage::Solids => self.editor.solids_subpage = subpage,
+                        crate::ui::state::PlanningPage::Haulage => {}
                     }
                     if self.editor.is_planning_viewport() {
                         self.editor.active_property_tab = crate::ui::state::PropertyTab::Reserves;
@@ -968,6 +1050,34 @@ impl<'a> App<'a> {
                 let result = self.cut_triangulation_by_surface(target_id, reference_id, side, name);
                 if result.is_ok() {
                     self.editor.tri_cut_surface_open = false;
+                }
+                result
+            }
+            UiCommand::OpenBuildSolidFromSurfaces => {
+                self.editor.tri_solid_open = true;
+                self.editor.tri_solid_name_auto = true;
+                // The active surface is the design being reserved; the ground
+                // it meets is chosen explicitly second, as the other topology
+                // tools do it.
+                self.editor.tri_solid_design_id = self.active_triangulation;
+                self.editor.tri_solid_topography_id = None;
+                self.editor.tri_solid_region = crate::ui::state::SolidRegion::Cut;
+                self.editor.tri_solid_name_input = self
+                    .active_triangulation
+                    .and_then(|id| self.triangulations.iter().find(|item| item.id == id))
+                    .map(|item| crate::app::canvas::derived_triangulation_name(&item.name, &tr!(literal = "Solid")))
+                    .unwrap_or_default();
+                Ok(())
+            }
+            UiCommand::ExecuteBuildSolidFromSurfaces {
+                design_id,
+                topography_id,
+                region,
+                name,
+            } => {
+                let result = self.create_solid_from_surfaces(design_id, topography_id, region, name);
+                if result.is_ok() {
+                    self.editor.tri_solid_open = false;
                 }
                 result
             }

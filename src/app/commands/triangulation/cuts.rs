@@ -550,7 +550,7 @@ pub(super) fn bary_z(x: f64, y: f64, v: [mesh_data::Vertex; 3]) -> f64 {
 }
 
 /// Clip a triangle to the band z_min <= z <= z_max, returning 0–2 result triangles.
-pub(super) fn clip_triangle_z(v: [mesh_data::Vertex; 3], z_min: f64, z_max: f64) -> Vec<[mesh_data::Vertex; 3]> {
+pub(crate) fn clip_triangle_z(v: [mesh_data::Vertex; 3], z_min: f64, z_max: f64) -> Vec<[mesh_data::Vertex; 3]> {
     let mut result = clip_triangle_plane(v, z_min, true);
     let above_min = std::mem::take(&mut result);
     for tri in above_min {

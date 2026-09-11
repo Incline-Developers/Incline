@@ -131,6 +131,158 @@ pub(crate) fn grid_row(ui: &mut egui::Ui, row: GridRow<'_>) -> egui::Response {
     response
 }
 
+/// One cell of a [`grid_number_row`]: an editable number, a number shown but
+/// not editable here, or nothing at all.
+pub(crate) enum GridNumber<'a> {
+    Edit(&'a mut f64),
+    /// Shown greyed. Used for a value this list mirrors rather than owns - the
+    /// flitching list's RLs, which the benching list decides.
+    Fixed(f64),
+    Blank,
+}
+
+/// A two-column row of numbers, for the paired lists that describe a plan by
+/// elevation: an RL on the left and the height that applies below it on the
+/// right.
+///
+/// `error` paints the right-hand cell in the error colour, which is how a
+/// flitch height that does not divide its bench is reported.
+pub(crate) fn grid_number_row(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    cells: [GridNumber<'_>; 2],
+    error: Option<&str>,
+    selected: bool,
+) -> (egui::Response, bool) {
+    let height = grid_row_height(ui);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+    let visuals = ui.visuals();
+    let fill = if selected {
+        visuals.selection.bg_fill
+    } else if response.hovered() {
+        visuals.widgets.hovered.bg_fill
+    } else {
+        visuals.extreme_bg_color
+    };
+    let stroke = visuals.widgets.noninteractive.bg_stroke;
+    let split = rect.left() + rect.width() * 0.5;
+    ui.painter().rect_filled(rect, 0.0, fill);
+    ui.painter().line_segment([egui::pos2(split, rect.top()), egui::pos2(split, rect.bottom())], stroke);
+    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+
+    let mut changed = false;
+    let id = egui::Id::new(id);
+    for (index, cell) in cells.into_iter().enumerate() {
+        let cell_rect = if index == 0 {
+            egui::Rect::from_min_max(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::pos2(split - 4.0, rect.bottom() - 2.0))
+        } else {
+            egui::Rect::from_min_max(egui::pos2(split + 4.0, rect.top() + 2.0), egui::pos2(rect.right() - 4.0, rect.bottom() - 2.0))
+        };
+        if !cell_rect.is_positive() {
+            continue;
+        }
+        match cell {
+            GridNumber::Blank => {}
+            GridNumber::Fixed(value) => {
+                let text = egui::RichText::new(format!("{value:.2}")).color(ui.visuals().weak_text_color());
+                ui.put(cell_rect, egui::Label::new(text).truncate().halign(egui::Align::Min));
+            }
+            GridNumber::Edit(value) => {
+                let color = if index == 1 && error.is_some() { Some(ui.visuals().error_fg_color) } else { None };
+                let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id.with(index)).max_rect(cell_rect));
+                if let Some(color) = color {
+                    child.visuals_mut().override_text_color = Some(color);
+                }
+                let field = child.put(cell_rect, egui::DragValue::new(value).speed(0.5).max_decimals(3));
+                changed |= field.changed();
+                if let Some(message) = error {
+                    field.on_hover_text(message);
+                }
+            }
+        }
+    }
+    (response, changed)
+}
+
+/// A row naming a sub-item of the row above it, with the swatches and choice
+/// that style it: a flitch position within a bench, in the flitching list.
+///
+/// Returns whether anything was changed.
+pub(crate) fn grid_style_row(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    color: &mut [f32; 4],
+    pattern_color: &mut [f32; 4],
+    pattern: &mut crate::model::FillStyle,
+    pattern_label: impl Fn(crate::model::FillStyle) -> String,
+) -> bool {
+    let height = grid_row_height(ui);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let (fill, rule, label_color) = {
+        let visuals = ui.visuals();
+        (visuals.extreme_bg_color, visuals.widgets.noninteractive.bg_stroke, visuals.weak_text_color())
+    };
+    ui.painter().rect_filled(rect, 0.0, fill);
+    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], rule);
+
+    // The controls are laid out from the right so the name keeps whatever is
+    // left, and the row still reads at a narrow column width.
+    const SWATCH: f32 = 26.0;
+    const PATTERN: f32 = 78.0;
+    let mut changed = false;
+    let id = egui::Id::new(id);
+    let mut right = rect.right() - 4.0;
+    let cell = |width: f32, right: &mut f32| {
+        let cell = egui::Rect::from_min_max(egui::pos2(*right - width, rect.top() + 2.0), egui::pos2(*right, rect.bottom() - 2.0));
+        *right -= width + 4.0;
+        cell
+    };
+    let pattern_color_rect = cell(SWATCH, &mut right);
+    let pattern_rect = cell(PATTERN, &mut right);
+    let color_rect = cell(SWATCH, &mut right);
+
+    for (index, (rect, value)) in [(color_rect, &mut *color), (pattern_color_rect, &mut *pattern_color)].into_iter().enumerate() {
+        if rect.is_positive() {
+            changed |= ui
+                .scope_builder(egui::UiBuilder::new().id_salt(id.with(("swatch", index))).max_rect(rect), |ui| {
+                    ui.spacing_mut().interact_size.y = rect.height();
+                    crate::ui::widgets::color::edit_rgba_premultiplied(ui, value)
+                })
+                .inner
+                .changed();
+        }
+    }
+    if pattern_rect.is_positive() {
+        let selected = pattern_label(*pattern);
+        changed |= ui
+            .scope_builder(egui::UiBuilder::new().id_salt(id.with("pattern")).max_rect(pattern_rect), |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(pattern_rect));
+                ui.spacing_mut().interact_size.y = pattern_rect.height();
+                let mut picked = false;
+                egui::ComboBox::from_id_salt(id.with("pattern_combo"))
+                    .selected_text(selected)
+                    .width(pattern_rect.width())
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for option in crate::model::FillStyle::ALL {
+                            picked |= ui.selectable_value(pattern, option, pattern_label(option)).changed();
+                        }
+                    });
+                picked
+            })
+            .inner;
+    }
+    let name_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 20.0, rect.top()), egui::pos2(right.max(rect.left() + 20.0), rect.bottom()));
+    if name_rect.is_positive() {
+        ui.put(
+            name_rect,
+            egui::Label::new(egui::RichText::new(label).color(label_color)).truncate().halign(egui::Align::Min),
+        );
+    }
+    changed
+}
+
 /// A titled, bordered pane holding a scrollable column of [`grid_row`]s.
 pub(crate) struct DataGrid<'a> {
     id: &'a str,
@@ -222,11 +374,74 @@ impl PropertyRows<'_> {
         self.value_field(key, &mut value.to_owned(), unit, error, true)
     }
 
+    /// A single-choice value, drawn as a combo box filling the value column.
+    /// `options` supplies each selectable value with its label; the row is
+    /// identified by `id` so two tables can carry the same key.
+    pub(crate) fn combo<T: Clone + PartialEq>(
+        &mut self,
+        id: impl std::hash::Hash + std::fmt::Debug,
+        key: &str,
+        value: &mut T,
+        selected_text: &str,
+        options: impl IntoIterator<Item = (T, String)>,
+    ) -> egui::Response {
+        let (rect, split) = self.begin_row(false);
+        self.ui.put(
+            self.key_rect(rect, split, false),
+            egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min),
+        );
+        let value_rect = self.value_rect(rect, split);
+        let mut changed = false;
+        let mut response = self
+            .ui
+            .scope_builder(egui::UiBuilder::new().max_rect(value_rect), |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(value_rect));
+                // The combo is a button, and its natural height would overrun
+                // the row rule; the cell it sits in is the height it gets.
+                ui.spacing_mut().interact_size.y = value_rect.height();
+                egui::ComboBox::from_id_salt(id)
+                    .selected_text(selected_text)
+                    .width(value_rect.width())
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for (option, text) in options {
+                            changed |= ui.selectable_value(value, option, text).changed();
+                        }
+                    })
+                    .response
+            })
+            .inner;
+        if changed {
+            response.mark_changed();
+        }
+        response
+    }
+
+    /// An editable colour, drawn as the shared swatch button in the value
+    /// column. The value is linear-space RGBA, as the renderer holds colours.
+    pub(crate) fn color(&mut self, key: &str, value: &mut [f32; 4]) -> egui::Response {
+        let (rect, split) = self.begin_row(false);
+        self.ui.put(
+            self.key_rect(rect, split, false),
+            egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min),
+        );
+        let value_rect = self.value_rect(rect, split);
+        self.ui
+            .scope_builder(egui::UiBuilder::new().max_rect(value_rect), |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(value_rect));
+                ui.spacing_mut().interact_size.y = value_rect.height();
+                crate::ui::widgets::color::edit_rgba_premultiplied(ui, value)
+            })
+            .inner
+    }
+
     /// An editable boolean, drawn as a checkbox in the value column.
     pub(crate) fn checkbox(&mut self, key: &str, value: &mut bool) -> egui::Response {
         let (rect, split) = self.begin_row(false);
-        self.ui
-            .put(self.key_rect(rect, split, false), egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min));
+        self.ui.put(
+            self.key_rect(rect, split, false),
+            egui::Label::new(egui::RichText::new(key)).truncate().halign(egui::Align::Min),
+        );
         self.ui.put(self.value_rect(rect, split), egui::Checkbox::new(value, ""))
     }
 

@@ -81,6 +81,12 @@ pub(crate) struct RenderInput<'frame> {
     pub(crate) drill_holes: &'frame [OpenDrillHoleDataset],
     pub(crate) point_clouds: &'frame [OpenPointCloud],
     pub(crate) rasters: &'frame [OpenRasterTexture],
+    /// The Solids Setup page's inspection mesh, when one is being shown. It
+    /// is not a project item, so it reaches the renderer beside the project's
+    /// own triangulations rather than among them.
+    /// The Solids Setup page's inspection meshes: the solid as one, or one
+    /// closed mesh per flitch once it has a benching plan.
+    pub(crate) solid_preview: &'frame [OpenTriangulation],
     pub(crate) project: &'frame UiProjectView,
 }
 
@@ -94,6 +100,7 @@ impl<'a> Graphics<'a> {
             drill_holes,
             point_clouds,
             rasters,
+            solid_preview,
             project,
         } = input;
         // Only scene content forces the cached scene to be re-rendered. The
@@ -101,6 +108,27 @@ impl<'a> Graphics<'a> {
         // `render_editor_overlay_pass`, so `overlay_dirty` deliberately does
         // not appear here - that is what keeps a cursor-following tool preview
         // off the critical path of a full scene render.
+        // The inspector can be opened before the main viewport has ever fitted
+        // the imported mine coordinates, leaving GPU coordinates at mine
+        // magnitudes. Rebase towards the solid, but only once it is genuinely
+        // far away, and snap to a coarse grid: the preview's bounds follow the
+        // View selection, and an origin that tracked them exactly would clear
+        // every GPU cache each time a bench was ticked.
+        if !solid_preview.is_empty() {
+            const REBASE_DISTANCE: f64 = 4096.0;
+            const REBASE_GRID: f64 = 1024.0;
+            let (center, _) = super::solid_preview::mesh_framing(solid_preview);
+            let origin = (center / REBASE_GRID).round() * REBASE_GRID;
+            if (center - self.scene_origin).abs().max_element() > REBASE_DISTANCE && self.scene_origin != origin {
+                self.scene_origin = origin;
+                self.triangulation_gpu.clear();
+                self.block_model_gpu.clear();
+                self.drill_hole_gpu = Default::default();
+                self.geometry_dirty = true;
+                self.scene_cache_key = None;
+                self.solid_preview_key = None;
+            }
+        }
         let mut scene_content_changed = self.geometry_dirty;
         self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
@@ -119,6 +147,7 @@ impl<'a> Graphics<'a> {
             self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
             self.include_tool_previews_in_depth(editor);
             self.include_batter_berm_preview_in_depth(editor);
+            self.include_blast_outlines_in_depth(editor);
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
         self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
@@ -168,6 +197,7 @@ impl<'a> Graphics<'a> {
             self.scene_origin,
             scale_factor,
             triangulations,
+            solid_preview,
             rasters,
             editor,
             &self.surface_style_bind_group_layout,
@@ -425,6 +455,18 @@ impl<'a> Graphics<'a> {
         // pass as the main and detached viewports. The egui panel samples this
         // offscreen texture below.
         self.render_embedded_slice_preview(document, triangulations, block_models, drill_holes, point_clouds, rasters, editor);
+        self.render_solid_preview(
+            solid_preview,
+            super::solid_preview::SolidPreviewScene {
+                document,
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                rasters,
+            },
+            editor,
+        );
 
         // Keep the engineering-drawing dialog's map preview current.
         self.refresh_plot_preview(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);

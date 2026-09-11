@@ -51,6 +51,19 @@ impl<'a> App<'a> {
             OpenItem::BlockModel(mut item) => {
                 if let Some(target) = self.block_models.iter_mut().find(|target| target.id == item.id) {
                     preserve_state(&target.state, &mut item.state);
+                    // Reserve statistics are written only on the UI thread, so
+                    // the live model is never older than this snapshot. A scan
+                    // landing between an eviction's snapshot and its apply
+                    // would otherwise be wiped by the swap - along with the
+                    // request key that says it satisfied these inputs, which
+                    // turns the next unload/reload of an unloaded model into a
+                    // scan that never sticks.
+                    item.reserve_totals = std::mem::take(&mut target.reserve_totals);
+                    item.reserve_totals_key = target.reserve_totals_key;
+                    item.reserve_totals_data_key = target.reserve_totals_data_key;
+                    item.reserve_totals_awaiting_restore = target.reserve_totals_awaiting_restore;
+                    item.reserve_totals_error = std::mem::take(&mut target.reserve_totals_error);
+                    item.reserve_totals_error_key = target.reserve_totals_error_key;
                     *target = *item;
                 }
             }

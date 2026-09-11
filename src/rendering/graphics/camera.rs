@@ -947,6 +947,26 @@ impl<'a> Graphics<'a> {
         let Some((min, max)) = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden) else {
             return;
         };
+        self.frame_bounds(min, max, document, triangulations, block_models, drill_holes, point_clouds, hidden);
+    }
+
+    /// Fit one explicit box, keeping the current orbit angle.
+    ///
+    /// Separate from [`Self::zoom_to_extents`] so a page can frame the thing
+    /// it is about - the Blasting step frames the selected bench - rather
+    /// than everything the scene happens to hold.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn frame_bounds(
+        &mut self,
+        min: DVec3,
+        max: DVec3,
+        document: &Document,
+        triangulations: &[OpenTriangulation],
+        block_models: &[OpenBlockModel],
+        drill_holes: &[OpenDrillHoleDataset],
+        point_clouds: &[OpenPointCloud],
+        hidden: &HashSet<SceneEntityId>,
+    ) {
         let center = (min + max) * 0.5;
         let forward = self.camera.forward();
         let right = forward.cross(self.camera.up()).normalize_or_zero();
@@ -1002,9 +1022,20 @@ impl<'a> Graphics<'a> {
             crate::ui::state::StandardView::West => (DVec3::X, DVec3::Z),
             crate::ui::state::StandardView::East => (DVec3::NEG_X, DVec3::Z),
         };
+        self.set_view_direction(forward, up);
+    }
+
+    /// Swing the camera to look along `forward`, as the standard views do.
+    /// Separate from them so a page that owns the camera - the Blasting
+    /// step's plan view - can put back whatever the user had before.
+    pub(crate) fn set_view_direction(&mut self, forward: DVec3, up: DVec3) {
         self.camera_controller.begin_view_transition(&self.camera, forward, up, self.projection.zoom);
         self.camera_controller.end_orbit();
         self.orbit_marker = None;
+    }
+
+    pub(crate) fn camera_orientation(&self) -> (DVec3, DVec3) {
+        (self.camera.forward(), self.camera.up())
     }
 
     /// Keep the depth range tight around the current scene. An oversized range
@@ -1215,6 +1246,35 @@ impl<'a> Graphics<'a> {
             .batter_berm_rings_world
             .iter()
             .flatten()
+            .copied()
+            .filter(|point| point.x.is_finite() && point.y.is_finite() && point.z.is_finite())
+            .map(|point| {
+                let point = self.exaggerate_point(point);
+                (point - self.camera.position).dot(forward)
+            })
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
+
+        if min_depth.is_finite() {
+            let padding = (self.projection.zoom * 0.25).max(1.0);
+            self.projection.expand_view_depth_range(min_depth, max_depth, padding);
+        }
+    }
+
+    /// Keep the blast outlines inside the clip volume. They are drawn on their
+    /// bench's nominal crest plane, which on the topmost bench sits above the
+    /// mesh roof - that roof is topography, not a cut cap - so the scene bounds
+    /// stop short of them and the near plane clips them away as the shrinking
+    /// zoom padding stops covering the gap.
+    pub(super) fn include_blast_outlines_in_depth(&mut self, editor: &EditorState) {
+        if editor.blasting_outlines.is_empty() {
+            return;
+        }
+
+        let forward = self.camera.forward();
+        let (min_depth, max_depth) = editor
+            .blasting_outlines
+            .iter()
+            .flat_map(|outline| outline.rings.iter().flatten())
             .copied()
             .filter(|point| point.x.is_finite() && point.y.is_finite() && point.z.is_finite())
             .map(|point| {

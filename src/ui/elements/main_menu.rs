@@ -336,7 +336,10 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
     let survives = match editor.active_tool {
         ActiveTool::None | ActiveTool::VerticalSlice => true,
         ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint => workspace == Workspace::DrillAndBlast,
-        _ => workspace.has_production_tools(),
+        // Planning's Blasting step carries a run of the drawing tools of its
+        // own, so one armed there is still armed when the user comes back to
+        // it - the same rule, read against the page rather than the tab.
+        _ => workspace.has_production_tools() || editor.is_planning_cut_step(),
     };
     if !survives {
         commands.push(UiCommand::SetActiveTool(ActiveTool::None));
@@ -662,6 +665,10 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             }
             if ContextMenuAction::new(tr!(literal = "Merge Shell into Topology...")).show(ui).clicked() {
                 commands.push(UiCommand::OpenIncludeSolidInTopology);
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!(literal = "Build Solid from Surfaces...")).show(ui).clicked() {
+                commands.push(UiCommand::OpenBuildSolidFromSurfaces);
                 ui.close();
             }
             context_menu_separator(ui);

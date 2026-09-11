@@ -50,6 +50,7 @@ pub(crate) mod plot;
 pub(crate) mod projections;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
+pub(crate) mod solid_preview;
 pub(crate) mod targets;
 
 pub(super) const TEXT_CACHE_TRIM_INTERVAL_FRAMES: u64 = 300;
@@ -212,6 +213,8 @@ pub(crate) struct Graphics<'a> {
     // are dropped first during shutdown.
     pub(super) gui: Gui,
     pub(super) text_system: TextSystem,
+    pub(super) solid_surface_render_pipeline: wgpu::RenderPipeline,
+    pub(super) transparent_solid_surface_render_pipeline: wgpu::RenderPipeline,
     pub(super) surface_render_pipeline: wgpu::RenderPipeline,
     pub(super) transparent_surface_render_pipeline: wgpu::RenderPipeline,
     pub(super) grid_render_pipeline: wgpu::RenderPipeline,
@@ -277,6 +280,10 @@ pub(crate) struct Graphics<'a> {
     /// re-renders when its key (or its own view state) changes.
     embedded_preview_scene_key: Option<u64>,
     detached_preview_scene_key: Option<u64>,
+    /// The Solids Setup page's offscreen orbit view, and the fingerprint of
+    /// what it last drew.
+    solid_preview: Option<solid_preview::SolidPreviewTarget>,
+    solid_preview_key: Option<u64>,
     pub(super) surface: wgpu::Surface<'a>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) adapter: wgpu::Adapter,

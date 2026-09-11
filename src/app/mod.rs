@@ -4,6 +4,7 @@ pub(crate) mod events; // Handles window events
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
 pub(crate) mod memory; // Browser address-space budgeting for large allocations
+pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
 pub(crate) mod tie_in; // Drill & Blast's tie-in and initiation point
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web_download;
@@ -350,6 +351,24 @@ pub(crate) struct App<'a> {
     /// Pointer state owned by the detached slice-preview window. Kept out of
     /// `EditorState` because it is transient native-window input, not project
     /// or tool state.
+    /// The Solids Setup page's inspection mesh, kept only while that page is
+    /// showing it; see `App::sync_solid_preview`.
+    pub(crate) solid_preview: Option<crate::app::commands::solids::SolidPreview>,
+    /// The solid whose surfaces have already been asked back from storage, so
+    /// a restore that fails is not retried every frame.
+    pub(crate) solid_view_cache: std::collections::HashMap<crate::model::SolidId, crate::app::commands::solids_view::ViewSolid>,
+    pub(crate) solid_view_body: Vec<crate::model::triangulation::OpenTriangulation>,
+    pub(crate) solid_view_body_key: Option<u64>,
+    /// Dig block identities, per solid, remembered across geometry rebuilds.
+    ///
+    /// Deliberately not inside `solid_view_cache`: that cache is thrown away
+    /// whenever a solid's body is rebuilt, and ground that did not move must
+    /// not be renamed underneath a schedule because of it.
+    pub(crate) dig_block_identities: std::collections::HashMap<crate::model::SolidId, Vec<crate::app::commands::solids_view::DigBlockIdentity>>,
+    /// The six-stage Solids pipeline's state for the active project; see
+    /// [`crate::app::planning_pipeline`]. `None` until a project is open.
+    pub(crate) planning_pipeline: Option<crate::app::planning_pipeline::PlanningPipeline>,
+    pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     slice_preview_cursor_px: Option<(f64, f64)>,
     slice_preview_middle_down: bool,
     pending_selection_click: Option<crate::rendering::graphics::camera::ScenePick>,
@@ -460,6 +479,13 @@ impl<'a> Default for App<'a> {
             gizmo_drag: None,
             right_press_px: None,
             right_orbit_active: false,
+            solid_preview: None,
+            solid_view_cache: Default::default(),
+            solid_view_body: Vec::new(),
+            solid_view_body_key: None,
+            dig_block_identities: Default::default(),
+            planning_pipeline: None,
+            solid_preview_restore_requested: None,
             slice_preview_cursor_px: None,
             slice_preview_middle_down: false,
             pending_selection_click: None,
@@ -1248,7 +1274,30 @@ impl<'a> App<'a> {
         // workspace contents actually changed.
         let composite_key = self.workspace.composite_key();
         if Some(composite_key) != self.scene_document_key {
-            self.scene_document = self.workspace.scene_document();
+            self.scene_document = if self.editor.is_planning_cut_step() {
+                let mut scene = Document::new();
+                if let Some(document) = self.workspace.active_document() {
+                    scene.clone_reserve_fields_from(document);
+                    scene.clone_solids_from(document);
+                }
+                scene
+            } else {
+                self.workspace.scene_document()
+            };
+            if let Some((solid, band)) = self.editor.planning_cut_target()
+                && let Some(bench) = self
+                    .workspace
+                    .active_document()
+                    .and_then(|doc| doc.solid(solid))
+                    .and_then(|solid| solid.blasting.drawing(band.base, self.editor.is_dig_strips_step()))
+                && let Some(layer) = &bench.planning_layer
+            {
+                self.scene_document.append_layer_snapshot_unindexed(
+                    layer,
+                    bench.cuts.iter().map(|cut| (cut, self.workspace.active_document().unwrap().object_revision(cut.id()))),
+                );
+                self.scene_document.rebuild_object_index();
+            }
             self.scene_document_key = Some(composite_key);
             // The snap index rebuild is deferred to the next snap/orbit
             // query: many edits never snap before the next edit, and the
@@ -1331,7 +1380,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn invalidate_overlay(&mut self) {
+    pub(crate) fn invalidate_overlay(&mut self) {
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.invalidate_overlay();
         }

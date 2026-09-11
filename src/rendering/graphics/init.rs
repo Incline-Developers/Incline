@@ -935,7 +935,7 @@ impl<'a> Graphics<'a> {
 
         // Triangulation surface pipelines use position-only vertices with a per-draw colour
         // uniform.
-        let create_tri_surface_pipeline = |label, write_depth, depth_compare| {
+        let create_tri_surface_pipeline = |label, write_depth, depth_compare, cull_mode| {
             let mut depth = Self::depth_state(write_depth, 0);
             depth.depth_compare = Some(depth_compare);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -961,7 +961,7 @@ impl<'a> Graphics<'a> {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
+                    cull_mode,
                     polygon_mode: wgpu::PolygonMode::Fill,
                     unclipped_depth: false,
                     conservative: false,
@@ -976,8 +976,11 @@ impl<'a> Graphics<'a> {
                 cache: None,
             })
         };
-        let surface_render_pipeline = create_tri_surface_pipeline("Opaque Triangulation Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual);
-        let transparent_surface_render_pipeline = create_tri_surface_pipeline("Transparent Triangulation Surface Pipeline", false, wgpu::CompareFunction::GreaterEqual);
+        let surface_render_pipeline = create_tri_surface_pipeline("Opaque Triangulation Surface Pipeline", true, wgpu::CompareFunction::GreaterEqual, None);
+        let solid_surface_render_pipeline = create_tri_surface_pipeline("Opaque Planning Slab Pipeline", true, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
+        let transparent_solid_surface_render_pipeline =
+            create_tri_surface_pipeline("Transparent Planning Slab Pipeline", false, wgpu::CompareFunction::GreaterEqual, Some(wgpu::Face::Back));
+        let transparent_surface_render_pipeline = create_tri_surface_pipeline("Transparent Triangulation Surface Pipeline", false, wgpu::CompareFunction::GreaterEqual, None);
         let grid_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Infinite XY Grid Pipeline"),
             layout: Some(&grid_pipeline_layout),
@@ -1424,6 +1427,8 @@ impl<'a> Graphics<'a> {
             gui,
             text_system,
             surface_render_pipeline,
+            solid_surface_render_pipeline,
+            transparent_solid_surface_render_pipeline,
             transparent_surface_render_pipeline,
             grid_render_pipeline,
             raster_plane_render_pipeline,
@@ -1556,6 +1561,8 @@ impl<'a> Graphics<'a> {
             slice_preview: None,
             embedded_slice_preview: None,
             embedded_preview_scene_key: None,
+            solid_preview: None,
+            solid_preview_key: None,
             detached_preview_scene_key: None,
         })
     }

@@ -22,11 +22,12 @@ const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [0.6038, 0.6038, 0.6038, 1.0];
 
 mod contours;
 mod creation;
-mod cuts;
+pub(crate) mod cuts;
 mod geometry;
 mod include;
 mod point_cloud_tin;
 pub(crate) mod session;
+pub(crate) mod solid_between;
 
 use geometry::*;
 pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, terrain_budget_target};

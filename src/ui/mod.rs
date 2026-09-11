@@ -545,7 +545,7 @@ fn draw_ui(
     let viewport_bar_rect = elements::viewport_bar::draw_viewport_bar(root_ui, editor, project, commands);
 
     if editor.is_planning_setup() {
-        let explorer = elements::explorer::draw_explorer(root_ui, editor, project, commands);
+        let explorer = elements::explorer::draw_explorer(root_ui, editor, project, document, commands);
         let console_rect = editor.show_console.then(|| {
             let available_height = root_ui.available_height();
             let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
@@ -555,7 +555,11 @@ fn draw_ui(
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let planning_page = editor.planning_page;
-        let details = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
+        let details = if editor.is_solids_view() {
+            elements::solids_view::draw_details(root_ui, editor, project, document, commands)
+        } else {
+            elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page)
+        };
         dialogs::about::draw_about_dialog(root_ui, editor);
         elements::properties::draw_preferences(root_ui, editor, commands);
         if editor.renaming_item.is_some() {
@@ -587,7 +591,7 @@ fn draw_ui(
         return geometry_dirty;
     }
 
-    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, commands);
+    let explorer = elements::explorer::draw_explorer(root_ui, editor, project, document, commands);
 
     // The console belongs below the bottom toolbar. Reserve the toolbar's height
     // before showing the console so dragging it to its maximum cannot starve the
@@ -613,7 +617,13 @@ fn draw_ui(
     // and they carry on underneath it, and after the viewport bar, so it
     // starts directly under it: the mockup's shape, and the order it takes to
     // get there.
-    let products_rect = if editor.is_planning_viewport() {
+    let products_rect = if editor.is_planning_cut_step() {
+        Some(if editor.is_dig_strips_step() {
+            elements::dig_strips::draw_panel(root_ui, editor, commands)
+        } else {
+            elements::blasting::draw_panel(root_ui, editor, commands)
+        })
+    } else if editor.is_planning_viewport() {
         Some(elements::planning_reserves::draw_data_panel(root_ui))
     } else {
         (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor))
@@ -1097,7 +1107,32 @@ fn draw_ui(
     }
 
     if editor.show_world_axis_gizmo {
-        elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands);
+        let gizmo = elements::cursors::draw_orientation_gizmo(
+            root_ui,
+            egui::Id::new("world_orientation_gizmo"),
+            canvas_rect,
+            frame_context.camera_forward,
+            frame_context.camera_up,
+        );
+        if let Some(view) = gizmo.clicked {
+            commands.push(UiCommand::SetStandardView(view));
+        }
+    }
+
+    if editor.is_planning_cut_step() {
+        let painter = root_ui.painter().with_clip_rect(canvas_rect);
+        let scale = root_ui.ctx().pixels_per_point();
+        for (name, (x, y), selected) in &editor.blast_labels {
+            let center = egui::pos2(x / scale, y / scale);
+            let galley = painter.layout_no_wrap(
+                name.clone(),
+                egui::FontId::proportional(15.0),
+                if *selected { egui::Color32::from_rgb(255, 190, 40) } else { egui::Color32::WHITE },
+            );
+            let rect = egui::Rect::from_center_size(center, galley.size());
+            painter.rect_filled(rect.expand2(egui::vec2(5.0, 3.0)), 3.0, egui::Color32::from_black_alpha(190));
+            painter.galley(rect.min, galley, egui::Color32::WHITE);
+        }
     }
 
     // The drawn cursor, and with it the decision to hide the system pointer.
@@ -1301,6 +1336,7 @@ fn draw_global_dialogs(
     }
 
     if editor.tri_cut_pitshell_open {
+        dialogs::triangulation::draw_build_solid_dialog(root_ui, editor, project, commands);
         dialogs::triangulation::draw_cut_topology_to_pit_shell_dialog(root_ui, editor, project, commands);
     }
 

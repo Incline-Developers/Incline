@@ -1635,6 +1635,7 @@ planning-centroid = Centroid
 
 planning-page-solids = Solids
 planning-page-haulage = Haulage
+planning-subpage-view = View
 planning-subpage-layout = Layout
 planning-subpage-animate = Animate
 
@@ -1642,6 +1643,10 @@ planning-subpage-animate = Animate
 
 planning-field-list = Field List
 planning-block-models = Block Models
+planning-solids = Solids
+planning-benching = Benching
+planning-blasting = Blasting
+planning-benches = Benches
 
 preferences-title = Preferences
 
@@ -1649,3 +1654,117 @@ context-text-colour = Text colour
 
 context-polylines = Polylines
 context-points = Points
+
+planning-building-slabs = Building bench slabs…
+planning-too-many-flitches = A bench can contain at most 64 flitches
+planning-solid-needs-surfaces = Load or assign both the design surface and topography to inspect this solid
+planning-building-view = Building solids inspector…
+planning-solid-geometry-pending = Preparing occupied benches…
+planning-empty-category = (Empty)
+planning-computing-reserves = Computing selected reserves…
+planning-reserve-needs-model = Assign a block model to compute reserve fields
+planning-reserve-unloaded = Loading block model for reserves…
+planning-reserve-open-solid = Reserve fields require closed solid meshes
+planning-reserve-method = Geometric overlap fractions · uniform values within blocks · totals added per solid
+planning-reserve-blocks = Equivalent blocks
+planning-reserve-status = Reserves
+planning-reserve-scope = Method
+planning-reserve-categories = { $count } categories
+planning-reserve-unavailable = Block model data is unavailable; reload the model to compute reserves
+planning-volume-unavailable = Preview available · volume requires closed meshes
+
+planning-stat-sum = Sum
+planning-stat-avg = Avg
+planning-stat-min = Min
+planning-stat-max = Max
+planning-select-solid = Select a solid from the list
+planning-blast-name-taken = Blast { $name } already exists on RL { $rl }
+planning-blasts = Blasts
+planning-blasts-empty = Select a bench to see its blasts
+planning-blasts-one-bench = Select a single bench to draw cuts on it
+planning-blast-row = { $name } · { $area } m²
+
+
+planning-dig-strips = Dig Strips
+planning-dig-blocks = Dig Blocks
+planning-dig-select-flitch = Select a flitch to draw dig strips.
+planning-dig-copy = Copy Strips
+planning-dig-paste = Paste Strips
+
+## Reserve field diagnostics
+
+reserve-issue-unmapped = Not mapped to a column or constant on this block model
+reserve-issue-constant = The constant mapped onto this field is not a finite number
+reserve-issue-missing-column = Column "{ $column }" is not in this block model
+reserve-issue-wants-category = Column "{ $column }" is numeric; a category field needs a categorical column
+reserve-issue-wants-numeric = Column "{ $column }" is categorical; this field needs a numeric column
+reserve-issue-not-resident = Column "{ $column }" is listed but its values are not loaded
+reserve-issue-length = Column "{ $column }" has { $values } values for { $blocks } blocks
+reserve-issue-weight-missing = The weighting field is no longer in the Field List
+reserve-issue-weight-not-summed = Weighting field "{ $name }" must be a summed field
+reserve-issue-weight-unresolved = The weighting field could not be resolved on this block model
+reserve-issue-all-missing = Every block in range was missing a value for this field
+reserve-issue-model-excluded = This block model is excluded from the project's reserves
+planning-reserve-capacity-only = Geometry only · no block model assigned, so there is no measured content
+
+## Solids pipeline stages
+
+stage-state-not-run = Not run
+stage-state-stale = Stale
+stage-state-blocked = Blocked
+stage-state-queued = Queued
+stage-state-running = Running
+stage-state-complete = Complete
+stage-state-failed = Failed
+stage-state-cancelled = Cancelled
+stage-blocked-by = Run { $stage } first
+stage-all-current = Every stage is already current
+stage-failed-count = { $count } problems to resolve
+stage-duplicate-field = Two fields share this name
+stage-model-data-gaps = { $missing } blocks missing a value · { $weights } with no usable weight
+stage-waiting-models = Waiting on { $count } block models
+stage-waiting-solids = Waiting on { $count } solids
+stage-no-occupied-bands = The benching plan reaches no material in this solid
+stage-run-step = Run Step
+stage-run-all = Run All
+stage-cancel = Cancel Run
+stage-force-rebuild = Rebuild Everything
+stage-last-run = Run { $generation } · { $entities } entities
+stage-diagnostics = Diagnostics
+stage-never-run = This stage has not been run
+planning-reserve-coverage = Model coverage
+planning-reserve-coverage-note = Block-model volume measured into the shown geometry, as a share of its geometric volume
+stage-dig-blocks-summary = Dig Strips complete · { $blocks } blocks across { $solids } solids · { $volume } m³ measured · { $unmeasured } without a closed volume
+stage-block-not-closed = Dig block { $block } ({ $area } m²) did not come out closed, so it has no volume
+stage-volume-mismatch = { $blocks } dig blocks total { $children } m³ against the bench's own { $parent } m³
+stage-coverage-exceeds = Block model covers { $covered } m³ of a bench measuring { $parent } m³
+stage-duplicate-block-id = Two dig blocks share identity { $id }
+stage-block-no-blast = Dig block { $block } lies in no blast of its bench
+planning-stat-not-scanned = Not scanned yet · run the Block Models stage
+planning-stat-scanning = Scanning…
+planning-stat-loading = Loading block model…
+planning-stat-scan-failed = Scan failed · { $error } · right-click the model to recompute
+planning-recompute-stats = Recompute Statistics
+planning-snapshot-incomplete = { $solid } has no completed geometry for the current inputs
+planning-snapshot-failed = { $solid } failed: { $message }
+stage-bench-no-children = A bench holding { $volume } m³ produced no dig blocks
+stage-child-unmeasured = Dig block { $block } has no reserve measurement
+stage-blocks-mismatch = Dig blocks total { $children } equivalent blocks against the bench's own { $parent }
+stage-coverage-mismatch = Dig blocks cover { $children } m³ against the bench's own { $parent } m³
+stage-field-lost = A reserve field measured on the bench is absent from its dig blocks
+stage-field-mismatch = { $field }: dig blocks total { $children } against the bench's own { $parent }
+stage-category-mismatch = Category { $category }: dig blocks hold { $children } equivalent blocks against the bench's own { $parent }
+planning-not-run = Not run · use Run All to build this solid's benches and dig blocks
+planning-reserve-partial = Partial · { $contributed } blocks contributed, { $missing } could not
+planning-reserve-none-contributed = No block in this ground carried a value ({ $missing } missing)
+planning-block-replaces = Replaces { $ids }
+stage-blocks-relineaged = { $count } dig blocks replaced ground that previously held other identities
+planning-snapshot-no-project = No project is open
+planning-snapshot-not-run = { $stage } has not been run
+planning-snapshot-stale = { $stage } is out of date; run it again
+planning-snapshot-running = { $stage } is still running
+planning-snapshot-unmeasured = Dig block { $block } has no reserve measurement
+planning-snapshot-label = Scheduling snapshot
+planning-snapshot-ready = Ready · run { $generation } · { $blocks } dig blocks
+stage-missing-reference = The bench has no independent reserve measurement to reconcile against
+stage-field-invented = The dig blocks report a reserve field the bench does not measure

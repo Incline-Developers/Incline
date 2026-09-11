@@ -34,7 +34,13 @@ impl<'a> App<'a> {
             RenameTarget::PointCloud(id) => self.point_clouds.iter().find(|item| item.id == id).map(|item| item.name.clone()),
             RenameTarget::BlockModel(id) => self.block_models.iter().find(|item| item.id == id).map(|item| item.name.clone()),
             RenameTarget::DrillHole(id) => self.drill_holes.iter().find(|item| item.id == id).map(|item| item.name.clone()),
-            RenameTarget::ReserveField(id) => self.workspace.active_document().and_then(|document| document.reserve_field(id)).map(|field| field.name.clone()),
+            RenameTarget::ReserveField(id) => self
+                .workspace
+                .active_document()
+                .and_then(|document| document.reserve_field(id))
+                .map(|field| field.name.clone()),
+            RenameTarget::Solid(id) => self.workspace.active_document().and_then(|document| document.solid(id)).map(|solid| solid.name.clone()),
+            RenameTarget::BlastShape(blast) => self.blast_name(blast),
         }
     }
 
@@ -79,7 +85,7 @@ impl<'a> App<'a> {
             return;
         }
         let siblings: Vec<String> = match target {
-            RenameTarget::Layer(_) | RenameTarget::ReserveField(_) => return,
+            RenameTarget::Layer(_) | RenameTarget::ReserveField(_) | RenameTarget::Solid(_) | RenameTarget::BlastShape(_) => return,
             RenameTarget::Triangulation(id) => sibling_names!(self.triangulations, id),
             RenameTarget::Raster(id) => sibling_names!(self.raster_textures, id),
             RenameTarget::PointCloud(id) => sibling_names!(self.point_clouds, id),
@@ -88,7 +94,7 @@ impl<'a> App<'a> {
         };
         let name = unique_item_name(requested.clone(), siblings.iter().map(String::as_str));
         let item = match target {
-            RenameTarget::Layer(_) | RenameTarget::ReserveField(_) => return,
+            RenameTarget::Layer(_) | RenameTarget::ReserveField(_) | RenameTarget::Solid(_) | RenameTarget::BlastShape(_) => return,
             RenameTarget::Triangulation(id) => ItemRef::Triangulation(id),
             RenameTarget::Raster(id) => ItemRef::Raster(id),
             RenameTarget::PointCloud(id) => ItemRef::PointCloud(id),

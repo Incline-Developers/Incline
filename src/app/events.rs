@@ -169,6 +169,27 @@ impl<'a> App<'a> {
                     }
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
+                    // The Solids Setup page's inspection mesh is rebuilt before
+                    // the frame that shows it, and borrowed straight into the
+                    // render input - it is never a project item.
+                    // Invalidation first: the edits made since the last frame
+                    // decide which stages are still current, and so what a run
+                    // in flight is allowed to schedule. Doing this after the
+                    // geometry sync would let one frame's work start against a
+                    // demand that the same frame's edit had already retired.
+                    self.sync_planning_pipeline();
+                    self.sync_solid_preview();
+                    self.sync_reserve_setup_stats();
+                    self.sync_blasting_view();
+                    self.sync_blasting_bench();
+                    self.sync_blasting_outlines();
+                    self.sync_dig_blocks();
+                    self.sync_blasting_frame();
+                    let showing_solid_preview = self.showing_solid_preview();
+                    let showing_solids_view = self.editor.is_solids_view();
+                    // Blasting draws into the real viewport, so its bench
+                    // slabs are the scene rather than an offscreen preview.
+                    let blasting = self.editor.is_planning_cut_step();
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.pending_resize.take();
                     if let Some(graphics) = self.graphics.as_mut() {
@@ -197,11 +218,20 @@ impl<'a> App<'a> {
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
                             editor: &mut self.editor,
                             document: &mut self.scene_document,
-                            triangulations: &self.triangulations,
+                            triangulations: if blasting { &self.solid_view_body } else { &self.triangulations },
                             block_models: &self.block_models,
                             drill_holes: &self.drill_holes,
                             point_clouds: &self.point_clouds,
                             rasters: &self.raster_textures,
+                            solid_preview: if blasting {
+                                &[]
+                            } else if showing_solids_view {
+                                &self.solid_view_body
+                            } else if showing_solid_preview {
+                                self.solid_preview.as_ref().map_or(&[][..], |preview| preview.meshes())
+                            } else {
+                                &[]
+                            },
                             project: &project,
                         }) {
                             Ok(ui_output) => {
@@ -1070,6 +1100,8 @@ impl<'a> App<'a> {
                 KeyCode::KeyA => {
                     self.select_all_active_objects();
                 }
+                KeyCode::KeyC if self.editor.is_dig_strips_step() => self.copy_dig_strips(),
+                KeyCode::KeyV if self.editor.is_dig_strips_step() => self.paste_dig_strips(),
                 KeyCode::KeyD => {
                     self.duplicate_selection();
                 }
@@ -1101,6 +1133,12 @@ impl<'a> App<'a> {
         if self.editor.slice_mode_enabled {
             // No orbiting in slice mode; the camera is fully derived from the
             // slice state (Q/E rotates the slice line instead).
+            return;
+        }
+
+        if self.editor.is_planning_cut_step() {
+            // Blast outlines are drawn in plan; orbiting out of it would put
+            // the cursor plane at an angle to the ground being drawn on.
             return;
         }
 
@@ -1431,6 +1469,11 @@ impl<'a> App<'a> {
     pub(crate) fn set_active_tool_from_toolbar(&mut self, tool: ActiveTool) {
         if self.editor.text_editing_enabled {
             return;
+        }
+        // Reaching for a placing tool is what creates the bench's cut layer,
+        // and it has to exist before the gate below asks for one.
+        if self.editor.is_planning_cut_step() && tool.requires_active_layer() && tool != self.editor.active_tool {
+            self.ensure_bench_cut_layer();
         }
         if self.editor.drill_pattern_open {
             self.editor.close_drill_pattern();

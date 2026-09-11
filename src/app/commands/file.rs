@@ -2344,6 +2344,7 @@ impl<'a> App<'a> {
             design.metadata.name = bundle.project_name;
             for imported in &bundle.designs {
                 design.document.merge_reserve_fields_from(&imported.document);
+                design.document.merge_solids_from(&imported.document);
             }
             for imported in bundle.designs {
                 project::merge_document_preserve_ids(&mut design.document, &imported.document);

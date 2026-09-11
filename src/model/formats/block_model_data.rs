@@ -232,7 +232,11 @@ impl BlockModelData {
     /// [`Self::numeric_variables`]'s plain numbers. Used to map a Reserves
     /// [`crate::model::ReserveAggregation::Category`] field.
     pub(crate) fn categorical_variables(&self) -> Vec<&BlockVariable> {
-        self.metadata.variables.iter().filter(|variable| matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort")).collect()
+        self.metadata
+            .variables
+            .iter()
+            .filter(|variable| matches!(variable.physical_type.as_str(), "namedbyte" | "namedshort"))
+            .collect()
     }
 
     pub(crate) fn color_values(&self, name: &str) -> Result<Vec<f64>, BlockModelDataError> {

@@ -118,18 +118,76 @@ impl Default for PreferencesDraft {
 impl EditorState {
     pub(crate) fn planning_subpage(&self) -> PlanningSubpage {
         match self.planning_page {
-            PlanningPage::Solids => PlanningSubpage::Setup,
+            PlanningPage::Solids => self.solids_subpage,
             PlanningPage::Haulage => PlanningSubpage::Layout,
             PlanningPage::Schedule => self.schedule_subpage,
         }
     }
 
-    pub(crate) fn is_planning_viewport(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_subpage() != PlanningSubpage::Setup
+    /// Whether the Solids Setup page is on its Blasting step.
+    ///
+    /// Blasting is the one Setup step that needs the viewport: its shapes are
+    /// drawn with the same tools as any other design geometry, which pick,
+    /// snap and orbit against the real scene. So it reverses both of the
+    /// predicates below rather than adding a layout branch of its own.
+    pub(crate) fn is_blasting_step(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Solids
+            && self.solids_subpage == PlanningSubpage::Setup
+            && self.planning_solids_step == SolidsStep::Blasting
     }
 
+    pub(crate) fn is_dig_strips_step(&self) -> bool {
+        self.active_workspace == Workspace::Planning
+            && self.planning_page == PlanningPage::Solids
+            && self.solids_subpage == PlanningSubpage::Setup
+            && self.planning_solids_step == SolidsStep::DigStrips
+    }
+    pub(crate) fn is_planning_cut_step(&self) -> bool {
+        self.is_blasting_step() || self.is_dig_strips_step()
+    }
+
+    pub(crate) fn planning_cut_target(&self) -> Option<(crate::model::SolidId, BenchSelection)> {
+        if !self.is_planning_cut_step() {
+            return None;
+        }
+        match self.solids_view_selection.as_slice() {
+            [row] => row.band.filter(|band| band.is_flitch == self.is_dig_strips_step()).map(|band| (row.solid, band)),
+            _ => None,
+        }
+    }
+
+    /// The one bench the Blasting step is working on, if the selection names
+    /// exactly one.
+    ///
+    /// Drawing a cut needs a single bench to draw it on: a cut line belongs to
+    /// one bench's layer, and its RL is the elevation the tools place vertices
+    /// at. Selecting a whole solid, or several benches, is a way of looking at
+    /// the outlines rather than a way of editing them, so it arms nothing.
+    pub(crate) fn blasting_bench(&self) -> Option<(crate::model::SolidId, BenchSelection)> {
+        if !self.is_blasting_step() {
+            return None;
+        }
+        match self.solids_view_selection.as_slice() {
+            [row] => row.band.filter(|band| !band.is_flitch).map(|band| (row.solid, band)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_planning_viewport(&self) -> bool {
+        self.active_workspace == Workspace::Planning && (!matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View) || self.is_planning_cut_step())
+    }
+
+    /// Whether a Planning page that owns the whole window - rather than
+    /// framing the 3D viewport - is on screen. Both the Solids setup and the
+    /// view of what it produced are laid out that way.
     pub(crate) fn is_planning_setup(&self) -> bool {
-        self.active_workspace == Workspace::Planning && self.planning_subpage() == PlanningSubpage::Setup
+        self.active_workspace == Workspace::Planning && matches!(self.planning_subpage(), PlanningSubpage::Setup | PlanningSubpage::View) && !self.is_planning_cut_step()
+    }
+
+    /// Whether the Solids page is showing its View subpage.
+    pub(crate) fn is_solids_view(&self) -> bool {
+        self.active_workspace == Workspace::Planning && self.planning_page == PlanningPage::Solids && self.solids_subpage == PlanningSubpage::View
     }
 
     /// Set (or clear) the status-bar message. Whenever the displayed task
@@ -252,6 +310,304 @@ pub(crate) enum TriSurfaceType {
     SolidClosed,
 }
 
+/// The Solids Setup subpage's steps, in the order the step tree lists them:
+/// the project-wide Field List, each block model's mapping onto it, then the
+/// solids those reserves are computed over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidsStep {
+    FieldList,
+    BlockModels,
+    Solids,
+    Benching,
+    /// Dividing each bench into the shapes it is blasted in. Unlike the other
+    /// steps this one frames the 3D viewport rather than owning the window,
+    /// because the blast outlines are drawn with the ordinary design tools.
+    Blasting,
+    DigStrips,
+}
+
+impl SolidsStep {
+    /// Every step, in the order the step tree lists them.
+    pub(crate) const ALL: [Self; 6] = [Self::FieldList, Self::BlockModels, Self::Solids, Self::Benching, Self::Blasting, Self::DigStrips];
+}
+
+/// One derived blast shape, ready to draw and to list.
+///
+/// The rings are the face's own boundary: `rings[0]` is its outer ring and
+/// any that follow are holes through it. Derived from the bench outline each
+/// time it changes, so nothing here is the source of truth except the name.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlastOutline {
+    pub(crate) solid: crate::model::SolidId,
+    /// RL at the bottom of the bench this blast divides.
+    pub(crate) bench_base: f64,
+    /// The elevation the outline was traced at - the bench crest, which is
+    /// the surface its holes would be collared on.
+    pub(crate) plane: f64,
+    pub(crate) name: String,
+    /// The point the name was matched on, carried so the panel addresses the
+    /// stored blast by exactly the value the derivation stored.
+    pub(crate) anchor: [f64; 2],
+    pub(crate) rings: Vec<Vec<glam::DVec3>>,
+    /// Plan area, outer ring less its holes.
+    pub(crate) area: f64,
+}
+
+/// What the Blasting step borrows from the rest of the editor while it is
+/// open: the camera, the drawing target and the working elevation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlastingRestore {
+    pub(crate) forward: glam::DVec3,
+    pub(crate) up: glam::DVec3,
+    pub(crate) layer: Option<crate::model::LayerId>,
+    pub(crate) z_level: f64,
+    pub(crate) z_input: f64,
+}
+
+/// What the properties panel says about a selected dig block.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DigBlockInfo {
+    pub(crate) id: crate::model::DigBlockId,
+    pub(crate) name: String,
+    pub(crate) plan_area: f64,
+    /// The bench and flitch it belongs to, named rather than re-derived.
+    pub(crate) bench: BenchSelection,
+    pub(crate) flitch: BenchSelection,
+    pub(crate) blast: Option<BlastShapeRef>,
+    pub(crate) volume: Option<f64>,
+    /// Identities this block's ground used to be held under.
+    pub(crate) replaces: Vec<crate::model::DigBlockId>,
+}
+
+/// One stage's status as the step tree reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PlanningStageView {
+    pub(crate) state: crate::app::planning_pipeline::StageState,
+    pub(crate) message: Option<String>,
+    pub(crate) diagnostics: Vec<crate::app::planning_pipeline::StageDiagnostic>,
+    pub(crate) last_success: Option<crate::app::planning_pipeline::StageSummary>,
+    /// The earlier stage that has to run first, when this one cannot.
+    pub(crate) blocked_by: Option<SolidsStep>,
+}
+
+/// The outcome of one resolved click on a planning preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidPick {
+    Hit(crate::model::triangulation::TriangulationId),
+    /// The ray reached nothing. Distinct from "no pick has been resolved yet".
+    Miss,
+}
+
+/// A row of the Solids View tree: a solid, one of its benches, or one flitch
+/// inside a bench. The kind heading a group is not itself selectable - it
+/// stands for every solid under it, which selecting those says better.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidsViewRow {
+    pub(crate) solid: crate::model::SolidId,
+    /// The slice of that solid, or `None` for the solid as a whole.
+    pub(crate) band: Option<BenchSelection>,
+}
+
+/// A row of the Benching step's results: one bench, or one flitch inside it.
+/// Selecting a row picks that slice of the solid out in the preview.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BenchSelection {
+    /// RL at the bottom of the slice, which is also what names it.
+    pub(crate) base: f64,
+    pub(crate) top: f64,
+    /// Whether the row is a flitch rather than a whole bench.
+    pub(crate) is_flitch: bool,
+}
+
+/// What the Solids Setup page has to say about its preview, mirrored out of
+/// `App` each frame so the page - which only ever reads editor state - can
+/// caption the render window without reaching into the preview itself.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SolidPreviewSummary {
+    /// No run has produced geometry for this solid yet. Distinct from Empty,
+    /// which means a completed run found nothing.
+    NotRun,
+    /// Nothing to show: no solid selected, or it has no surfaces yet.
+    Empty,
+    /// The solid names surfaces, but none of them are loaded - unloading an
+    /// item frees its geometry, so there is nothing to draw until it is
+    /// loaded again.
+    Unloaded,
+    /// A build is running. `showing_previous` means the solid it is replacing
+    /// is still on screen, so the caption should read as an update rather than
+    /// as an empty pane.
+    Building {
+        showing_previous: bool,
+    },
+    /// A surface the solid needs is being read back from storage before the
+    /// build can start.
+    LoadingInputs {
+        showing_previous: bool,
+    },
+    /// Ready to inspect. `volume` is present only for a built solid; a lone
+    /// design surface encloses nothing. `waiting_on_unloaded` marks the
+    /// half-built case: one of the two surfaces is loaded and the other is
+    /// not, so this shows the design on its own rather than the volume.
+    Ready {
+        volume: Option<f64>,
+        faces: usize,
+        waiting_on_unloaded: bool,
+    },
+    Failed(String),
+}
+
+/// How the Solids Setup page's preview is looking at its solid: an orbit
+/// around the mesh's own centre, plus a zoom multiplier on the framing that
+/// fits it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SolidPreviewView {
+    /// Rotation about the vertical axis, in radians.
+    pub(crate) yaw: f64,
+    /// Elevation above the horizon, in radians, clamped short of the poles so
+    /// the view never gimbals onto its up vector.
+    pub(crate) pitch: f64,
+    /// 1.0 frames the whole mesh; larger moves in.
+    pub(crate) zoom_multiplier: f64,
+    /// Offset of the framed centre from the mesh's own centre, in screen
+    /// right/up units of the orbit's own basis, as a fraction of the framing
+    /// radius - so a pan holds its place on screen as the view is zoomed.
+    pub(crate) pan: [f64; 2],
+}
+
+impl Default for SolidPreviewView {
+    fn default() -> Self {
+        // A raised three-quarter view: a pit reads as a pit at a glance,
+        // which a plan or elevation view of the same mesh does not.
+        Self {
+            yaw: -std::f64::consts::FRAC_PI_4,
+            pitch: std::f64::consts::FRAC_PI_6,
+            zoom_multiplier: 1.0,
+            pan: [0.0; 2],
+        }
+    }
+}
+
+impl SolidPreviewView {
+    /// Widest elevation either side of the horizon. Stopping short of
+    /// straight down keeps the camera's up vector well defined.
+    const MAX_PITCH: f64 = std::f64::consts::FRAC_PI_2 * 0.98;
+
+    pub(crate) fn orbit_by_pixels(&mut self, delta: [f64; 2], frame_height: f64) {
+        // A drag across the full frame is half a turn, so the whole solid can
+        // be walked around without the pointer leaving the panel.
+        let scale = std::f64::consts::PI / frame_height.max(1.0);
+        self.yaw -= delta[0] * scale;
+        self.pitch = (self.pitch + delta[1] * scale).clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
+    }
+
+    pub(crate) fn zoom_by_scroll(&mut self, scroll: f64) {
+        self.zoom_multiplier = (self.zoom_multiplier * (scroll / 400.0).exp()).clamp(0.1, 40.0);
+    }
+
+    /// Slide the view across the frame. The drag is divided by the zoom, so
+    /// the point under the pointer stays under it at any magnification.
+    pub(crate) fn pan_by_pixels(&mut self, delta: [f64; 2], frame_height: f64) {
+        let scale = 2.0 / (frame_height.max(1.0) * self.zoom_multiplier.max(0.05));
+        self.pan[0] -= delta[0] * scale;
+        self.pan[1] += delta[1] * scale;
+    }
+
+    /// The framed point, given the mesh's own centre and framing radius.
+    pub(crate) fn framed_center(self, center: glam::DVec3, radius: f64) -> glam::DVec3 {
+        let (right, up) = self.screen_basis();
+        center + (right * self.pan[0] + up * self.pan[1]) * radius
+    }
+
+    /// The view direction this orbit looks along, matching the one the
+    /// renderer builds from the same angles.
+    pub(crate) fn forward(self) -> glam::DVec3 {
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        glam::DVec3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch).normalize()
+    }
+
+    /// Screen right and up vectors of this view, for projecting world axes
+    /// onto the preview image.
+    pub(crate) fn screen_basis(self) -> (glam::DVec3, glam::DVec3) {
+        let forward = self.forward();
+        let right = forward.cross(glam::DVec3::Z).normalize_or_zero();
+        let right = if right == glam::DVec3::ZERO { glam::DVec3::X } else { right };
+        (right, right.cross(forward))
+    }
+
+    /// Swing the orbit round to one of the gizmo's named directions, matching
+    /// the view directions `Graphics::set_standard_view` gives the main
+    /// camera so both cameras answer a gizmo click the same way.
+    pub(crate) fn face(&mut self, view: StandardView) {
+        let (yaw, pitch) = match view {
+            StandardView::Up => (self.yaw, Self::MAX_PITCH),
+            StandardView::Down => (self.yaw, -Self::MAX_PITCH),
+            StandardView::North => (-std::f64::consts::FRAC_PI_2, 0.0),
+            StandardView::South => (std::f64::consts::FRAC_PI_2, 0.0),
+            StandardView::West => (0.0, 0.0),
+            StandardView::East => (std::f64::consts::PI, 0.0),
+        };
+        self.yaw = yaw;
+        self.pitch = pitch;
+    }
+
+    pub(crate) fn hash_into(self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.yaw.to_bits().hash(hasher);
+        self.pitch.to_bits().hash(hasher);
+        self.zoom_multiplier.to_bits().hash(hasher);
+        self.pan[0].to_bits().hash(hasher);
+        self.pan[1].to_bits().hash(hasher);
+    }
+}
+
+/// Which of the two volumes a design surface and a topography enclose is
+/// wanted, when they cross each other.
+///
+/// A design surface rarely stays on one side of the ground: a pit shell
+/// carries a crest that runs out over natural surface, a dump design toes out
+/// into a hillside. Where it crosses, the two surfaces bound *two* volumes -
+/// the ground cut away below the design, and the material placed above it -
+/// and a solid is one or the other, never both. Taking both is what merges
+/// the two surfaces into an unusable shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolidRegion {
+    /// Where the design lies below the topography: the excavated volume of a
+    /// pit or a cut.
+    Cut,
+    /// Where the design lies above the topography: the placed volume of a
+    /// dump or a stockpile.
+    Fill,
+}
+
+impl SolidRegion {
+    pub(crate) const ALL: [Self; 2] = [Self::Cut, Self::Fill];
+
+    /// The region a solid of this kind is made of: ground taken out for a pit,
+    /// material placed on top for a dump or stockpile.
+    pub(crate) fn of_solid(kind: crate::model::SolidKind) -> Self {
+        match kind {
+            crate::model::SolidKind::Pit => Self::Cut,
+            crate::model::SolidKind::Dump | crate::model::SolidKind::Stockpile => Self::Fill,
+        }
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Cut => tr!(literal = "Cut"),
+            Self::Fill => tr!(literal = "Fill"),
+        }
+    }
+
+    /// One line describing what the region covers, for the tool's help panel.
+    pub(crate) fn description(self) -> String {
+        match self {
+            Self::Cut => tr!(literal = "the volume below the design surface and above the topography - a pit or cut"),
+            Self::Fill => tr!(literal = "the volume above the design surface and below the topography - a dump or stockpile"),
+        }
+    }
+}
+
 /// Which side of a reference topology to remove from a surface being trimmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TriSurfaceCutSide {
@@ -290,6 +646,10 @@ pub(crate) enum TriangulationPickTarget {
     IncludeTopology,
     IncludeShape,
     ContourSurface,
+    /// The design surface half of the Build Solid tool.
+    SolidDesign,
+    /// The topography half of the Build Solid tool.
+    SolidTopography,
 }
 
 impl TriangulationPickTarget {
@@ -298,6 +658,8 @@ impl TriangulationPickTarget {
             Self::TrimTopology | Self::CutPitTopology | Self::IncludeTopology => tr!(literal = "Click the topology in the viewport."),
             Self::CutPitShell => tr!(literal = "Click the pit shell in the viewport."),
             Self::IncludeShape => tr!(literal = "Click the pit or stockpile solid in the viewport."),
+            Self::SolidDesign => tr!(literal = "Click the design surface in the viewport."),
+            Self::SolidTopography => tr!(literal = "Click the topography in the viewport."),
             Self::ClipSurface | Self::SliceSurface | Self::TrimSurface | Self::ContourSurface => tr!(literal = "Click the surface in the viewport."),
         }
     }
@@ -850,6 +1212,43 @@ pub(crate) enum RenameTarget {
     /// A Solids Reserves setup Field List entry. Not undoable, like the rest
     /// of that config - see `App::rename_reserve_field`.
     ReserveField(crate::model::ReserveFieldId),
+    /// A Solids setup solid, renamed in place like the Field List beside it.
+    Solid(crate::model::SolidId),
+    /// One blast shape of one bench. Blasts are derived from geometry, so
+    /// what is renamed is the stored name held against the face's anchor.
+    BlastShape(BlastShapeRef),
+}
+
+/// A stable, copyable reference to one stored blast name.
+///
+/// Keyed by the anchor rather than a list index: the list is rewritten
+/// whenever a face gains or loses a name, and an index would then point at a
+/// different blast than the one the dialog was opened on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct BlastShapeRef {
+    pub(crate) solid: crate::model::SolidId,
+    /// Bit pattern of the bench's base RL, so the reference stays `Copy` and
+    /// compares exactly against the value it was taken from.
+    pub(crate) bench: u64,
+    pub(crate) anchor: [u64; 2],
+}
+
+impl BlastShapeRef {
+    pub(crate) fn new(solid: crate::model::SolidId, bench_base: f64, anchor: [f64; 2]) -> Self {
+        Self {
+            solid,
+            bench: bench_base.to_bits(),
+            anchor: [anchor[0].to_bits(), anchor[1].to_bits()],
+        }
+    }
+
+    pub(crate) fn bench_base(self) -> f64 {
+        f64::from_bits(self.bench)
+    }
+
+    pub(crate) fn anchor(self) -> [f64; 2] {
+        [f64::from_bits(self.anchor[0]), f64::from_bits(self.anchor[1])]
+    }
 }
 
 impl RenameTarget {
@@ -862,6 +1261,8 @@ impl RenameTarget {
             Self::BlockModel(_) => tr!(literal = "Block Model"),
             Self::DrillHole(_) => tr!(literal = "Drill Holes"),
             Self::ReserveField(_) => tr!(literal = "Field"),
+            Self::Solid(_) => tr!(literal = "Solid"),
+            Self::BlastShape(_) => tr!(literal = "Blast"),
         }
     }
 
@@ -876,6 +1277,11 @@ impl RenameTarget {
             Self::BlockModel(id) => UiCommand::RemoveBlockModel(id),
             Self::DrillHole(id) => UiCommand::RemoveDrillHole(id),
             Self::ReserveField(id) => UiCommand::DeleteReserveField(id),
+            Self::Solid(id) => UiCommand::DeleteSolid(id),
+            // A blast cannot be deleted - it is ground, and it exists as long
+            // as the lines around it do. Clearing its name is the nearest
+            // thing: it goes back to being numbered automatically.
+            Self::BlastShape(blast) => UiCommand::ResetBlastName(blast),
         }
     }
 }
@@ -1154,6 +1560,80 @@ pub(crate) struct EditorState {
     pub(crate) slice_preview_detached: bool,
     /// GPU texture rendered with the normal shaded plan-view scene pass.
     pub(crate) slice_preview_texture: Option<egui::TextureId>,
+    /// Offscreen image of the solid being inspected on the Solids Setup page,
+    /// the frame size it is asked to fill, and how it is being orbited.
+    pub(crate) solid_preview_texture: Option<egui::TextureId>,
+    pub(crate) solid_preview_size_px: [u32; 2],
+    pub(crate) solid_preview_view: SolidPreviewView,
+    pub(crate) solid_preview_summary: SolidPreviewSummary,
+    /// Lowest and highest RL the previewed solid reaches, mirrored out of
+    /// `App` so the Benching step can leave out benches the solid never
+    /// occupies.
+    /// The blast outlines currently derived for the Blasting step, in the
+    /// order the panel lists them. Rebuilt only when the geometry, the
+    /// selection or the stored names change - never per frame.
+    pub(crate) blasting_outlines: Vec<BlastOutline>,
+    pub(crate) dig_outlines: Vec<BlastOutline>,
+    pub(crate) dig_outlines_key: Option<u64>,
+    pub(crate) selected_dig_block: Option<BlastShapeRef>,
+    /// A click on the solid preview, waiting for the renderer to say which
+    /// solid it landed on.
+    ///
+    /// Held as image UVs rather than pixels. The renderer clamps its target to
+    /// a size range of its own, so a pane outside that range draws at one size
+    /// and was being picked against another; a fraction of the image means the
+    /// same point whatever size it was actually drawn at.
+    pub(crate) solid_preview_pick_uv: Option<[f32; 2]>,
+    /// The completed result of that click. A miss is a result, not an absence:
+    /// it clears the selection the way clicking empty space in the viewport
+    /// does, which an `Option<TriangulationId>` could not express.
+    pub(crate) solid_preview_picked: Option<SolidPick>,
+    /// The selected dig block as the figures panel reports it: identity,
+    /// parents and what it is worth. Mirrored out of the committed artifacts.
+    pub(crate) selected_dig_block_info: Option<DigBlockInfo>,
+    pub(crate) dig_clipboard: Vec<crate::model::Object>,
+    pub(crate) selected_blast: Option<BlastShapeRef>,
+    pub(crate) scroll_to_blast: bool,
+    pub(crate) blast_labels: Vec<(String, (f32, f32), bool)>,
+    pub(crate) blasting_outlines_key: Option<u64>,
+    /// The bench selection the view was last framed on, so picking a bench
+    /// zooms to it once rather than fighting the user's pan every frame.
+    pub(crate) blasting_framed_key: Option<u64>,
+    /// What the Blasting step took over on entry and puts back on leaving, so
+    /// popping in to check a bench costs the user neither the view nor the
+    /// drawing settings they had set up.
+    pub(crate) blasting_restore: Option<BlastingRestore>,
+    /// The bench the active layer and working elevation were last pointed at,
+    /// so they follow the selection without being reapplied every frame.
+    pub(crate) blasting_bench_key: Option<u64>,
+    /// The six-stage pipeline's status, mirrored out of `App` each frame so
+    /// the step tree can mark each step without reaching into the pipeline.
+    /// Indexed by [`SolidsStep::index`].
+    pub(crate) planning_stages: [PlanningStageView; SolidsStep::ALL.len()],
+    /// Whether a run is queued or in flight, so the controls can offer Cancel.
+    pub(crate) planning_run_active: bool,
+    /// What a scheduler asking for a snapshot right now would be told.
+    pub(crate) planning_snapshot_status: String,
+    pub(crate) solid_view_reserves: Option<crate::model::solid_reserves::ReserveTotals>,
+    pub(crate) solid_view_reserve_status: Option<String>,
+    /// Why each absent reserve field is absent, so every dash in the figures
+    /// panel can say what is wrong with it rather than looking like a zero.
+    pub(crate) solid_view_reserve_issues: std::collections::HashMap<crate::model::ReserveFieldId, String>,
+    /// How much of the shown geometric volume the block model actually covers,
+    /// 0..1. A partly covered solid must not read as fully measured.
+    pub(crate) solid_view_coverage: Option<f64>,
+    pub(crate) solid_view_bands: std::collections::HashMap<crate::model::SolidId, Vec<BenchSelection>>,
+    pub(crate) solid_preview_sources: std::collections::HashSet<crate::model::triangulation::TriangulationId>,
+    pub(crate) solid_preview_z_range: Option<(f64, f64)>,
+    /// Widths of the Solids step's two draggable columns, in points, and
+    /// whether its object tab is open. The page lays its columns out by rect,
+    /// so the seams keep their positions here rather than in an egui panel.
+    pub(crate) planning_solid_list_width: f32,
+    pub(crate) planning_solid_properties_width: f32,
+    pub(crate) planning_solid_objects_open: bool,
+    /// The bench or flitch picked out in the Benching step's results, and so
+    /// highlighted in the preview.
+    pub(crate) planning_selected_bench: Option<BenchSelection>,
     /// Physical pixel size requested by the embedded preview on its last UI frame.
     pub(crate) slice_preview_size_px: [u32; 2],
     /// Pan/zoom of the plan preview only; independent of the slice geometry.
@@ -1413,6 +1893,13 @@ pub(crate) struct EditorState {
     pub(crate) tri_cut_surface_side: TriSurfaceCutSide,
     pub(crate) tri_cut_surface_name_input: String,
     pub(crate) tri_cut_surface_name_auto: bool,
+    /// Build Solid from Surfaces: the two inputs and the output name.
+    pub(crate) tri_solid_open: bool,
+    pub(crate) tri_solid_design_id: Option<TriangulationId>,
+    pub(crate) tri_solid_topography_id: Option<TriangulationId>,
+    pub(crate) tri_solid_region: SolidRegion,
+    pub(crate) tri_solid_name_input: String,
+    pub(crate) tri_solid_name_auto: bool,
 
     // Cut Topology to Pit Shell
     pub(crate) tri_cut_pitshell_open: bool,
@@ -1560,6 +2047,11 @@ pub(crate) struct EditorState {
     pub(crate) active_workspace: Workspace,
     pub(crate) planning_page: PlanningPage,
     pub(crate) schedule_subpage: PlanningSubpage,
+    /// Which Solids subpage is showing: its setup, or the view of what that
+    /// setup produced.
+    pub(crate) solids_subpage: PlanningSubpage,
+    /// Rows picked out in the Solids View tree.
+    pub(crate) solids_view_selection: Vec<SolidsViewRow>,
     /// Selected row in the Solids Setup subpage's Block Models step.
     pub(crate) planning_selected_block_model: Option<BlockModelId>,
     /// Whether the New Field dialog (Solids Setup's Field List step) is open,
@@ -1568,6 +2060,20 @@ pub(crate) struct EditorState {
     pub(crate) new_reserve_field_name: String,
     pub(crate) new_reserve_field_kind: ReserveFieldKind,
     pub(crate) new_reserve_field_weight_field: Option<crate::model::ReserveFieldId>,
+    /// Selected step in the Solids Setup subpage's step tree. Held here
+    /// rather than in egui's temporary data because `App` reads it too: the
+    /// solid preview is only built while the Solids step is on screen.
+    pub(crate) planning_solids_step: SolidsStep,
+    /// Selected row in the Solids Setup subpage's Solids step.
+    pub(crate) planning_selected_solid: Option<crate::model::SolidId>,
+    /// Whether the New Solid dialog (Solids Setup's Solids step) is open, and
+    /// its draft contents.
+    pub(crate) new_solid_open: bool,
+    pub(crate) new_solid_name: String,
+    pub(crate) new_solid_kind: crate::model::SolidKind,
+    pub(crate) new_solid_surface: Option<TriangulationId>,
+    pub(crate) new_solid_topography: Option<TriangulationId>,
+    pub(crate) new_solid_block_model: Option<BlockModelId>,
     pub(crate) workspace_order: [Workspace; 4],
     /// The Drill & Blast workspace's stored products, in the order the palette
     /// lays them out.
@@ -1693,6 +2199,7 @@ impl EditorState {
             || self.tri_cut_poly_open
             || self.tri_cut_z_open
             || self.tri_cut_surface_open
+            || self.tri_solid_open
             || self.tri_cut_pitshell_open
             || self.tri_include_solid_open
             || self.tri_contour_open
@@ -1776,6 +2283,15 @@ impl EditorState {
     /// preview geometry, projected handle, or modal draft can refer to the
     /// project that was just left.
     pub(crate) fn clear_project_transients(&mut self) {
+        self.selected_blast = None;
+        self.selected_dig_block = None;
+        self.dig_outlines.clear();
+        self.dig_outlines_key = None;
+        self.blasting_outlines.clear();
+        self.blast_labels.clear();
+        self.blasting_outlines_key = None;
+        self.blasting_bench_key = None;
+        self.blasting_framed_key = None;
         self.selected_handles.clear();
         self.selected_drill_holes.clear();
         self.selected_tie_ins.clear();
@@ -2094,6 +2610,39 @@ impl EditorState {
             slice_mode_enabled: false,
             slice_preview_detached: false,
             slice_preview_texture: None,
+            solid_preview_texture: None,
+            solid_preview_size_px: [420, 420],
+            solid_preview_view: SolidPreviewView::default(),
+            solid_preview_summary: SolidPreviewSummary::Empty,
+            blasting_outlines: Vec::new(),
+            dig_outlines: Vec::new(),
+            dig_outlines_key: None,
+            selected_dig_block: None,
+            solid_preview_pick_uv: None,
+            solid_preview_picked: None,
+            selected_dig_block_info: None,
+            dig_clipboard: Vec::new(),
+            selected_blast: None,
+            scroll_to_blast: false,
+            blast_labels: Vec::new(),
+            blasting_outlines_key: None,
+            blasting_framed_key: None,
+            blasting_restore: None,
+            blasting_bench_key: None,
+            planning_stages: Default::default(),
+            planning_run_active: false,
+            planning_snapshot_status: String::new(),
+            solid_view_reserves: None,
+            solid_view_reserve_issues: Default::default(),
+            solid_view_coverage: None,
+            solid_view_reserve_status: None,
+            solid_view_bands: Default::default(),
+            solid_preview_sources: Default::default(),
+            solid_preview_z_range: None,
+            planning_solid_list_width: 240.0,
+            planning_solid_properties_width: 320.0,
+            planning_solid_objects_open: false,
+            planning_selected_bench: None,
             slice_preview_size_px: [440, 440],
             slice_preview_navigation: SlicePreviewNavigation::default(),
             slice_width_input: 25.0,
@@ -2226,6 +2775,12 @@ impl EditorState {
             tri_cut_surface_side: TriSurfaceCutSide::CutTop,
             tri_cut_surface_name_input: String::new(),
             tri_cut_surface_name_auto: true,
+            tri_solid_open: false,
+            tri_solid_design_id: None,
+            tri_solid_topography_id: None,
+            tri_solid_region: SolidRegion::Cut,
+            tri_solid_name_input: String::new(),
+            tri_solid_name_auto: true,
             tri_cut_pitshell_open: false,
             tri_cut_pitshell_topology_id: None,
             tri_cut_pitshell_pitshell_id: None,
@@ -2321,11 +2876,21 @@ impl EditorState {
             active_workspace: Workspace::Production,
             planning_page: PlanningPage::Solids,
             schedule_subpage: PlanningSubpage::Setup,
+            solids_subpage: PlanningSubpage::Setup,
+            solids_view_selection: Vec::new(),
             planning_selected_block_model: None,
             new_reserve_field_open: false,
             new_reserve_field_name: String::new(),
             new_reserve_field_kind: ReserveFieldKind::Sum,
             new_reserve_field_weight_field: None,
+            planning_solids_step: SolidsStep::FieldList,
+            planning_selected_solid: None,
+            new_solid_open: false,
+            new_solid_name: String::new(),
+            new_solid_kind: crate::model::SolidKind::Pit,
+            new_solid_surface: None,
+            new_solid_topography: None,
+            new_solid_block_model: None,
             workspace_order: Workspace::ALL,
             delay_products: builtin_delay_products(),
             next_delay_product_id: builtin_delay_products().len() as u64,
@@ -2770,6 +3335,43 @@ pub(crate) enum UiCommand {
         block_model: BlockModelId,
         included: bool,
     },
+    /// Add a solid to the Solids setup, as the New Solid dialog filled it in.
+    AddSolid {
+        name: String,
+        kind: crate::model::SolidKind,
+        surface: Option<TriangulationId>,
+        topography: Option<TriangulationId>,
+        block_model: Option<BlockModelId>,
+    },
+    /// Clear a blast's stored name so it is numbered automatically again.
+    ResetBlastName(BlastShapeRef),
+    SelectBlast(Option<BlastShapeRef>),
+    SelectDigBlock(BlastShapeRef),
+    CopyDigStrips,
+    PasteDigStrips,
+    DeleteSolid(crate::model::SolidId),
+    /// Add the solid currently being previewed to the project as a
+    /// triangulation, so it can be rendered, edited and saved like any other.
+    SaveSolidPreviewToProject,
+    /// Return the Solids preview to the orbit it opens at.
+    ResetSolidPreviewView,
+    /// Ask for one block model's whole-model reserve statistics again, after
+    /// a scan that failed or could not load its inputs.
+    RecomputeReserveStats(BlockModelId),
+    /// Run one stage of the Solids pipeline across its configured scope.
+    RunPlanningStage(SolidsStep),
+    /// Run from the earliest stage that is not current through Dig Strips.
+    RunAllPlanningStages,
+    /// Stop a run in flight, leaving completed stages alone.
+    CancelPlanningRun,
+    /// Discard every artifact and run all six stages again. Distinct from
+    /// Run All, which skips stages whose inputs have not moved.
+    ForceRebuildPlanning,
+    /// Change one field of a solid from its property table.
+    UpdateSolid {
+        solid: crate::model::SolidId,
+        edit: crate::model::SolidEdit,
+    },
     /// Apply or remove one collar's initiation delay after its dialog closes.
     SetInitiation {
         target: DrillHoleRef,
@@ -3034,6 +3636,15 @@ pub(crate) enum UiCommand {
     },
     /// Open the "Trim to Topology" dialog.
     OpenCutTriangulationBySurface,
+    /// Open the Build Solid from Surfaces tool.
+    OpenBuildSolidFromSurfaces,
+    /// Build a closed solid from a design surface and the topography it meets.
+    ExecuteBuildSolidFromSurfaces {
+        design_id: TriangulationId,
+        topography_id: TriangulationId,
+        region: SolidRegion,
+        name: String,
+    },
     /// Trim one surface against a topology in the vertical direction.
     ExecuteCutTriangulationBySurface {
         target_id: TriangulationId,
@@ -3139,6 +3750,7 @@ impl UiCommand {
             | Self::BeginCutPolyPick
             | Self::OpenCutTriangulationByZ
             | Self::OpenCutTriangulationBySurface
+            | Self::OpenBuildSolidFromSurfaces
             | Self::OpenCutTopologyByPitShell
             | Self::OpenIncludeSolidInTopology
             | Self::OpenContourTriangulation
@@ -3154,7 +3766,14 @@ impl UiCommand {
             | Self::RequestDeleteLayer(_)
             | Self::RequestDeleteItem(_)
             | Self::SetReserveMapping { .. }
-            | Self::SetReserveModelIncluded { .. } => None,
+            | Self::SetReserveModelIncluded { .. }
+            | Self::UpdateSolid { .. }
+            | Self::ResetSolidPreviewView
+            | Self::RecomputeReserveStats(_)
+            | Self::RunPlanningStage(_)
+            | Self::RunAllPlanningStages
+            | Self::CancelPlanningRun
+            | Self::ForceRebuildPlanning => None,
 
             #[cfg(target_arch = "wasm32")]
             Self::ClearBrowserImportSelection(_) => None,
@@ -3210,6 +3829,11 @@ impl UiCommand {
             Self::CreateLayer { name } => report(tr!(literal = "Create Layer"), name.clone()),
             Self::AddReserveField { name, .. } => report(tr!(literal = "Add Field"), name.clone()),
             Self::DeleteReserveField(id) => report(tr!(literal = "Delete Field"), format!("{id:?}")),
+            Self::AddSolid { name, .. } => report(tr!(literal = "Add Solid"), name.clone()),
+            Self::DeleteSolid(id) => report(tr!(literal = "Delete Solid"), format!("{id:?}")),
+            Self::SelectBlast(_) | Self::SelectDigBlock(_) | Self::CopyDigStrips | Self::PasteDigStrips => None,
+            Self::ResetBlastName(blast) => report(tr!(literal = "Reset Blast Name"), format!("{:?} RL {:.2}", blast.solid, blast.bench_base())),
+            Self::SaveSolidPreviewToProject => report(tr!(literal = "Save Solid to Project"), tr!(literal = "From the Solids preview")),
             Self::AddDelayProduct { delay_ms, name, .. } => report(tr!(literal = "Add Product"), format!("{delay_ms} ms · {name}")),
             Self::DeleteDelayProduct(id) => report(tr!(literal = "Delete Product"), format!("{id:?}")),
             Self::FinishPolyClose => report(tr!(literal = "Create Polyline"), tr!(literal = "Finish closed polyline")),
@@ -3329,6 +3953,7 @@ impl UiCommand {
                 tr_format!(literal = "%name% · %z_min% to %z_max%", name = name, z_min = z_min, z_max = z_max),
             ),
             Self::ExecuteCutTriangulationBySurface { name, .. } => report(tr!(literal = "Trim Triangulation to Surface"), name.clone()),
+            Self::ExecuteBuildSolidFromSurfaces { name, .. } => report(tr!(literal = "Build Solid from Surfaces"), name.clone()),
             Self::ExecuteCutTopologyByPitShell { name, .. } => report(tr!(literal = "Cut Topology to Pit Shell"), name.clone()),
             Self::ExecuteIncludeSolidInTopology { name, .. } => report(tr!(literal = "Merge Shell into Topology"), name.clone()),
             Self::Undo => report(tr!(literal = "Undo"), tr!(literal = "Previous edit")),
@@ -3642,7 +4267,7 @@ impl PlanningPage {
 
     pub(crate) fn subpages(self) -> &'static [PlanningSubpage] {
         match self {
-            Self::Solids => &[PlanningSubpage::Setup],
+            Self::Solids => &[PlanningSubpage::Setup, PlanningSubpage::View],
             Self::Haulage => &[PlanningSubpage::Layout],
             Self::Schedule => &[PlanningSubpage::Setup, PlanningSubpage::Animate],
         }
@@ -3653,6 +4278,9 @@ impl PlanningPage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PlanningSubpage {
     Setup,
+    /// Solids: everything the setup has generated, to look through rather than
+    /// to configure.
+    View,
     Layout,
     Animate,
 }
@@ -3661,6 +4289,7 @@ impl PlanningSubpage {
     pub(crate) fn label(self) -> String {
         match self {
             Self::Setup => tr!("planning-page-setup"),
+            Self::View => tr!("planning-subpage-view"),
             Self::Layout => tr!("planning-subpage-layout"),
             Self::Animate => tr!("planning-subpage-animate"),
         }

@@ -663,6 +663,11 @@ impl<'a> Graphics<'a> {
                 if cached.color[3] < 0.999 {
                     continue;
                 }
+                render_pass.set_pipeline(if triangulation.cull_back_faces {
+                    &self.solid_surface_render_pipeline
+                } else {
+                    &self.surface_render_pipeline
+                });
                 total_chunks += cached.surface_chunks.len() as u32;
                 // Cheap whole-mesh reject before touching individual chunks.
                 let (aabb_min, aabb_max) = self.mesh_scene_aabb(&triangulation.mesh);
@@ -759,6 +764,11 @@ impl<'a> Graphics<'a> {
                 let Some(cached) = self.triangulation_gpu.get(triangulation.id) else {
                     continue;
                 };
+                render_pass.set_pipeline(if triangulation.cull_back_faces {
+                    &self.transparent_solid_surface_render_pipeline
+                } else {
+                    &self.transparent_surface_render_pipeline
+                });
                 total_chunks += cached.surface_chunks.len() as u32;
                 let (aabb_min, aabb_max) = self.mesh_scene_aabb(&triangulation.mesh);
                 if !frustum.intersects_aabb(aabb_min, aabb_max) {

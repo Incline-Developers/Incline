@@ -270,6 +270,18 @@ pub(crate) struct CameraUniform {
     viewport_origin: [f32; 4],
 }
 
+/// The matrix [`CameraUniform::update_view_proj`] uploads, over points rebased
+/// by `scene_origin`.
+///
+/// An overlay drawn on top of a render has to project through the same matrix
+/// the GPU drew with, not one rebuilt from the live camera: the two differ
+/// wherever a pass uploads its own settings, as the solid preview does by
+/// rendering without vertical exaggeration.
+pub(crate) fn scene_view_proj(camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) -> DMat4 {
+    let rebased_view = dcamera::rh::view::look_to_mat4(camera.position - scene_origin, camera.forward(), camera.up);
+    projection.calc_matrix() * rebased_view * DMat4::from_scale(DVec3::new(1.0, 1.0, vertical_exaggeration))
+}
+
 impl CameraUniform {
     pub(crate) fn new() -> Self {
         Self {
@@ -283,9 +295,7 @@ impl CameraUniform {
     }
 
     pub(crate) fn update_view_proj(&mut self, camera: &Camera, projection: &Projection, scene_origin: DVec3, vertical_exaggeration: f64) {
-        let rebased_view = dcamera::rh::view::look_to_mat4(camera.position - scene_origin, camera.forward(), camera.up);
-        let exaggeration = DMat4::from_scale(DVec3::new(1.0, 1.0, vertical_exaggeration));
-        let view_proj = projection.calc_matrix() * rebased_view * exaggeration;
+        let view_proj = scene_view_proj(camera, projection, scene_origin, vertical_exaggeration);
         self.view_proj = view_proj.as_mat4().to_cols_array_2d();
         self.inv_view_proj = view_proj.inverse().as_mat4().to_cols_array_2d();
         let forward = camera.forward();

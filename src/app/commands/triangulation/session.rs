@@ -73,6 +73,10 @@ impl<'a> App<'a> {
                         line_weight: Some(1.0),
                         raster_texture: None,
                         raster_opacity: 1.0,
+                        flitch_style: None,
+                        cull_back_faces: false,
+                        always_show_edges: false,
+                        depth_shade: None,
                     });
                     app.touch_active_project_content();
                     if should_fit {
@@ -181,6 +185,10 @@ impl<'a> App<'a> {
                         line_weight: Some(1.0),
                         raster_texture: None,
                         raster_opacity: 1.0,
+                        flitch_style: None,
+                        cull_back_faces: false,
+                        always_show_edges: false,
+                        depth_shade: None,
                     });
                     self.touch_active_project_content();
                     if should_fit {
@@ -276,7 +284,12 @@ impl<'a> App<'a> {
             self.active_triangulation = None;
         }
         // Rasters draped onto this surface are a property of the surface, so
-        // they come back with it; nothing else references it.
+        // they come back with it. The Solids setup does reference it by id,
+        // and a later import can reuse that id, so drop those references here
+        // rather than let a new surface silently inherit them.
+        if let Some(document) = self.workspace.active_document_mut() {
+            document.forget_solid_triangulation(id);
+        }
         self.delete_project_item(ItemRef::Triangulation(id));
         userspace_log!("{}", tr_format!(literal = "Deleted triangulation '%name%' from project", name = name));
     }
@@ -379,6 +392,10 @@ impl<'a> App<'a> {
             line_weight: Some(1.0),
             raster_texture: None,
             raster_opacity: 1.0,
+            flitch_style: None,
+            cull_back_faces: false,
+            always_show_edges: false,
+            depth_shade: None,
         });
         self.touch_active_project_content();
         self.active_triangulation = Some(id);

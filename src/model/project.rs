@@ -535,6 +535,7 @@ impl ProjectStore {
             // data through (see `App::render`'s `document` parameter) - the
             // Reserves Field List needs to survive the rebuild too.
             scene.clone_reserve_fields_from(document);
+            scene.clone_solids_from(document);
         }
         scene.rebuild_object_index();
         scene
@@ -635,6 +636,18 @@ pub(crate) fn merge_document_preserve_ids(target: &mut Document, imported: &Docu
             id
         };
         layer_map.insert(layer.id, target_layer);
+    }
+
+    // Older planning files reference a design layer by id. Keep that
+    // ownership when importing into a document whose default layer collided.
+    for solid in &mut target.solids {
+        if let Some(source) = imported.solid(solid.id) {
+            for bench in &mut solid.blasting.benches {
+                if let Some(old) = source.blasting.bench(bench.base).and_then(|entry| entry.cut_layer) {
+                    bench.cut_layer = layer_map.get(&old).copied().or(Some(old));
+                }
+            }
+        }
     }
 
     target.copy_deferred_layers(imported, &layer_map, true);

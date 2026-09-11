@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::model::{formats::mesh_data, project::ProjectItemState};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TriangulationId(pub(crate) u64);
 
 /// The computed outputs of loading a triangulation file, produced on a background
@@ -54,6 +54,17 @@ pub(crate) struct OpenTriangulation {
     /// Optional georeferenced raster draped over this surface in world XY.
     pub(crate) raster_texture: Option<crate::model::raster::RasterTextureId>,
     pub(crate) raster_opacity: f32,
+    /// Runtime-only style for generated planning slabs.
+    pub(crate) flitch_style: Option<crate::model::FlitchStyle>,
+    pub(crate) cull_back_faces: bool,
+    /// Draw this mesh's edges whether or not it is selected. Set for the dig
+    /// blocks a flitch is cut into, whose seams are the only thing telling one
+    /// block from the next.
+    pub(crate) always_show_edges: bool,
+    /// Scene-Z range to shade this surface across, as a greyscale ramp over
+    /// its own colour. Runtime only, for the Blasting step's plan view, where
+    /// depth is the only cue a top-down orthographic camera leaves.
+    pub(crate) depth_shade: Option<[f64; 2]>,
 }
 
 impl OpenTriangulation {

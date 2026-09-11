@@ -5,7 +5,9 @@ use crate::{
     model::{Document, Object, ObjectId, SceneEntityId, point_cloud::PointCloudId, triangulation::TriangulationId},
     rendering::color::{color32_to_rgba, rgba_to_color32},
     ui::{
-        state::{ContourOutputLayer, EditorState, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView},
+        state::{
+            ContourOutputLayer, EditorState, SolidRegion, TriCreatePhase, TriPolylineClipMode, TriSurfaceCutSide, TriSurfaceType, TriangulationPickTarget, UiCommand, UiProjectView,
+        },
         widgets::menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText, MenuFieldU32},
     },
 };
@@ -883,6 +885,136 @@ pub(crate) fn draw_cut_surface_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
 
     if !open {
         editor.tri_cut_surface_open = false;
+    }
+}
+
+/// The Build Solid from Surfaces tool: pick a design surface and the
+/// topography it meets, and get the closed volume between them.
+///
+/// The same construction the Solids Setup page previews, so a solid inspected
+/// there and one built here are the same mesh.
+pub(crate) fn draw_build_solid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_solid_open || editor.triangulation_pick_target.is_some() {
+        return;
+    }
+
+    let mut open = true;
+    DragableMenu::new("build_solid_from_surfaces_dialog", tr!(literal = "Build Solid from Surfaces"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            let loaded: Vec<(TriangulationId, &str)> = project
+                .triangulations
+                .iter()
+                .filter(|entry| entry.is_loaded)
+                .map(|entry| (entry.id, entry.name.as_str()))
+                .collect();
+
+            let topography_id = editor.tri_solid_topography_id;
+            let design_label = editor
+                .tri_solid_design_id
+                .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
+                .map(str::to_owned)
+                .unwrap_or_else(|| tr!(literal = "Select…"));
+            let old_design = editor.tri_solid_design_id;
+            if triangulation_picker_field(
+                ui,
+                "build_solid_design",
+                tr!(literal = "Design Surface"),
+                &mut editor.tri_solid_design_id,
+                design_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != topography_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!(literal = "The pit shell, dump design or stockpile design bounding the volume."),
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::SolidDesign);
+            }
+
+            let design_id = editor.tri_solid_design_id;
+            let topography_label = editor
+                .tri_solid_topography_id
+                .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
+                .map(str::to_owned)
+                .unwrap_or_else(|| tr!(literal = "Select…"));
+            if triangulation_picker_field(
+                ui,
+                "build_solid_topography",
+                tr!(literal = "Topography"),
+                &mut editor.tri_solid_topography_id,
+                topography_label,
+                loaded.iter().filter(|(id, _)| Some(*id) != design_id).map(|(id, name)| (Some(*id), (*name).into())),
+                tr!(literal = "The ground the design is measured against. Both surfaces are left intact."),
+            ) {
+                editor.triangulation_pick_target = Some(TriangulationPickTarget::SolidTopography);
+            }
+
+            if editor.tri_solid_design_id != old_design
+                && editor.tri_solid_name_auto
+                && let Some(name) = editor
+                    .tri_solid_design_id
+                    .and_then(|id| loaded.iter().find(|(loaded_id, _)| *loaded_id == id).map(|(_, name)| *name))
+            {
+                editor.tri_solid_name_input = crate::app::canvas::derived_triangulation_name(name, &tr!(literal = "Solid"));
+            }
+
+            ui.add_space(4.0);
+
+            MenuField::new(tr!(literal = "Volume"))
+                .help_text(tr!(literal = "Which of the two volumes the surfaces bound: the ground cut away \
+                     below the design, or the material placed above it."))
+                .show(ui, |ui, row_height, _| {
+                    let (response, clicked) = centered_choice_buttons(ui, row_height, SolidRegion::ALL.map(|region| (region.label(), editor.tri_solid_region == region)));
+                    if let Some(index) = clicked {
+                        editor.tri_solid_region = SolidRegion::ALL[index];
+                    }
+                    response
+                });
+
+            tool_help_panel(
+                ui,
+                tr_format!(
+                    literal = "Encloses %region%, over the area the two surfaces share and closing along the line where they cross.",
+                    region = editor.tri_solid_region.description()
+                ),
+            );
+
+            if MenuFieldText::new(tr!(literal = "Output name"), &mut editor.tri_solid_name_input)
+                .help_text(tr!(literal = "Name assigned to the solid."))
+                .width(picker_control_width(ui))
+                .hint_text(tr!(literal = "e.g. north_pit_solid"))
+                .show(ui)
+                .changed()
+            {
+                editor.tri_solid_name_auto = false;
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = editor.tri_solid_design_id.is_some()
+                && editor.tri_solid_topography_id.is_some()
+                && editor.tri_solid_design_id != editor.tri_solid_topography_id
+                && !editor.tri_solid_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirm_pressed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!(literal = "Build")).primary().enabled(can_run)).clicked() || (confirm && can_run))
+                    && let (Some(design_id), Some(topography_id)) = (editor.tri_solid_design_id, editor.tri_solid_topography_id)
+                {
+                    commands.push(UiCommand::ExecuteBuildSolidFromSurfaces {
+                        design_id,
+                        topography_id,
+                        region: editor.tri_solid_region,
+                        name: editor.tri_solid_name_input.trim().to_owned(),
+                    });
+                }
+                if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
+                    editor.tri_solid_open = false;
+                }
+            });
+        });
+
+    if !open {
+        editor.tri_solid_open = false;
     }
 }
 

@@ -99,7 +99,9 @@ impl<'a> App<'a> {
     /// Compute the offset result geometry for the current side-pick settings,
     /// choosing between a uniform offset and a per-vertex angled projection to a
     /// target absolute RL depending on `offset_project_to_rl`.
-    fn compute_offset_result(&self, src_verts: &[glam::DVec3], closed: bool, cursor_world_xy: glam::DVec2) -> Vec<glam::DVec3> {
+    /// `scale` multiplies the configured offset, so the planning tool can lay
+    /// down its second, third and further copies through the same path.
+    fn compute_offset_result(&self, src_verts: &[glam::DVec3], closed: bool, cursor_world_xy: glam::DVec2, scale: f64) -> Vec<glam::DVec3> {
         let result = if let Some((tan_angle, target_rl)) = self.editor.offset_project_to_rl {
             // Per-vertex horizontal distance implied by each vertex's own elevation,
             // used only to size the cursor-side probe below.
@@ -111,18 +113,44 @@ impl<'a> App<'a> {
             let side = crate::model::geometry::offset_side_from_cursor(src_verts, closed, cursor_world_xy, probe_dist);
             crate::model::geometry::geometric_offset_project_to_rl(src_verts, closed, side, tan_angle, target_rl)
         } else {
-            let horiz_dist = self.editor.offset_horiz_dist;
-            let abs_dist = horiz_dist.abs();
-            let z_delta = self.editor.offset_z_delta;
+            let abs_dist = self.editor.offset_horiz_dist.abs() * scale;
+            let z_delta = self.editor.offset_z_delta * scale;
             let side = crate::model::geometry::offset_side_from_cursor(src_verts, closed, cursor_world_xy, abs_dist);
             crate::model::geometry::geometric_offset(src_verts, closed, side * abs_dist, z_delta)
         };
 
-        if self.editor.offset_collide_with_triangulation {
+        // Planning cuts lie flat on one bench or flitch, where there is no
+        // batter for the clamp to stop against, so the setting is ignored
+        // rather than reset - the full tool keeps whatever the user chose.
+        if self.editor.offset_collide_with_triangulation && !self.editor.is_planning_cut_step() {
             self.clamp_offset_to_triangulations(src_verts, &result)
         } else {
             result
         }
+    }
+
+    /// How many evenly spaced copies one side-pick should lay down.
+    ///
+    /// A planning cut is drawn flat on a single bench or flitch, so the tool is
+    /// reduced to a spacing and repeats out to the cursor: pointing 110 m south
+    /// at a 20 m spacing lays strips at 20, 40, 60, 80 and 100 m. Everywhere
+    /// else the tool keeps its single-copy behaviour.
+    fn offset_repeat_steps(&self, src_verts: &[glam::DVec3], cursor_world_xy: glam::DVec2) -> usize {
+        /// Guards against a spacing typo turning one drag into unbounded work.
+        const MAX_STEPS: usize = 500;
+
+        if !self.editor.is_planning_cut_step() {
+            return 1;
+        }
+        let spacing = self.editor.offset_horiz_dist.abs();
+        if spacing < 1e-9 {
+            return 1;
+        }
+        let reach = src_verts
+            .windows(2)
+            .map(|edge| segment_distance_xy(cursor_world_xy, edge[0].truncate(), edge[1].truncate()))
+            .fold(f64::INFINITY, f64::min);
+        spaced_copies(reach, spacing, MAX_STEPS)
     }
 
     fn clamp_offset_to_triangulations(&self, src_verts: &[glam::DVec3], proposed: &[glam::DVec3]) -> Vec<glam::DVec3> {
@@ -192,13 +220,15 @@ impl<'a> App<'a> {
                 Some(Object::Polyline { verts, closed, .. }) => (crate::model::geometry::tessellate_polyline_bulges(verts, *closed), *closed),
                 _ => continue,
             };
-            let preview = self.compute_offset_result(&src_verts, closed, cursor_world_xy);
-            let start = preview_world.len();
-            source_world.extend(src_verts);
-            preview_world.extend(preview);
-            ranges.push((start, preview_world.len(), closed));
-            if ranges.len() == 1 {
-                first_closed = closed;
+            for step in 1..=self.offset_repeat_steps(&src_verts, cursor_world_xy) {
+                let preview = self.compute_offset_result(&src_verts, closed, cursor_world_xy, step as f64);
+                let start = preview_world.len();
+                source_world.extend(src_verts.iter().copied());
+                preview_world.extend(preview);
+                ranges.push((start, preview_world.len(), closed));
+                if ranges.len() == 1 {
+                    first_closed = closed;
+                }
             }
         }
 
@@ -243,9 +273,11 @@ impl<'a> App<'a> {
                 continue;
             };
             let src_verts = crate::model::geometry::tessellate_polyline_bulges(verts, *closed);
-            let new_positions = self.compute_offset_result(&src_verts, *closed, cursor_world_xy);
-            let new_verts: Vec<PolyVertex> = new_positions.into_iter().map(PolyVertex::straight).collect();
-            offset_specs.push((*layer, new_verts, *closed, *color, *fill, *line_weight));
+            for step in 1..=self.offset_repeat_steps(&src_verts, cursor_world_xy) {
+                let new_positions = self.compute_offset_result(&src_verts, *closed, cursor_world_xy, step as f64);
+                let new_verts: Vec<PolyVertex> = new_positions.into_iter().map(PolyVertex::straight).collect();
+                offset_specs.push((*layer, new_verts, *closed, *color, *fill, *line_weight));
+            }
         }
 
         let offset_count = offset_specs.len();
@@ -299,4 +331,24 @@ impl<'a> App<'a> {
         self.editor.active_tool = ActiveTool::None;
         self.invalidate_geometry();
     }
+}
+
+/// Copies of a cut that fit within `reach` at `spacing`, always at least one so
+/// a pick close to the source still draws the cut the user asked for.
+fn spaced_copies(reach: f64, spacing: f64, max_steps: usize) -> usize {
+    if !reach.is_finite() || spacing < 1e-9 {
+        return 1;
+    }
+    ((reach / spacing).floor() as usize).clamp(1, max_steps)
+}
+
+/// Shortest XY distance from `point` to the segment `start`-`end`.
+fn segment_distance_xy(point: glam::DVec2, start: glam::DVec2, end: glam::DVec2) -> f64 {
+    let edge = end - start;
+    let length_squared = edge.length_squared();
+    if length_squared < 1e-18 {
+        return point.distance(start);
+    }
+    let t = ((point - start).dot(edge) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + edge * t)
 }

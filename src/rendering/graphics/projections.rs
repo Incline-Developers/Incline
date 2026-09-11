@@ -377,6 +377,18 @@ impl<'a> Graphics<'a> {
     }
 
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
+        editor.blast_labels = (if editor.is_dig_strips_step() { &editor.dig_outlines } else { &editor.blasting_outlines })
+            .iter()
+            .filter_map(|outline| {
+                let world = DVec3::new(outline.anchor[0], outline.anchor[1], outline.plane);
+                let selected = (if editor.is_dig_strips_step() {
+                    editor.selected_dig_block
+                } else {
+                    editor.selected_blast
+                }) == Some(crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor));
+                self.world_to_window_px(&self.view_proj(), world).map(|point| (outline.name.clone(), point, selected))
+            })
+            .collect();
         // Where the snap landed, for the drawn cursor to mark. The snapped
         // point is the one the tool will use, and it is not the pointer: it
         // can sit anywhere inside the snap threshold of it.

@@ -64,6 +64,22 @@ pub(crate) enum JobKey {
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    /// The Solids Setup page's inspection mesh. Keyed by the solid, so
+    /// selecting another one - or changing this one's surfaces - cancels the
+    /// build already in flight for it.
+    SolidPreview(crate::model::SolidId),
+    /// One attempt at building one of a solid's artifacts.
+    ///
+    /// The token identifies the *attempt*, not the inputs. Keying on an input
+    /// fingerprint cannot tell a retry from the cancelled attempt it replaces,
+    /// because identical inputs hash identically - so a result the cancelled
+    /// attempt had already computed would satisfy the new request and publish.
+    SolidArtifact {
+        solid: crate::model::SolidId,
+        kind: crate::app::commands::solids_view::SolidArtifact,
+        token: u64,
+    },
+    ReserveStats(crate::model::block_model::BlockModelId, u64),
     Project {
         runtime_id: u32,
         document_revision: u64,
@@ -195,6 +211,12 @@ impl<'a> App<'a> {
             JobKey::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == id),
             JobKey::BlockModel(id) => self.block_models.iter().any(|item| item.id == id),
             JobKey::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == id),
+            // The page may have moved to another solid, or off the step, while
+            // the build ran; its result is only wanted for the solid still
+            // being previewed.
+            JobKey::ReserveStats(id, key) => self.block_models.iter().any(|model| model.id == id && model.reserve_totals_key == Some(key)),
+            JobKey::SolidArtifact { solid, kind, token } => self.solid_view_cache.get(&solid).is_some_and(|cache| cache.accepts(kind, token)),
+            JobKey::SolidPreview(solid) => self.solid_preview.as_ref().is_some_and(|preview| preview.solid() == solid),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects

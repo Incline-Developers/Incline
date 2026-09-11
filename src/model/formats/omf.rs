@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use crate::{
     i18n::{tr, tr_format},
     model::{
-        Document, FillStyle, Layer, Object, ObjectColor, PolyVertex, ReserveField,
+        Document, FillStyle, Layer, Object, ObjectColor, PolyVertex, ReserveField, Solid,
         block_model::{
             BlockBounds, BlockBoundsSource, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices, StoredColorTransferFunction,
             opaque_irregular_surface_block_count, opaque_surface_block_count,
@@ -50,6 +50,7 @@ const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
 const META_DRILL_HOLE: &str = "incline:drill_hole";
 const META_RESERVE_FIELDS: &str = "incline:reserve_fields";
+const META_SOLIDS: &str = "incline:solids";
 /// A dataset's tie-in: its surface connectors and where the round starts,
 /// both keyed by hole name. Carried on the dataset's own element, because
 /// they are what joins its holes rather than anything one hole holds.
@@ -421,6 +422,19 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
     let mut element = omf_crate::Element::new("Designs", omf_crate::Composite::new(layers));
     put(&mut element, META_KIND, "designs");
     put(&mut element, META_RESERVE_FIELDS, serde_json::to_value(document.reserve_fields())?);
+    let mut solids = document.solids().to_vec();
+    for bench in solids.iter_mut().flat_map(|solid| solid.blasting.benches.iter_mut().chain(&mut solid.blasting.dig_strips)) {
+        bench.cut_layer = bench.cut_layer.map(|id| crate::model::LayerId(id.0 & LOCAL_MASK));
+        if let Some(layer) = &mut bench.planning_layer {
+            layer.id.0 &= LOCAL_MASK;
+        }
+        bench.cuts = bench
+            .cuts
+            .iter()
+            .map(|object| object.with_id_and_layer(crate::model::ObjectId(object.id().0 & LOCAL_MASK), crate::model::LayerId(object.layer().0 & LOCAL_MASK)))
+            .collect();
+    }
+    put(&mut element, META_SOLIDS, serde_json::to_value(solids)?);
     Ok(element)
 }
 
@@ -1362,6 +1376,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             META_DRILL_HOLE,
             META_TIE_INS,
             META_RESERVE_FIELDS,
+            META_SOLIDS,
         ];
         let unknown_metadata = element.metadata.keys().filter(|key| !KNOWN_METADATA.contains(&key.as_str())).cloned().collect::<Vec<_>>();
         if !unknown_metadata.is_empty() {
@@ -1489,6 +1504,14 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .and_then(|value| serde_json::from_value::<Vec<ReserveField>>(value).ok())
         {
             document.restore_reserve_fields(reserve_fields);
+        }
+        if let Some(solids) = element
+            .metadata
+            .get(META_SOLIDS)
+            .cloned()
+            .and_then(|value| serde_json::from_value::<Vec<Solid>>(value).ok())
+        {
+            document.restore_solids(solids);
         }
         document.validate().with_context(|| format!("validate designs '{}'", element.name))?;
         let unloaded: Vec<_> = document.layers().iter().filter(|layer| !layer.loaded).map(|layer| layer.id).collect();

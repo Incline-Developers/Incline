@@ -269,6 +269,19 @@ impl<'a> App<'a> {
                     &tr!(literal = "Trimmed"),
                 );
             }
+            TriangulationPickTarget::SolidDesign => {
+                self.editor.tri_solid_design_id = Some(id);
+                if self.editor.tri_solid_topography_id == Some(id) {
+                    self.editor.tri_solid_topography_id = None;
+                }
+                update_auto_derived_name(&mut self.editor.tri_solid_name_input, self.editor.tri_solid_name_auto, name, &tr!(literal = "Solid"));
+            }
+            TriangulationPickTarget::SolidTopography => {
+                self.editor.tri_solid_topography_id = Some(id);
+                if self.editor.tri_solid_design_id == Some(id) {
+                    self.editor.tri_solid_design_id = None;
+                }
+            }
             TriangulationPickTarget::CutPitTopology => {
                 self.editor.tri_cut_pitshell_topology_id = Some(id);
                 if self.editor.tri_cut_pitshell_pitshell_id == Some(id) {
@@ -403,6 +416,33 @@ impl<'a> App<'a> {
             return;
         }
 
+        if !dragged
+            && self.editor.is_dig_strips_step()
+            && self.editor.active_tool == ActiveTool::None
+            && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
+        {
+            self.editor.selected_dig_block = self.editor.dig_outlines.iter().find_map(|outline| {
+                let world = self.graphics.as_ref()?.cursor_world(outline.plane)?;
+                let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|p| p.truncate()).collect()).collect();
+                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
+            });
+            self.invalidate_overlay();
+            return;
+        }
+        if !dragged
+            && self.editor.is_blasting_step()
+            && self.editor.active_tool == ActiveTool::None
+            && !pending_selection_click.is_some_and(|pick| matches!(pick.entity, SceneEntityId::Object(_)))
+        {
+            self.editor.scroll_to_blast = true;
+            self.editor.selected_blast = self.editor.blasting_outlines.iter().rev().find_map(|outline| {
+                let world = self.graphics.as_ref()?.cursor_world(outline.plane)?;
+                let face: Vec<Vec<glam::DVec2>> = outline.rings.iter().map(|ring| ring.iter().map(|point| point.truncate()).collect()).collect();
+                crate::model::arrangement::point_in_face(&face, world.truncate()).then(|| crate::ui::state::BlastShapeRef::new(outline.solid, outline.bench_base, outline.anchor))
+            });
+            self.invalidate_overlay();
+            return;
+        }
         if !dragged {
             if self.editor.active_tool == ActiveTool::None && self.select_tie_at_cursor() {
                 return;
@@ -698,6 +738,9 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn active_project_object_ids(&self) -> std::collections::HashSet<crate::model::ObjectId> {
+        if self.editor.is_planning_cut_step() {
+            return self.scene_document.objects().iter().map(Object::id).collect();
+        }
         self.workspace
             .active_project()
             .map(|project| project.project.document.objects().iter().map(Object::id).collect())

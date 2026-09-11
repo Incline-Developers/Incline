@@ -37,6 +37,12 @@ enum BlockSurfaceSelection {
 }
 
 pub(crate) struct CachedTriangulationGpu {
+    mesh: std::sync::Weak<mesh_data::Triangulation>,
+    flitch_style: Option<crate::model::FlitchStyle>,
+    depth_shade: Option<[f64; 2]>,
+    /// The scene origin the depth range was reduced by. Rebasing moves it,
+    /// and the uniform holds the reduced values, not the world ones.
+    depth_origin_z: f64,
     pub(crate) surface_chunks: Vec<CachedSurfaceChunk>,
     pub(crate) surface_style_buffer: wgpu::Buffer,
     pub(crate) surface_style_bind_group: wgpu::BindGroup,
@@ -89,6 +95,7 @@ pub(crate) struct EdgeInstance {
 struct SurfaceStyleUniform {
     color: [f32; 4],
     params: [f32; 4],
+    pattern_color: [f32; 4],
 }
 
 /// Mirrors `ColorStop` for upload; `pos.x` holds the stop's `t`, the rest is
@@ -1231,6 +1238,11 @@ impl TriangulationGpuCache {
         scene_origin: DVec3,
         scale_factor: f32,
         triangulations: &[OpenTriangulation],
+        // Cached alongside the project's own surfaces so the Solids Setup
+        // preview has GPU geometry to draw, without the project list - which
+        // the explorer and the main viewport both read - having to carry a
+        // mesh that is not a project item.
+        solid_preview: &[OpenTriangulation],
         rasters: &[OpenRasterTexture],
         editor: &EditorState,
         surface_style_layout: &wgpu::BindGroupLayout,
@@ -1240,9 +1252,9 @@ impl TriangulationGpuCache {
         // A drape survives unloading and hiding the raster, so the texture a
         // surface actually samples is the drape filtered by what can be drawn.
         let drawable_rasters: HashSet<_> = rasters.iter().filter(|raster| raster.state.loaded).map(|raster| raster.id).collect();
-        let loaded: HashSet<_> = triangulations.iter().filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
+        let loaded: HashSet<_> = triangulations.iter().chain(solid_preview).filter(|tri| tri.state.loaded).map(|tri| tri.id).collect();
         self.meshes.retain(|id, _| loaded.contains(id));
-        for triangulation in triangulations {
+        for triangulation in triangulations.iter().chain(solid_preview) {
             if !triangulation.state.loaded {
                 continue;
             }
@@ -1264,16 +1276,42 @@ impl TriangulationGpuCache {
             if editor.translucent_handles.contains(&entity) {
                 make_translucent(&mut line_color);
             }
-            // Selection always shows edges, even when global wireframes are off.
-            let show_edges = selected || editor.topology_wireframes_enabled;
+            // Selection always shows edges, even when global wireframes are off,
+            // and so does a mesh that asks for them - a dig block's seam is the
+            // only thing separating it from the block beside it.
+            let show_edges = selected || editor.topology_wireframes_enabled || triangulation.always_show_edges;
             let edge_width = if show_edges {
                 (triangulation.line_weight.unwrap_or(1.0) * scale_factor).max(1.0)
             } else {
                 0.0
             };
 
+            if self
+                .meshes
+                .get(&triangulation.id)
+                .is_some_and(|cached| cached.mesh.as_ptr() != std::sync::Arc::as_ptr(&triangulation.mesh))
+            {
+                self.meshes.remove(&triangulation.id);
+            }
+            let pattern = triangulation.flitch_style.map_or(0.0, |style| match style.pattern {
+                crate::model::FillStyle::Crosses => 2.0,
+                crate::model::FillStyle::Slashes => 1.0,
+                _ => 0.0,
+            });
+            let pattern_color = triangulation.flitch_style.map_or([0.0; 4], |style| style.pattern_color);
+            // Vertices reach the shader scene-origin-relative, so the range
+            // has to be reduced the same way. Equal bounds disable the ramp.
+            let [depth_low, depth_high] = triangulation
+                .depth_shade
+                .filter(|[low, high]| high > low)
+                .map_or([0.0, 0.0], |[low, high]| [(low - scene_origin.z) as f32, (high - scene_origin.z) as f32]);
             if let Some(cached) = self.meshes.get_mut(&triangulation.id) {
-                let surface_dirty = cached.color != color || cached.raster_texture != raster_texture || cached.raster_opacity != triangulation.raster_opacity;
+                let surface_dirty = cached.depth_shade != triangulation.depth_shade
+                    || (triangulation.depth_shade.is_some() && cached.depth_origin_z != scene_origin.z)
+                    || cached.flitch_style != triangulation.flitch_style
+                    || cached.color != color
+                    || cached.raster_texture != raster_texture
+                    || cached.raster_opacity != triangulation.raster_opacity;
                 // Rebuild edge geometry only when edges flip between present and absent.
                 let edge_geom_dirty = (cached.edge_width == 0.0) != (edge_width == 0.0);
                 let edge_style_dirty = cached.line_color != line_color || cached.edge_width != edge_width;
@@ -1285,9 +1323,18 @@ impl TriangulationGpuCache {
                 if surface_dirty {
                     let style = SurfaceStyleUniform {
                         color,
-                        params: [if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 }, 0.0, 0.0, 0.0],
+                        params: [
+                            if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 },
+                            pattern,
+                            depth_low,
+                            depth_high,
+                        ],
+                        pattern_color,
                     };
                     queue.write_buffer(&cached.surface_style_buffer, 0, bytemuck::bytes_of(&style));
+                    cached.flitch_style = triangulation.flitch_style;
+                    cached.depth_shade = triangulation.depth_shade;
+                    cached.depth_origin_z = scene_origin.z;
                     cached.color = color;
                     cached.raster_texture = raster_texture;
                     cached.raster_opacity = triangulation.raster_opacity;
@@ -1315,7 +1362,13 @@ impl TriangulationGpuCache {
 
                 let surface_style = SurfaceStyleUniform {
                     color,
-                    params: [if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 }, 0.0, 0.0, 0.0],
+                    params: [
+                        if raster_texture.is_some() { triangulation.raster_opacity.clamp(0.0, 1.0) } else { 0.0 },
+                        pattern,
+                        depth_low,
+                        depth_high,
+                    ],
+                    pattern_color,
                 };
                 let surface_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Surface Style Uniform"),
@@ -1358,6 +1411,10 @@ impl TriangulationGpuCache {
                 self.meshes.insert(
                     triangulation.id,
                     CachedTriangulationGpu {
+                        mesh: std::sync::Arc::downgrade(&triangulation.mesh),
+                        flitch_style: triangulation.flitch_style,
+                        depth_shade: triangulation.depth_shade,
+                        depth_origin_z: scene_origin.z,
                         surface_chunks,
                         surface_style_buffer,
                         surface_style_bind_group,
@@ -1460,7 +1517,10 @@ fn build_surface_chunks(
         if !world_min.x.is_finite() {
             continue;
         }
-        let chunk_origin = (world_min + world_max) * 0.5;
+        // Adjacent generated slabs share boundary vertices. Give them the same
+        // rebasing origin, so those vertices follow identical f64 -> f32 paths
+        // rather than rounding differently on opposite sides of a flitch seam.
+        let chunk_origin = if triangulation.cull_back_faces { scene_origin } else { (world_min + world_max) * 0.5 };
 
         for &face_index in run {
             let Some(face) = mesh.face_vertex_indices(face_index as usize) else {
@@ -1517,6 +1577,7 @@ fn build_surface_chunks(
             (world_min - scene_origin).as_vec3(),
             (world_max - scene_origin).as_vec3(),
             (chunk_origin - scene_origin).as_vec3(),
+            chunk_origin,
             chunk_index,
             surface_style_layout,
             surface_chunk_layout,
@@ -1581,6 +1642,7 @@ fn upload_surface_chunk(
     bounds_min: Vec3,
     bounds_max: Vec3,
     chunk_offset: Vec3,
+    chunk_origin: DVec3,
     chunk_index: usize,
     surface_style_layout: &wgpu::BindGroupLayout,
     surface_chunk_layout: &wgpu::BindGroupLayout,
@@ -1617,6 +1679,7 @@ fn upload_surface_chunk(
     let debug_style = SurfaceStyleUniform {
         color: chunk_debug_color(chunk_index),
         params: [0.0; 4],
+        pattern_color: [0.0; 4],
     };
     let debug_style_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Chunk Debug Style Uniform"),
@@ -1632,7 +1695,16 @@ fn upload_surface_chunk(
         label: Some("Chunk Debug Style Bind Group"),
     });
     // Scene-origin-relative rebase offset re-added in the vertex shader.
-    let chunk_uniform: [f32; 4] = [chunk_offset.x, chunk_offset.y, chunk_offset.z, 0.0];
+    let chunk_uniform: [f32; 8] = [
+        chunk_offset.x,
+        chunk_offset.y,
+        chunk_offset.z,
+        0.0,
+        chunk_origin.x.rem_euclid(5.0) as f32,
+        chunk_origin.y.rem_euclid(5.0) as f32,
+        chunk_origin.z.rem_euclid(5.0) as f32,
+        0.0,
+    ];
     let chunk_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Surface Chunk Offset Uniform"),
         contents: bytemuck::bytes_of(&chunk_uniform),

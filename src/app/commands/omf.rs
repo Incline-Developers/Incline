@@ -96,6 +96,7 @@ impl<'a> App<'a> {
         design.metadata.units = units;
         for imported in &designs {
             design.document.merge_reserve_fields_from(&imported.document);
+            design.document.merge_solids_from(&imported.document);
         }
         for imported in designs {
             project::merge_document_preserve_ids(&mut design.document, &imported.document);
@@ -178,6 +179,10 @@ impl<'a> App<'a> {
                 line_weight: imported.line_weight,
                 raster_texture,
                 raster_opacity: imported.raster_opacity,
+                flitch_style: None,
+                cull_back_faces: false,
+                always_show_edges: false,
+                depth_shade: None,
             });
             self.touch_active_project_content();
             if imported.is_loaded {
@@ -439,6 +444,10 @@ impl<'a> App<'a> {
                     line_weight: imported.line_weight,
                     raster_texture,
                     raster_opacity: imported.raster_opacity,
+                    flitch_style: None,
+                    cull_back_faces: false,
+                    always_show_edges: false,
+                    depth_shade: None,
                 });
                 self.touch_active_project_content();
                 if self.active_triangulation.is_none() {
