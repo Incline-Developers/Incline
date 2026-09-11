@@ -2915,9 +2915,9 @@ pub(crate) enum UiCommand {
     CancelOffset,
     ConfirmDrapeSelection,
     CancelRelimit,
+    /// Frame everything visible from square on. Sliced, square on means the
+    /// section plane, and the mode is kept - the section is the view.
     ResetView,
-    /// Squares the camera to the section plane without leaving slice mode or changing the section itself, unlike `ResetView`.
-    ResetSliceView,
     /// Arm a click that fixes the centre of rotation, or release the one that is set.
     ToggleRotationCentre,
     /// The grid button: the RL grid in a section, the XY grid in plan.
@@ -3360,7 +3360,6 @@ impl UiCommand {
             Self::CommitStrokeOpen => report(tr!(literal = "Create Line"), tr!(literal = "Finish open polyline")),
             Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
             Self::ResetView => report(tr!(literal = "Reset View"), tr!(literal = "Fit to extents")),
-            Self::ResetSliceView => report(tr!(literal = "Reset Section View"), tr!(literal = "Camera square to the section")),
             Self::ToggleRotationCentre => report(tr!(literal = "Centre of Rotation"), tr!(literal = "Fix or release the centre both views orbit about")),
             Self::SetTopologyWireframes(enabled) => report(
                 tr!(literal = "Set Topology Wireframes"),

@@ -1405,9 +1405,6 @@ pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, comm
                 if ui.add(MenuButton::new(tr!(literal = "Exit slice"))).clicked() {
                     commands.push(UiCommand::SetSliceModeEnabled(false));
                 }
-                if ui.add(MenuButton::new(tr!("slice-reset-view"))).clicked() {
-                    commands.push(UiCommand::ResetSliceView);
-                }
             });
         });
 }

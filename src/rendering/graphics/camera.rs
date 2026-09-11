@@ -265,6 +265,19 @@ pub(super) fn in_plane_screen_move(dx: f64, dy: f64, right: DVec3, up: DVec3, no
     Some(shift.clamp_length_max(dx.hypot(dy) / crate::rendering::camera::MIN_SECTION_INCIDENCE.sin()))
 }
 
+/// Camera forward and up for a standard view; the section takes the same pair
+/// to turn its plane to, so the two views agree on where "north" looks.
+pub(super) fn standard_view_basis(view: crate::ui::state::StandardView) -> (DVec3, DVec3) {
+    match view {
+        crate::ui::state::StandardView::Up => (DVec3::NEG_Z, DVec3::Y),
+        crate::ui::state::StandardView::Down => (DVec3::Z, DVec3::Y),
+        crate::ui::state::StandardView::North => (DVec3::NEG_Y, DVec3::Z),
+        crate::ui::state::StandardView::South => (DVec3::Y, DVec3::Z),
+        crate::ui::state::StandardView::West => (DVec3::X, DVec3::Z),
+        crate::ui::state::StandardView::East => (DVec3::NEG_X, DVec3::Z),
+    }
+}
+
 /// The inverse of `eye_keeping_centre`: the eye's offset from a fixed `centre`.
 pub(super) fn eye_offset_from(centre: DVec3, eye: DVec3, basis: (DVec3, DVec3, DVec3)) -> (f64, f64, f64) {
     let (forward, right, up) = basis;
@@ -1264,6 +1277,10 @@ impl<'a> Graphics<'a> {
         let Some((min, max)) = scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, hidden) else {
             return;
         };
+        if self.slice_view.is_some() {
+            self.zoom_slice_to_extents(min, max);
+            return;
+        }
         let center = (min + max) * 0.5;
         let forward = self.camera.forward();
         let right = forward.cross(self.camera.up()).normalize_or_zero();
@@ -1310,15 +1327,53 @@ impl<'a> Graphics<'a> {
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, hidden);
     }
 
-    pub(crate) fn set_standard_view(&mut self, view: crate::ui::state::StandardView) {
-        let (forward, up) = match view {
-            crate::ui::state::StandardView::Up => (DVec3::NEG_Z, DVec3::Y),
-            crate::ui::state::StandardView::Down => (DVec3::Z, DVec3::Y),
-            crate::ui::state::StandardView::North => (DVec3::NEG_Y, DVec3::Z),
-            crate::ui::state::StandardView::South => (DVec3::Y, DVec3::Z),
-            crate::ui::state::StandardView::West => (DVec3::X, DVec3::Z),
-            crate::ui::state::StandardView::East => (DVec3::NEG_X, DVec3::Z),
+    /// Zoom to extents within a section: the zoom and the in-plane anchor
+    /// move, the section itself does not. Its direction and where the slab
+    /// sits along its normal are what the view is *of*, so framing must not
+    /// quietly cut somewhere else.
+    ///
+    /// Bounds arrive in model elevations and the section works in displayed
+    /// ones, so they are stretched by the vertical exaggeration first.
+    fn zoom_slice_to_extents(&mut self, min: DVec3, max: DVec3) {
+        let screen = self.screen_size();
+        let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
+        let corners = std::array::from_fn::<DVec3, 8, _>(|i| {
+            self.exaggerate_point(DVec3::new(
+                if (i & 1) == 0 { min.x } else { max.x },
+                if (i & 2) == 0 { min.y } else { max.y },
+                if (i & 4) == 0 { min.z } else { max.z },
+            ))
+        });
+        let target = self.exaggerate_point((min + max) * 0.5);
+        let Some(slice) = self.slice_view.as_mut() else {
+            return;
         };
+        let (forward, right, up) = slice.camera_basis();
+
+        // The section cuts the scene box at whatever angle it runs, so measure the corners along the view's own axes rather than the box's.
+        let (mut half_width, mut half_height) = (0.0_f64, 0.0_f64);
+        for corner in corners {
+            let offset = corner - target;
+            half_width = half_width.max(offset.dot(right).abs());
+            half_height = half_height.max(offset.dot(up).abs());
+        }
+        self.projection.zoom = if half_width <= 1e-9 && half_height <= 1e-9 {
+            default_zoom(aspect)
+        } else {
+            // 10 % padding, matching the plan view's fit.
+            (half_height.max(half_width / aspect) * 1.1).max(1e-4)
+        };
+
+        // Slide the anchor within the plane until the scene's centre is the screen's; ortho, so the eye's depth off the plane doesn't enter into it.
+        let offset = target - slice.camera_position();
+        if let Some(shift) = in_plane_screen_move(offset.dot(right), offset.dot(up), right, up, slice.normal()) {
+            slice.center += shift;
+        }
+        self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
+    }
+
+    pub(crate) fn set_standard_view(&mut self, view: crate::ui::state::StandardView) {
+        let (forward, up) = standard_view_basis(view);
         self.camera_controller.begin_view_transition(&self.camera, forward, up, self.projection.zoom);
         self.camera_controller.end_orbit();
         self.orbit_marker = None;
@@ -1608,16 +1663,14 @@ impl<'a> Graphics<'a> {
         // (counter-clockwise seen from above), E right.
         let rotate_amount = f64::from(i8::from(slice.input.rotate_left)) - f64::from(i8::from(slice.input.rotate_right));
         if rotate_amount != 0.0 {
-            let angle = rotate_amount * slice.rotate_speed * step;
-            slice.direction = DVec2::from_angle(angle).rotate(slice.direction).normalize_or(slice.direction);
             // Turn about the fixed centre when set, else the anchor; the eye rides along.
-            let turn = DVec2::from_angle(angle);
-            if let Some(centre) = fixed_centre {
-                let arm = turn.rotate((slice.center - centre).truncate());
-                slice.center = DVec3::new(centre.x + arm.x, centre.y + arm.y, slice.center.z);
-            }
-            let eye = turn.rotate(slice.view_offset.truncate());
-            slice.view_offset = DVec3::new(eye.x, eye.y, slice.view_offset.z);
+            slice.turn(rotate_amount * slice.rotate_speed * step, fixed_centre);
+        }
+
+        // A gizmo click eases the section round to a standard view over the same moment the plan view's camera takes, in the same two parts a click can ask for: the line turns, and the orbit unwinds.
+        let turning = slice.advance_turn(dt);
+        if let Some((turn_step, _, _)) = turning {
+            slice.turn(turn_step, fixed_centre);
         }
 
         // Right-drag orbits only the eye, so the plane being drawn on never moves under a stroke (Q/E turn the section itself); settled before the walk/pan/zoom below since those act on this orientation.
@@ -1625,8 +1678,12 @@ impl<'a> Graphics<'a> {
             slice.orbit_dragging = false;
         }
         let anchored = fixed_centre
-            .filter(|_| slice.orbit != DVec2::ZERO)
+            .filter(|_| slice.orbit != DVec2::ZERO || turning.is_some())
             .map(|centre| (centre, eye_offset_from(centre, slice.camera_position(), slice.camera_basis())));
+        if let Some((_, yaw, pitch)) = turning {
+            slice.yaw = yaw;
+            slice.pitch = pitch;
+        }
         if slice.orbit != DVec2::ZERO {
             let angles = self.camera_controller.orbit_angles(slice.orbit.x, slice.orbit.y);
             // Matches the plan view's sign: it rotates the camera position by the negated horizontal angle, so forward turns by its negative.

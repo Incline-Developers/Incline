@@ -19,26 +19,39 @@ impl<'a> App<'a> {
         }
     }
 
-    /// The armed click: fix the centre at the closest point under the cursor
-    /// and stand the tool down.
+    /// The armed click: fix the centre where the cursor says it will land -
+    /// the caught snap point when a snap mode holds one, else the closest
+    /// point under the cursor - and stand the tool down.
     pub(crate) fn pick_rotation_centre_at_cursor(&mut self) {
-        self.refresh_snap_index();
-        let Some(graphics) = self.graphics.as_mut() else {
-            return;
+        // The snap dot is a promise: the tool must fix the centre on the point
+        // it drew, not on a second pick that lands somewhere else.
+        let snapped = if self.editor.snapping_active() && self.editor.cursor_snapped {
+            self.editor.cursor_world
+        } else {
+            None
         };
-        // One rule for every object: the closest point on it to the cursor,
-        // whatever the hover snap showed.
-        let Some(centre) = graphics.pick_rotation_centre(
-            &self.triangulations,
-            &self.drill_holes,
-            &self.editor.hidden_handles,
-            &self.editor.frozen_handles,
-            &self.scene_document,
-            &self.snap_index,
-            self.editor.z_level,
-        ) else {
-            userspace_warn!("{}", tr!(literal = "No point under the cursor to fix the centre of rotation on"));
-            return;
+        let centre = if let Some(centre) = snapped {
+            centre
+        } else {
+            self.refresh_snap_index();
+            let Some(graphics) = self.graphics.as_mut() else {
+                return;
+            };
+            // No snap caught: one rule for every object, the closest point on
+            // it to the cursor.
+            let Some(centre) = graphics.pick_rotation_centre(
+                &self.triangulations,
+                &self.drill_holes,
+                &self.editor.hidden_handles,
+                &self.editor.frozen_handles,
+                &self.scene_document,
+                &self.snap_index,
+                self.editor.z_level,
+            ) else {
+                userspace_warn!("{}", tr!(literal = "No point under the cursor to fix the centre of rotation on"));
+                return;
+            };
+            centre
         };
         self.editor.rotation_centre = Some(centre);
         self.editor.active_tool = ActiveTool::None;

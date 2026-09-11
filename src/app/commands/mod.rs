@@ -598,12 +598,13 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ResetView => {
-                self.leave_slice_mode();
-                self.reset_view();
-                Ok(())
-            }
-            UiCommand::ResetSliceView => {
-                self.reset_slice_view();
+                // Sliced, the section is the view: squaring up to it and
+                // fitting is the reset, rather than dropping the mode.
+                if self.editor.slice_mode_enabled {
+                    self.reset_slice_view();
+                } else {
+                    self.reset_view();
+                }
                 Ok(())
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
@@ -623,15 +624,21 @@ impl<'a> App<'a> {
             }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
             UiCommand::SetStandardView(view) => {
-                // The slice camera is derived from the slice state each frame;
-                // a standard-view transition would silently queue and fire on
-                // exit, so ignore it while sliced.
-                if self.editor.slice_mode_enabled {
-                    return Ok(());
-                }
+                // The slice camera is derived from the slice state each frame,
+                // so a standard-view transition would silently queue and fire
+                // on exit; sliced, the section turns to face the view instead.
+                let sliced = self.editor.slice_mode_enabled;
                 if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.set_standard_view(view);
+                    if sliced {
+                        graphics.set_slice_standard_view(view);
+                    } else {
+                        graphics.set_standard_view(view);
+                    }
                     self.redraw_requested = true;
+                }
+                if sliced {
+                    // No mouse event behind this camera swap; ending any orbit lets the cursor land back on the section.
+                    self.end_right_orbit();
                 }
                 Ok(())
             }
@@ -718,7 +725,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
-                self.leave_slice_mode();
+                // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();
                 Ok(())
             }

@@ -107,14 +107,29 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr!(literal = "Exited slice view"));
     }
 
-    /// Squares the section camera to its plane; undoes only the orbit, leaving direction, slab position, pan and zoom untouched.
+    /// Reset View while sliced: square the camera to the section plane, then
+    /// frame what is visible on it. The section itself - its direction and
+    /// where the slab sits along its normal - is left exactly where it is,
+    /// which is what lets Reset View mean something here without dropping the
+    /// mode to get back to a plan view.
     pub(crate) fn reset_slice_view(&mut self) {
-        if !self.graphics.as_mut().is_some_and(|graphics| graphics.reset_slice_view(self.editor.rotation_centre)) {
-            return;
+        if let Some(graphics) = self.graphics.as_mut() {
+            if !graphics.reset_slice_view(self.editor.rotation_centre) {
+                return;
+            }
+            // Squared up first, so the fit measures the section as it will be seen.
+            graphics.zoom_to_extents(
+                &self.scene_document,
+                &self.triangulations,
+                &self.block_models,
+                &self.drill_holes,
+                &self.point_clouds,
+                &self.editor.hidden_handles,
+            );
         }
         self.end_right_orbit();
         self.redraw_requested = true;
-        userspace_log!("{}", tr!(literal = "Reset the section view"));
+        userspace_log!("{}", tr!(literal = "Reset the section view (fit to extents)"));
     }
 
     /// Whether the cursor may be re-projected onto the section: yes when the section moves with no mouse event behind it, not while a right drag is orbiting it.

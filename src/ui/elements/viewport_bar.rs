@@ -429,24 +429,6 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         editor.vertical_exaggeration_dialog_open = true;
     }
 
-    let zoom = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), tr!(literal = "Zoom to Extents"))
-            .id_salt("zoom_to_extents")
-            .button_side(side),
-    );
-    if zoom.clicked() {
-        commands.push(UiCommand::ZoomToExtents);
-    }
-
-    let reset = ui.add(
-        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!(literal = "Reset View"))
-            .id_salt("reset_view")
-            .button_side(side),
-    );
-    if reset.clicked() {
-        commands.push(UiCommand::ResetView);
-    }
-
     // Fixed centre of rotation: one click arms a pick, the next click on the
     // button releases the centre; lit while armed or set.
     let armed = editor.active_tool == ActiveTool::PickRotationCentre;
@@ -467,6 +449,24 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     );
     if centre.clicked() {
         commands.push(UiCommand::ToggleRotationCentre);
+    }
+
+    let zoom = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), tr!(literal = "Zoom to Extents"))
+            .id_salt("zoom_to_extents")
+            .button_side(side),
+    );
+    if zoom.clicked() {
+        commands.push(UiCommand::ZoomToExtents);
+    }
+
+    let reset = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("reset_view.svg")), tr!(literal = "Reset View"))
+            .id_salt("reset_view")
+            .button_side(side),
+    );
+    if reset.clicked() {
+        commands.push(UiCommand::ResetView);
     }
 }
 
@@ -523,7 +523,7 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
 
     let wireframes = ui.add(
         ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
+            egui::Image::new(themed_icon!(ui, "toggle_wireframes.svg")),
             if editor.topology_wireframes_enabled {
                 tr!(literal = "Hide Wireframes")
             } else {

@@ -24,6 +24,10 @@ pub(crate) fn orientation_gizmo_rect(canvas_rect: egui::Rect) -> egui::Rect {
 
 /// Draw the world-axis gizmo in the viewport's top-right corner.
 ///
+/// `horizontal_only` drops the Z arms: a vertical section can be turned to
+/// face any compass axis, but never straight up or down, and an arm that
+/// cannot be honoured is better not drawn than drawn dead.
+///
 /// Returns the rect it occupies, or [`egui::Rect::NOTHING`] when the viewport
 /// is too small to draw it.
 pub(crate) fn draw_orientation_gizmo(
@@ -31,6 +35,7 @@ pub(crate) fn draw_orientation_gizmo(
     canvas_rect: egui::Rect,
     camera_forward: [f32; 3],
     camera_up: [f32; 3],
+    horizontal_only: bool,
     commands: &mut Vec<crate::ui::state::UiCommand>,
 ) -> egui::Rect {
     let gizmo_rect = orientation_gizmo_rect(canvas_rect);
@@ -57,6 +62,7 @@ pub(crate) fn draw_orientation_gizmo(
 
             let mut nodes: Vec<_> = axis_defs
                 .into_iter()
+                .filter(|(axis, _, _)| !horizontal_only || axis[2] == 0.0)
                 .flat_map(|(axis, label, color)| {
                     [1.0_f32, -1.0].into_iter().map(move |sign| {
                         let signed_axis = [axis[0] * sign, axis[1] * sign, axis[2] * sign];
@@ -145,23 +151,14 @@ fn marker_painter(ui: &egui::Ui, x: f32, y: f32, clip_rect: egui::Rect, id: &str
     Some((painter, pos))
 }
 
-pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: egui::Rect) {
-    let Some((painter, pos)) = marker_painter(ui, ox, oy, clip_rect, "orbit_marker") else {
-        return;
-    };
-    let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 220));
-    let r = 4.0;
-    painter.circle_stroke(pos, r, stroke);
-    painter.line_segment([pos - egui::vec2(r + 4.0, 0.0), pos + egui::vec2(r + 4.0, 0.0)], stroke);
-    painter.line_segment([pos - egui::vec2(0.0, r + 4.0), pos + egui::vec2(0.0, r + 4.0)], stroke);
-}
-
-/// The fixed centre of rotation: a ringed dot with four ticks, in the orbit
-/// marker's colour so the two read as one family, and it stays up between drags.
-pub(crate) fn draw_rotation_centre_marker(ui: &mut egui::Ui, cx: f32, cy: f32, clip_rect: egui::Rect) {
-    let Some((painter, pos)) = marker_painter(ui, cx, cy, clip_rect, "rotation_centre_marker") else {
-        return;
-    };
+/// The mark a rotation turns about: a ringed dot with four ticks, carrying its
+/// own dark halo so it reads over any scene behind it.
+///
+/// One glyph serves both pivots - the transient one a plain orbit picks under
+/// the cursor, and the fixed centre the C tool pins - because they mean the
+/// same thing to the eye. What separates them is how long they stay: the
+/// transient one lives only for the drag, the fixed one stays up between drags.
+fn paint_pivot_marker(painter: &egui::Painter, pos: egui::Pos2) {
     let halo = egui::Stroke::new(3.2, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140));
     let core = egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(255, 180, 0, 235));
     let r = 6.0;
@@ -173,6 +170,22 @@ pub(crate) fn draw_rotation_centre_marker(ui: &mut egui::Ui, cx: f32, cy: f32, c
         }
     }
     painter.circle_filled(pos, 1.8, core.color);
+}
+
+/// The pivot a plain orbit drag turns about, shown for the length of the drag.
+pub(crate) fn draw_orbit_marker(ui: &mut egui::Ui, ox: f32, oy: f32, clip_rect: egui::Rect) {
+    let Some((painter, pos)) = marker_painter(ui, ox, oy, clip_rect, "orbit_marker") else {
+        return;
+    };
+    paint_pivot_marker(&painter, pos);
+}
+
+/// The fixed centre of rotation, which stays up between drags.
+pub(crate) fn draw_rotation_centre_marker(ui: &mut egui::Ui, cx: f32, cy: f32, clip_rect: egui::Rect) {
+    let Some((painter, pos)) = marker_painter(ui, cx, cy, clip_rect, "rotation_centre_marker") else {
+        return;
+    };
+    paint_pivot_marker(&painter, pos);
 }
 
 /// Half-width of the cursor's crosshair arms, in points.
