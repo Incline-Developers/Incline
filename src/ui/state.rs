@@ -1625,8 +1625,6 @@ pub(crate) struct EditorState {
     pub(crate) solid_view_bands: std::collections::HashMap<crate::model::SolidId, Vec<BenchSelection>>,
     pub(crate) solid_preview_sources: std::collections::HashSet<crate::model::triangulation::TriangulationId>,
     pub(crate) solid_preview_z_range: Option<(f64, f64)>,
-    /// Whether the draggable Objects island is expanded.
-    pub(crate) planning_solid_objects_open: bool,
     /// The bench or flitch picked out in the Benching step's results, and so
     /// highlighted in the preview.
     pub(crate) planning_selected_bench: Option<BenchSelection>,
@@ -2635,7 +2633,6 @@ impl EditorState {
             solid_view_bands: Default::default(),
             solid_preview_sources: Default::default(),
             solid_preview_z_range: None,
-            planning_solid_objects_open: false,
             planning_selected_bench: None,
             slice_preview_size_px: [440, 440],
             slice_preview_navigation: SlicePreviewNavigation::default(),

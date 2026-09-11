@@ -242,7 +242,12 @@ pub(crate) fn paint_window_background(ctx: &egui::Context, index: egui::layers::
 }
 
 /// The edge of a panel the user drags to resize it.
+///
+/// All four sides, so a seam can be named wherever one turns up; nothing drags
+/// a bottom edge at the moment - a panel claims its own side, and the seam is
+/// the one it shares with what it was claimed against.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) enum Edge {
     Left,
     Right,

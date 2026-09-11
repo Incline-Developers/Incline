@@ -26,6 +26,7 @@ use crate::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{DataGrid, GridNumber, GridRow, PropertyTable, grid_number_row, grid_row, grid_style_row, property_table_height},
             explorer::{ExplorerEntry, ExplorerHeader, paint_fixed_stripes, reserve_fixed_stripes},
+            island::{Island, Side},
             menu::{MenuFieldCombo, MenuFieldF64},
         },
     },
@@ -872,53 +873,43 @@ impl Default for PlanningLayout {
     }
 }
 
-fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, width: f32, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> R {
-    let response = egui::Panel::left(id)
-        .resizable(true)
-        .default_size(width)
-        .min_size(120.0)
-        .show_separator_line(chrome::show_separator_line(ui))
-        .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-            content(ui, ui.available_rect_before_wrap())
-        });
-    layout.regions.push(response.response.rect);
-    layout.grips.push(chrome::Grip::new(response.response.rect, chrome::Edge::Right, id));
+/// One column of a planning step, drawn as an island the user can drag shut.
+///
+/// `title` is what the closed spine carries; it is the heading the content
+/// draws for itself, so the island reads the same open or shut. The content's
+/// value comes back only while the island is open.
+fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, title: &str, width: f32, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> Option<R> {
+    let response = Island::new(id, Side::Left, title).default_width(width).min_width(120.0).flush().show(ui, content);
+    layout.regions.extend(response.regions);
+    layout.grips.push(response.grip);
     response.inner
 }
 
-fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
-    let response = egui::CentralPanel::default()
+/// Whatever is left once the islands have taken their columns, as one pane.
+/// Returns what it claimed, for a caller that registers it itself.
+fn central_pane(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui, egui::Rect)) -> egui::Rect {
+    egui::CentralPanel::default()
         .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| content(ui, ui.available_rect_before_wrap()));
-    layout.regions.push(response.response.rect);
+        .show(ui, |ui| content(ui, ui.available_rect_before_wrap()))
+        .response
+        .rect
 }
 
+fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl FnOnce(&mut egui::Ui, egui::Rect)) {
+    let rect = central_pane(ui, content);
+    layout.regions.push(rect);
+}
+
+/// The object tree, down the far side of every Solids step. Closed until the
+/// user pulls it open, since a step is worked from the columns beside it.
 fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
-    let id = "planning_objects_island";
-    let frame = chrome::region_frame(ui).inner_margin(egui::Margin::ZERO);
-    let separator = chrome::show_separator_line(ui);
-    let collapsed = egui::Panel::right("planning_objects_collapsed")
-        .resizable(true)
-        .exact_size(26.0)
-        .frame(frame)
-        .show_separator_line(separator);
-    let expanded = egui::Panel::right(id)
-        .resizable(true)
-        .default_size(280.0)
-        .min_size(140.0)
-        .frame(frame)
-        .show_separator_line(separator);
     let title = tr!(literal = "Objects");
-    let mut open = editor.planning_solid_objects_open;
-    // Clicking the collapsed spine opens it as well, which the resize handle's
-    // drag and double-click cannot advertise on their own.
-    let mut clicked = false;
-    let response = egui::Panel::show_switched(ui, &mut open, collapsed, expanded, |ui, expanded| {
-        let rect = ui.available_rect_before_wrap();
-        ui.set_clip_rect(ui.clip_rect().intersect(rect));
-        if expanded {
+    let response = Island::new("planning_objects_island", Side::Right, title.clone())
+        .default_width(280.0)
+        .min_width(140.0)
+        .flush()
+        .open_by_default(false)
+        .show(ui, |ui, rect| {
             framed_render_pane(ui, rect, &title, |ui, body| {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(body));
@@ -927,45 +918,29 @@ fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut E
                     crate::ui::elements::explorer::draw_object_tree(ui, editor, project, commands);
                 });
             });
-        } else {
-            // Collapsed: a narrow spine carrying the title down the page, so
-            // the strip still says what dragging it back open would show.
-            let response = ui.interact(rect, ui.id().with("planning_objects_spine"), egui::Sense::click());
-            if response.hovered() {
-                ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.hovered.bg_fill);
-            }
-            let galley = ui.painter().layout_no_wrap(title.clone(), egui::FontId::proportional(11.0), ui.visuals().text_color());
-            // Rotated a quarter turn so the label reads up the spine.
-            let text = egui::epaint::TextShape::new(
-                egui::pos2(rect.center().x - galley.size().y * 0.5, rect.top() + 12.0 + galley.size().x),
-                galley,
-                ui.visuals().text_color(),
-            )
-            .with_angle(-std::f32::consts::FRAC_PI_2);
-            ui.painter().with_clip_rect(rect).add(text);
-            if response.clicked() {
-                clicked = true;
-            }
-        }
-    });
-    editor.planning_solid_objects_open = open || clicked;
-    layout.regions.push(response.response.rect);
-    layout.grips.push(chrome::Grip::new(response.response.rect, chrome::Edge::Left, id));
+        });
+    layout.regions.extend(response.regions);
+    layout.grips.push(response.grip);
 }
 
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     objects_island(ui, layout, editor, project, commands);
-    island(ui, layout, "planning_solids_list_island", 240.0, |ui, rect| {
+    island(ui, layout, "planning_solids_list_island", &tr!("planning-solids"), 240.0, |ui, rect| {
         draw_solid_list(ui, rect, editor, document, commands)
     });
-    island(ui, layout, "planning_solids_properties_island", 320.0, |ui, rect| {
-        match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
+    island(
+        ui,
+        layout,
+        "planning_solids_properties_island",
+        &tr!("planning-properties"),
+        320.0,
+        |ui, rect| match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
             Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
             None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
                 rows.header(&tr!("planning-property"), &tr!("planning-value"));
             }),
-        }
-    });
+        },
+    );
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
 }
@@ -1194,7 +1169,7 @@ const DEFAULT_RANGE_DEPTH: f64 = 120.0;
 
 fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     objects_island(ui, layout, editor, project, commands);
-    island(ui, layout, "planning_bench_solids_island", 240.0, |ui, rect| {
+    island(ui, layout, "planning_bench_solids_island", &tr!("planning-solids"), 240.0, |ui, rect| {
         draw_solid_list(ui, rect, editor, document, commands)
     });
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
@@ -1203,20 +1178,18 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
     let mut plan = selected.map(|solid| solid.benching.clone()).unwrap_or_default();
     let mut changed = false;
 
-    // This column only arranges two independent islands; it has no shared frame.
-    let settings_id = "planning_bench_settings_column";
-    let settings = egui::Panel::left(settings_id)
-        .resizable(true)
-        .default_size(240.0)
-        .min_size(140.0)
-        .show_separator_line(chrome::show_separator_line(ui))
-        .frame(egui::Frame::NONE)
-        .show(ui, |ui| {
-            let flitch_id = "planning_flitching_island";
-            let flitch = egui::Panel::bottom(flitch_id)
-                .resizable(true)
-                .default_size(ui.available_height() * 0.6)
-                .min_size(100.0)
+    // This column arranges two panes rather than being one, so it carries no
+    // frame of its own and they halve its height between them. It still closes
+    // as a whole: the seam down its side drags both of them shut.
+    let settings = Island::new("planning_bench_settings_column", Side::Left, tr!("planning-benching"))
+        .section(tr!(literal = "Flitching"))
+        .default_width(240.0)
+        .min_width(140.0)
+        .bare()
+        .show(ui, |ui, _| {
+            let flitching = egui::Panel::bottom("planning_flitching_island")
+                .resizable(false)
+                .exact_size(ui.available_height() * 0.5)
                 .show_separator_line(chrome::show_separator_line(ui))
                 .frame(chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
                 .show(ui, |ui| {
@@ -1228,10 +1201,10 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
                             rows.header(&tr!("planning-property"), &tr!("planning-value"));
                         });
                     }
-                });
-            layout.regions.push(flitch.response.rect);
-            layout.grips.push(chrome::Grip::new(flitch.response.rect, chrome::Edge::Top, flitch_id));
-            central_island(ui, layout, |ui, rect| {
+                })
+                .response
+                .rect;
+            let benching = central_pane(ui, |ui, rect| {
                 if solid_id.is_some() {
                     draw_benching_list(ui, rect, &mut plan, &mut changed);
                 } else {
@@ -1241,9 +1214,17 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
                     });
                 }
             });
+            [flitching, benching]
         });
-    layout.grips.push(chrome::Grip::new(settings.response.rect, chrome::Edge::Right, settings_id));
-    island(ui, layout, "planning_bench_results_island", 240.0, |ui, rect| {
+    // Open, the two panes are the regions - clipped back to the column, so
+    // neither reaches over its neighbour while the column slides shut. Shut,
+    // the island hands back the two strips of its spine instead.
+    if let Some(panes) = settings.inner {
+        layout.regions.extend(panes.map(|pane| pane.intersect(settings.rect)));
+    }
+    layout.regions.extend(settings.regions);
+    layout.grips.push(settings.grip);
+    island(ui, layout, "planning_bench_results_island", &tr!(literal = "Results"), 240.0, |ui, rect| {
         if solid_id.is_some() {
             draw_bench_results(ui, rect, &plan, editor);
         } else {
@@ -1282,7 +1263,9 @@ fn draw_solids_details(
         SolidsStep::Solids => draw_solids_step(ui, layout, editor, project, document, commands),
         SolidsStep::Benching => draw_benching_step(ui, layout, editor, project, document, commands),
         SolidsStep::BlockModels => {
-            island(ui, layout, "planning_models_island", 280.0, |ui, rect| draw_block_model_list(ui, rect, editor, project));
+            island(ui, layout, "planning_models_island", &tr!("planning-block-models"), 280.0, |ui, rect| {
+                draw_block_model_list(ui, rect, editor, project)
+            });
             central_island(ui, layout, |ui, rect| {
                 if let Some(model) = editor.planning_selected_block_model.and_then(|id| block_models.iter().find(|model| model.id == id)) {
                     draw_block_model_mapping(ui, rect, document, model, commands);
@@ -1300,9 +1283,20 @@ fn category_labels() -> [String; 4] {
     [tr!("planning-dumps"), tr!("planning-stockpiles"), tr!("planning-loaders"), tr!("planning-trucks")]
 }
 
+/// Id of, and the last choice made in, the content category list. Read
+/// separately from the list that sets it, because the list is an island the
+/// user can close and the items beside it still have to know what they list.
+fn category_id(page: PlanningPage) -> egui::Id {
+    egui::Id::new(("planning_site_category", page))
+}
+
+fn current_category(ui: &egui::Ui, page: PlanningPage) -> usize {
+    ui.data(|data| data.get_temp::<usize>(category_id(page))).unwrap_or(0).min(3)
+}
+
 fn draw_content_categories(ui: &mut egui::Ui, rect: egui::Rect, page: PlanningPage) -> usize {
-    let category_id = egui::Id::new(("planning_site_category", page));
-    let mut category = ui.data(|data| data.get_temp::<usize>(category_id)).unwrap_or(0).min(3);
+    let category_id = category_id(page);
+    let mut category = current_category(ui, page);
     DataGrid::new("planning_categories", rect, &tr!("planning-content"))
         .column_header(&tr!("planning-content-type"))
         .show(ui, |ui| {
@@ -1376,8 +1370,14 @@ pub(crate) fn draw_details(
             central_island(ui, &mut layout, |ui, rect| draw_configuration(ui, rect, page));
             return;
         }
-        let category = island(ui, &mut layout, "planning_categories_island", 260.0, |ui, rect| draw_content_categories(ui, rect, page));
-        island(ui, &mut layout, "planning_items_island", 320.0, |ui, rect| draw_items(ui, rect, category));
+        // Closed, the category list still stands at whatever was last picked.
+        let category = island(ui, &mut layout, "planning_categories_island", &tr!("planning-content"), 260.0, |ui, rect| {
+            draw_content_categories(ui, rect, page)
+        })
+        .unwrap_or_else(|| current_category(ui, page));
+        island(ui, &mut layout, "planning_items_island", &category_labels()[category], 320.0, |ui, rect| {
+            draw_items(ui, rect, category)
+        });
         central_island(ui, &mut layout, draw_item_properties);
     });
     layout.rect = response.response.rect;

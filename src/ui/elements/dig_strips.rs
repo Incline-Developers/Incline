@@ -2,24 +2,25 @@
 use crate::{
     i18n::tr,
     ui::{
-        EditorState, chrome,
+        EditorState,
         state::{BlastShapeRef, UiCommand},
         widgets::{
             data_grid::{GridRow, grid_row},
             explorer::explorer_note,
+            island::{Island, IslandResponse, Side},
         },
     },
 };
 
-pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    egui::Panel::right("planning_dig_blocks")
-        .resizable(true)
-        .default_size(260.0)
-        .min_size(200.0)
-        .max_size(420.0)
-        .show_separator_line(chrome::show_separator_line(ui))
-        .frame(chrome::region_frame(ui))
-        .show(ui, |ui| {
+const PANEL_ID: &str = "planning_dig_blocks";
+
+pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> IslandResponse<()> {
+    Island::new(PANEL_ID, Side::Right, tr!("planning-dig-blocks"))
+        .fill(crate::ui::widgets::tree_row_colors(ui).0)
+        .default_width(260.0)
+        .min_width(200.0)
+        .max_width(420.0)
+        .show(ui, |ui, _| {
             ui.label(crate::ui::fonts::bold(&tr!("planning-dig-blocks")));
             ui.horizontal(|ui| {
                 if ui
@@ -54,6 +55,4 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
                 }
             });
         })
-        .response
-        .rect
 }
