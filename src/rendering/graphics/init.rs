@@ -198,6 +198,7 @@ impl<'a> Graphics<'a> {
         let shader = make_shader(&device, "../shaders/shader.wgsl", include_str!("../shaders/shader.wgsl"));
         let surface_shader = make_shader(&device, "../shaders/surface.wgsl", include_str!("../shaders/surface.wgsl"));
         let grid_shader = make_shader(&device, "../shaders/grid.wgsl", include_str!("../shaders/grid.wgsl"));
+        let section_grid_shader = make_shader(&device, "../shaders/section_grid.wgsl", include_str!("../shaders/section_grid.wgsl"));
         let block_model_shader = make_shader(&device, "../shaders/block_model.wgsl", include_str!("../shaders/block_model.wgsl"));
         let block_model_volume_shader = make_shader(&device, "../shaders/block_model_volume.wgsl", include_str!("../shaders/block_model_volume.wgsl"));
         let block_model_transparency_fallback_shader = make_shader(
@@ -277,6 +278,20 @@ impl<'a> Graphics<'a> {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: grid_buffer.as_entire_binding(),
+            }],
+        });
+
+        let section_grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Section Grid Uniform Buffer"),
+            contents: bytemuck::bytes_of(&<SectionGridUniform as bytemuck::Zeroable>::zeroed()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let section_grid_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Section Grid Bind Group"),
+            layout: &grid_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: section_grid_buffer.as_entire_binding(),
             }],
         });
 
@@ -1032,6 +1047,46 @@ impl<'a> Graphics<'a> {
             multiview_mask: None,
             cache: None,
         });
+        // The section grid shares the XY grid's shape and layout but not its
+        // rule: it is depth tested and writes depth on its lines, so geometry
+        // in front of the plane hides it and geometry behind sits under it.
+        let section_grid_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Section Grid Pipeline"),
+            layout: Some(&grid_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &section_grid_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &section_grid_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(Self::depth_state(true, 0)),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
         // Flat plan-view images for undraped rasters: drawn first, pinned to
         // the far plane, no depth writes, so all scene geometry covers them.
         let raster_plane_shader = make_shader(&device, "../shaders/raster_plane.wgsl", include_str!("../shaders/raster_plane.wgsl"));
@@ -1440,6 +1495,7 @@ impl<'a> Graphics<'a> {
             surface_render_pipeline,
             transparent_surface_render_pipeline,
             grid_render_pipeline,
+            section_grid_render_pipeline,
             raster_plane_render_pipeline,
             block_model_render_pipeline,
             block_model_volume_pipeline,
@@ -1484,6 +1540,8 @@ impl<'a> Graphics<'a> {
             camera_bind_group,
             grid_buffer,
             grid_bind_group,
+            section_grid_buffer,
+            section_grid_bind_group,
             msaa_color,
             msaa_view,
             scene_cache,

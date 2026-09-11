@@ -150,6 +150,50 @@ pub(super) struct GridUniform {
     pub(super) y_axis_color: [f32; 4],
 }
 
+/// The section grid's shader inputs; see `section_grid.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct SectionGridUniform {
+    pub(super) params: [f32; 4],
+    pub(super) phase: [f32; 4],
+    pub(super) color: [f32; 4],
+}
+
+impl SectionGridUniform {
+    fn new(
+        scene_origin: DVec3,
+        background: [f32; 4],
+        axis: crate::ui::state::SectionGridAxis,
+        axis_spacing: f64,
+        elevation_spacing: f64,
+        style: &crate::ui::state::SectionGridStyle,
+        scale_factor: f64,
+    ) -> Self {
+        let rule_x = matches!(axis, crate::ui::state::SectionGridAxis::Easting);
+        let axis_origin = if rule_x { scene_origin.x } else { scene_origin.y };
+        let color = match style.color {
+            Some(chosen) => crate::rendering::color::color32_to_rgba(chosen),
+            None => {
+                let luminance = crate::rendering::color::relative_luminance(background);
+                let mut color = crate::rendering::color::rgb_bytes_to_linear_rgba(if luminance > 0.35 { [55, 60, 66] } else { [99, 106, 115] });
+                color[3] = 0.45;
+                color
+            }
+        };
+        Self {
+            params: [if rule_x { 1.0 } else { 0.0 }, axis_spacing as f32, elevation_spacing as f32, 0.0],
+            phase: [
+                (axis_origin / axis_spacing).fract() as f32,
+                (scene_origin.z / elevation_spacing).fract() as f32,
+                // Points to the physical pixels the shader measures in.
+                (style.thickness * scale_factor) as f32,
+                0.0,
+            ],
+            color,
+        }
+    }
+}
+
 impl GridUniform {
     fn new(scene_origin: DVec3, background: [f32; 4], camera: &Camera, projection: &Projection, vertical_exaggeration: f64, fly_mode_enabled: bool) -> Self {
         fn color(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
@@ -215,6 +259,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) surface_render_pipeline: wgpu::RenderPipeline,
     pub(super) transparent_surface_render_pipeline: wgpu::RenderPipeline,
     pub(super) grid_render_pipeline: wgpu::RenderPipeline,
+    pub(super) section_grid_render_pipeline: wgpu::RenderPipeline,
     pub(super) raster_plane_render_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_render_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_volume_pipeline: wgpu::RenderPipeline,
@@ -259,6 +304,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) camera_bind_group: wgpu::BindGroup,
     pub(super) grid_buffer: wgpu::Buffer,
     pub(super) grid_bind_group: wgpu::BindGroup,
+    pub(super) section_grid_buffer: wgpu::Buffer,
+    pub(super) section_grid_bind_group: wgpu::BindGroup,
     pub(super) msaa_color: wgpu::Texture,
     pub(super) msaa_view: wgpu::TextureView,
     pub(super) scene_cache: SceneCacheTarget,

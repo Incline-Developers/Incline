@@ -1131,8 +1131,6 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
     let to_pos = |px: (f32, f32)| egui::pos2(px.0 / ppp, px.1 / ppp);
 
     let (ink, outline) = contrast_ink(editor.renderer_background_color);
-    // 40% alpha keeps the grid a backdrop rather than swamping the design geometry on the section plane.
-    let line_stroke = egui::Stroke::new(1.0, ink.gamma_multiply(0.4));
     let font = overlay_label_font();
 
     // A label under a floating panel is dropped rather than drawn unreadable; panel areas are
@@ -1158,10 +1156,11 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
     for line in &editor.section_grid_px {
         let from = to_pos(line.from_px);
         let to = to_pos(line.to_px);
+        // The line itself is drawn on the plane by the renderer, under the
+        // geometry; only its label is placed here, at the on-screen end.
         let Some((from, to)) = clip_segment_to_rect(from, to, canvas_rect) else {
             continue;
         };
-        painter.line_segment([from, to], line_stroke);
 
         // A level's number stands alone as an RL; eastings and northings need their axis prefixed to tell them apart.
         // A negative zero from the index arithmetic would print as "-0".

@@ -50,6 +50,8 @@ struct EditorSceneState {
     /// Bit pattern: the level the design plane and z-cut draw at.
     z_level: u64,
     show_xy_grid: bool,
+    slice_grid_enabled: bool,
+    section_grid_style: crate::ui::state::SectionGridStyle,
     fly_mode_enabled: bool,
     /// Tie Holes draws drill traces without the depth test (`draw_drill_holes`).
     tying_holes: bool,
@@ -62,6 +64,8 @@ impl EditorSceneState {
         Self {
             z_level: editor.z_level.to_bits(),
             show_xy_grid: editor.show_xy_grid,
+            slice_grid_enabled: editor.slice_grid_enabled,
+            section_grid_style: editor.section_grid_style,
             fly_mode_enabled: editor.fly_mode_enabled,
             tying_holes: editor.tying_holes(),
             shows_tie_ins: editor.shows_tie_ins(),
@@ -144,6 +148,20 @@ impl<'a> Graphics<'a> {
             self.fly_mode_enabled,
         );
         self.queue.write_buffer(&self.grid_buffer, 0, bytemuck::bytes_of(&grid_uniform));
+        if editor.slice_grid_enabled
+            && let Some((axis, axis_spacing, elevation_spacing)) = self.section_grid_spacing(editor.section_grid_style.level_spacing)
+        {
+            let section_grid_uniform = SectionGridUniform::new(
+                self.scene_origin,
+                editor.renderer_background_color,
+                axis,
+                axis_spacing,
+                elevation_spacing,
+                &editor.section_grid_style,
+                self.window.scale_factor(),
+            );
+            self.queue.write_buffer(&self.section_grid_buffer, 0, bytemuck::bytes_of(&section_grid_uniform));
+        }
         // Advance non-blocking volume-usage readbacks. Their callbacks only
         // send a small bitset through a channel; residency changes are applied
         // later by the normal streaming pass.

@@ -90,6 +90,16 @@ fn axis_component(vector: DVec2, axis: SectionGridAxis) -> f64 {
     }
 }
 
+/// `spacing` coarsened up the 1-2-5 series until at most `max_lines` fit in
+/// `span`: a chosen spacing too fine for the view thins lines and labels alike.
+pub(crate) fn coarsen_to_fit(spacing: f64, span: f64, max_lines: usize) -> f64 {
+    let mut spacing = spacing.max(MIN_SPACING_M);
+    while span / spacing > max_lines as f64 {
+        spacing = crate::model::plot::round_up_to_series(spacing * 2.0, &SPACING_STEPS);
+    }
+    spacing
+}
+
 /// Every multiple of `spacing` inside the inclusive `range`, ascending, built as `index * spacing` rather than by repeated addition so values are exact and never drift.
 /// A range that would take more than `max_lines` lines is coarsened up through the 1-2-5 series rather than dropped, so an extreme view still gets a grid.
 pub(crate) fn grid_values(range: (f64, f64), spacing: f64, max_lines: usize) -> Vec<f64> {

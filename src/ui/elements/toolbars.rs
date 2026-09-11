@@ -326,6 +326,11 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                         if grid.clicked() {
                             commands.push(UiCommand::SetSliceGridEnabled(!editor.slice_grid_enabled));
                         }
+                        // Right click: the grid's options, on the spacing
+                        // in force.
+                        if grid.secondary_clicked() && editor.section_grid_dialog.is_none() {
+                            editor.section_grid_dialog = Some(crate::ui::state::SectionGridDialog::open(editor.section_grid_style, editor.section_grid_level_spacing));
+                        }
                     }
 
                     // Task progress hugs the right end of the strip, out of the

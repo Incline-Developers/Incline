@@ -5,7 +5,7 @@ use crate::{
     ui::{
         state::EditorState,
         widgets::{
-            menu::{MenuButton, MenuFieldF64},
+            menu::{self, MenuButton, MenuFieldBool, MenuFieldColor32, MenuFieldF64},
             viewport::ViewportDockPanel,
         },
     },
@@ -45,4 +45,49 @@ pub(crate) fn draw_vertical_exaggeration_dialog(ui: &mut egui::Ui, editor: &mut 
                 }
             });
         });
+}
+
+/// The section grid's options, opened by a right click on the grid button:
+/// colour, line thickness and the RL spacing, applied on OK or Apply;
+/// Cancel drops the fields, an earlier Apply stays.
+pub(crate) fn draw_section_grid_dialog(ui: &mut egui::Ui, editor: &mut EditorState, viewport_rect: egui::Rect) {
+    let Some(dialog) = editor.section_grid_dialog.as_mut() else {
+        return;
+    };
+    let (mut confirm, mut cancel, mut apply) = (false, false, false);
+    ViewportDockPanel::new("section_grid_options", tr!(literal = "RL Grid Options"), viewport_rect)
+        .min_width(330.0)
+        .show(ui.ctx(), |ui| {
+            MenuFieldBool::new(tr!(literal = "Automatic colour"), &mut dialog.auto_color).show(ui);
+            if !dialog.auto_color {
+                MenuFieldColor32::new(tr!(literal = "Colour"), &mut dialog.color).show(ui);
+            }
+            MenuFieldF64::new(tr!(literal = "Thickness"), &mut dialog.thickness, 0.5..=6.0)
+                .max_decimals(1)
+                .speed(0.1)
+                .suffix(tr!(literal = " px"))
+                .show(ui);
+            MenuFieldBool::new(tr!(literal = "Automatic RL spacing"), &mut dialog.auto_spacing).show(ui);
+            if !dialog.auto_spacing {
+                MenuFieldF64::new(tr!(literal = "RL spacing"), &mut dialog.spacing, crate::rendering::section_grid::MIN_SPACING_M..=10000.0)
+                    .max_decimals(1)
+                    .speed(1.0)
+                    .suffix(tr!(literal = " m"))
+                    .show(ui);
+            }
+            ui.add_space(10.0);
+            let confirm_from_enter = menu::dialog_confirm_pressed(ui.ctx());
+            let cancel_from_escape = menu::dialog_cancel_pressed(ui.ctx());
+            menu::menu_actions(ui, |ui| {
+                confirm = ui.add(MenuButton::new(tr!(literal = "OK")).primary()).clicked() || confirm_from_enter;
+                cancel = ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() || cancel_from_escape;
+                apply = ui.add(MenuButton::new(tr!(literal = "Apply"))).clicked();
+            });
+        });
+    if confirm || apply {
+        editor.section_grid_style = dialog.style();
+    }
+    if confirm || cancel {
+        editor.section_grid_dialog = None;
+    }
 }

@@ -736,6 +736,16 @@ impl<'a> Graphics<'a> {
             }
         }
 
+        // The section's grid on its plane, after the opaque geometry and with
+        // depth on, so whatever sits in front of the plane hides it and
+        // whatever sits behind shows it. Its labels stay with egui.
+        if include_editor_overlays && editor.slice_grid_enabled && self.slice_view.is_some() {
+            render_pass.set_pipeline(&self.section_grid_render_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.section_grid_bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
         if !self.triangulation_gpu.is_empty() {
             let mut transparent: Vec<_> = triangulations
                 .iter()

@@ -743,6 +743,69 @@ pub(crate) enum SectionGridLineKind {
     Upright(SectionGridAxis),
 }
 
+/// The section grid's look; not persisted with the project.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionGridStyle {
+    /// `None` picks a colour that contrasts the background.
+    pub(crate) color: Option<egui::Color32>,
+    /// Line width in pixels.
+    pub(crate) thickness: f64,
+    /// Metres between RL levels; `None` sizes them from the zoom, as the
+    /// easting/northing lines always are.
+    pub(crate) level_spacing: Option<f64>,
+}
+
+impl Default for SectionGridStyle {
+    fn default() -> Self {
+        Self {
+            color: None,
+            thickness: 1.0,
+            level_spacing: None,
+        }
+    }
+}
+
+impl std::hash::Hash for SectionGridStyle {
+    /// Every field: a change must re-render the cached scene the grid is in.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.color.hash(state);
+        self.thickness.to_bits().hash(state);
+        self.level_spacing.map(f64::to_bits).hash(state);
+    }
+}
+
+/// The grid options dialog's fields; Cancel drops them, an earlier Apply stays.
+#[derive(Clone, Debug)]
+pub(crate) struct SectionGridDialog {
+    pub(crate) auto_color: bool,
+    pub(crate) color: egui::Color32,
+    pub(crate) thickness: f64,
+    pub(crate) auto_spacing: bool,
+    pub(crate) spacing: f64,
+}
+
+impl SectionGridDialog {
+    /// Open on the current style; `spacing_now` seeds the manual spacing
+    /// with what the zoom chose.
+    pub(crate) fn open(style: SectionGridStyle, spacing_now: f64) -> Self {
+        Self {
+            auto_color: style.color.is_none(),
+            color: style.color.unwrap_or(egui::Color32::from_rgba_unmultiplied(140, 146, 152, 115)),
+            thickness: style.thickness,
+            auto_spacing: style.level_spacing.is_none(),
+            spacing: style.level_spacing.unwrap_or(spacing_now),
+        }
+    }
+
+    pub(crate) fn style(&self) -> SectionGridStyle {
+        SectionGridStyle {
+            color: (!self.auto_color).then_some(self.color),
+            thickness: self.thickness,
+            level_spacing: (!self.auto_spacing).then_some(self.spacing),
+        }
+    }
+}
+
 /// One frame's screen-space projection of a section-grid line, in physical pixels matching `cursor_screen_px`.
 #[derive(Clone, Copy)]
 pub(crate) struct SectionGridLine {
@@ -1168,6 +1231,11 @@ pub(crate) struct EditorState {
     /// Whether the section shows the world grid (constant-elevation and easting/northing lines).
     pub(crate) slice_grid_enabled: bool,
     pub(crate) section_grid_px: Vec<SectionGridLine>,
+    /// The section grid's look, from the grid button's right-click dialog.
+    pub(crate) section_grid_style: SectionGridStyle,
+    pub(crate) section_grid_dialog: Option<SectionGridDialog>,
+    /// The RL spacing in force this frame, chosen or automatic.
+    pub(crate) section_grid_level_spacing: f64,
 
     // Selection box
     /// Physical-pixel bounds of an in-progress box selection.
@@ -2117,6 +2185,9 @@ impl EditorState {
             slice_half_length: 0.0,
             slice_grid_enabled: false,
             section_grid_px: Vec::new(),
+            section_grid_style: SectionGridStyle::default(),
+            section_grid_dialog: None,
+            section_grid_level_spacing: 10.0,
             selection_box_start_px: None,
             selection_box_current_px: None,
             drape_phase: DrapePhase::Designs,

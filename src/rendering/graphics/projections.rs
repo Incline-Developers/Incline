@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     app::commands::drawing::rotate_collar::{ring_axis, ring_basis},
     rendering::section_grid,
-    ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen, SectionGridLine, SectionGridLineKind},
+    ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen, SectionGridAxis, SectionGridLine, SectionGridLineKind},
 };
 
 pub(crate) type ScreenSegmentPx = ((f32, f32), (f32, f32));
@@ -384,9 +384,39 @@ impl<'a> Graphics<'a> {
         )
     }
 
+    /// The section grid's spacing: which world axis the uprights follow and
+    /// the two spacings, sized from the square-on spans so an orbit does not
+    /// re-rule the grid; exaggeration keeps a screen cell from being square.
+    pub(super) fn section_grid_spacing(&self, level_spacing: Option<f64>) -> Option<(SectionGridAxis, f64, f64)> {
+        let slice = self.slice_view.as_ref()?;
+        let screen = self.screen_size();
+        let half_length = slice_visible_half_length(self.projection.zoom, screen);
+        let half_height = self.projection.zoom;
+        let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
+        let points_per_pixel = 1.0 / self.window.scale_factor();
+        let strike_pt = 2.0 * half_length / world_per_pixel * points_per_pixel;
+        let height_pt = 2.0 * half_height / world_per_pixel * points_per_pixel;
+        let axis = section_grid::upright_axis(slice.direction);
+        let axis_spacing = section_grid::grid_spacing(section_grid::upright_span(slice.direction, half_length), strike_pt);
+        // half_height is display units (exaggerated); the span is true metres.
+        let true_span = 2.0 * half_height / self.vertical_exaggeration;
+        // A chosen spacing is thinned once here, for the lines and their labels
+        // alike, so the widest reach still fits the line budget.
+        let elevation_spacing = level_spacing.map_or_else(
+            || section_grid::grid_spacing(true_span, height_pt),
+            |chosen| section_grid::coarsen_to_fit(chosen, true_span * GRID_REACH_MAX, MAX_GRID_LINES),
+        );
+        Some((axis, axis_spacing, elevation_spacing))
+    }
+
     /// Section grid in window pixels: elevation levels plus world easting/northing lines where the cut crosses them.
-    fn build_section_grid(&self) -> Vec<SectionGridLine> {
-        let Some(slice) = self.slice_view.as_ref() else { return Vec::new() };
+    /// The lines are drawn on the plane by the section grid shader; these
+    /// place the labels.
+    fn build_section_grid(&self, level_spacing: Option<f64>) -> (Vec<SectionGridLine>, Option<f64>) {
+        let Some(slice) = self.slice_view.as_ref() else { return (Vec::new(), None) };
+        let Some((axis, axis_spacing, elevation_spacing)) = self.section_grid_spacing(level_spacing) else {
+            return (Vec::new(), None);
+        };
         let screen = self.screen_size();
 
         // Sized from zoom alone, not the viewport corners, so an orbit does not re-rule the grid.
@@ -394,7 +424,11 @@ impl<'a> Graphics<'a> {
         let half_height = self.projection.zoom;
 
         // Ruled about the anchor, the eye's foot on the plane (`set_eye`).
-        let (_, right, up) = slice.camera_basis();
+        let (forward, right, up) = slice.camera_basis();
+        // The shader fades the lines out towards edge-on; the labels go too.
+        if forward.dot(slice.normal()).abs() < 0.1 {
+            return (Vec::new(), None);
+        }
         let strike = slice.direction.extend(0.0);
         let foot = slice.center;
         // Spacing is sized from the square-on spans, so an orbit does not
@@ -403,22 +437,10 @@ impl<'a> Graphics<'a> {
         let strike_reach = half_length * stretch(right.dot(strike));
         // Yawed and pitched together, screen-up also runs along the strike.
         let height_reach = ((half_height + strike_reach * up.dot(strike).abs()) / up.z.abs()).min(half_height * GRID_REACH_MAX);
-        // half_height is display units (exaggerated); bottom/top are true
+        // The reach is display units (exaggerated); the ruled range is true
         // metres via unexaggeration - eastings/northings need no such step.
-        let bottom = self.unexaggerate_point(foot - DVec3::Z * half_height).z;
-        let top = self.unexaggerate_point(foot + DVec3::Z * half_height).z;
         let rule_bottom = self.unexaggerate_point(foot - DVec3::Z * height_reach).z;
         let rule_top = self.unexaggerate_point(foot + DVec3::Z * height_reach).z;
-
-        let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
-        let points_per_pixel = 1.0 / self.window.scale_factor();
-        let strike_pt = 2.0 * half_length / world_per_pixel * points_per_pixel;
-        let height_pt = 2.0 * half_height / world_per_pixel * points_per_pixel;
-
-        // Axis and elevation get separate spacing: exaggeration keeps a screen cell from being square.
-        let axis = section_grid::upright_axis(slice.direction);
-        let axis_spacing = section_grid::grid_spacing(section_grid::upright_span(slice.direction, half_length), strike_pt);
-        let elevation_spacing = section_grid::grid_spacing(top - bottom, height_pt);
 
         let view_proj = self.view_proj();
         let center_xy = foot.truncate();
@@ -444,7 +466,7 @@ impl<'a> Graphics<'a> {
                 SectionGridLineKind::Upright(axis),
             );
         }
-        lines
+        (lines, Some(elevation_spacing))
     }
 
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
@@ -545,7 +567,12 @@ impl<'a> Graphics<'a> {
         }
 
         if editor.slice_grid_enabled {
-            editor.section_grid_px = self.build_section_grid();
+            // The spacing in force is kept; the grid's options open on it.
+            let (lines, level_spacing) = self.build_section_grid(editor.section_grid_style.level_spacing);
+            editor.section_grid_px = lines;
+            if let Some(level_spacing) = level_spacing {
+                editor.section_grid_level_spacing = level_spacing;
+            }
         } else {
             editor.section_grid_px.clear();
         }

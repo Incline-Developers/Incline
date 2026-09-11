@@ -899,6 +899,7 @@ fn draw_ui(
         dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
+    dialogs::files::draw_section_grid_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
