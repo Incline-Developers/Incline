@@ -1743,11 +1743,11 @@ impl EditorState {
         !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
     }
 
-    /// In the slice view only while the rotation-centre pick is armed: the
-    /// cursor is otherwise pinned to the section plane, not snapped. Armed, it
-    /// snaps to strings inside the slab, though the click picks again on its own.
+    /// Whether a snap mode is up. The section snaps as the plan does: its
+    /// targets are the ones inside the slab, and off them the cursor falls
+    /// back to the section plane like any unsnapped pick.
     pub(crate) fn snapping_active(&self) -> bool {
-        self.cursor_mode.snaps() && (!self.slice_mode_enabled || self.active_tool == ActiveTool::PickRotationCentre)
+        self.cursor_mode.snaps()
     }
 
     pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
@@ -2694,6 +2694,24 @@ impl ActiveTool {
     /// and the same session capture.
     pub(crate) fn acts_on_collars(self) -> bool {
         matches!(self, Self::MoveCollar | Self::RotateCollar)
+    }
+
+    /// Tools whose click takes the world point under the cursor, and so want
+    /// the snap poll running while they are armed. Everything else picks an
+    /// entity or drives a gizmo, where a snapped cursor means nothing.
+    pub(crate) fn snaps_cursor(self) -> bool {
+        matches!(
+            self,
+            Self::MakePoint
+                | Self::MakeLine
+                | Self::MakePoly
+                | Self::MakeCircle
+                | Self::MakeText
+                | Self::MeasureDistance
+                | Self::MeasureBatterAngle
+                | Self::VerticalSlice
+                | Self::PickRotationCentre
+        )
     }
 
     pub(crate) fn works_in_slice_view(self) -> bool {

@@ -156,19 +156,27 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr_format!(literal = "Set section grid = %enabled%", enabled = enabled));
     }
 
-    /// Re-projects the cursor onto the section after a camera move with no mouse event behind it; always unsnapped, since a section never honours a snap.
+    /// Re-places the cursor after a camera move with no mouse event behind it.
+    /// Walking the section carries its targets past a still mouse, so the snap
+    /// is asked again here rather than dropped; off any target the cursor
+    /// falls back to the section plane under it.
     pub(crate) fn refresh_slice_cursor(&mut self) {
         if !self.slice_cursor_tracks_section() {
             return;
         }
-        let Some(world) = self.graphics.as_ref().and_then(|graphics| graphics.cursor_world(self.editor.z_level)) else {
+        let snapped = if self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() {
+            self.cursor_snap_point(web_time::Instant::now())
+        } else {
+            None
+        };
+        let Some(world) = snapped.or_else(|| self.graphics.as_ref().and_then(|graphics| graphics.cursor_world(self.editor.z_level))) else {
             return;
         };
-        if self.editor.cursor_world == Some(world) {
+        if self.editor.cursor_world == Some(world) && self.editor.cursor_snapped == snapped.is_some() {
             return;
         }
         self.editor.cursor_world = Some(world);
-        self.editor.cursor_snapped = false;
+        self.editor.cursor_snapped = snapped.is_some();
         if self.editor.overlay_follows_cursor() {
             self.invalidate_overlay();
         }

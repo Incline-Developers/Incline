@@ -1158,14 +1158,12 @@ impl<'a> Graphics<'a> {
         if *mode == CursorMode::Select {
             return None;
         }
-        if self.slice_view.is_some() {
-            // A section snaps to strings only, inside its slab, whatever the mode.
-            return self
-                .string_point_near_cursor(document, snap_index, hidden, frozen, SNAP_THRESHOLD_PX)
-                .map(|(point, _)| point);
-        }
         let view_proj = self.view_proj();
         let screen = self.screen_size();
+        // A section snaps to what it draws: the slab is handed down so every
+        // mode's targets, and the occluders that could hide them, stop at its
+        // two walls.
+        let slab = self.section_slab();
         let candidate = SceneQuery::snap(
             document,
             snap_index,
@@ -1178,6 +1176,7 @@ impl<'a> Graphics<'a> {
             self.camera_controller.mouse_loc,
             SNAP_THRESHOLD_PX,
             xray_enabled,
+            slab,
         )?;
         if !xray_enabled && self.nonselectable_asset_occludes(candidate, hidden, &view_proj, screen) {
             None

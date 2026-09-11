@@ -345,12 +345,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     if editor.slice_mode_enabled {
-        let gestures = tr!("slice-viewport-gestures");
-        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(if editor.cursor_mode.snaps() {
-            tr_format!(literal = "no snapping · %gestures%", gestures = gestures.as_str())
-        } else {
-            gestures
-        }));
+        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!("slice-viewport-gestures")));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {

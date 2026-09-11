@@ -416,45 +416,12 @@ impl<'a> App<'a> {
                     self.maybe_start_right_orbit_drag();
                     let z = self.editor.z_level;
                     let raw = self.graphics.as_ref().and_then(|g| g.cursor_world(z));
-                    let is_drawing_tool = matches!(
-                        self.editor.active_tool,
-                        ActiveTool::MakePoint
-                            | ActiveTool::MakeLine
-                            | ActiveTool::MakePoly
-                            | ActiveTool::MakeCircle
-                            | ActiveTool::MakeText
-                            | ActiveTool::MeasureDistance
-                            | ActiveTool::MeasureBatterAngle
-                            | ActiveTool::VerticalSlice
-                            | ActiveTool::PickRotationCentre
-                    );
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
-                    let snap_eligible = is_drawing_tool && self.editor.snapping_active() && !camera_active && !is_scrolling;
+                    let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
-                    let snap_poll_due = self
-                        .last_snap_poll_instant
-                        .is_none_or(|last_poll| now.duration_since(last_poll) >= super::rate_interval(self.editor.snap_poll_rate));
-                    let snapped = if snap_eligible && snap_poll_due {
-                        self.last_snap_poll_instant = Some(now);
-                        self.refresh_snap_index();
-                        let document = &self.scene_document;
-                        self.graphics.as_ref().and_then(|g| {
-                            g.snap_cursor(
-                                document,
-                                &self.snap_index,
-                                &self.triangulations,
-                                &self.editor.hidden_handles,
-                                &self.editor.frozen_handles,
-                                &self.editor.cursor_mode,
-                                self.editor.xray_enabled,
-                            )
-                        })
-                    } else if snap_eligible && self.editor.cursor_snapped {
-                        self.editor.cursor_world
-                    } else {
-                        None
-                    };
+                    let snap_poll_due = self.cursor_poll_due(now);
+                    let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
                     let was_snapped = self.editor.cursor_snapped;
                     // During a camera drag the mouse steers the view, not the
                     // cursor: keep the last world cursor (and its snapped flag)
@@ -1009,6 +976,42 @@ impl<'a> App<'a> {
             graphics.slice_process_key(key, state == ElementState::Pressed);
         }
         true
+    }
+
+    /// The snap under the cursor for this poll: a fresh query when the rate
+    /// the user set says one is due, else the point last caught, so a snap
+    /// held between polls neither flickers nor re-queries the scene. `None`
+    /// when nothing is within the snap threshold.
+    ///
+    /// Callers decide whether a snap applies at all; this only answers where
+    /// one lands. A section answers it the same way a plan does, against the
+    /// targets inside its slab.
+    pub(crate) fn cursor_snap_point(&mut self, now: Instant) -> Option<glam::DVec3> {
+        if !self.cursor_poll_due(now) {
+            return self.editor.cursor_snapped.then_some(self.editor.cursor_world).flatten();
+        }
+        self.last_snap_poll_instant = Some(now);
+        self.refresh_snap_index();
+        let document = &self.scene_document;
+        self.graphics.as_ref().and_then(|graphics| {
+            graphics.snap_cursor(
+                document,
+                &self.snap_index,
+                &self.triangulations,
+                &self.editor.hidden_handles,
+                &self.editor.frozen_handles,
+                &self.editor.cursor_mode,
+                self.editor.xray_enabled,
+            )
+        })
+    }
+
+    /// Whether the cursor-poll rate the user set allows another scene query
+    /// now. The snap and the tool-hover picks share one budget: both walk the
+    /// scene for the same still cursor.
+    pub(crate) fn cursor_poll_due(&self, now: Instant) -> bool {
+        self.last_snap_poll_instant
+            .is_none_or(|last_poll| now.duration_since(last_poll) >= super::rate_interval(self.editor.snap_poll_rate))
     }
 
     /// Ends a right-drag orbit and reports whether one was running.

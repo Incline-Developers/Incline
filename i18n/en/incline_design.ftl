@@ -1153,7 +1153,6 @@ literal-strike-strike-dip-3cbc18ac238a6a85 = %strike%° strike · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (horizontal, no strike)
 literal-slice-view-531d1a0f0f256066 = Slice view
 slice-viewport-gestures = middle-drag pan · right-drag orbit · Shift+wheel walk · W/S move slab · Q/E rotate · Esc exit
-literal-no-snapping-gestures-8ba61d06c6179a75 = no snapping · %gestures%
 literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - not available in the section view
 literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = That tool is not available in the section view
 literal-north-ca6a42d80c5dd964 = North
