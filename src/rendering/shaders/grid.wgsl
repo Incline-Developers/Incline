@@ -7,7 +7,8 @@ struct GridUniform {
     // relative to that scene origin; w: perspective-view flag.
     origin_plane: vec4<f32>,
     // x: fractional base-10 level selected once for the whole view;
-    // y: whether grazing-angle suppression is enabled (disabled in Fly mode).
+    // y: whether grazing-angle suppression is enabled (disabled in Fly mode);
+    // z: extra line width in pixels beyond the one-pixel default.
     level_params: vec4<f32>,
     minor_color: vec4<f32>,
     major_color: vec4<f32>,
@@ -56,7 +57,7 @@ fn grid_coverage(scene_xy: vec2<f32>, world_offset: vec2<f32>, spacing: f32) -> 
     let scaled = scaled_scene + fract(world_offset / spacing);
     let derivative = max(fwidth(scaled_scene), vec2<f32>(1.0e-6));
     let cell_distance = abs(fract(scaled - 0.5) - 0.5) / derivative;
-    let pixel_distance = min(cell_distance.x, cell_distance.y);
+    let pixel_distance = max(min(cell_distance.x, cell_distance.y) - grid.level_params.z * 0.5, 0.0);
     return 1.0 - smoothstep(0.30, 0.90, pixel_distance);
 }
 
@@ -82,7 +83,7 @@ fn projected_axis_coverage(fragment_xy: vec2<f32>, base: vec3<f32>, direction: v
     if line_length < 1.0e-6 {
         return 0.0;
     }
-    let pixel_distance = abs(dot(line, vec3<f32>(fragment_xy, 1.0))) / line_length;
+    let pixel_distance = max(abs(dot(line, vec3<f32>(fragment_xy, 1.0))) / line_length - grid.level_params.z * 0.5, 0.0);
     return 1.0 - smoothstep(0.35, 0.95, pixel_distance);
 }
 
@@ -91,7 +92,8 @@ fn line_alpha(scene_xy: vec2<f32>, spacing: f32, opacity: f32, world_per_pixel: 
     // Do not let sub-pixel lines accumulate into a bright sheet near the
     // horizon. Blender handles the same transition through level alpha and
     // low-alpha stippling; smooth coverage is a better fit for this pipeline.
-    let projected_spacing = spacing / world_per_pixel;
+    // Measured against the line's own width, so thick lines thin out sooner.
+    let projected_spacing = spacing / world_per_pixel / (1.0 + grid.level_params.z);
     let density_fade = smoothstep(0.75, 2.5, projected_spacing);
     return coverage * opacity * density_fade;
 }

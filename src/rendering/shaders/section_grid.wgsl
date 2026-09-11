@@ -91,8 +91,10 @@ fn fs_main(@builtin(position) fragment_position: vec4<f32>) -> FragmentOutput {
     // levels, not the uprights. Sub-pixel spacing must not pile into a sheet.
     let axis_per_pixel = max(length(vec2<f32>(dpdx(axis_scene), dpdy(axis_scene))), 1.0e-8);
     let level_per_pixel = max(length(vec2<f32>(dpdx(scene_point.z), dpdy(scene_point.z))), 1.0e-8);
-    let axis_alpha = family_coverage(axis_scene, section_grid.phase.x, axis_spacing) * smoothstep(0.75, 2.5, axis_spacing / axis_per_pixel);
-    let level_alpha = family_coverage(scene_point.z, section_grid.phase.y, level_spacing) * smoothstep(0.75, 2.5, level_spacing / level_per_pixel);
+    // Measured against the line's own width, so thick lines thin out sooner.
+    let width = max(section_grid.phase.z, 1.0);
+    let axis_alpha = family_coverage(axis_scene, section_grid.phase.x, axis_spacing) * smoothstep(0.75, 2.5, axis_spacing / axis_per_pixel / width);
+    let level_alpha = family_coverage(scene_point.z, section_grid.phase.y, level_spacing) * smoothstep(0.75, 2.5, level_spacing / level_per_pixel / width);
     let alpha = max(axis_alpha, level_alpha) * section_grid.color.a * grazing_fade;
     // Faint fringes write depth too, so they are dropped rather than drawn.
     if alpha < 0.02 {

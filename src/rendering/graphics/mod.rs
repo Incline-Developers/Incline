@@ -195,7 +195,17 @@ impl SectionGridUniform {
 }
 
 impl GridUniform {
-    fn new(scene_origin: DVec3, background: [f32; 4], camera: &Camera, projection: &Projection, vertical_exaggeration: f64, fly_mode_enabled: bool) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        scene_origin: DVec3,
+        background: [f32; 4],
+        camera: &Camera,
+        projection: &Projection,
+        vertical_exaggeration: f64,
+        fly_mode_enabled: bool,
+        style: &crate::ui::state::PlanGridStyle,
+        scale_factor: f64,
+    ) -> Self {
         fn color(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
             let mut color = crate::rendering::color::rgb_bytes_to_linear_rgba(rgb);
             color[3] = alpha;
@@ -203,7 +213,7 @@ impl GridUniform {
         }
 
         let luminance = crate::rendering::color::relative_luminance(background);
-        let (minor_color, major_color, x_axis_color, y_axis_color) = if luminance > 0.35 {
+        let (mut minor_color, mut major_color, x_axis_color, y_axis_color) = if luminance > 0.35 {
             (color([72, 77, 82], 0.28), color([55, 60, 66], 0.46), color([130, 62, 66], 0.78), color([67, 108, 57], 0.78))
         } else {
             (
@@ -213,6 +223,18 @@ impl GridUniform {
                 color([65, 101, 55], 0.82),
             )
         };
+
+        // A chosen colour takes the major lines as given and the minor lines
+        // at the palette's minor-to-major opacity; the axes keep their own.
+        if let Some(chosen) = style.color {
+            let minor_ratio = minor_color[3] / major_color[3];
+            major_color = crate::rendering::color::color32_to_rgba(chosen);
+            minor_color = major_color;
+            minor_color[3] *= minor_ratio;
+        }
+        // Points beyond the one-pixel width the grid has always had, in the
+        // physical pixels the shader measures in.
+        let extra_width = ((style.thickness - 1.0) * scale_factor).max(0.0);
 
         // Blender selects one grid level for the whole view from camera
         // distance/zoom, then draws the level below and above it. Keeping the
@@ -242,7 +264,7 @@ impl GridUniform {
             ],
             // y controls grazing-angle suppression. Fly mode deliberately
             // leaves the grid at full opacity even when viewed edge-on.
-            level_params: [grid_level as f32, if fly_mode_enabled { 0.0 } else { 1.0 }, 0.0, 0.0],
+            level_params: [grid_level as f32, if fly_mode_enabled { 0.0 } else { 1.0 }, extra_width as f32, 0.0],
             minor_color,
             major_color,
             x_axis_color,

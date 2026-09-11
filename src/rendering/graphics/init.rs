@@ -253,10 +253,9 @@ impl<'a> Graphics<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let initial_grid_uniform = GridUniform::new(DVec3::ZERO, crate::app::io::default_renderer_background_color(), &camera, &projection, 1.0, false);
         let grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("XY Grid Uniform Buffer"),
-            contents: bytemuck::bytes_of(&initial_grid_uniform),
+            contents: bytemuck::bytes_of(&<GridUniform as bytemuck::Zeroable>::zeroed()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let grid_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

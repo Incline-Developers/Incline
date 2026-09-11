@@ -52,6 +52,7 @@ struct EditorSceneState {
     show_xy_grid: bool,
     slice_grid_enabled: bool,
     section_grid_style: crate::ui::state::SectionGridStyle,
+    xy_grid_style: crate::ui::state::PlanGridStyle,
     fly_mode_enabled: bool,
     /// Tie Holes draws drill traces without the depth test (`draw_drill_holes`).
     tying_holes: bool,
@@ -66,6 +67,7 @@ impl EditorSceneState {
             show_xy_grid: editor.show_xy_grid,
             slice_grid_enabled: editor.slice_grid_enabled,
             section_grid_style: editor.section_grid_style,
+            xy_grid_style: editor.xy_grid_style,
             fly_mode_enabled: editor.fly_mode_enabled,
             tying_holes: editor.tying_holes(),
             shows_tie_ins: editor.shows_tie_ins(),
@@ -146,6 +148,8 @@ impl<'a> Graphics<'a> {
             &self.projection,
             self.vertical_exaggeration,
             self.fly_mode_enabled,
+            &editor.xy_grid_style,
+            self.window.scale_factor(),
         );
         self.queue.write_buffer(&self.grid_buffer, 0, bytemuck::bytes_of(&grid_uniform));
         if editor.slice_grid_enabled

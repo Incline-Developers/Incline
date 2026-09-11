@@ -774,9 +774,36 @@ impl std::hash::Hash for SectionGridStyle {
     }
 }
 
-/// The grid options dialog's fields; Cancel drops them, an earlier Apply stays.
+/// The plan view's XY grid look. Spacing isn't overridden; it stays the
+/// automatic level rule. Not persisted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlanGridStyle {
+    /// `None` keeps the colours picked against the background.
+    pub(crate) color: Option<egui::Color32>,
+    /// Line width in pixels; 1 is the width the grid has always had.
+    pub(crate) thickness: f64,
+}
+
+impl Default for PlanGridStyle {
+    fn default() -> Self {
+        Self { color: None, thickness: 1.0 }
+    }
+}
+
+impl std::hash::Hash for PlanGridStyle {
+    /// Every field: a change must re-render the cached scene the grid is in.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.color.hash(state);
+        self.thickness.to_bits().hash(state);
+    }
+}
+
+/// The grid options dialog's fields, for the RL grid in a section or the XY
+/// grid in plan; Cancel drops them, an earlier Apply stays.
 #[derive(Clone, Debug)]
-pub(crate) struct SectionGridDialog {
+pub(crate) struct GridOptionsDialog {
+    /// The plan grid: no spacing fields, its level rule is not overridden.
+    pub(crate) plan: bool,
     pub(crate) auto_color: bool,
     pub(crate) color: egui::Color32,
     pub(crate) thickness: f64,
@@ -784,24 +811,45 @@ pub(crate) struct SectionGridDialog {
     pub(crate) spacing: f64,
 }
 
-impl SectionGridDialog {
-    /// Open on the current style; `spacing_now` seeds the manual spacing
-    /// with what the zoom chose.
-    pub(crate) fn open(style: SectionGridStyle, spacing_now: f64) -> Self {
+impl GridOptionsDialog {
+    const COLOR_SEED: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(140, 146, 152, 115);
+
+    /// Open on the section grid's style; `spacing_now` seeds the manual
+    /// spacing with what the zoom chose.
+    pub(crate) fn open_section(style: SectionGridStyle, spacing_now: f64) -> Self {
         Self {
+            plan: false,
             auto_color: style.color.is_none(),
-            color: style.color.unwrap_or(egui::Color32::from_rgba_unmultiplied(140, 146, 152, 115)),
+            color: style.color.unwrap_or(Self::COLOR_SEED),
             thickness: style.thickness,
             auto_spacing: style.level_spacing.is_none(),
             spacing: style.level_spacing.unwrap_or(spacing_now),
         }
     }
 
-    pub(crate) fn style(&self) -> SectionGridStyle {
+    pub(crate) fn open_plan(style: PlanGridStyle) -> Self {
+        Self {
+            plan: true,
+            auto_color: style.color.is_none(),
+            color: style.color.unwrap_or(Self::COLOR_SEED),
+            thickness: style.thickness,
+            auto_spacing: true,
+            spacing: 0.0,
+        }
+    }
+
+    pub(crate) fn section_style(&self) -> SectionGridStyle {
         SectionGridStyle {
             color: (!self.auto_color).then_some(self.color),
             thickness: self.thickness,
             level_spacing: (!self.auto_spacing).then_some(self.spacing),
+        }
+    }
+
+    pub(crate) fn plan_style(&self) -> PlanGridStyle {
+        PlanGridStyle {
+            color: (!self.auto_color).then_some(self.color),
+            thickness: self.thickness,
         }
     }
 }
@@ -1233,7 +1281,9 @@ pub(crate) struct EditorState {
     pub(crate) section_grid_px: Vec<SectionGridLine>,
     /// The section grid's look, from the grid button's right-click dialog.
     pub(crate) section_grid_style: SectionGridStyle,
-    pub(crate) section_grid_dialog: Option<SectionGridDialog>,
+    /// The plan grid's look, from the same button's right click in plan.
+    pub(crate) xy_grid_style: PlanGridStyle,
+    pub(crate) grid_dialog: Option<GridOptionsDialog>,
     /// The RL spacing in force this frame, chosen or automatic.
     pub(crate) section_grid_level_spacing: f64,
 
@@ -1744,7 +1794,8 @@ impl EditorState {
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
-        self.exit_confirm_open
+        self.grid_dialog.is_some()
+            || self.exit_confirm_open
             || self.replace_project_confirm_open
             || self.lossy_save_confirm_open
             || self.delete_confirm_open
@@ -2186,7 +2237,8 @@ impl EditorState {
             slice_grid_enabled: false,
             section_grid_px: Vec::new(),
             section_grid_style: SectionGridStyle::default(),
-            section_grid_dialog: None,
+            xy_grid_style: PlanGridStyle::default(),
+            grid_dialog: None,
             section_grid_level_spacing: 10.0,
             selection_box_start_px: None,
             selection_box_current_px: None,

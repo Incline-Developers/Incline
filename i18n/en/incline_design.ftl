@@ -1673,3 +1673,4 @@ literal-rl-spacing-88a1992aa9332272 = RL spacing
 literal-hide-xy-grid-85952898e2cff804 = Hide XY Grid
 literal-show-xy-grid-d22a739bae102bb1 = Show XY Grid
 literal-set-grid-63bc48801d739665 = Set Grid
+literal-xy-grid-options-04861f560f92a08c = XY Grid Options

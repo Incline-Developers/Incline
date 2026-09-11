@@ -324,9 +324,14 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                     if grid.clicked() {
                         commands.push(UiCommand::SetGridShown(!shown));
                     }
-                    // Right click in a section: RL grid options.
-                    if editor.slice_mode_enabled && grid.secondary_clicked() && editor.section_grid_dialog.is_none() {
-                        editor.section_grid_dialog = Some(crate::ui::state::SectionGridDialog::open(editor.section_grid_style, editor.section_grid_level_spacing));
+                    // Right click: that grid's options, the RL grid's on the
+                    // spacing in force.
+                    if grid.secondary_clicked() && editor.grid_dialog.is_none() {
+                        editor.grid_dialog = Some(if editor.slice_mode_enabled {
+                            crate::ui::state::GridOptionsDialog::open_section(editor.section_grid_style, editor.section_grid_level_spacing)
+                        } else {
+                            crate::ui::state::GridOptionsDialog::open_plan(editor.xy_grid_style)
+                        });
                     }
 
                     // Task progress hugs the right end of the strip, out of the
