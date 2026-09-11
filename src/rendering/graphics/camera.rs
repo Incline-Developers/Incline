@@ -250,7 +250,8 @@ pub(super) fn slide_onto_plane(eye: DVec3, center: DVec3, forward: DVec3, normal
 }
 
 /// The move within a vertical section plane that shifts the view by `dx` along
-/// screen right and `dy` up, so a drag tracks the hand at any orbit.
+/// screen right and `dy` up, so a drag tracks the hand at any orbit; held to
+/// the pitch clamp's own bound, since edge-on by yaw the move is unbounded.
 pub(super) fn in_plane_screen_move(dx: f64, dy: f64, right: DVec3, up: DVec3, normal: DVec3) -> Option<DVec3> {
     let strike = DVec3::Z.cross(normal).normalize_or(DVec3::X);
     let (a, b, c, d) = (strike.dot(right), DVec3::Z.dot(right), strike.dot(up), DVec3::Z.dot(up));
@@ -260,7 +261,8 @@ pub(super) fn in_plane_screen_move(dx: f64, dy: f64, right: DVec3, up: DVec3, no
     }
     let along = (dx * d - dy * b) / determinant;
     let rise = (dy * a - dx * c) / determinant;
-    Some(strike * along + DVec3::Z * rise)
+    let shift = strike * along + DVec3::Z * rise;
+    Some(shift.clamp_length_max(dx.hypot(dy) / crate::rendering::camera::MIN_SECTION_INCIDENCE.sin()))
 }
 
 /// The inverse of `eye_keeping_centre`: the eye's offset from a fixed `centre`.
@@ -1595,6 +1597,7 @@ impl<'a> Graphics<'a> {
         let Some(slice) = self.slice_view.as_mut() else {
             return;
         };
+        let pending = slice.has_pending_updates();
         // Matches the zoom feel of the main `CameraController` (see init.rs).
         const SLICE_ZOOM_SENSITIVITY: f64 = 0.005;
         const SLICE_WALK_SECONDS_PER_NOTCH: f64 = 0.25;
@@ -1638,9 +1641,9 @@ impl<'a> Graphics<'a> {
         let (forward, right, up) = slice.camera_basis();
         slice.update_viewing_side(forward);
         if let Some((centre, (screen_x, screen_y, depth))) = anchored {
-            // The eye turns about the centre, not the section: the cut line and slab stay put.
+            // The eye turns about the centre; the anchor takes its foot below.
             let eye = eye_keeping_centre(centre, screen_x, screen_y, depth, (forward, right, up));
-            slice.view_offset = slide_onto_plane(eye, slice.center, forward, normal) - slice.center;
+            slice.view_offset = eye - slice.center;
         }
 
         // W/S and Shift+wheel both walk the slab along its normal, in the same metres, added together and applied once; forward is away from the eye, not `+normal`.
@@ -1676,6 +1679,12 @@ impl<'a> Graphics<'a> {
             }
             self.projection.zoom = (self.projection.zoom - zoom_factor).max(1.0e-4);
             slice.scroll = 0.0;
+        }
+
+        // On input the eye slides onto the plane and the anchor takes its
+        // foot, so the overview, depth range and Q/E follow the screen.
+        if pending {
+            slice.set_eye(slide_onto_plane(slice.camera_position(), slice.center, forward, normal));
         }
 
         // The camera sits on the section plane, so the znear/zfar range stays centred on it; the shown slab is the shader clip, not this range, so orbiting only changes the angle, not what's cut.

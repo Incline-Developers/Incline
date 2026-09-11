@@ -1154,6 +1154,7 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
         obscured_by.push(crate::ui::elements::cursors::orientation_gizmo_rect(canvas_rect));
     }
 
+    let mut placed: Vec<egui::Rect> = Vec::new();
     for line in &editor.section_grid_px {
         let from = to_pos(line.from_px);
         let to = to_pos(line.to_px);
@@ -1187,9 +1188,11 @@ pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect
 
         let galley = painter.layout_no_wrap(text, font.clone(), ink);
         let label_rect = align.anchor_size(position, galley.size());
-        if obscured_by.iter().any(|panel| panel.intersects(label_rect)) {
+        // A label landing on one already drawn is dropped; the line stays.
+        if obscured_by.iter().chain(&placed).any(|taken| taken.intersects(label_rect)) {
             continue;
         }
+        placed.push(label_rect);
         outlined_galley(&painter, position, align, galley, ink, outline);
     }
 }

@@ -413,6 +413,7 @@ impl SliceInputState {
 pub(crate) struct SliceViewState {
     /// Slice-line midpoint in display space (world XY, exaggerated Z);
     /// `z` is the current view-centre elevation.
+    /// Rides with the eye's foot on the plane (`set_eye`); Q/E turns about it.
     pub(super) center: DVec3,
     /// Unit direction of the slice line in XY ("strike"). Screen-right maps
     /// to `+direction`; the view direction (slab normal) is
@@ -445,9 +446,8 @@ pub(crate) struct SliceViewState {
     /// Camera and ortho zoom to restore on exit.
     pub(super) saved_camera: Camera,
     pub(super) saved_zoom: f64,
-    /// Where the eye sits relative to `center`: a fixed centre of rotation turns
-    /// the eye about itself, and the section line stays where it was cut, even
-    /// after the centre is released.
+    /// The eye's offset from `center`, along the normal only: the depth the
+    /// slide onto the plane could not remove near edge-on, zero otherwise.
     pub(super) view_offset: DVec3,
 }
 
@@ -470,11 +470,18 @@ impl SliceViewState {
         slice_view_forward(self.direction)
     }
 
-    /// The eye: `center` plus `view_offset`, which a fixed rotation centre
-    /// can pull off the section plane (see the depth-extent widening in
-    /// `frame.rs`).
+    /// The eye: `center` plus `view_offset`.
     pub(super) fn camera_position(&self) -> DVec3 {
         self.center + self.view_offset
+    }
+
+    /// Place the eye: the anchor takes its foot, the offset keeps its depth.
+    pub(super) fn set_eye(&mut self, eye: DVec3) {
+        let normal = self.normal();
+        let offset = eye - self.center;
+        let depth = offset.dot(normal);
+        self.center += offset - normal * depth;
+        self.view_offset = normal * depth;
     }
 
     pub(super) fn camera_basis(&self) -> (DVec3, DVec3, DVec3) {
@@ -912,7 +919,7 @@ impl<'a> Graphics<'a> {
             None => slice.camera_position(),
         };
         // Square-on, the view meets the plane head-on, so the eye always lands back on it.
-        slice.view_offset = camera::slide_onto_plane(eye, slice.center, forward, slice.normal()) - slice.center;
+        slice.set_eye(camera::slide_onto_plane(eye, slice.center, forward, slice.normal()));
         self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
         true
     }

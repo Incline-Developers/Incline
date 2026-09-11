@@ -85,6 +85,9 @@ const CARD_SCALE_PROBE_WORLD: f64 = 1.0;
 /// it rather than dropping the axis.
 const MAX_GRID_LINES: usize = 64;
 
+/// How far the ruled area may stretch under tilt, in square-on screens.
+const GRID_REACH_MAX: f64 = 4.0;
+
 fn fade_ramp(value: f32, min: f32, max: f32) -> f32 {
     if value <= min {
         0.0
@@ -390,15 +393,22 @@ impl<'a> Graphics<'a> {
         let half_length = slice_visible_half_length(self.projection.zoom, screen);
         let half_height = self.projection.zoom;
 
-        // Ruled around the plane point the view looks at, not the section's
-        // anchor: a fixed centre of rotation moves the eye about, and the grid
-        // has to cover what is on screen.
-        let (forward, _, _) = slice.camera_basis();
-        let foot = super::camera::slide_onto_plane(slice.camera_position(), slice.center, forward, slice.normal());
+        // Ruled about the anchor, the eye's foot on the plane (`set_eye`).
+        let (_, right, up) = slice.camera_basis();
+        let strike = slice.direction.extend(0.0);
+        let foot = slice.center;
+        // Spacing is sized from the square-on spans, so an orbit does not
+        // re-rule the grid; the reach grows with the tilt, which shows more.
+        let stretch = |cosine: f64| (1.0 / cosine.abs()).min(GRID_REACH_MAX);
+        let strike_reach = half_length * stretch(right.dot(strike));
+        // Yawed and pitched together, screen-up also runs along the strike.
+        let height_reach = ((half_height + strike_reach * up.dot(strike).abs()) / up.z.abs()).min(half_height * GRID_REACH_MAX);
         // half_height is display units (exaggerated); bottom/top are true
         // metres via unexaggeration - eastings/northings need no such step.
         let bottom = self.unexaggerate_point(foot - DVec3::Z * half_height).z;
         let top = self.unexaggerate_point(foot + DVec3::Z * half_height).z;
+        let rule_bottom = self.unexaggerate_point(foot - DVec3::Z * height_reach).z;
+        let rule_top = self.unexaggerate_point(foot + DVec3::Z * height_reach).z;
 
         let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
         let points_per_pixel = 1.0 / self.window.scale_factor();
@@ -423,13 +433,13 @@ impl<'a> Graphics<'a> {
         };
 
         // Level = constant true elevation; Upright = fixed at a world easting/northing regardless of orbit.
-        for elevation in section_grid::grid_values((bottom, top), elevation_spacing, MAX_GRID_LINES) {
-            push((-half_length, elevation), (half_length, elevation), elevation, SectionGridLineKind::Level);
+        for elevation in section_grid::grid_values((rule_bottom, rule_top), elevation_spacing, MAX_GRID_LINES) {
+            push((-strike_reach, elevation), (strike_reach, elevation), elevation, SectionGridLineKind::Level);
         }
-        for crossing in section_grid::upright_crossings(center_xy, slice.direction, half_length, axis_spacing, MAX_GRID_LINES) {
+        for crossing in section_grid::upright_crossings(center_xy, slice.direction, strike_reach, axis_spacing, MAX_GRID_LINES) {
             push(
-                (crossing.along_strike, bottom),
-                (crossing.along_strike, top),
+                (crossing.along_strike, rule_bottom),
+                (crossing.along_strike, rule_top),
                 crossing.value,
                 SectionGridLineKind::Upright(axis),
             );
