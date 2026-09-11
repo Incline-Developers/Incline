@@ -876,9 +876,8 @@ impl<'a> Graphics<'a> {
         hits
     }
 
-    /// Begin an orbit with the anchor at the surface or geometry point under the cursor.
-    /// Falls back to the point on the working plane at `working_plane_z`, then the camera-target depth, when the view cannot meet that plane.
-    /// Called from the app level where triangulations are available.
+    /// Anchors a plan orbit on the fixed centre, else on the pivot a C pick
+    /// would take. The section orbits by a separate path.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_orbit_at_surface(
         &mut self,
@@ -891,44 +890,13 @@ impl<'a> Graphics<'a> {
         working_plane_z: f64,
         rotation_centre: Option<DVec3>,
     ) {
-        // Prefer snapping to a nearby document vertex so the orbit pivot lands
-        // on actual geometry (lines, polylines, points) when one is close.
-        let pt = rotation_centre.unwrap_or_else(|| {
-            self.snap_under_cursor(document, snap_index, triangulations, hidden, frozen)
-                .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z, SNAP_THRESHOLD_PX))
-        });
+        let pt = rotation_centre.unwrap_or_else(|| self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z));
         self.camera.sync_angles_from_forward();
         self.camera_controller.begin_orbit(self.exaggerate_point(pt));
         self.orbit_marker = rotation_centre.is_none().then_some(pt);
     }
 
-    /// The vertex within snap reach of the cursor, if any.
-    fn snap_under_cursor(
-        &self,
-        document: &Document,
-        snap_index: &crate::model::spatial::ObjectSnapIndex,
-        triangulations: &[OpenTriangulation],
-        hidden: &HashSet<SceneEntityId>,
-        frozen: &HashSet<SceneEntityId>,
-    ) -> Option<DVec3> {
-        SceneQuery::snap(
-            document,
-            snap_index,
-            triangulations,
-            hidden,
-            frozen,
-            &CursorMode::SnapToPoint,
-            &self.view_proj(),
-            self.screen_size(),
-            self.camera_controller.mouse_loc,
-            SNAP_THRESHOLD_PX,
-            false,
-        )
-    }
-
-    /// The plan-view pivot when nothing snapped: the nearest asset under the
-    /// cursor, else an object within `pick_px`, the working plane, or the eye's depth.
-    #[allow(clippy::too_many_arguments)]
+    /// Asset under the cursor, else object, working plane, or eye depth.
     fn orbit_point_under_cursor(
         &self,
         triangulations: &[OpenTriangulation],
@@ -936,7 +904,6 @@ impl<'a> Graphics<'a> {
         hidden: &HashSet<SceneEntityId>,
         frozen: &HashSet<SceneEntityId>,
         working_plane_z: f64,
-        pick_px: f32,
     ) -> DVec3 {
         let view_proj = self.view_proj();
         let screen = self.screen_size();
@@ -955,7 +922,7 @@ impl<'a> Graphics<'a> {
                     &view_proj,
                     screen,
                     DVec2::new(f64::from(self.camera_controller.mouse_loc.0), f64::from(self.camera_controller.mouse_loc.1)),
-                    SNAP_THRESHOLD_PX,
+                    ROTATION_CENTRE_PICK_PX,
                     hidden,
                     frozen,
                     self.section_slab(),
@@ -971,7 +938,7 @@ impl<'a> Graphics<'a> {
                     // No asset surface hit - try picking any document object
                     // near the cursor, then the working plane under it, then
                     // the camera-target depth if the view can't meet the plane.
-                    self.pick_at_cursor(pick_px, triangulations, hidden, frozen, false)
+                    self.pick_at_cursor(ROTATION_CENTRE_PICK_PX, triangulations, hidden, frozen, false)
                         .map(|(_, world)| world)
                         .or_else(|| {
                             // Reject a working-plane hit behind the viewer (a tilted view can put the plane there).
@@ -982,10 +949,7 @@ impl<'a> Graphics<'a> {
         }
     }
 
-    /// The point a click fixes as the centre: the nearest string or drill trace
-    /// on screen within reach, since the eye aims at the line and not the
-    /// surface above it; else the section plane under the cursor, or in plan
-    /// the pivot an orbit would take.
+    /// Nearest string or trace within reach, else section plane or plan pivot.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn pick_rotation_centre(
         &self,
@@ -997,15 +961,43 @@ impl<'a> Graphics<'a> {
         snap_index: &crate::model::spatial::ObjectSnapIndex,
         working_plane_z: f64,
     ) -> Option<DVec3> {
+        if self.slice_view.is_some() {
+            return self
+                .string_or_trace_near_cursor(drill_holes, hidden, frozen, document, snap_index)
+                .or_else(|| self.section_point_at_px(self.camera_controller.mouse_loc));
+        }
+        Some(self.plan_pivot_near_cursor(triangulations, drill_holes, hidden, frozen, document, snap_index, working_plane_z))
+    }
+
+    /// Nearest string or trace point within reach, since the eye aims at the
+    /// line and not the surface above it, else the surface under the cursor.
+    #[allow(clippy::too_many_arguments)]
+    fn plan_pivot_near_cursor(
+        &self,
+        triangulations: &[OpenTriangulation],
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        document: &Document,
+        snap_index: &crate::model::spatial::ObjectSnapIndex,
+        working_plane_z: f64,
+    ) -> DVec3 {
+        self.string_or_trace_near_cursor(drill_holes, hidden, frozen, document, snap_index)
+            .unwrap_or_else(|| self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z))
+    }
+
+    /// The nearer of the closest string and trace points within reach.
+    fn string_or_trace_near_cursor(
+        &self,
+        drill_holes: &[OpenDrillHoleDataset],
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+        document: &Document,
+        snap_index: &crate::model::spatial::ObjectSnapIndex,
+    ) -> Option<DVec3> {
         let string = self.string_point_near_cursor(document, snap_index, hidden, frozen, ROTATION_CENTRE_PICK_PX);
         let trace = self.trace_point_near_cursor(drill_holes, hidden, frozen, ROTATION_CENTRE_PICK_PX);
-        if let Some((point, _)) = [string, trace].into_iter().flatten().min_by(|a, b| a.1.total_cmp(&b.1)) {
-            return Some(point);
-        }
-        if self.slice_view.is_some() {
-            return self.section_point_at_px(self.camera_controller.mouse_loc);
-        }
-        Some(self.orbit_point_under_cursor(triangulations, drill_holes, hidden, frozen, working_plane_z, ROTATION_CENTRE_PICK_PX))
+        [string, trace].into_iter().flatten().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(point, _)| point)
     }
 
     /// Screen position of a fixed centre; `None` behind a perspective eye.

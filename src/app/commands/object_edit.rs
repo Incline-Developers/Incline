@@ -18,7 +18,7 @@ use crate::{
 impl<'a> App<'a> {
     /// Open the "Edit Object" dialog on `id`, seeding its working copy from
     /// the active project's document (not `scene_document`, the read-only
-    /// composite — the dialog needs the editable copy).
+    /// composite: the dialog needs the editable copy).
     pub(crate) fn open_object_edit_dialog(&mut self, id: ObjectId) {
         // Already open on this object: leave the in-progress working copy
         // alone rather than clobbering it with a fresh seed.
