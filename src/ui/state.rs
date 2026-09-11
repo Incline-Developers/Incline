@@ -2868,8 +2868,8 @@ pub(crate) enum UiCommand {
     ResetSliceView,
     /// Arm a click that fixes the centre of rotation, or release the one that is set.
     ToggleRotationCentre,
-    /// Show or hide the world grid ruled across the section.
-    SetSliceGridEnabled(bool),
+    /// The grid button: the RL grid in a section, the XY grid in plan.
+    SetGridShown(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     SetStandardView(StandardView),
@@ -3314,7 +3314,7 @@ impl UiCommand {
                 tr!(literal = "Set Topology Wireframes"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
             ),
-            Self::SetSliceGridEnabled(enabled) => report(tr!(literal = "Set Section Grid"), if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
+            Self::SetGridShown(shown) => report(tr!(literal = "Set Grid"), if *shown { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
             Self::SetShowPoints(enabled) => report(
                 tr!(literal = "Set Point Visibility"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },

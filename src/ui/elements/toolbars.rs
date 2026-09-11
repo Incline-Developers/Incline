@@ -305,32 +305,28 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
                         });
                     }
 
-                    // Plan has no cut face for the grid to trace, so it is
-                    // hidden here rather than shown disabled.
-                    if editor.slice_mode_enabled {
-                        ui.add_space(12.);
-
-                        let grid = ui.add(
-                            ToolbarButton::new(
-                                egui::Image::new(themed_icon!(ui, "section_grid.svg")),
-                                if editor.slice_grid_enabled {
-                                    tr!(literal = "Hide RL Grid")
-                                } else {
-                                    tr!(literal = "Show RL Grid")
-                                },
-                            )
+                    // One grid button: the RL grid in a section, the XY grid in
+                    // plan; which one is the app's call (`set_grid_shown`).
+                    ui.add_space(12.);
+                    let shown = if editor.slice_mode_enabled { editor.slice_grid_enabled } else { editor.show_xy_grid };
+                    let label = match (editor.slice_mode_enabled, shown) {
+                        (true, true) => tr!(literal = "Hide RL Grid"),
+                        (true, false) => tr!(literal = "Show RL Grid"),
+                        (false, true) => tr!(literal = "Hide XY Grid"),
+                        (false, false) => tr!(literal = "Show XY Grid"),
+                    };
+                    let grid = ui.add(
+                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "section_grid.svg")), label)
                             .id_salt("section_grid")
                             .button_side(side)
-                            .selected(editor.slice_grid_enabled),
-                        );
-                        if grid.clicked() {
-                            commands.push(UiCommand::SetSliceGridEnabled(!editor.slice_grid_enabled));
-                        }
-                        // Right click: the grid's options, on the spacing
-                        // in force.
-                        if grid.secondary_clicked() && editor.section_grid_dialog.is_none() {
-                            editor.section_grid_dialog = Some(crate::ui::state::SectionGridDialog::open(editor.section_grid_style, editor.section_grid_level_spacing));
-                        }
+                            .selected(shown),
+                    );
+                    if grid.clicked() {
+                        commands.push(UiCommand::SetGridShown(!shown));
+                    }
+                    // Right click in a section: RL grid options.
+                    if editor.slice_mode_enabled && grid.secondary_clicked() && editor.section_grid_dialog.is_none() {
+                        editor.section_grid_dialog = Some(crate::ui::state::SectionGridDialog::open(editor.section_grid_style, editor.section_grid_level_spacing));
                     }
 
                     // Task progress hugs the right end of the strip, out of the

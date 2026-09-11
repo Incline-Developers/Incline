@@ -1670,3 +1670,6 @@ literal-thickness-289be54832e4be75 = Thickness
 literal-px-c2a09a17cdcb2c7f =  px
 literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Automatic RL spacing
 literal-rl-spacing-88a1992aa9332272 = RL spacing
+literal-hide-xy-grid-85952898e2cff804 = Hide XY Grid
+literal-show-xy-grid-d22a739bae102bb1 = Show XY Grid
+literal-set-grid-63bc48801d739665 = Set Grid

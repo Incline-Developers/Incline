@@ -606,10 +606,7 @@ impl<'a> App<'a> {
                 self.reset_slice_view();
                 Ok(())
             }
-            UiCommand::SetSliceGridEnabled(enabled) => {
-                self.set_slice_grid_enabled(enabled);
-                Ok(())
-            }
+            UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
