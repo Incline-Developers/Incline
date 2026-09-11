@@ -1,10 +1,3 @@
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    cam_forward: vec4<f32>,
-};
-@group(0) @binding(0)
-var<uniform> camera: CameraUniform;
-
 struct ColorStop {
     color: vec4<f32>,
     // .x holds the stop's position (0..1); rest is padding.
@@ -43,6 +36,8 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) grade: f32,
     @location(1) local_position: vec3<f32>,
+    // Distance from the section plane; affine in position, so interpolation is exact.
+    @location(2) section_offset: f32,
 };
 
 // Walks the colormap's bands. Slot 0 holds the colour below the first
@@ -132,11 +127,15 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: InstanceInput) ->
     out.grade = instance.grade;
     out.local_position = position;
     out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
+    out.section_offset = section_plane_offset(position);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if outside_section_slab(in.section_offset) {
+        discard;
+    }
     if (in.grade < -1.5) {
         discard;
     }

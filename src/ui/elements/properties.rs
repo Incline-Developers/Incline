@@ -10,7 +10,7 @@ use crate::{
         widgets::{
             collapsible_section::CollapsibleSection,
             context_menu::{FIELD_WIDTH, context_menu_fields},
-            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32},
+            menu::{self, MenuFieldBool, MenuFieldColor32, MenuFieldCombo, MenuFieldF32, MenuFieldF64, MenuFieldU32, menu_field_label},
             viewport::BlockModelProperties,
         },
     },
@@ -151,6 +151,14 @@ pub(crate) fn draw_selection_appearance(
                 geometry_dirty,
             );
         });
+        // The object editor needs exactly one selected design object.
+        if editor.selected_handles.len() == 1
+            && let [object_id] = objects.as_slice()
+            && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Edit Object...")).show(ui).clicked()
+        {
+            commands.push(UiCommand::OpenObjectEditDialog(*object_id));
+            commands.push(UiCommand::CloseCanvasContextMenu);
+        }
         if crate::ui::widgets::context_menu::ContextMenuAction::new(tr!(literal = "Move to Layer..."))
             .show(ui)
             .clicked()
@@ -305,7 +313,6 @@ fn reset_interface_defaults(draft: &mut PreferencesDraft) {
     draft.show_console = defaults.show_console;
     draft.panel_chrome = defaults.panel_chrome;
     draft.show_world_axis_gizmo = defaults.show_world_axis_gizmo;
-    draft.show_xy_grid = defaults.show_xy_grid;
     draft.show_scale_bar = defaults.show_scale_bar;
 }
 
@@ -369,7 +376,6 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Show console"), &mut draft.show_console).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Panel chrome"), &mut draft.panel_chrome).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "World axis gizmo"), &mut draft.show_world_axis_gizmo).show(ui));
-            changed |= committed(&MenuFieldBool::new(tr!(literal = "XY grid"), &mut draft.show_xy_grid).show(ui));
             changed |= committed(&MenuFieldBool::new(tr!(literal = "Scale bar"), &mut draft.show_scale_bar).show(ui));
             changed
         },
@@ -524,7 +530,26 @@ fn draw_developer_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
     );
 }
 
-fn fill_style_label(style: FillStyle) -> String {
+/// A labelled value the panel only reports, laid out like the editable fields
+/// beside it so the columns line up.
+pub(crate) fn read_only_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    let row_height = ui.spacing().interact_size.y;
+    let row_width = ui.available_width();
+    // The same column width the fields resolve for themselves, or the values
+    // would not line up under them.
+    let value_width = crate::ui::widgets::menu::field_column_for(ui, label, false);
+    ui.allocate_ui_with_layout(egui::vec2(row_width, row_height), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(value_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(value).color(ui.visuals().weak_text_color()));
+        });
+        let label_width = ui.available_width();
+        ui.allocate_ui_with_layout(egui::vec2(label_width, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            menu_field_label(ui, label.into(), None);
+        });
+    });
+}
+
+pub(crate) fn fill_style_label(style: FillStyle) -> String {
     match style {
         FillStyle::Clear => tr!(literal = "Clear"),
         FillStyle::Crosses => tr!(literal = "Crosses"),

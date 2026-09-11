@@ -129,6 +129,7 @@ impl Gui {
         drill_holes: &[crate::model::drill_hole::OpenDrillHoleDataset],
         screen_size: [u32; 2],
         orbit_marker: Option<(f32, f32)>,
+        rotation_centre: Option<(f32, f32)>,
         camera_active: bool,
         camera_forward: [f32; 3],
         camera_up: [f32; 3],
@@ -159,6 +160,7 @@ impl Gui {
         let console_snapshot = crate::logging::console_snapshot();
         let frame_context = UiFrameContext {
             orbit_marker,
+            rotation_centre,
             camera_active,
             camera_forward,
             camera_up,
@@ -286,6 +288,8 @@ fn mirror_copy_text_to_browser_clipboard(platform_output: &egui::PlatformOutput)
 #[derive(Clone, Copy)]
 struct UiFrameContext<'a> {
     orbit_marker: Option<(f32, f32)>,
+    /// Screen position of the fixed centre of rotation, while one is set.
+    rotation_centre: Option<(f32, f32)>,
     /// Whether the camera is being driven by the pointer right now (a
     /// right-button drag). The drawn cursor stands down for a fly-mode look,
     /// where the pointer is grabbed to the window and has no position to sit at.
@@ -341,7 +345,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     }
 
     if editor.slice_mode_enabled {
-        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!(literal = "middle-drag pan · W/S move slab · Q/E rotate · Esc exit")));
+        return Some(ViewportMessage::text(tr!(literal = "Slice view")).minor(tr!("slice-viewport-gestures")));
     }
 
     if editor.active_tool == ActiveTool::MakeCircle {
@@ -361,6 +365,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
         ActiveTool::RotateCollar if !editor.rotate_tool_has_targets() => ViewportMessage::text(tr!(literal = "Select a drill hole")),
         ActiveTool::RotateCollar => ViewportMessage::text(tr!(literal = "Drag a ring, or type an azimuth and dip")).minor(tr!(literal = "each hole turns about its own collar")),
         ActiveTool::SetInitiationPoint => ViewportMessage::text(tr!(literal = "Click a collar to add or edit an initiation point")),
+        ActiveTool::PickRotationCentre => ViewportMessage::text(tr!(literal = "Click a point to fix the centre of rotation")),
         // The palette selects its first product for you, so the only way to
         // reach the tool with nothing to tie with is to have deleted them
         // all. Say so up front rather than only in the console warning the
@@ -520,7 +525,7 @@ fn draw_ui(
 
     // --- Panel layout: compute rects for all fixed panels ---
     let project_active = project.has_active_project;
-    let editing_enabled = project.has_active_project && !editor.fly_mode_enabled && !editor.slice_mode_enabled;
+    let editing_enabled = project.has_active_project && !editor.fly_mode_enabled;
 
     // On macOS the File and Project dropdowns are in the system menu bar
     // (`mac.rs`) instead, but the bar itself is still drawn: the mark and the
@@ -604,6 +609,9 @@ fn draw_ui(
     // - lays itself out in.
     let canvas_rect = scene_rect;
     *canvas_rect_out = canvas_rect;
+
+    // Draw first so later overlays paint above it.
+    widgets::viewport::draw_section_grid(root_ui, editor, canvas_rect);
 
     draw_initiation_cards(root_ui, editor, canvas_rect);
 
@@ -886,9 +894,11 @@ fn draw_ui(
         dialogs::editing::draw_select_project_dialog(root_ui, project, commands);
     }
     dialogs::files::draw_vertical_exaggeration_dialog(root_ui, editor, canvas_rect);
+    dialogs::files::draw_grid_options_dialog(root_ui, editor, canvas_rect);
     dialogs::editing::draw_move_to_layer_dialog(root_ui, editor, project, commands);
     dialogs::editing::draw_move_to_axis_dialog(root_ui, editor, commands);
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
+    dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
     elements::properties::draw_preferences(root_ui, editor, commands);
     elements::properties::draw_block_model_controls(root_ui, editor, block_models, commands, canvas_rect);
@@ -1046,9 +1056,19 @@ fn draw_ui(
     if let Some((ox, oy)) = frame_context.orbit_marker {
         elements::cursors::draw_orbit_marker(root_ui, ox, oy, canvas_rect);
     }
+    if let Some((cx, cy)) = frame_context.rotation_centre {
+        elements::cursors::draw_rotation_centre_marker(root_ui, cx, cy, canvas_rect);
+    }
 
     if editor.show_world_axis_gizmo {
-        elements::cursors::draw_orientation_gizmo(root_ui, canvas_rect, frame_context.camera_forward, frame_context.camera_up, commands);
+        elements::cursors::draw_orientation_gizmo(
+            root_ui,
+            canvas_rect,
+            frame_context.camera_forward,
+            frame_context.camera_up,
+            editor.slice_mode_enabled,
+            commands,
+        );
     }
 
     // The drawn cursor, and with it the decision to hide the system pointer.

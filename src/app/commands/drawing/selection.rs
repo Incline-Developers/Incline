@@ -172,6 +172,7 @@ impl<'a> App<'a> {
             graphics.window_to_viewport_px(cursor_px),
             PICK_THRESHOLD_PX * 2.0,
             pick::VertexPickFilter::DeletablePolyline,
+            graphics.section_slab(),
         )?;
         let ObjectPoint::Vertex(vertex_index) = point else {
             return None;
@@ -303,9 +304,6 @@ impl<'a> App<'a> {
         self.refresh_snap_index();
         let graphics = self.graphics.as_ref()?;
         let cursor_px = self.editor.cursor_screen_px?;
-        // Cursor positions are physical pixels; the marker the user aims at is
-        // sized in logical ones, so scale the radius to match what is drawn.
-        let scale_factor = self.window.as_ref().map_or(1.0, |window| window.scale_factor() as f32);
         let (object_id, point, world) = pick::pick_nearest_vertex_indexed(
             &self.scene_document,
             &self.snap_index,
@@ -314,8 +312,11 @@ impl<'a> App<'a> {
             &graphics.view_proj(),
             graphics.screen_size_pub(),
             graphics.window_to_viewport_px(cursor_px),
-            MOVE_VERTEX_PICK_PX * scale_factor,
+            // Cursor is physical pixels; the marker size is in logical
+            // points, so scale the radius up to match.
+            self.points_to_px(MOVE_VERTEX_PICK_PX),
             pick::VertexPickFilter::AnyEditable,
+            graphics.section_slab(),
         )?;
         let screen_px = graphics.world_to_window_px(&graphics.view_proj(), world)?;
         Some(MoveVertexHit {

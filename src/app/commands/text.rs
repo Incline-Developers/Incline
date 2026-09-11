@@ -42,11 +42,7 @@ impl<'a> App<'a> {
     }
 
     fn place_text_at_cursor(&mut self) {
-        if matches!(
-            self.editor.cursor_mode,
-            crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-        ) && !self.editor.cursor_snapped
-        {
+        if self.editor.snapping_active() && !self.editor.cursor_snapped {
             return;
         }
         let Some(world) = self.editor.cursor_world else {

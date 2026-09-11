@@ -12,7 +12,7 @@ use crate::{
         spatial::ObjectSnapIndex,
         triangulation::OpenTriangulation,
     },
-    rendering::snap,
+    rendering::{camera::SectionSlab, snap},
     ui::state::CursorMode,
 };
 
@@ -42,18 +42,20 @@ impl SceneQuery {
     }
 
     /// Test a rendered document pick at its own screen position. Frozen
-    /// surfaces still hide geometry, even though they cannot be selected.
+    /// surfaces still hide geometry, even though they cannot be selected; one
+    /// the slab clips away is not drawn, so it hides nothing.
     pub(crate) fn surface_occludes_pick(
         triangulations: &[OpenTriangulation],
         hidden: &HashSet<SceneEntityId>,
         view_projection: &DMat4,
         scene_origin: DVec3,
         candidate: DVec3,
+        slab: Option<SectionSlab>,
     ) -> bool {
         let Some((origin, direction)) = ray_through_world_point(view_projection, candidate) else {
             return false;
         };
-        let Some((_, surface)) = Self::nearest_surface(triangulations, hidden, None, origin, direction) else {
+        let Some(surface) = nearest_drawn_surface(triangulations, hidden, origin, direction, slab) else {
             return false;
         };
         // Pick vertices come from rebased f32 render buffers, whereas the BVH
@@ -63,6 +65,30 @@ impl SceneQuery {
         let surface_depth = (surface - origin).dot(direction);
         let tolerance = 1.0e-5_f64.max(rounding).max(surface_depth.abs() * 1.0e-9);
         (candidate - surface).dot(direction) > tolerance
+    }
+
+    /// Whether an opaque filled polyline is drawn in front of a candidate and
+    /// hides it. A fill is the one document primitive that occludes; strokes
+    /// and text are drawn over what they cross, so they never do.
+    pub(crate) fn opaque_fill_occludes_pick(
+        document: &Document,
+        snap_index: &ObjectSnapIndex,
+        hidden: &HashSet<SceneEntityId>,
+        view_projection: &DMat4,
+        candidate: DVec3,
+        slab: Option<SectionSlab>,
+    ) -> bool {
+        let Some((origin, direction)) = ray_through_world_point(view_projection, candidate) else {
+            return false;
+        };
+        // Only the nearest fill is known here, so a farther one inside the slab
+        // is missed: that lets a pick through, the safe way to be wrong.
+        let Some(fill) = nearest_opaque_document_fill(document, snap_index, hidden, origin, direction).filter(|point| slab.is_none_or(|slab| slab.contains(*point))) else {
+            return false;
+        };
+        let fill_depth = (fill - origin).dot(direction);
+        let tolerance = 1.0e-5_f64.max(fill_depth.abs() * 1.0e-9);
+        (candidate - fill).dot(direction) > tolerance
     }
 
     /// Nearest selectable drill hole under a ray, named down to the hole
@@ -158,8 +184,9 @@ impl SceneQuery {
         cursor: (f32, f32),
         threshold: f32,
         xray_enabled: bool,
+        slab: Option<SectionSlab>,
     ) -> Option<DVec3> {
-        let candidate = snap::snap_cursor(document, snap_index, triangulations, hidden, frozen, mode, view_projection, screen, cursor, threshold)?;
+        let candidate = snap::snap_cursor(document, snap_index, triangulations, hidden, frozen, mode, view_projection, screen, cursor, threshold, slab)?;
         if xray_enabled {
             return Some(candidate.world);
         }
@@ -172,10 +199,15 @@ impl SceneQuery {
         // Surface snapping already found the nearest triangulation along this
         // ray. Other snap modes still need the triangulation visibility test.
         let surface_depth = (!matches!(mode, CursorMode::SnapToSurface))
-            .then(|| Self::nearest_surface(triangulations, hidden, None, ray_origin, ray_direction))
+            .then(|| nearest_drawn_surface(triangulations, hidden, ray_origin, ray_direction, slab))
             .flatten()
-            .map(|(_, point)| (point - ray_origin).dot(ray_direction));
-        let document_fill_depth = nearest_opaque_document_fill(document, snap_index, hidden, ray_origin, ray_direction).map(|point| (point - ray_origin).dot(ray_direction));
+            .map(|point| (point - ray_origin).dot(ray_direction));
+        // A fill the slab clips away hides nothing. Only the nearest fill is
+        // known here, so a farther one inside the slab is missed: that lets a
+        // snap through, which is the safe way to be wrong.
+        let document_fill_depth = nearest_opaque_document_fill(document, snap_index, hidden, ray_origin, ray_direction)
+            .filter(|point| slab.is_none_or(|slab| slab.contains(*point)))
+            .map(|point| (point - ray_origin).dot(ray_direction));
         let occluder_depth = surface_depth.into_iter().chain(document_fill_depth).min_by(f64::total_cmp);
         // A triangulation must occlude its own back-side vertices too. The small
         // relative tolerance only absorbs ray/triangle floating-point noise at
@@ -298,6 +330,28 @@ fn ray_disc_distance(origin: DVec3, direction: DVec3, center: DVec3, normal: DVe
     }
     let hit = origin + direction * distance;
     (hit.distance_squared(center) <= radius * radius).then_some(distance)
+}
+
+/// Nearest surface the view actually draws along a ray. Inside a section the
+/// slab discards every fragment outside it, so a surface it clips away is not
+/// there to hide a snap target behind it.
+fn nearest_drawn_surface(
+    triangulations: &[OpenTriangulation],
+    hidden: &HashSet<SceneEntityId>,
+    ray_origin: DVec3,
+    ray_direction: DVec3,
+    slab: Option<SectionSlab>,
+) -> Option<DVec3> {
+    triangulations
+        .iter()
+        .filter(|triangulation| triangulation.state.loaded && !hidden.contains(&triangulation.entity_id()))
+        .filter_map(|triangulation| {
+            triangulation
+                .spatial
+                .ray_hit_details_where(&triangulation.mesh, ray_origin, ray_direction, |point| slab.is_none_or(|slab| slab.contains(point)))
+                .map(|hit| hit.point)
+        })
+        .min_by(|a, b| (*a - ray_origin).dot(ray_direction).total_cmp(&(*b - ray_origin).dot(ray_direction)))
 }
 
 fn nearest_opaque_document_fill(document: &Document, snap_index: &ObjectSnapIndex, hidden: &HashSet<SceneEntityId>, ray_origin: DVec3, ray_direction: DVec3) -> Option<DVec3> {

@@ -94,7 +94,7 @@ jobs:
           set -euo pipefail
           mkdir -p out
           name="Incline-Design-${{ needs.version.outputs.version }}-linux-x86_64"
-          cp target/release/Incline-Design "target/release/$name"
+          cp target/release/incline-design "target/release/$name"
           tar -czf "out/$name.tar.gz" -C target/release "$name"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -125,7 +125,7 @@ jobs:
           set -euo pipefail
           mkdir -p out staged
           name="Incline-Design-${{ needs.version.outputs.version }}-windows-x86_64"
-          cp target/release/Incline-Design.exe "staged/$name.exe"
+          cp target/release/incline-design.exe "staged/$name.exe"
           7z a "out/$name.zip" "./staged/$name.exe"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

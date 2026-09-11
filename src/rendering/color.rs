@@ -296,6 +296,11 @@ pub(crate) fn linear_to_srgb_byte(linear: f32) -> u8 {
     (srgb * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
+/// Rec. 709 relative luminance of a linear RGBA colour, alpha ignored.
+pub(crate) fn relative_luminance(rgba: [f32; 4]) -> f32 {
+    0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
+}
+
 pub(crate) fn rgba_to_color32(rgba: [f32; 4]) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(
         linear_to_srgb_byte(rgba[0]),

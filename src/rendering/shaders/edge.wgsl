@@ -1,12 +1,3 @@
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    cam_forward: vec4<f32>,
-    cam_position: vec4<f32>,
-    viewport: vec4<f32>,
-};
-@group(0) @binding(0)
-var<uniform> camera: CameraUniform;
-
 struct EdgeStyle {
     color: vec4<f32>,
     width: f32,
@@ -22,6 +13,8 @@ struct EdgeInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    // Distance from the section plane; affine in position, so interpolation is exact.
+    @location(1) section_offset: f32,
 };
 
 @vertex
@@ -35,6 +28,8 @@ fn vs_main(edge: EdgeInput, @builtin(vertex_index) vertex_index: u32) -> VertexO
     let pixel_to_ndc = vec2<f32>(2.0 / camera.viewport.x, 2.0 / camera.viewport.y);
     let use_end = vertex_index == 2u || vertex_index == 4u || vertex_index == 5u;
     let positive = vertex_index == 0u || vertex_index == 3u || vertex_index == 5u;
+    // The endpoint this vertex was built from, so the clip agrees with what is drawn.
+    let world_position = select(edge.start, edge.end, use_end);
     var clip = select(start_clip, end_clip, use_end);
     let side = select(-1.0, 1.0, positive);
     clip.x = clip.x + normal.x * side * edge_style.width * 0.5 * pixel_to_ndc.x * clip.w;
@@ -42,10 +37,14 @@ fn vs_main(edge: EdgeInput, @builtin(vertex_index) vertex_index: u32) -> VertexO
     var out: VertexOutput;
     out.clip_position = clip;
     out.color = edge_style.color;
+    out.section_offset = section_plane_offset(world_position);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if outside_section_slab(in.section_offset) {
+        discard;
+    }
     return in.color;
 }

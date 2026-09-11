@@ -268,6 +268,8 @@ pub(crate) struct CameraUniform {
     /// volume raycast target) - only the main window's toolbar-bounded canvas
     /// has a nonzero offset. zw: unused padding.
     viewport_origin: [f32; 4],
+    section_plane: [f32; 4],
+    section_normal: [f32; 4],
 }
 
 impl CameraUniform {
@@ -279,6 +281,23 @@ impl CameraUniform {
             viewport: [1.0, 1.0, 0.0, 0.0],
             inv_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
             viewport_origin: [0.0; 4],
+            section_plane: [0.0; 4],
+            section_normal: [0.0; 4],
+        }
+    }
+
+    /// Loads `slab` into the uniform, rebased onto `scene_origin` like vertex positions; clears it for `None`.
+    pub(crate) fn set_section_slab(&mut self, slab: Option<SectionSlab>, scene_origin: DVec3) {
+        match slab {
+            Some(slab) => {
+                let point = slab.point - scene_origin;
+                self.section_plane = [point.x as f32, point.y as f32, point.z as f32, slab.half_width as f32];
+                self.section_normal = [slab.normal.x as f32, slab.normal.y as f32, slab.normal.z as f32, 1.0];
+            }
+            None => {
+                self.section_plane = [0.0; 4];
+                self.section_normal = [0.0; 4];
+            }
         }
     }
 
@@ -403,6 +422,15 @@ impl CameraController {
         self.orbit_anchor = None;
     }
 
+    pub(crate) fn orbit_angles(&self, dx: f64, dy: f64) -> DVec2 {
+        let horizontal_sign = if self.invert_horizontal_look { -1.0 } else { 1.0 };
+        let vertical_sign = if self.invert_vertical_look { 1.0 } else { -1.0 };
+        DVec2::new(dx * self.rotate_sensitivity * horizontal_sign, dy * self.rotate_sensitivity * vertical_sign)
+    }
+
+    /// Ease the camera onto a standard view. A section turns itself instead
+    /// (`Graphics::set_slice_standard_view`), over this same duration, so
+    /// clicking the gizmo reads as one gesture in either view.
     pub(crate) fn begin_view_transition(&mut self, camera: &Camera, forward: DVec3, up_hint: DVec3, target_distance: f64) {
         let end_forward = forward.normalize_or(camera.forward());
         let end_up = orthonormal_up(end_forward, up_hint);
@@ -413,7 +441,7 @@ impl CameraController {
             target: camera.target(),
             distance: target_distance.max(MIN_ORTHO_ZOOM),
             elapsed: Duration::ZERO,
-            duration: Duration::from_millis(280),
+            duration: VIEW_TRANSITION_DURATION,
         });
     }
 
@@ -470,11 +498,7 @@ impl CameraController {
 
     pub(crate) fn process_scroll(&mut self, delta: &MouseScrollDelta) {
         self.view_transition = None;
-        self.scroll += match delta {
-            // Assuming a line is about 100 pixels
-            MouseScrollDelta::LineDelta(_, scroll) => *scroll as f64 * 100.0,
-            MouseScrollDelta::PixelDelta(PhysicalPosition { y: scroll, .. }) => *scroll,
-        };
+        self.scroll += crate::rendering::graphics::scroll_pixels(delta);
     }
 
     pub(crate) fn has_pending_updates(&self) -> bool {
@@ -590,7 +614,7 @@ struct ViewTransition {
     duration: Duration,
 }
 
-fn ease_out_cubic(t: f64) -> f64 {
+pub(super) fn ease_out_cubic(t: f64) -> f64 {
     1.0 - (1.0 - t).powi(3)
 }
 
@@ -797,6 +821,14 @@ pub(crate) fn point(x: f32, y: f32, screen: Size) -> DVec3 {
     DVec3::new(new_x, new_y, 0.)
 }
 
+pub(super) fn view_plane_offset(camera: &Camera, zoom: f64, aspect: f64, screen: Size, mouse_px: (f32, f32)) -> DVec3 {
+    let rel = point(mouse_px.0, mouse_px.1, screen);
+    let forward = camera.forward();
+    let right = forward.cross(camera.up()).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    right * rel.x * aspect * zoom + up * rel.y * zoom
+}
+
 /// Unproject a screen pixel to a world point on the plane `z = plane_z`.
 ///
 /// The projection is orthographic, so every view ray is parallel to the camera
@@ -805,11 +837,8 @@ pub(crate) fn point(x: f32, y: f32, screen: Size) -> DVec3 {
 /// `zoom` is `Projection::zoom`, which equals the camera-to-target distance.
 /// Returns `None` when the view direction is parallel to the plane.
 pub(crate) fn screen_to_world_on_plane(camera: &Camera, zoom: f64, aspect: f64, screen: Size, mouse_px: (f32, f32), plane_z: f64) -> Option<DVec3> {
-    let rel = point(mouse_px.0, mouse_px.1, screen);
     let forward = camera.forward();
-    let right = forward.cross(camera.up()).normalize_or_zero();
-    let up = right.cross(forward).normalize_or_zero();
-    let focal = camera.position + forward * zoom + right * rel.x * aspect * zoom + up * rel.y * zoom;
+    let focal = camera.position + forward * zoom + view_plane_offset(camera, zoom, aspect, screen, mouse_px);
     if forward.z.abs() <= f64::EPSILON {
         return None;
     }
@@ -817,29 +846,77 @@ pub(crate) fn screen_to_world_on_plane(camera: &Camera, zoom: f64, aspect: f64, 
     Some(focal + forward * t)
 }
 
-/// Unproject a screen pixel to a world point on the plane through the camera
-/// position, perpendicular to `forward`.
-///
-/// This is the plane a point picked in the vertical slice view must land on.
-/// `update_slice_camera` places the camera *on* the section plane so the
-/// symmetric znear/zfar slab is centred there, which makes the plane through
-/// `camera.position` the section itself. [`screen_to_world_on_plane`] cannot
-/// serve here: a section camera looks horizontally, so its view ray never meets
-/// a `z = plane_z` plane.
-///
-/// The projection is orthographic, so the pixel maps to the plane by offsetting
-/// along the screen axes alone - no ray march, and nothing along `forward`,
-/// which is what keeps the result exactly coplanar with the section rather than
-/// a zoom-dependent step in front of it.
-pub(crate) fn screen_to_world_on_view_plane(camera: &Camera, zoom: f64, aspect: f64, screen: Size, mouse_px: (f32, f32)) -> DVec3 {
-    let rel = point(mouse_px.0, mouse_px.1, screen);
+/// A point on the vertical section plane, its horizontal unit normal, and
+/// the half width of the slab either side of it, in metres. The normal is
+/// horizontal, so vertical exaggeration (which scales Z only) cannot skew distance.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SectionSlab {
+    pub(crate) point: DVec3,
+    pub(crate) normal: DVec3,
+    pub(crate) half_width: f64,
+}
+
+impl SectionSlab {
+    /// Signed distance to the section plane: positive on the `normal` side, negative on the other.
+    pub(crate) fn signed_distance(&self, world: DVec3) -> f64 {
+        (world - self.point).dot(self.normal)
+    }
+
+    pub(crate) fn contains(&self, world: DVec3) -> bool {
+        self.signed_distance(world).abs() <= self.half_width
+    }
+
+    /// Fraction range `(enter, leave)` along segment `a`-`b`, each in `0.0..=1.0`,
+    /// that lies inside the slab; `None` if the whole segment is outside.
+    pub(crate) fn clip_segment(&self, a: DVec3, b: DVec3) -> Option<(f64, f64)> {
+        let from = self.signed_distance(a);
+        let to = self.signed_distance(b);
+        let slope = to - from;
+        let mut enter = 0.0_f64;
+        let mut leave = 1.0_f64;
+        for (numerator, denominator) in [(self.half_width - from, slope), (self.half_width + from, -slope)] {
+            if denominator.abs() <= f64::EPSILON {
+                // Parallel to this wall: the segment is wholly on one side, so keep or drop it whole.
+                if numerator < 0.0 {
+                    return None;
+                }
+            } else if denominator > 0.0 {
+                leave = leave.min(numerator / denominator);
+            } else {
+                enter = enter.max(numerator / denominator);
+            }
+        }
+        (enter <= leave).then_some((enter, leave))
+    }
+}
+
+/// How long a click on the orientation gizmo takes to bring its view up.
+pub(super) const VIEW_TRANSITION_DURATION: Duration = Duration::from_millis(280);
+
+/// Minimum angle, in radians, from edge-on before the section cursor disappears (about 5 degrees).
+pub(crate) const MIN_SECTION_INCIDENCE: f64 = 0.087;
+
+/// World point on the section plane through world-space `plane_point` with
+/// unit normal `plane_normal`, under screen pixel `mouse_px`. Returns `None`
+/// when the view is edge-on to the plane.
+pub(crate) fn screen_to_world_on_section_plane(
+    camera: &Camera,
+    zoom: f64,
+    aspect: f64,
+    screen: Size,
+    mouse_px: (f32, f32),
+    plane_point: DVec3,
+    plane_normal: DVec3,
+) -> Option<DVec3> {
     let forward = camera.forward();
-    let right = forward.cross(camera.up()).normalize_or_zero();
-    let up = right.cross(forward).normalize_or_zero();
     // A section camera is built from a horizontal strike and world Z, so the
-    // basis is never degenerate. If it ever were, every pixel would map to the
-    // camera position and the whole stroke would pile up on one point without
-    // anything looking wrong on screen.
-    debug_assert!(right != DVec3::ZERO && up != DVec3::ZERO, "degenerate slice camera basis");
-    camera.position + right * rel.x * aspect * zoom + up * rel.y * zoom
+    // basis is never degenerate.
+    debug_assert!(forward.cross(camera.up()) != DVec3::ZERO, "degenerate slice camera basis");
+    let origin = camera.position + view_plane_offset(camera, zoom, aspect, screen, mouse_px);
+    let denominator = forward.dot(plane_normal);
+    if denominator.abs() < MIN_SECTION_INCIDENCE.sin() {
+        return None;
+    }
+    let distance = (plane_point - origin).dot(plane_normal) / denominator;
+    Some(origin + forward * distance)
 }

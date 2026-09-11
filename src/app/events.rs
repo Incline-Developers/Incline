@@ -6,11 +6,41 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::{app::App, i18n::tr_format, logging::CommandReportSpec, rendering::graphics::RenderSurfaceError, ui::state::ActiveTool, userspace_error};
+use crate::{
+    app::App,
+    i18n::{tr, tr_format},
+    logging::CommandReportSpec,
+    rendering::graphics::RenderSurfaceError,
+    ui::state::ActiveTool,
+    userspace_error, userspace_warn,
+};
 
-const RIGHT_CLICK_DRAG_THRESHOLD_PX: f32 = 3.0;
+/// Right-press-to-drag threshold, in logical points, scaled by the window's scale factor before use.
+const RIGHT_CLICK_DRAG_THRESHOLD_PT: f32 = 3.0;
 
 impl<'a> App<'a> {
+    fn pixels_per_point(&self) -> f32 {
+        self.window.as_ref().map_or(1.0, |window| window.scale_factor() as f32)
+    }
+
+    /// Converts points to physical pixels, flooring the scale factor at 1.0.
+    pub(crate) fn points_to_px(&self, points: f32) -> f32 {
+        points * self.pixels_per_point().max(1.0)
+    }
+
+    fn right_click_drag_threshold_px(&self) -> f32 {
+        self.points_to_px(RIGHT_CLICK_DRAG_THRESHOLD_PT)
+    }
+
+    /// Whether the pointer is still within click distance of where the right button went down.
+    /// Both the release and drag paths must use this same test, or one gesture could be claimed as both.
+    fn right_press_is_click(&self, press: (f32, f32)) -> bool {
+        let Some(cur) = self.editor.cursor_screen_px else {
+            return false;
+        };
+        (cur.0 - press.0).hypot(cur.1 - press.1) < self.right_click_drag_threshold_px()
+    }
+
     pub(crate) fn handle_window_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, window_id: winit::window::WindowId, event: WindowEvent) {
         if self.graphics.as_ref().and_then(|graphics| graphics.slice_preview_window_id()) == Some(window_id) {
             self.handle_slice_preview_event(event);
@@ -28,6 +58,8 @@ impl<'a> App<'a> {
             self.window_focused = *focused;
             if !focused {
                 self.finish_left_button_interactions();
+                // No release will come for a button lost mid-drag; end the orbit here.
+                self.end_right_orbit();
                 if let Some(graphics) = self.graphics.as_mut() {
                     graphics.release_mouse_capture();
                     graphics.release_slice_keys();
@@ -75,18 +107,15 @@ impl<'a> App<'a> {
                 ..
             } = &event
             && (!gui_consumed || *state == ElementState::Released)
-            && let Some(graphics) = self.graphics.as_mut()
+            && self.slice_key(*key, *state)
         {
-            graphics.slice_process_key(*key, *state == ElementState::Pressed);
             self.redraw_requested = true;
         }
 
         if !gui_consumed {
             let canvas_pick_mode_active =
                 self.editor.triangulation_pick_target.is_some() || self.editor.tri_cut_poly_awaiting_pick || self.editor.drill_pattern_awaiting_shape_pick;
-            let measurement_tool_active = matches!(self.editor.active_tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
-            let suppress_view_mode_canvas_click = (self.editor.fly_mode_enabled || (self.editor.slice_mode_enabled && !measurement_tool_active))
-                && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
+            let suppress_view_mode_canvas_click = self.editor.view_mode_owns_canvas_click() && matches!(event, WindowEvent::MouseInput { button: MouseButton::Left, .. });
             if !suppress_view_mode_canvas_click || canvas_pick_mode_active {
                 self.handle_mouse_press(&event);
                 self.handle_mouse_release(&event);
@@ -102,23 +131,33 @@ impl<'a> App<'a> {
                 // Never retain a viewport press across a GUI-owned right-button
                 // event. In particular, a consumed release must not leave a
                 // pending context click or orbit promotion behind.
-                self.right_press_px = None;
-                self.right_orbit_active = false;
+                self.end_right_orbit();
             }
         }
 
-        let graphics_consumed = self.graphics.as_mut().is_some_and(|graphics| {
-            if gui_consumed && !graphics.should_receive_event_when_gui_consumed(&event) {
-                return false;
-            }
+        // Taken here, before the renderer sees it, or one notch would both walk the section and zoom it.
+        let slice_walked = !gui_consumed && self.slice_walk_scroll(&event);
+        let graphics_consumed = !slice_walked
+            && self.graphics.as_mut().is_some_and(|graphics| {
+                if gui_consumed && !graphics.should_receive_event_when_gui_consumed(&event) {
+                    return false;
+                }
 
-            let consumed = graphics.input(&event);
-            if consumed {
-                self.redraw_requested = true;
-            }
-            consumed
-        });
+                let consumed = graphics.input(&event);
+                if consumed {
+                    self.redraw_requested = true;
+                }
+                consumed
+            });
         let input_consumed = gui_consumed || graphics_consumed;
+        // Moves egui claimed skip the arm below; the camera still tracks them
+        // on the web (see `track_cursor_through_gui`).
+        if input_consumed
+            && let WindowEvent::CursorMoved { position, .. } = &event
+            && self.graphics.as_mut().is_some_and(|g| g.track_cursor_through_gui((*position).into()))
+        {
+            self.redraw_requested = true;
+        }
 
         if !input_consumed {
             match event {
@@ -156,6 +195,7 @@ impl<'a> App<'a> {
                     self.refresh_intersection_availability();
                     self.refresh_tie_preview();
                     self.refresh_blast_round();
+                    self.refresh_object_edit_dialog();
                     let project = self.project_view();
                     if let Some(window) = &self.window {
                         let title = project.projects.first().map_or_else(
@@ -171,6 +211,7 @@ impl<'a> App<'a> {
                     crate::mac::sync_menu_state(&self.editor, &project);
                     let completing_topology_load = self.topology_uploads_pending();
                     let applied_resize = self.pending_resize.take();
+                    let mut slice_moving = false;
                     if let Some(graphics) = self.graphics.as_mut() {
                         if let Some(size) = applied_resize {
                             graphics.resize(size);
@@ -191,7 +232,16 @@ impl<'a> App<'a> {
                             self.editor.smoothed_frame_interval = Some(interval);
                             self.editor.measured_fps = (interval > 0.0).then(|| 1.0 / interval);
                         }
-                        graphics.update(dt, self.editor.block_model_interaction_resolution_divisor);
+                        // Ask before `update`, which consumes the section's move deltas.
+                        slice_moving = graphics.slice_view_moving();
+                        graphics.update(dt, self.editor.block_model_interaction_resolution_divisor, self.editor.rotation_centre);
+                    }
+                    // cursor_world is otherwise only written from CursorMoved; re-project after a keyboard-driven move.
+                    if slice_moving {
+                        self.refresh_slice_cursor();
+                        self.redraw_requested = true;
+                    }
+                    if let Some(graphics) = self.graphics.as_mut() {
                         self.editor.can_undo = self.history.can_undo();
                         self.editor.can_redo = self.history.can_redo();
                         match graphics.render(crate::rendering::graphics::frame::RenderInput {
@@ -348,7 +398,7 @@ impl<'a> App<'a> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.editor.cursor_screen_px = Some((position.x as f32, position.y as f32));
-                    let pixels_per_point = self.window.as_ref().map_or(1.0, |window| window.scale_factor() as f32);
+                    let pixels_per_point = self.points_to_px(1.0);
                     let circle_input_reset = self
                         .editor
                         .circle_draft
@@ -366,48 +416,12 @@ impl<'a> App<'a> {
                     self.maybe_start_right_orbit_drag();
                     let z = self.editor.z_level;
                     let raw = self.graphics.as_ref().and_then(|g| g.cursor_world(z));
-                    let is_drawing_tool = matches!(
-                        self.editor.active_tool,
-                        ActiveTool::MakePoint
-                            | ActiveTool::MakeLine
-                            | ActiveTool::MakePoly
-                            | ActiveTool::MakeCircle
-                            | ActiveTool::MakeText
-                            | ActiveTool::MeasureDistance
-                            | ActiveTool::MeasureBatterAngle
-                            | ActiveTool::VerticalSlice
-                    );
                     let is_scrolling = self.last_scroll_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(250));
-                    let snap_mode_enabled = matches!(
-                        self.editor.cursor_mode,
-                        crate::ui::state::CursorMode::SnapToPoint | crate::ui::state::CursorMode::SnapToLine | crate::ui::state::CursorMode::SnapToSurface
-                    );
                     let camera_active = self.graphics.as_ref().is_some_and(|g| g.is_camera_active());
-                    let snap_eligible = is_drawing_tool && snap_mode_enabled && !camera_active && !is_scrolling;
+                    let snap_eligible = self.editor.active_tool.snaps_cursor() && self.editor.snapping_active() && !camera_active && !is_scrolling;
                     let now = Instant::now();
-                    let snap_poll_due = self
-                        .last_snap_poll_instant
-                        .is_none_or(|last_poll| now.duration_since(last_poll) >= super::rate_interval(self.editor.snap_poll_rate));
-                    let snapped = if snap_eligible && snap_poll_due {
-                        self.last_snap_poll_instant = Some(now);
-                        self.refresh_snap_index();
-                        let document = &self.scene_document;
-                        self.graphics.as_ref().and_then(|g| {
-                            g.snap_cursor(
-                                document,
-                                &self.snap_index,
-                                &self.triangulations,
-                                &self.editor.hidden_handles,
-                                &self.editor.frozen_handles,
-                                &self.editor.cursor_mode,
-                                self.editor.xray_enabled,
-                            )
-                        })
-                    } else if snap_eligible && self.editor.cursor_snapped {
-                        self.editor.cursor_world
-                    } else {
-                        None
-                    };
+                    let snap_poll_due = self.cursor_poll_due(now);
+                    let snapped = if snap_eligible { self.cursor_snap_point(now) } else { None };
                     let was_snapped = self.editor.cursor_snapped;
                     // During a camera drag the mouse steers the view, not the
                     // cursor: keep the last world cursor (and its snapped flag)
@@ -468,6 +482,7 @@ impl<'a> App<'a> {
                                 screen,
                                 graphics.window_to_viewport_px(cursor_px),
                                 crate::app::PICK_THRESHOLD_PX * 2.5,
+                                graphics.section_slab(),
                             );
                             let hover_px = nearest.and_then(|(oid, _vi, world)| {
                                 let is_closed_polyline = self.scene_document.get_object(oid).is_some_and(|o| {
@@ -682,23 +697,27 @@ impl<'a> App<'a> {
                 self.slice_preview_middle_down = state == ElementState::Pressed;
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let scroll = match delta {
-                    MouseScrollDelta::LineDelta(_, value) => f64::from(value) * 100.0,
-                    MouseScrollDelta::PixelDelta(position) => position.y,
-                };
-                let changed = self
-                    .graphics
-                    .as_ref()
-                    .and_then(|graphics| graphics.slice_preview_viewport())
-                    .is_some_and(|(size, scale_factor)| {
-                        let cursor = self.slice_preview_cursor_px.unwrap_or((f64::from(size.width) * 0.5, f64::from(size.height) * 0.5));
-                        let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(self.editor.slice_half_length, size.height, scale_factor);
-                        self.editor
-                            .slice_preview_navigation
-                            .zoom_at_pixel(scroll, [cursor.0, cursor.1], [f64::from(size.width), f64::from(size.height)], fitted_zoom)
-                    });
-                if changed && let Some(graphics) = self.graphics.as_ref() {
-                    graphics.request_slice_preview_redraw();
+                // Only a notch the section walk leaves alone reaches the zoom below.
+                if self.slice_walk_scroll(&event) {
+                    if let Some(graphics) = self.graphics.as_ref() {
+                        graphics.request_slice_preview_redraw();
+                    }
+                } else {
+                    let scroll = crate::rendering::graphics::scroll_pixels(&delta);
+                    let changed = self
+                        .graphics
+                        .as_ref()
+                        .and_then(|graphics| graphics.slice_preview_viewport())
+                        .is_some_and(|(size, scale_factor)| {
+                            let cursor = self.slice_preview_cursor_px.unwrap_or((f64::from(size.width) * 0.5, f64::from(size.height) * 0.5));
+                            let fitted_zoom = crate::ui::state::fitted_slice_preview_zoom(self.editor.slice_half_length, size.height, scale_factor);
+                            self.editor
+                                .slice_preview_navigation
+                                .zoom_at_pixel(scroll, [cursor.0, cursor.1], [f64::from(size.width), f64::from(size.height)], fitted_zoom)
+                        });
+                    if changed && let Some(graphics) = self.graphics.as_ref() {
+                        graphics.request_slice_preview_redraw();
+                    }
                 }
             }
             WindowEvent::KeyboardInput {
@@ -732,6 +751,7 @@ impl<'a> App<'a> {
                 self.slice_preview_middle_down = false;
                 self.redraw_requested = true;
             }
+            // Same W/S/Q/E handling as the main window, via the shared `slice_key`.
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -740,12 +760,13 @@ impl<'a> App<'a> {
                         ..
                     },
                 ..
-            } if !(cfg!(target_os = "macos") || self.modifiers.control_key()) && self.modifiers.super_key() => {
-                if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.slice_process_key(key, state == ElementState::Pressed);
-                    graphics.request_slice_preview_redraw();
+            } if !self.modifiers.control_key() && !(cfg!(target_os = "macos") && self.modifiers.super_key()) => {
+                if self.slice_key(key, state) {
+                    if let Some(graphics) = self.graphics.as_ref() {
+                        graphics.request_slice_preview_redraw();
+                    }
+                    self.redraw_requested = true;
                 }
-                self.redraw_requested = true;
             }
             WindowEvent::Resized(size) => {
                 if let Some(graphics) = self.graphics.as_mut() {
@@ -902,6 +923,7 @@ impl<'a> App<'a> {
                     }
                 }
                 ActiveTool::SetInitiationPoint => self.set_initiation_at_cursor(),
+                ActiveTool::PickRotationCentre => self.pick_rotation_centre_at_cursor(),
                 ActiveTool::ExplodePolyline => self.explode_at_cursor(),
                 ActiveTool::FuseIntoPolyline => self.fuse_click(),
                 ActiveTool::SplitAtPoints => self.split_at_points_click(),
@@ -947,6 +969,60 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Routes one of the section's W/S/Q/E keys to the slice camera. Shared by
+    /// the main window and the detached section preview.
+    fn slice_key(&mut self, key: KeyCode, state: ElementState) -> bool {
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.slice_process_key(key, state == ElementState::Pressed);
+        }
+        true
+    }
+
+    /// The snap under the cursor for this poll: a fresh query when the rate
+    /// the user set says one is due, else the point last caught, so a snap
+    /// held between polls neither flickers nor re-queries the scene. `None`
+    /// when nothing is within the snap threshold.
+    ///
+    /// Callers decide whether a snap applies at all; this only answers where
+    /// one lands. A section answers it the same way a plan does, against the
+    /// targets inside its slab.
+    pub(crate) fn cursor_snap_point(&mut self, now: Instant) -> Option<glam::DVec3> {
+        if !self.cursor_poll_due(now) {
+            return self.editor.cursor_snapped.then_some(self.editor.cursor_world).flatten();
+        }
+        self.last_snap_poll_instant = Some(now);
+        self.refresh_snap_index();
+        let document = &self.scene_document;
+        self.graphics.as_ref().and_then(|graphics| {
+            graphics.snap_cursor(
+                document,
+                &self.snap_index,
+                &self.triangulations,
+                &self.editor.hidden_handles,
+                &self.editor.frozen_handles,
+                &self.editor.cursor_mode,
+                self.editor.xray_enabled,
+            )
+        })
+    }
+
+    /// Whether the cursor-poll rate the user set allows another scene query
+    /// now. The snap and the tool-hover picks share one budget: both walk the
+    /// scene for the same still cursor.
+    pub(crate) fn cursor_poll_due(&self, now: Instant) -> bool {
+        self.last_snap_poll_instant
+            .is_none_or(|last_poll| now.duration_since(last_poll) >= super::rate_interval(self.editor.snap_poll_rate))
+    }
+
+    /// Ends a right-drag orbit and reports whether one was running.
+    pub(crate) fn end_right_orbit(&mut self) -> bool {
+        let was_orbiting = self.right_orbit_active;
+        self.right_press_px = None;
+        self.right_orbit_active = false;
+        self.refresh_slice_cursor();
+        was_orbiting
+    }
+
     fn handle_right_press_for_orbit(&mut self, event: &WindowEvent) {
         if let WindowEvent::MouseInput {
             button: MouseButton::Right,
@@ -965,32 +1041,40 @@ impl<'a> App<'a> {
         }
     }
 
-    fn handle_right_release(&mut self, event: &WindowEvent) {
-        let measurement_tool_active = matches!(self.editor.active_tool, ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
-        if self.editor.fly_mode_enabled || (self.editor.slice_mode_enabled && !measurement_tool_active) {
-            // View modes do not open the canvas context menu. Slice mode still
-            // lets a quick right click reach the cancellation path while one
-            // of its supported measurement tools is active.
-            self.right_press_px = None;
-            self.right_orbit_active = false;
-            return;
+    /// Shift+scroll walks the section along its own normal; plain scroll still zooms. Reports whether the notch was taken.
+    fn slice_walk_scroll(&mut self, event: &WindowEvent) -> bool {
+        let WindowEvent::MouseWheel { delta, .. } = event else {
+            return false;
+        };
+        if !self.editor.slice_mode_enabled || !self.modifiers.shift_key() {
+            return false;
         }
-        if let WindowEvent::MouseInput {
+        let consumed = self.graphics.as_mut().is_some_and(|graphics| graphics.slice_walk_scroll(delta));
+        if consumed {
+            self.redraw_requested = true;
+        }
+        consumed
+    }
+
+    fn handle_right_release(&mut self, event: &WindowEvent) {
+        // Button kind is checked before the press anchor is touched, or the drag could never arm.
+        let WindowEvent::MouseInput {
             state: ElementState::Released,
             button: MouseButton::Right,
             ..
         } = event
+        else {
+            return;
+        };
+        // Read before ending the orbit, which clears it.
+        let press_px = self.right_press_px;
+        let orbit_was_active = self.end_right_orbit();
+        if self.editor.view_mode_owns_canvas_click() {
+            // Fly mode, and the section while a tool it can't serve is up, own the right button outright.
+            return;
+        }
         {
-            let orbit_was_active = self.right_orbit_active;
-            self.right_orbit_active = false;
-            let is_quick_press = match (self.right_press_px.take(), self.editor.cursor_screen_px) {
-                (Some(press), Some(cur)) => {
-                    let dx = cur.0 - press.0;
-                    let dy = cur.1 - press.1;
-                    (dx * dx + dy * dy).sqrt() < RIGHT_CLICK_DRAG_THRESHOLD_PX
-                }
-                _ => false,
-            } && !orbit_was_active;
+            let is_quick_press = press_px.is_some_and(|press| self.right_press_is_click(press)) && !orbit_was_active;
             if is_quick_press && self.editor.tie_anchor.is_some() {
                 // The same thing a right click does to a polyline being drawn:
                 // put the run down, without the canvas menu over the pattern.
@@ -1094,13 +1178,18 @@ impl<'a> App<'a> {
         }
         let dx = cur.0 - press.0;
         let dy = cur.1 - press.1;
-        if (dx * dx + dy * dy).sqrt() < RIGHT_CLICK_DRAG_THRESHOLD_PX {
+        if self.right_press_is_click(press) {
             return;
         }
 
         if self.editor.slice_mode_enabled {
-            // No orbiting in slice mode; the camera is fully derived from the
-            // slice state (Q/E rotates the slice line instead).
+            // The section's camera is rebuilt from slice state every frame, so this drag goes to the slice
+            // orbit instead of the generic controller, carrying the delta already past the click threshold.
+            let initial = glam::DVec2::new(dx.into(), dy.into());
+            if self.graphics.as_mut().is_some_and(|graphics| graphics.begin_slice_orbit_drag(initial)) {
+                self.right_orbit_active = true;
+                self.redraw_requested = true;
+            }
             return;
         }
 
@@ -1115,6 +1204,9 @@ impl<'a> App<'a> {
             &self.editor.frozen_handles,
             &self.scene_document,
             &self.snap_index,
+            self.editor.z_level,
+            self.editor.rotation_centre,
+            self.editor.xray_enabled,
         );
         graphics.begin_right_orbit_drag();
         self.right_orbit_active = true;
@@ -1126,6 +1218,7 @@ impl<'a> App<'a> {
             event: KeyEvent {
                 state,
                 physical_key: PhysicalKey::Code(key),
+                repeat,
                 ..
             },
             ..
@@ -1134,6 +1227,8 @@ impl<'a> App<'a> {
             return;
         };
         match state {
+            // A held C is one press: the toggle must not chatter with the key's auto-repeat.
+            ElementState::Pressed if *repeat && *key == KeyCode::KeyC => {}
             ElementState::Pressed => self.handle_key_code(*key),
             ElementState::Released => {
                 // Once the Enter that opened the polyline finish dialog is
@@ -1254,8 +1349,9 @@ impl<'a> App<'a> {
                     self.editor.viewport_pick_hover_label = None;
                     self.editor.tool_highlight_id = self.editor.drill_pattern_boundary_id;
                     self.invalidate_geometry();
-                } else if self.editor.slice_mode_enabled {
-                    self.set_slice_mode_enabled(false);
+                } else if self.editor.slice_mode_enabled && self.editor.active_tool == ActiveTool::None && self.editor.pending_stroke.is_empty() {
+                    // Escape unwinds one step at a time: a tool up or a stroke half drawn falls through to the cancel paths below.
+                    self.leave_slice_mode();
                 } else if self.editor.active_tool == ActiveTool::VerticalSlice {
                     self.editor.slice_pending_start = None;
                     self.editor.active_tool = ActiveTool::None;
@@ -1306,6 +1402,10 @@ impl<'a> App<'a> {
                     self.discard_stroke();
                 }
             }
+            // C: the centre of rotation, on and off, the same as its toolbar button.
+            KeyCode::KeyC if !self.editor.text_editing_enabled && !self.modifiers.control_key() && !self.modifiers.super_key() && !self.modifiers.alt_key() => {
+                self.toggle_rotation_centre();
+            }
             KeyCode::Backquote => {
                 let picked = self.graphics.as_ref().and_then(|graphics| {
                     graphics.pick_at_cursor(
@@ -1347,7 +1447,10 @@ impl<'a> App<'a> {
                     self.try_finish_tool();
                 }
             }
-            KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled => {
+            // The "Edit Object" dialog has its own row Delete button and no
+            // keyboard shortcut for it, and it is opened on a selected object,
+            // so without this guard Delete/Backspace raises "delete this object?".
+            KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled && self.editor.object_edit_dialog.is_none() => {
                 if !self.editor.selected_tie_ins.is_empty() {
                     self.delete_selected_tie_ins();
                     return;
@@ -1436,8 +1539,11 @@ impl<'a> App<'a> {
             self.editor.close_drill_pattern();
             self.invalidate_geometry();
         }
-        let allowed_in_slice = matches!(tool, ActiveTool::None | ActiveTool::MeasureDistance | ActiveTool::MeasureBatterAngle);
-        if (self.editor.fly_mode_enabled && tool != ActiveTool::None) || (self.editor.slice_mode_enabled && !allowed_in_slice) {
+        if self.editor.fly_mode_enabled && tool != ActiveTool::None {
+            return;
+        }
+        if self.editor.slice_mode_enabled && tool.section_refuses() {
+            userspace_warn!("{}", tr!(literal = "That tool is not available in the section view"));
             return;
         }
         if tool != self.editor.active_tool
@@ -1537,14 +1643,16 @@ impl<'a> App<'a> {
             } else {
                 self.cancel_active_tool();
             }
+            // A fly look is not an orbit: a fixed centre has no part in it and its
+            // marker would mislead.
+            self.clear_rotation_centre();
             // Fly and slice modes are mutually exclusive: both claim W/S and
             // right-drag.
-            self.set_slice_mode_enabled(false);
+            self.leave_slice_mode();
             self.finish_left_button_interactions();
             self.editor.canvas_context_menu_open = false;
             self.editor.cursor_snapped = false;
-            self.right_press_px = None;
-            self.right_orbit_active = false;
+            self.end_right_orbit();
         }
 
         self.editor.fly_mode_enabled = enabled;

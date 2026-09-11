@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
-use glam::{DMat4, DVec2, DVec3, DVec4};
+use glam::{DMat4, DQuat, DVec2, DVec3, DVec4};
 use lyon::tessellation::VertexBuffers;
 use web_time::Instant;
 use wgpu::util::DeviceExt;
@@ -22,7 +22,7 @@ use crate::{
     },
     rendering::{
         BlockInstance, StrokeVertex, SurfaceVertex, Vertex,
-        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, screen_to_world_on_plane, screen_to_world_on_view_plane},
+        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, SectionSlab, screen_to_world_on_plane, screen_to_world_on_section_plane},
         pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
@@ -150,16 +150,70 @@ pub(super) struct GridUniform {
     pub(super) y_axis_color: [f32; 4],
 }
 
+/// The section grid's shader inputs; see `section_grid.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct SectionGridUniform {
+    pub(super) params: [f32; 4],
+    pub(super) phase: [f32; 4],
+    pub(super) color: [f32; 4],
+}
+
+impl SectionGridUniform {
+    fn new(
+        scene_origin: DVec3,
+        background: [f32; 4],
+        axis: crate::ui::state::SectionGridAxis,
+        axis_spacing: f64,
+        elevation_spacing: f64,
+        style: &crate::ui::state::SectionGridStyle,
+        scale_factor: f64,
+    ) -> Self {
+        let rule_x = matches!(axis, crate::ui::state::SectionGridAxis::Easting);
+        let axis_origin = if rule_x { scene_origin.x } else { scene_origin.y };
+        let color = match style.color {
+            Some(chosen) => crate::rendering::color::color32_to_rgba(chosen),
+            None => {
+                let luminance = crate::rendering::color::relative_luminance(background);
+                let mut color = crate::rendering::color::rgb_bytes_to_linear_rgba(if luminance > 0.35 { [55, 60, 66] } else { [99, 106, 115] });
+                color[3] = 0.45;
+                color
+            }
+        };
+        Self {
+            params: [if rule_x { 1.0 } else { 0.0 }, axis_spacing as f32, elevation_spacing as f32, 0.0],
+            phase: [
+                (axis_origin / axis_spacing).fract() as f32,
+                (scene_origin.z / elevation_spacing).fract() as f32,
+                // Points to the physical pixels the shader measures in.
+                (style.thickness * scale_factor) as f32,
+                0.0,
+            ],
+            color,
+        }
+    }
+}
+
 impl GridUniform {
-    fn new(scene_origin: DVec3, background: [f32; 4], camera: &Camera, projection: &Projection, vertical_exaggeration: f64, fly_mode_enabled: bool) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        scene_origin: DVec3,
+        background: [f32; 4],
+        camera: &Camera,
+        projection: &Projection,
+        vertical_exaggeration: f64,
+        fly_mode_enabled: bool,
+        style: &crate::ui::state::PlanGridStyle,
+        scale_factor: f64,
+    ) -> Self {
         fn color(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
             let mut color = crate::rendering::color::rgb_bytes_to_linear_rgba(rgb);
             color[3] = alpha;
             color
         }
 
-        let luminance = background[0] * 0.2126 + background[1] * 0.7152 + background[2] * 0.0722;
-        let (minor_color, major_color, x_axis_color, y_axis_color) = if luminance > 0.35 {
+        let luminance = crate::rendering::color::relative_luminance(background);
+        let (mut minor_color, mut major_color, x_axis_color, y_axis_color) = if luminance > 0.35 {
             (color([72, 77, 82], 0.28), color([55, 60, 66], 0.46), color([130, 62, 66], 0.78), color([67, 108, 57], 0.78))
         } else {
             (
@@ -169,6 +223,18 @@ impl GridUniform {
                 color([65, 101, 55], 0.82),
             )
         };
+
+        // A chosen colour takes the major lines as given and the minor lines
+        // at the palette's minor-to-major opacity; the axes keep their own.
+        if let Some(chosen) = style.color {
+            let minor_ratio = minor_color[3] / major_color[3];
+            major_color = crate::rendering::color::color32_to_rgba(chosen);
+            minor_color = major_color;
+            minor_color[3] *= minor_ratio;
+        }
+        // Points beyond the one-pixel width the grid has always had, in the
+        // physical pixels the shader measures in.
+        let extra_width = ((style.thickness - 1.0) * scale_factor).max(0.0);
 
         // Blender selects one grid level for the whole view from camera
         // distance/zoom, then draws the level below and above it. Keeping the
@@ -198,7 +264,7 @@ impl GridUniform {
             ],
             // y controls grazing-angle suppression. Fly mode deliberately
             // leaves the grid at full opacity even when viewed edge-on.
-            level_params: [grid_level as f32, if fly_mode_enabled { 0.0 } else { 1.0 }, 0.0, 0.0],
+            level_params: [grid_level as f32, if fly_mode_enabled { 0.0 } else { 1.0 }, extra_width as f32, 0.0],
             minor_color,
             major_color,
             x_axis_color,
@@ -215,6 +281,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) surface_render_pipeline: wgpu::RenderPipeline,
     pub(super) transparent_surface_render_pipeline: wgpu::RenderPipeline,
     pub(super) grid_render_pipeline: wgpu::RenderPipeline,
+    pub(super) section_grid_render_pipeline: wgpu::RenderPipeline,
     pub(super) raster_plane_render_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_render_pipeline: wgpu::RenderPipeline,
     pub(super) block_model_volume_pipeline: wgpu::RenderPipeline,
@@ -259,6 +326,8 @@ pub(crate) struct Graphics<'a> {
     pub(super) camera_bind_group: wgpu::BindGroup,
     pub(super) grid_buffer: wgpu::Buffer,
     pub(super) grid_bind_group: wgpu::BindGroup,
+    pub(super) section_grid_buffer: wgpu::Buffer,
+    pub(super) section_grid_bind_group: wgpu::BindGroup,
     pub(super) msaa_color: wgpu::Texture,
     pub(super) msaa_view: wgpu::TextureView,
     pub(super) scene_cache: SceneCacheTarget,
@@ -413,6 +482,7 @@ impl SliceInputState {
 pub(crate) struct SliceViewState {
     /// Slice-line midpoint in display space (world XY, exaggerated Z);
     /// `z` is the current view-centre elevation.
+    /// Rides with the eye's foot on the plane (`set_eye`); Q/E turns about it.
     pub(super) center: DVec3,
     /// Unit direction of the slice line in XY ("strike"). Screen-right maps
     /// to `+direction`; the view direction (slab normal) is
@@ -430,21 +500,173 @@ pub(crate) struct SliceViewState {
     pub(super) pan: DVec2,
     /// Accumulated scroll deltas (pixels, 1 line ≈ 100 px).
     pub(super) scroll: f64,
+    pub(super) walk: f64,
+    pub(super) orbit: DVec2,
+    /// Whether a right drag has passed the click/drag threshold; below it a
+    /// right click still finishes the drawn polyline instead of moving the view.
+    pub(super) orbit_dragging: bool,
+    /// Orbit from square-on, radians: `yaw` about world Z, then `pitch` about
+    /// the yawed screen-right axis; both zero is the entered view.
+    pub(super) yaw: f64,
+    pub(super) pitch: f64,
+    /// Which side of the plane the camera is on (`true` = front, the entered
+    /// side); `walk_direction` reads it to keep the walk direction correct after an orbit.
+    pub(super) viewing_from_front: bool,
     /// Camera and ortho zoom to restore on exit.
     pub(super) saved_camera: Camera,
     pub(super) saved_zoom: f64,
+    /// The eye's offset from `center`, along the normal only: the depth the
+    /// slide onto the plane could not remove near edge-on, zero otherwise.
+    pub(super) view_offset: DVec3,
+    /// An in-flight turn to a standard view, eased over a moment.
+    pub(super) turn_to: Option<SliceTurn>,
+}
+
+/// A section on its way to a standard view: the gizmo's counterpart to the
+/// plan view's camera transition, held on the slice state because the section
+/// camera is rebuilt from that state every frame - a camera transition would
+/// simply be overwritten.
+#[derive(Debug)]
+pub(super) struct SliceTurn {
+    /// Total turn of the section line, radians, and how much of it is spent.
+    angle: f64,
+    turned: f64,
+    /// The orbit to unwind on the way: every standard view a section can be
+    /// turned to is square-on, so both of these ease to zero.
+    start_yaw: f64,
+    start_pitch: f64,
+    elapsed: Duration,
 }
 
 impl SliceViewState {
+    /// Whether the section still has work in hand: navigation the next tick
+    /// must consume, or a turn to finish. Drives the redraw loop, so a turn
+    /// counts even though nothing is touching the mouse.
     pub(super) fn has_pending_updates(&self) -> bool {
-        self.input.any() || self.pan != DVec2::ZERO || self.scroll != 0.0
+        self.has_pending_input() || self.turn_to.is_some()
+    }
+
+    fn has_pending_input(&self) -> bool {
+        self.input.any() || self.pan != DVec2::ZERO || self.scroll != 0.0 || self.orbit != DVec2::ZERO || self.walk != 0.0
+    }
+
+    /// Advance an in-flight turn: the section line's step for this tick and
+    /// the yaw/pitch to hold. `None` when no turn is running - and navigation
+    /// input takes over from one at once, as it does from the plan view's
+    /// transition.
+    pub(super) fn advance_turn(&mut self, dt: Duration) -> Option<(f64, f64, f64)> {
+        if self.has_pending_input() {
+            self.turn_to = None;
+        }
+        let turn = self.turn_to.as_mut()?;
+        turn.elapsed += dt;
+        let linear = (turn.elapsed.as_secs_f64() / crate::rendering::camera::VIEW_TRANSITION_DURATION.as_secs_f64()).clamp(0.0, 1.0);
+        let eased = crate::rendering::camera::ease_out_cubic(linear);
+        // The line is turned by steps rather than set outright, so each step goes through `turn` and keeps the eye and a fixed centre with it.
+        let step = turn.angle * eased - turn.turned;
+        turn.turned += step;
+        let (start_yaw, start_pitch) = (turn.start_yaw, turn.start_pitch);
+        if linear >= 1.0 {
+            self.turn_to = None;
+        }
+        Some((step, start_yaw * (1.0 - eased), start_pitch * (1.0 - eased)))
+    }
+
+    pub(super) fn slab(&self) -> SectionSlab {
+        SectionSlab {
+            point: self.center,
+            normal: self.normal(),
+            half_width: self.width * 0.5,
+        }
     }
 
     /// View direction of the section (the slab normal), horizontal by
     /// construction. Chosen so that screen-right equals `+direction`.
-    pub(super) fn forward(&self) -> DVec3 {
+    pub(super) fn normal(&self) -> DVec3 {
         slice_view_forward(self.direction)
     }
+
+    /// The eye: `center` plus `view_offset`.
+    pub(super) fn camera_position(&self) -> DVec3 {
+        self.center + self.view_offset
+    }
+
+    /// Place the eye: the anchor takes its foot, the offset keeps its depth.
+    pub(super) fn set_eye(&mut self, eye: DVec3) {
+        let normal = self.normal();
+        let offset = eye - self.center;
+        let depth = offset.dot(normal);
+        self.center += offset - normal * depth;
+        self.view_offset = normal * depth;
+    }
+
+    pub(super) fn camera_basis(&self) -> (DVec3, DVec3, DVec3) {
+        camera_frame(self.normal(), self.yaw, self.pitch)
+    }
+
+    /// Turn the section line `angle` radians about `fixed_centre` when one is
+    /// set, else about the anchor, carrying the eye with it. A rigid turn
+    /// about a vertical axis, so a fixed centre keeps its pixel through it.
+    pub(super) fn turn(&mut self, angle: f64, fixed_centre: Option<DVec3>) {
+        let turn = DVec2::from_angle(angle);
+        self.direction = turn.rotate(self.direction).normalize_or(self.direction);
+        if let Some(centre) = fixed_centre {
+            let arm = turn.rotate((self.center - centre).truncate());
+            self.center = DVec3::new(centre.x + arm.x, centre.y + arm.y, self.center.z);
+        }
+        let eye = turn.rotate(self.view_offset.truncate());
+        self.view_offset = DVec3::new(eye.x, eye.y, self.view_offset.z);
+    }
+
+    pub(super) fn update_viewing_side(&mut self, forward: DVec3) {
+        self.viewing_from_front = settled_viewing_side(self.viewing_from_front, forward.dot(self.normal()));
+    }
+}
+
+/// Camera basis for a section `normal`, yawed about world Z then pitched
+/// about the resulting screen-right; right stays horizontal so the frame never collapses looking straight down.
+fn camera_frame(normal: DVec3, yaw: f64, pitch: f64) -> (DVec3, DVec3, DVec3) {
+    let yawed = DQuat::from_rotation_z(yaw) * normal;
+    let right = yawed.cross(DVec3::Z).normalize_or(DVec3::X);
+    let forward = DQuat::from_axis_angle(right, pitch) * yawed;
+    (forward, right, right.cross(forward).normalize_or(DVec3::Z))
+}
+
+/// Hysteresis around edge-on, in degrees: below this margin the camera's
+/// recorded side of the plane doesn't flip, since exactly edge-on the sign is arbitrary and would flicker under a barely-moving hand.
+const SIDE_FLIP_MARGIN_DEGREES: f64 = 5.0;
+
+fn settled_viewing_side(was_front: bool, incidence: f64) -> bool {
+    if incidence.abs() > SIDE_FLIP_MARGIN_DEGREES.to_radians().sin() {
+        incidence > 0.0
+    } else {
+        was_front
+    }
+}
+
+/// Direction a forward walk moves the plane, away from the eye: `normal`
+/// from the front side, `-normal` from the back.
+fn walk_direction(normal: DVec3, viewing_from_front: bool) -> DVec3 {
+    if viewing_from_front { normal } else { -normal }
+}
+
+/// Wheel delta as `(x, y)` pixels; one notch is 100 px on either axis.
+fn axis_pixels(delta: &MouseScrollDelta) -> (f64, f64) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (f64::from(*x) * 100.0, f64::from(*y) * 100.0),
+        MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
+    }
+}
+
+pub(crate) fn scroll_pixels(delta: &MouseScrollDelta) -> f64 {
+    axis_pixels(delta).1
+}
+
+/// Wheel delta in pixels, preferring `y` like `scroll_pixels`, but falling
+/// back to `x`: Shift+wheel arrives as a horizontal delta (`y` zero) on Chrome and on macOS.
+pub(crate) fn scroll_pixels_either_axis(delta: &MouseScrollDelta) -> f64 {
+    let (x, y) = axis_pixels(delta);
+    if y != 0.0 { y } else { x }
 }
 
 /// View direction for a slice line running along `direction`:
@@ -459,6 +681,26 @@ pub(crate) fn slice_view_forward(direction: DVec2) -> DVec3 {
 pub(super) fn slice_visible_half_length(zoom: f64, screen: Size) -> f64 {
     let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
     (zoom * aspect).max(1.0e-4)
+}
+
+/// Bound the infinite section slab over the scene's display-space extents.
+/// The overview's visible line length must not limit depth: orbiting can bring
+/// geometry farther along the section into view even at a very small zoom.
+fn slice_depth_half_extent(center: DVec3, strike: DVec3, forward: DVec3, half_width: f64, bounds: Option<(DVec3, DVec3)>) -> f64 {
+    let mut tilt_depth: f64 = 0.0;
+    if let Some((min, max)) = bounds {
+        for i in 0..8 {
+            let corner = DVec3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            );
+            let delta = corner - center;
+            let depth = delta.dot(strike) * strike.dot(forward) + delta.z * forward.z;
+            tilt_depth = tilt_depth.max(depth.abs());
+        }
+    }
+    half_width + tilt_depth + 1.0
 }
 
 pub(super) struct BlockModelTransparencyTargets {
@@ -595,6 +837,9 @@ impl<'a> Graphics<'a> {
         self.fly_camera_controller.clear_input();
         if let Some(slice) = self.slice_view.as_mut() {
             slice.input = SliceInputState::default();
+            // Drop the armed orbit: otherwise the next pointer move would rotate the restored view.
+            slice.orbit_dragging = false;
+            slice.orbit = DVec2::ZERO;
         }
         self.sync_cursor_grab();
     }
@@ -731,11 +976,24 @@ impl<'a> Graphics<'a> {
             input: SliceInputState::default(),
             pan: DVec2::ZERO,
             scroll: 0.0,
+            walk: 0.0,
+            orbit: DVec2::ZERO,
+            orbit_dragging: false,
+            yaw: 0.0,
+            pitch: 0.0,
+            viewing_from_front: true,
             saved_camera,
             saved_zoom,
+            view_offset: DVec3::ZERO,
+            turn_to: None,
         };
-        self.camera.look_to(slice.center, slice.forward(), DVec3::Z, self.projection.zoom);
+        let (forward, _, up) = slice.camera_basis();
+        self.camera.look_to(slice.center, forward, up, self.projection.zoom);
         self.slice_view = Some(slice);
+    }
+
+    pub(crate) fn slice_view_moving(&self) -> bool {
+        self.slice_view.as_ref().is_some_and(SliceViewState::has_pending_updates)
     }
 
     /// Leave slice mode and restore the camera saved on entry. The clip
@@ -746,6 +1004,86 @@ impl<'a> Graphics<'a> {
         };
         self.camera = slice.saved_camera;
         self.projection.zoom = slice.saved_zoom;
+        if self.mouse_pressed == Some(MouseButton::Right) && !self.fly_mode_enabled {
+            self.mouse_pressed = None;
+        }
+    }
+
+    pub(crate) fn begin_slice_orbit_drag(&mut self, initial: DVec2) -> bool {
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        slice.orbit_dragging = true;
+        slice.orbit += initial;
+        self.begin_right_orbit_drag();
+        true
+    }
+
+    pub(crate) fn slice_walk_scroll(&mut self, delta: &MouseScrollDelta) -> bool {
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        slice.walk += scroll_pixels_either_axis(delta);
+        self.mark_interaction();
+        true
+    }
+
+    pub(crate) fn section_slab(&self) -> Option<SectionSlab> {
+        self.slice_view.as_ref().map(SliceViewState::slab)
+    }
+
+    /// Turn the section camera to a standard view: the section line itself
+    /// turns, so the camera ends square-on looking along that axis - the turn
+    /// Q/E make, taken in one eased step.
+    ///
+    /// Straight up and down are refused. A vertical section cannot be turned
+    /// to face them, and a view that grazes the plane has no point under the
+    /// cursor, so the gizmo drops those arms while sliced rather than offer a
+    /// turn that lands nowhere.
+    pub(crate) fn set_slice_standard_view(&mut self, view: crate::ui::state::StandardView) -> bool {
+        let (forward, _) = camera::standard_view_basis(view);
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        let Some(target) = forward.truncate().try_normalize() else {
+            return false;
+        };
+        // The turn runs on the update tick, which reads the live rotation centre; the shortest way round, since `angle_to` never exceeds half a turn.
+        slice.turn_to = Some(SliceTurn {
+            angle: slice.normal().truncate().angle_to(target),
+            turned: 0.0,
+            start_yaw: slice.yaw,
+            start_pitch: slice.pitch,
+            elapsed: Duration::ZERO,
+        });
+        true
+    }
+
+    /// Squares the section camera to its plane; undoes only the orbit,
+    /// leaving direction, slab position, pan and zoom untouched.
+    pub(crate) fn reset_slice_view(&mut self, rotation_centre: Option<DVec3>) -> bool {
+        let fixed_centre = rotation_centre.map(|centre| self.exaggerate_point(centre));
+        let Some(slice) = self.slice_view.as_mut() else {
+            return false;
+        };
+        // Squaring up outright takes over from a turn still in flight.
+        slice.turn_to = None;
+        // Squaring up is a turn like any other: a fixed centre keeps its pixel through it.
+        let anchored = fixed_centre.map(|centre| (centre, camera::eye_offset_from(centre, slice.camera_position(), slice.camera_basis())));
+        slice.yaw = 0.0;
+        slice.pitch = 0.0;
+        slice.orbit = DVec2::ZERO;
+        slice.orbit_dragging = false;
+        slice.viewing_from_front = true;
+        let (forward, right, up) = slice.camera_basis();
+        let eye = match anchored {
+            Some((centre, (screen_x, screen_y, depth))) => camera::eye_keeping_centre(centre, screen_x, screen_y, depth, (forward, right, up)),
+            None => slice.camera_position(),
+        };
+        // Square-on, the view meets the plane head-on, so the eye always lands back on it.
+        slice.set_eye(camera::slide_onto_plane(eye, slice.center, forward, slice.normal()));
+        self.camera.look_to(slice.camera_position(), forward, up, self.projection.zoom.max(1.0));
+        true
     }
 
     /// Forward a held-key press/release to the slice navigation input:

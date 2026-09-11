@@ -342,6 +342,15 @@ impl TriangleBvh {
     }
 
     pub(crate) fn ray_hit_details(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3) -> Option<TriangleHit> {
+        self.ray_hit_details_where(mesh, origin, direction, |_| true)
+    }
+
+    /// Nearest hit whose point `accept` keeps, skipping the ones it rejects.
+    /// A section wants the first surface *it draws*: the slab discards the
+    /// fragments outside it, so the hits outside it are not there to be hit.
+    /// Rejected hits never narrow the search, so the traversal still prunes
+    /// on the nearest accepted distance and stays a nearest-hit walk.
+    pub(crate) fn ray_hit_details_where(&self, mesh: &mesh_data::Triangulation, origin: DVec3, direction: DVec3, accept: impl Fn(DVec3) -> bool) -> Option<TriangleHit> {
         if self.nodes.is_empty() {
             return None;
         }
@@ -357,6 +366,7 @@ impl TriangleBvh {
                 for &triangle_index in &self.order[start..start + node.count as usize] {
                     if let Some(distance) = ray_triangle(origin, direction, self.triangle(mesh, triangle_index as usize))
                         && distance < nearest
+                        && accept(origin + direction * distance)
                     {
                         nearest = distance;
                     }

@@ -3,6 +3,7 @@ pub(crate) mod drawing; // Handles finishing polylines, creating points, etc com
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
+pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
@@ -592,11 +593,21 @@ impl<'a> App<'a> {
                 self.cancel_relimit();
                 Ok(())
             }
-            UiCommand::ResetView => {
-                self.set_slice_mode_enabled(false);
-                self.reset_view();
+            UiCommand::ToggleRotationCentre => {
+                self.toggle_rotation_centre();
                 Ok(())
             }
+            UiCommand::ResetView => {
+                // Sliced, the section is the view: squaring up to it and
+                // fitting is the reset, rather than dropping the mode.
+                if self.editor.slice_mode_enabled {
+                    self.reset_slice_view();
+                } else {
+                    self.reset_view();
+                }
+                Ok(())
+            }
+            UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
@@ -613,15 +624,21 @@ impl<'a> App<'a> {
             }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
             UiCommand::SetStandardView(view) => {
-                // The slice camera is derived from the slice state each frame;
-                // a standard-view transition would silently queue and fire on
-                // exit, so ignore it while sliced.
-                if self.editor.slice_mode_enabled {
-                    return Ok(());
-                }
+                // The slice camera is derived from the slice state each frame,
+                // so a standard-view transition would silently queue and fire
+                // on exit; sliced, the section turns to face the view instead.
+                let sliced = self.editor.slice_mode_enabled;
                 if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.set_standard_view(view);
+                    if sliced {
+                        graphics.set_slice_standard_view(view);
+                    } else {
+                        graphics.set_standard_view(view);
+                    }
                     self.redraw_requested = true;
+                }
+                if sliced {
+                    // No mouse event behind this camera swap; ending any orbit lets the cursor land back on the section.
+                    self.end_right_orbit();
                 }
                 Ok(())
             }
@@ -708,7 +725,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
-                self.set_slice_mode_enabled(false);
+                // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();
                 Ok(())
             }
@@ -777,6 +794,14 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenInsertPointAtElevationDialog => {
                 self.open_insert_point_at_elevation_dialog();
+                Ok(())
+            }
+            UiCommand::OpenObjectEditDialog(id) => {
+                self.open_object_edit_dialog(id);
+                Ok(())
+            }
+            UiCommand::ApplyObjectEdit { id, object, close } => {
+                self.apply_object_edit(id, *object, close);
                 Ok(())
             }
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {

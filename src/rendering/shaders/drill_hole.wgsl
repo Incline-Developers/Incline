@@ -1,12 +1,3 @@
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    cam_forward: vec4<f32>,
-    cam_position: vec4<f32>,
-    viewport: vec4<f32>,
-    inv_view_proj: mat4x4<f32>,
-};
-@group(0) @binding(0) var<uniform> camera: CameraUniform;
-
 struct SegmentInput {
     // xyz: segment start, relative to the scene origin. w: world radius.
     @location(0) start_radius: vec4<f32>,
@@ -20,6 +11,8 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) color: vec3<f32>,
+    // Distance from the section plane; affine in position, so interpolation is exact.
+    @location(2) section_offset: f32,
 };
 
 fn ring(angle: f32) -> vec2<f32> { return vec2<f32>(cos(angle), sin(angle)); }
@@ -83,11 +76,15 @@ fn vs_main(instance: SegmentInput, @builtin(vertex_index) vertex_index: u32) -> 
     out.position = camera.view_proj * vec4<f32>(world, 1.0);
     out.normal = normal;
     out.color = instance.color_pad.xyz;
+    out.section_offset = section_plane_offset(world);
     return out;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if outside_section_slab(input.section_offset) {
+        discard;
+    }
     let light = normalize(vec3<f32>(0.35, 0.45, 0.82));
     let diffuse = 0.38 + 0.62 * abs(dot(normalize(input.normal), light));
     return vec4<f32>(input.color * diffuse, 1.0);

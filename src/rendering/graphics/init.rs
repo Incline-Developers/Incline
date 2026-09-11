@@ -1,6 +1,16 @@
 use super::*;
 use crate::{i18n::tr_format, userspace_log};
 
+/// Compiles a shader whose body is prefixed with the shared camera prelude `camera_common.wgsl`, so the camera struct, its binding, and the section-slab helpers exist once.
+/// `label` carries the module's own path, matching what `wgpu::include_wgsl!` would have labelled it.
+fn make_shader(device: &wgpu::Device, label: &str, body: &'static str) -> wgpu::ShaderModule {
+    let source = format!("{}{body}", include_str!("../shaders/camera_common.wgsl"));
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
+    })
+}
+
 impl<'a> Graphics<'a> {
     pub(crate) async fn new(window: Arc<Window>) -> Result<Graphics<'a>> {
         let window_size = window.inner_size();
@@ -185,20 +195,25 @@ impl<'a> Graphics<'a> {
 
         surface.configure(&device, &config);
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/shader.wgsl"));
-        let surface_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/surface.wgsl"));
-        let grid_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/grid.wgsl"));
-        let block_model_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model.wgsl"));
-        let block_model_volume_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_volume.wgsl"));
-        let block_model_transparency_fallback_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_transparency_fallback.wgsl"));
+        let shader = make_shader(&device, "../shaders/shader.wgsl", include_str!("../shaders/shader.wgsl"));
+        let surface_shader = make_shader(&device, "../shaders/surface.wgsl", include_str!("../shaders/surface.wgsl"));
+        let grid_shader = make_shader(&device, "../shaders/grid.wgsl", include_str!("../shaders/grid.wgsl"));
+        let section_grid_shader = make_shader(&device, "../shaders/section_grid.wgsl", include_str!("../shaders/section_grid.wgsl"));
+        let block_model_shader = make_shader(&device, "../shaders/block_model.wgsl", include_str!("../shaders/block_model.wgsl"));
+        let block_model_volume_shader = make_shader(&device, "../shaders/block_model_volume.wgsl", include_str!("../shaders/block_model_volume.wgsl"));
+        let block_model_transparency_fallback_shader = make_shader(
+            &device,
+            "../shaders/block_model_transparency_fallback.wgsl",
+            include_str!("../shaders/block_model_transparency_fallback.wgsl"),
+        );
         let block_model_transparency_composite_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_transparency_composite.wgsl"));
         let block_model_volume_upscale_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/block_model_volume_upscale.wgsl"));
-        let stroke_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/stroke.wgsl"));
-        let edge_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/edge.wgsl"));
-        let point_cloud_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/point_cloud.wgsl"));
-        let drill_hole_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/drill_hole.wgsl"));
-        let drill_collar_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/drill_collar.wgsl"));
-        let design_point_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/design_point.wgsl"));
+        let stroke_shader = make_shader(&device, "../shaders/stroke.wgsl", include_str!("../shaders/stroke.wgsl"));
+        let edge_shader = make_shader(&device, "../shaders/edge.wgsl", include_str!("../shaders/edge.wgsl"));
+        let point_cloud_shader = make_shader(&device, "../shaders/point_cloud.wgsl", include_str!("../shaders/point_cloud.wgsl"));
+        let drill_hole_shader = make_shader(&device, "../shaders/drill_hole.wgsl", include_str!("../shaders/drill_hole.wgsl"));
+        let drill_collar_shader = make_shader(&device, "../shaders/drill_collar.wgsl", include_str!("../shaders/drill_collar.wgsl"));
+        let design_point_shader = make_shader(&device, "../shaders/design_point.wgsl", include_str!("../shaders/design_point.wgsl"));
 
         let camera = Camera::new(DVec3::new(0.0, 0.0, 10.0), (-90.0_f64).to_radians(), 0.0);
         let projection = Projection::new(config.width, config.height, INITIAL_CAMERA_Z_NEAR, INITIAL_CAMERA_Z_FAR);
@@ -238,10 +253,9 @@ impl<'a> Graphics<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let initial_grid_uniform = GridUniform::new(DVec3::ZERO, crate::app::io::default_renderer_background_color(), &camera, &projection, 1.0, false);
         let grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("XY Grid Uniform Buffer"),
-            contents: bytemuck::bytes_of(&initial_grid_uniform),
+            contents: bytemuck::bytes_of(&<GridUniform as bytemuck::Zeroable>::zeroed()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let grid_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -263,6 +277,20 @@ impl<'a> Graphics<'a> {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: grid_buffer.as_entire_binding(),
+            }],
+        });
+
+        let section_grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Section Grid Uniform Buffer"),
+            contents: bytemuck::bytes_of(&<SectionGridUniform as bytemuck::Zeroable>::zeroed()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let section_grid_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Section Grid Bind Group"),
+            layout: &grid_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: section_grid_buffer.as_entire_binding(),
             }],
         });
 
@@ -1018,9 +1046,49 @@ impl<'a> Graphics<'a> {
             multiview_mask: None,
             cache: None,
         });
+        // The section grid shares the XY grid's shape and layout but not its
+        // rule: it is depth tested and writes depth on its lines, so geometry
+        // in front of the plane hides it and geometry behind sits under it.
+        let section_grid_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Section Grid Pipeline"),
+            layout: Some(&grid_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &section_grid_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &section_grid_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: scene_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(Self::depth_state(true, 0)),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
         // Flat plan-view images for undraped rasters: drawn first, pinned to
         // the far plane, no depth writes, so all scene geometry covers them.
-        let raster_plane_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/raster_plane.wgsl"));
+        let raster_plane_shader = make_shader(&device, "../shaders/raster_plane.wgsl", include_str!("../shaders/raster_plane.wgsl"));
         let raster_plane_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Raster Plane Pipeline Layout"),
             bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&raster_surface_bind_group_layout)],
@@ -1426,6 +1494,7 @@ impl<'a> Graphics<'a> {
             surface_render_pipeline,
             transparent_surface_render_pipeline,
             grid_render_pipeline,
+            section_grid_render_pipeline,
             raster_plane_render_pipeline,
             block_model_render_pipeline,
             block_model_volume_pipeline,
@@ -1470,6 +1539,8 @@ impl<'a> Graphics<'a> {
             camera_bind_group,
             grid_buffer,
             grid_bind_group,
+            section_grid_buffer,
+            section_grid_bind_group,
             msaa_color,
             msaa_view,
             scene_cache,
