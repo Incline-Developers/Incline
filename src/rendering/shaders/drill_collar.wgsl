@@ -1,12 +1,3 @@
-struct CameraUniform {
-    view_proj: mat4x4<f32>,
-    cam_forward: vec4<f32>,
-    cam_position: vec4<f32>,
-    viewport: vec4<f32>,
-    inv_view_proj: mat4x4<f32>,
-};
-@group(0) @binding(0) var<uniform> camera: CameraUniform;
-
 struct CollarInstance {
     // xyz: collar position, relative to the scene origin. w: marker radius in
     // world units.
@@ -27,6 +18,8 @@ struct VertexOutput {
     // Flat because the radius is constant across the quad and the fragment
     // shader measures its ring widths in pixels against it.
     @location(3) @interpolate(flat) radius_pixels: f32,
+    // Distance from the section plane, flat: the marker is kept or dropped whole.
+    @location(4) @interpolate(flat) section_offset: f32,
 };
 
 const OUTLINE_PIXELS: f32 = 1.6;
@@ -83,11 +76,15 @@ fn vs_main(instance: CollarInstance, @builtin(vertex_index) vertex_index: u32) -
     out.outline = instance.outline_pixels.xyz;
     out.fill = instance.fill_hole_radius.xyz;
     out.radius_pixels = radius_pixels;
+    out.section_offset = section_plane_offset(center);
     return out;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if outside_section_slab(input.section_offset) {
+        discard;
+    }
     let distance_pixels = length(input.offset) * input.radius_pixels;
     // Not opacity: the pipeline turns this into a sample-coverage mask, so
     // the rim antialiases against the scene behind it without writing the

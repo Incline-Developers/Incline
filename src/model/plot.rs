@@ -235,18 +235,24 @@ pub(crate) fn fitted_scale(spec: &PlotSpec, world_width: f64, world_height: f64)
     let map_width_mm = layout.map.width / layout.px_per_mm;
     let map_height_mm = layout.map.height / layout.px_per_mm;
     let needed = (world_width * 1000.0 / map_width_mm).max(world_height * 1000.0 / map_height_mm);
-    Ok(round_up_to_nice(needed.max(1.0)))
+    Ok(round_up_to_series(needed.max(1.0), &DRAWING_SCALE_STEPS))
 }
 
-/// Round up to the next 1 / 2 / 2.5 / 5 × 10ⁿ value - the scales and grid
-/// intervals drawings conventionally use.
-fn round_up_to_nice(value: f64) -> f64 {
+/// The scales and grid intervals drawings conventionally use: 1 / 2 / 2.5 / 5 × 10ⁿ.
+pub(crate) const DRAWING_SCALE_STEPS: [f64; 5] = [1.0, 2.0, 2.5, 5.0, 10.0];
+
+/// Rounds `value` up to the next entry in ascending `steps` scaled by a power of ten; non-finite or non-positive input returns 1.0.
+pub(crate) fn round_up_to_series(value: f64, steps: &[f64]) -> f64 {
     if !(value.is_finite() && value > 0.0) {
         return 1.0;
     }
     let magnitude = 10f64.powf(value.log10().floor());
     let normalised = value / magnitude;
-    let step = [1.0, 2.0, 2.5, 5.0, 10.0].into_iter().find(|step| normalised <= *step + 1.0e-9).unwrap_or(10.0);
+    let step = steps
+        .iter()
+        .copied()
+        .find(|step| normalised <= *step + 1.0e-9)
+        .unwrap_or_else(|| steps.last().copied().unwrap_or(10.0));
     step * magnitude
 }
 
@@ -710,7 +716,7 @@ pub(crate) fn compose_sheet(input: SheetInput<'_>, painter: &mut TextPainter) ->
 fn grid_interval_for(layout: &PlotLayout, millimetre: f64, requested: Option<f64>) -> f64 {
     requested
         .filter(|interval| interval.is_finite() && *interval > 0.0)
-        .unwrap_or_else(|| round_up_to_nice(50.0 * millimetre * layout.world_per_px))
+        .unwrap_or_else(|| round_up_to_series(50.0 * millimetre * layout.world_per_px, &DRAWING_SCALE_STEPS))
 }
 
 fn draw_grid(canvas: &mut Canvas, painter: &mut TextPainter, layout: &PlotLayout, frame: &MapFrame, interval: f64, millimetre: f64) {

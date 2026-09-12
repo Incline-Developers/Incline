@@ -86,9 +86,8 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
 
 /// Draw the canvas right-click context menu for selected objects and triangulations.
 ///
-/// Actions only: an object's own values (colour, shape, fill, line weight) are
-/// edited in the explorer's Design properties tab. Updates `geometry_dirty`
-/// when changes are made.
+/// Groups design appearance and editing controls before shared selection actions.
+/// Updates `geometry_dirty` when changes are made.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_right_click_context(
     ui: &mut egui::Ui,
@@ -1381,7 +1380,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
         });
 }
 
-/// Slice view dock: slab width, movement speed, Q/E rotate rate, and Exit.
+/// Slice view dock: slab width, movement speed, Q/E rotate rate, reset, and exit.
 pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     ViewportDockPanel::new("slice_panel", tr!(literal = "Slice View"), viewport_rect)
         .min_width(210.0)

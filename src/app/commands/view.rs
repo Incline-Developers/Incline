@@ -1,11 +1,81 @@
 use crate::{
     app::App,
     i18n::{tr, tr_format},
-    ui::state::DelayProduct,
-    userspace_log,
+    ui::state::{ActiveTool, DelayProduct},
+    userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
+    /// The toolbar's one button: release a set centre, else arm the pick (or
+    /// disarm it: the toolbar toggles a tool handed twice).
+    pub(crate) fn toggle_rotation_centre(&mut self) {
+        if self.editor.rotation_centre.is_some() {
+            self.clear_rotation_centre();
+            userspace_log!("{}", tr!(literal = "Released the centre of rotation"));
+        } else if self.editor.fly_mode_enabled {
+            userspace_warn!("{}", tr!(literal = "The centre of rotation is not available in flying mode"));
+        } else {
+            self.set_active_tool_from_toolbar(ActiveTool::PickRotationCentre);
+        }
+    }
+
+    /// The armed click: fix the centre where the cursor says it will land -
+    /// the caught snap point when a snap mode holds one, else the closest
+    /// point under the cursor - and stand the tool down.
+    pub(crate) fn pick_rotation_centre_at_cursor(&mut self) {
+        // The snap dot is a promise: the tool must fix the centre on the point
+        // it drew, not on a second pick that lands somewhere else.
+        let snapped = if self.editor.snapping_active() && self.editor.cursor_snapped {
+            self.editor.cursor_world
+        } else {
+            None
+        };
+        let centre = if let Some(centre) = snapped {
+            centre
+        } else {
+            self.refresh_snap_index();
+            let Some(graphics) = self.graphics.as_mut() else {
+                return;
+            };
+            // No snap caught: one rule for every object, the closest point on
+            // it to the cursor.
+            let Some(centre) = graphics.pick_rotation_centre(
+                &self.triangulations,
+                &self.drill_holes,
+                &self.editor.hidden_handles,
+                &self.editor.frozen_handles,
+                &self.scene_document,
+                &self.snap_index,
+                self.editor.z_level,
+                self.editor.xray_enabled,
+            ) else {
+                userspace_warn!("{}", tr!(literal = "No point under the cursor to fix the centre of rotation on"));
+                return;
+            };
+            centre
+        };
+        self.editor.rotation_centre = Some(centre);
+        self.editor.active_tool = ActiveTool::None;
+        userspace_log!(
+            "{}",
+            tr_format!(
+                literal = "Fixed the centre of rotation at %x%, %y%, %z%",
+                x = format!("{:.3}", centre.x),
+                y = format!("{:.3}", centre.y),
+                z = format!("{:.3}", centre.z)
+            )
+        );
+        self.redraw_requested = true;
+    }
+
+    /// Drop the fixed centre; plan orbits pivot on the cursor again, and the
+    /// section's eye turns freely instead of about it.
+    pub(crate) fn clear_rotation_centre(&mut self) {
+        if self.editor.rotation_centre.take().is_some() {
+            self.redraw_requested = true;
+        }
+    }
+
     pub(crate) fn set_topology_wireframes(&mut self, enabled: bool) -> anyhow::Result<()> {
         self.editor.topology_wireframes_enabled = enabled;
         // Deliberately not persisted: this is a per-session view toggle.
@@ -24,13 +94,29 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Flip one view preference and save it, exactly as the Interface tab
+    /// Show or hide the construction grid on the world XY plane.
+    ///
+    /// Deliberately not persisted: this is a per-session view toggle, shown
+    /// again at the start of every run. Reached from the viewport bar alone -
+    /// see [`Self::set_grid_shown`], which picks it or the section's RL grid.
+    pub(crate) fn set_xy_grid_shown(&mut self, enabled: bool) {
+        self.editor.show_xy_grid = enabled;
+        self.redraw_requested = true;
+        userspace_log!("{}", tr_format!(literal = "Set XY grid = %enabled%", enabled = enabled));
+    }
+
+    /// Flip one View menu switch and save it, exactly as the Interface tab
     /// would: the View menu is a shortcut to those settings, not a second
     /// place they are stored.
     pub(crate) fn toggle_view_option(&mut self, option: crate::ui::state::ViewToggle) -> anyhow::Result<()> {
+        use crate::ui::state::ViewToggle;
+
+        let value = !option.get(&self.editor);
         let mut preferences = self.editor.current_preferences();
-        let value = !option.get(&preferences);
-        option.set(&mut preferences, value);
+        match option {
+            ViewToggle::Console => preferences.show_console = value,
+            ViewToggle::DarkMode => preferences.dark_mode = value,
+        }
         self.apply_preferences(preferences)
     }
 
@@ -71,7 +157,6 @@ impl<'a> App<'a> {
         self.editor.show_console = preferences.show_console;
         self.editor.panel_chrome = preferences.panel_chrome;
         self.editor.show_world_axis_gizmo = preferences.show_world_axis_gizmo;
-        self.editor.show_xy_grid = preferences.show_xy_grid;
         self.editor.show_scale_bar = preferences.show_scale_bar;
         self.editor.renderer_background_color = preferences.renderer_background_color;
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
@@ -222,7 +307,6 @@ pub(crate) fn config_from(
         show_console: preferences.show_console,
         panel_chrome: preferences.panel_chrome,
         show_world_axis_gizmo: preferences.show_world_axis_gizmo,
-        show_xy_grid: preferences.show_xy_grid,
         show_scale_bar: preferences.show_scale_bar,
         renderer_background_color: preferences.renderer_background_color,
         snap_poll_rate: preferences.snap_poll_rate,

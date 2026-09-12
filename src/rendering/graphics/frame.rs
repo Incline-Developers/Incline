@@ -50,6 +50,9 @@ struct EditorSceneState {
     /// Bit pattern: the level the design plane and z-cut draw at.
     z_level: u64,
     show_xy_grid: bool,
+    slice_grid_enabled: bool,
+    section_grid_style: crate::ui::state::SectionGridStyle,
+    xy_grid_style: crate::ui::state::PlanGridStyle,
     fly_mode_enabled: bool,
     /// Tie Holes draws drill traces without the depth test (`draw_drill_holes`).
     tying_holes: bool,
@@ -62,6 +65,9 @@ impl EditorSceneState {
         Self {
             z_level: editor.z_level.to_bits(),
             show_xy_grid: editor.show_xy_grid,
+            slice_grid_enabled: editor.slice_grid_enabled,
+            section_grid_style: editor.section_grid_style,
+            xy_grid_style: editor.xy_grid_style,
             fly_mode_enabled: editor.fly_mode_enabled,
             tying_holes: editor.tying_holes(),
             shows_tie_ins: editor.shows_tie_ins(),
@@ -104,14 +110,26 @@ impl<'a> Graphics<'a> {
         let mut scene_content_changed = self.geometry_dirty;
         self.vertical_exaggeration = editor.vertical_exaggeration.clamp(0.1, 20.0);
         let slice_visible_half_length = slice_visible_half_length(self.projection.zoom, self.screen_size());
+        if self.slice_view.is_some() {
+            self.refresh_scene_bounds(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
+        }
         if let Some(slice) = self.slice_view.as_mut() {
-            // Slice mode owns the clip planes: the symmetric depth extent *is*
-            // the slab, so the scene-fitting passes below must not run - they
-            // would blow the clip range back out to the scene bounds.
+            // Slice mode sets the clip planes itself; the scene-fitting passes below must not run.
             slice.width = editor.slice_width_input.clamp(0.1, 1.0e6);
             slice.move_speed = editor.slice_speed_input.clamp(0.0, 1.0e6);
             slice.rotate_speed = editor.slice_rotate_input.clamp(1.0, 720.0).to_radians();
-            self.projection.set_symmetric_depth_extent(slice.width * 0.5);
+            // Camera's own depth range, not the slab (fragment shaders clip to that directly) - kept wide enough a tilted or overhead view won't clip away geometry the slab would show.
+            let forward = self.camera.forward();
+            let strike = DVec3::new(slice.direction.x, slice.direction.y, 0.0);
+            // Scene bounds are model elevations, the slice centre a display one - stretch bounds by the vertical exaggeration before comparing.
+            let origin_z = self.scene_origin.z;
+            let exaggeration = self.vertical_exaggeration;
+            let display_z = |z: f64| origin_z + (z - origin_z) * exaggeration;
+            let bounds = self
+                .cached_scene_bounds
+                .map(|(min, max)| (DVec3::new(min.x, min.y, display_z(min.z)), DVec3::new(max.x, max.y, display_z(max.z))));
+            self.projection
+                .set_symmetric_depth_extent(slice_depth_half_extent(slice.center, strike, forward, slice.width * 0.5, bounds) + slice.view_offset.dot(forward).abs());
             editor.slice_center = [slice.center.x, slice.center.y, slice.center.z];
             editor.slice_direction = [slice.direction.x, slice.direction.y];
             editor.slice_half_length = slice_visible_half_length;
@@ -121,7 +139,8 @@ impl<'a> Graphics<'a> {
             self.include_batter_berm_preview_in_depth(editor);
         }
         editor.debug_clip_plane_distances = Some(self.projection.clip_planes());
-        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
+        // Uploaded every frame; outside a section this is `None`, which is what switches the shader clip off.
+        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor, self.section_slab());
         let grid_uniform = GridUniform::new(
             self.scene_origin,
             editor.renderer_background_color,
@@ -129,8 +148,24 @@ impl<'a> Graphics<'a> {
             &self.projection,
             self.vertical_exaggeration,
             self.fly_mode_enabled,
+            &editor.xy_grid_style,
+            self.window.scale_factor(),
         );
         self.queue.write_buffer(&self.grid_buffer, 0, bytemuck::bytes_of(&grid_uniform));
+        if editor.slice_grid_enabled
+            && let Some((axis, axis_spacing, elevation_spacing)) = self.section_grid_spacing(editor.section_grid_style.level_spacing)
+        {
+            let section_grid_uniform = SectionGridUniform::new(
+                self.scene_origin,
+                editor.renderer_background_color,
+                axis,
+                axis_spacing,
+                elevation_spacing,
+                &editor.section_grid_style,
+                self.window.scale_factor(),
+            );
+            self.queue.write_buffer(&self.section_grid_buffer, 0, bytemuck::bytes_of(&section_grid_uniform));
+        }
         // Advance non-blocking volume-usage readbacks. Their callbacks only
         // send a small bitset through a channel; residency changes are applied
         // later by the normal streaming pass.
@@ -416,6 +451,7 @@ impl<'a> Graphics<'a> {
         self.update_tool_projections(editor, document, drill_holes);
 
         let orbit_marker_screen = self.orbit_marker_screen_pos();
+        let rotation_centre_screen = editor.rotation_centre.and_then(|centre| self.rotation_centre_screen_pos(centre));
         let camera_active = self.is_camera_active();
         let camera_forward = self.camera.forward();
         let camera_up = self.camera.up();
@@ -433,6 +469,7 @@ impl<'a> Graphics<'a> {
             drill_holes,
             [self.size.width, self.size.height],
             orbit_marker_screen,
+            rotation_centre_screen,
             camera_active,
             [camera_forward.x as f32, camera_forward.y as f32, camera_forward.z as f32],
             [camera_up.x as f32, camera_up.y as f32, camera_up.z as f32],

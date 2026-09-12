@@ -429,6 +429,28 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
         editor.vertical_exaggeration_dialog_open = true;
     }
 
+    // Fixed centre of rotation: one click arms a pick, the next click on the
+    // button releases the centre; lit while armed or set.
+    let armed = editor.active_tool == ActiveTool::PickRotationCentre;
+    let centre = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("rotation_centre.svg")),
+            if editor.rotation_centre.is_some() {
+                format!("{} (C)", tr!(literal = "Release Centre of Rotation"))
+            } else if armed {
+                tr!(literal = "Click a point to fix the centre of rotation")
+            } else {
+                format!("{} (C)", tr!(literal = "Fix Centre of Rotation"))
+            },
+        )
+        .id_salt("rotation_centre")
+        .button_side(side)
+        .selected(armed || editor.rotation_centre.is_some()),
+    );
+    if centre.clicked() {
+        commands.push(UiCommand::ToggleRotationCentre);
+    }
+
     let zoom = ui.add(
         ToolbarButton::new(egui::Image::new(unthemed_icon!("zoom_to_extents.svg")), tr!(literal = "Zoom to Extents"))
             .id_salt("zoom_to_extents")
@@ -448,16 +470,88 @@ fn draw_camera_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut
     }
 }
 
+/// The three switches saying how the scene's geometry is drawn: the vertices of
+/// its lines, the wireframes on its meshes, the grid it is drawn over. None of
+/// them is a tool, and none of them is saved.
+///
+/// Added grid first because the layout runs right to left - see
+/// [`draw_scene_modes`], which they follow along the bar.
+fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    // One grid button: the RL grid in a section, the XY grid in plan; which one
+    // is the app's call (`set_grid_shown`).
+    let shown = if editor.slice_mode_enabled { editor.slice_grid_enabled } else { editor.show_xy_grid };
+    let label = match (editor.slice_mode_enabled, shown) {
+        (true, true) => tr!(literal = "Hide RL Grid"),
+        (true, false) => tr!(literal = "Show RL Grid"),
+        (false, true) => tr!(literal = "Hide XY Grid"),
+        (false, false) => tr!(literal = "Show XY Grid"),
+    };
+    let grid = ui.add(
+        ToolbarButton::new(egui::Image::new(unthemed_icon!("section_grid.svg")), label)
+            .id_salt("section_grid")
+            .button_side(side)
+            .selected(shown),
+    );
+    if grid.clicked() {
+        commands.push(UiCommand::SetGridShown(!shown));
+    }
+    // Right click: that grid's options, the RL grid's on the spacing in force.
+    if grid.secondary_clicked() && editor.grid_dialog.is_none() {
+        editor.grid_dialog = Some(if editor.slice_mode_enabled {
+            crate::ui::state::GridOptionsDialog::open_section(editor.section_grid_style, editor.section_grid_level_spacing)
+        } else {
+            crate::ui::state::GridOptionsDialog::open_plan(editor.xy_grid_style)
+        });
+    }
+
+    let wireframes = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(themed_icon!(ui, "toggle_wireframes.svg")),
+            if editor.topology_wireframes_enabled {
+                tr!(literal = "Hide Wireframes")
+            } else {
+                tr!(literal = "Show Wireframes")
+            },
+        )
+        .id_salt("wireframes")
+        .button_side(side)
+        .selected(editor.topology_wireframes_enabled),
+    );
+    if wireframes.clicked() {
+        commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
+    }
+
+    let points = ui.add(
+        ToolbarButton::new(
+            egui::Image::new(unthemed_icon!("toggle_points.svg")),
+            if editor.show_points {
+                tr!(literal = "Hide Points")
+            } else {
+                tr!(literal = "Show Points")
+            },
+        )
+        .id_salt("show_points")
+        .button_side(side)
+        .selected(editor.show_points),
+    );
+    if points.clicked() {
+        commands.push(UiCommand::SetShowPoints(!editor.show_points));
+    }
+}
+
 /// How the scene is drawn and got at, which every workspace carries.
 ///
-/// Flying, the slice view, x-ray, the wireframes and the points are all ways of
+/// Flying, the slice view, x-ray and the three display switches are all ways of
 /// reading what is already in the scene rather than tools for drawing it, so
 /// they are as useful over a blast pattern or a geological model as over a pit
 /// design and they stay on the bar across the tabs - which also means a mode is
 /// never left running with the button that turns it off gone from the window.
 fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
     // A right-to-left layout adds each button to the left of the last, so the
-    // run is added in reverse to read left to right on screen.
+    // run is added in reverse to read left to right on screen: the display
+    // switches come first here because they read last, after flying.
+    draw_display_switches(ui, editor, commands, side);
+
     let fly = ui.add(
         ToolbarButton::new(
             egui::Image::new(unthemed_icon!("fly_mode.svg")),
@@ -497,40 +591,6 @@ fn draw_scene_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut 
         } else {
             commands.push(UiCommand::SetActiveTool(ActiveTool::VerticalSlice));
         }
-    }
-
-    let wireframes = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("toggle_wireframes.svg")),
-            if editor.topology_wireframes_enabled {
-                tr!(literal = "Hide Wireframes")
-            } else {
-                tr!(literal = "Show Wireframes")
-            },
-        )
-        .id_salt("wireframes")
-        .button_side(side)
-        .selected(editor.topology_wireframes_enabled),
-    );
-    if wireframes.clicked() {
-        commands.push(UiCommand::SetTopologyWireframes(!editor.topology_wireframes_enabled));
-    }
-
-    let points = ui.add(
-        ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("toggle_points.svg")),
-            if editor.show_points {
-                tr!(literal = "Hide Points")
-            } else {
-                tr!(literal = "Show Points")
-            },
-        )
-        .id_salt("show_points")
-        .button_side(side)
-        .selected(editor.show_points),
-    );
-    if points.clicked() {
-        commands.push(UiCommand::SetShowPoints(!editor.show_points));
     }
 
     let xray = ui.add(

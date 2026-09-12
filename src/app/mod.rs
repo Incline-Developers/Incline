@@ -598,7 +598,6 @@ impl<'a> App<'a> {
         self.editor.show_console = config.show_console;
         self.editor.panel_chrome = config.panel_chrome;
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
-        self.editor.show_xy_grid = config.show_xy_grid;
         self.editor.show_scale_bar = config.show_scale_bar;
         self.editor.renderer_background_color = config.renderer_background_color;
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
@@ -1185,6 +1184,7 @@ impl<'a> App<'a> {
     }
 
     fn clear_editor_transient_state(&mut self) {
+        self.clear_rotation_centre();
         // Resolve document-backed drafts while their source identity is still
         // available. These helpers locate the owning project explicitly, so
         // this is also safe when a newly opened project has already become
@@ -1200,6 +1200,8 @@ impl<'a> App<'a> {
         if self.editor.text_editing_enabled {
             self.cancel_text_edit();
         }
+        // A section's plane and slab are in the coordinates of the project it was cut from, so it is left whenever the active project changes.
+        self.leave_slice_mode();
         self.editor.clear_project_transients();
         self.pending_selection_click = None;
         // Clear any in-progress gesture so it cannot bleed into the new project.

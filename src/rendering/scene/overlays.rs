@@ -154,24 +154,18 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
 
     if editor.active_tool == ActiveTool::VerticalSlice
         && let Some(start) = editor.slice_pending_start
+        && let Some(cursor) = editor.cursor_world
     {
-        draw_screen_cross(&mut overlay, start, 8.0, 2.0, PREVIEW_COLOR);
-        if let Some(cursor) = editor.cursor_world {
-            // The slice line is flat in XY; preview it at the start's elevation.
-            let end = DVec3::new(cursor.x, cursor.y, start.z);
-            draw_line(&mut overlay, start, end, 2.0, PREVIEW_COLOR);
-        }
+        // The slice line is flat in XY; preview it at the start's elevation.
+        let end = DVec3::new(cursor.x, cursor.y, start.z);
+        draw_line(&mut overlay, start, end, 2.0, PREVIEW_COLOR);
     }
 
     if editor.active_tool == ActiveTool::MeasureDistance
         && let Some(start) = editor.measurement_start
+        && let Some(end) = editor.measurement_end.or(editor.cursor_world)
     {
-        let end = editor.measurement_end.or(editor.cursor_world);
-        if let Some(end) = end {
-            draw_line(&mut overlay, start, end, 2.0, MEASUREMENT_COLOR);
-            draw_screen_cross(&mut overlay, end, 8.0, 2.0, MEASUREMENT_COLOR);
-        }
-        draw_screen_cross(&mut overlay, start, 8.0, 2.0, MEASUREMENT_COLOR);
+        draw_line(&mut overlay, start, end, 2.0, MEASUREMENT_COLOR);
     }
 
     if editor.active_tool == ActiveTool::MeasureBatterAngle {

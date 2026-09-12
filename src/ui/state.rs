@@ -17,7 +17,7 @@ use crate::{
     i18n::{tr, tr_format},
     logging::CommandReportSpec,
     model::{
-        Axis, FillStyle, LayerId, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
+        Axis, FillStyle, LayerId, Object, ObjectColor, ObjectId, ObjectPoint, SceneEntityId,
         block_model::{BlockModelId, ColorTransferFunction, FIRST_CUSTOM_COLOR_STOP_ID},
         drill_hole::{DrillCategoryColor, DrillColorPreset, DrillColorStop, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillPatternLayout},
         formats::{
@@ -47,7 +47,6 @@ pub(crate) struct PreferencesDraft {
     pub(crate) show_console: bool,
     pub(crate) panel_chrome: bool,
     pub(crate) show_world_axis_gizmo: bool,
-    pub(crate) show_xy_grid: bool,
     pub(crate) show_scale_bar: bool,
     pub(crate) snap_poll_rate: u32,
     pub(crate) vsync_enabled: bool,
@@ -88,7 +87,6 @@ impl Default for PreferencesDraft {
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: crate::app::io::default_show_xy_grid(),
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             snap_poll_rate: crate::app::io::default_snap_poll_rate(),
             vsync_enabled: crate::app::io::default_vsync_enabled(),
@@ -729,6 +727,141 @@ pub(crate) fn describe_collar_rotation(rotation: crate::model::drill_hole::Colla
     }
 }
 
+/// Horizontal axis of an upright section-grid line: `Easting` lines run at constant E, `Northing` at constant N.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SectionGridAxis {
+    Easting,
+    Northing,
+}
+
+/// Kind of section-grid line: `Level` at constant elevation, `Upright` where the cut crosses a world easting/northing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SectionGridLineKind {
+    Level,
+    Upright(SectionGridAxis),
+}
+
+/// The section grid's look; not persisted with the project.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionGridStyle {
+    /// `None` picks a colour that contrasts the background.
+    pub(crate) color: Option<egui::Color32>,
+    /// Line width in pixels.
+    pub(crate) thickness: f64,
+    /// Metres between RL levels; `None` sizes them from the zoom, as the
+    /// easting/northing lines always are.
+    pub(crate) level_spacing: Option<f64>,
+}
+
+impl Default for SectionGridStyle {
+    fn default() -> Self {
+        Self {
+            color: None,
+            thickness: 1.0,
+            level_spacing: None,
+        }
+    }
+}
+
+impl std::hash::Hash for SectionGridStyle {
+    /// Every field: a change must re-render the cached scene the grid is in.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.color.hash(state);
+        self.thickness.to_bits().hash(state);
+        self.level_spacing.map(f64::to_bits).hash(state);
+    }
+}
+
+/// The plan view's XY grid look. Spacing isn't overridden; it stays the
+/// automatic level rule. Not persisted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlanGridStyle {
+    /// `None` keeps the colours picked against the background.
+    pub(crate) color: Option<egui::Color32>,
+    /// Line width in pixels; 1 is the width the grid has always had.
+    pub(crate) thickness: f64,
+}
+
+impl Default for PlanGridStyle {
+    fn default() -> Self {
+        Self { color: None, thickness: 1.0 }
+    }
+}
+
+impl std::hash::Hash for PlanGridStyle {
+    /// Every field: a change must re-render the cached scene the grid is in.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.color.hash(state);
+        self.thickness.to_bits().hash(state);
+    }
+}
+
+/// The grid options dialog's fields, for the RL grid in a section or the XY
+/// grid in plan; Cancel drops them, an earlier Apply stays.
+#[derive(Clone, Debug)]
+pub(crate) struct GridOptionsDialog {
+    /// The plan grid: no spacing fields, its level rule is not overridden.
+    pub(crate) plan: bool,
+    pub(crate) auto_color: bool,
+    pub(crate) color: egui::Color32,
+    pub(crate) thickness: f64,
+    pub(crate) auto_spacing: bool,
+    pub(crate) spacing: f64,
+}
+
+impl GridOptionsDialog {
+    const COLOR_SEED: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(140, 146, 152, 115);
+
+    /// Open on the section grid's style; `spacing_now` seeds the manual
+    /// spacing with what the zoom chose.
+    pub(crate) fn open_section(style: SectionGridStyle, spacing_now: f64) -> Self {
+        Self {
+            plan: false,
+            auto_color: style.color.is_none(),
+            color: style.color.unwrap_or(Self::COLOR_SEED),
+            thickness: style.thickness,
+            auto_spacing: style.level_spacing.is_none(),
+            spacing: style.level_spacing.unwrap_or(spacing_now),
+        }
+    }
+
+    pub(crate) fn open_plan(style: PlanGridStyle) -> Self {
+        Self {
+            plan: true,
+            auto_color: style.color.is_none(),
+            color: style.color.unwrap_or(Self::COLOR_SEED),
+            thickness: style.thickness,
+            auto_spacing: true,
+            spacing: 0.0,
+        }
+    }
+
+    pub(crate) fn section_style(&self) -> SectionGridStyle {
+        SectionGridStyle {
+            color: (!self.auto_color).then_some(self.color),
+            thickness: self.thickness,
+            level_spacing: (!self.auto_spacing).then_some(self.spacing),
+        }
+    }
+
+    pub(crate) fn plan_style(&self) -> PlanGridStyle {
+        PlanGridStyle {
+            color: (!self.auto_color).then_some(self.color),
+            thickness: self.thickness,
+        }
+    }
+}
+
+/// One frame's screen-space projection of a section-grid line, in physical pixels matching `cursor_screen_px`.
+#[derive(Clone, Copy)]
+pub(crate) struct SectionGridLine {
+    pub(crate) from_px: (f32, f32),
+    pub(crate) to_px: (f32, f32),
+    /// World coordinate in metres: elevation for a level line, easting or northing for an upright one.
+    pub(crate) value: f64,
+    pub(crate) kind: SectionGridLineKind,
+}
+
 /// Plane-handle index used for the Move gizmo's view-aligned ring, which
 /// translates in the camera plane instead of a world-axis plane.
 pub(crate) const MOVE_GIZMO_VIEW_PLANE: u8 = 3;
@@ -914,7 +1047,9 @@ pub(crate) struct EditorState {
     pub(crate) panel_chrome: bool,
     /// Show the world-space axis gizmo in the top-right of the viewport.
     pub(crate) show_world_axis_gizmo: bool,
-    /// Show the construction grid on the world XY plane at Z=0.
+    /// Show the construction grid on the world XY plane at Z=0. Per-session
+    /// like the other view toggles above: shown at the start of every run and
+    /// never written to the config.
     pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     pub(crate) show_scale_bar: bool,
@@ -1065,7 +1200,7 @@ pub(crate) struct EditorState {
     pub(crate) editing_labels_id: Option<ObjectId>,
 
     // Cursor & snapping
-    /// Z plane used for all placement operations (point, line, poly vertices).
+    /// Z plane used for placement (point, line, poly vertices) outside the slice view.
     pub(crate) z_level: f64,
     /// Editable Z level value used by the toolbar and Design > Move to > Set Z.
     pub(crate) z_input: f64,
@@ -1105,6 +1240,9 @@ pub(crate) struct EditorState {
     /// Design > Insert Point > At intersection.
     pub(crate) selection_has_intersections: bool,
     pub(crate) insert_point_at_elevation_dialog: Option<crate::ui::dialogs::InsertPointAtElevationDialog>,
+    /// The "Edit Object" dialog, holding a working copy of one design object
+    /// until Apply or OK hands it back to the document.
+    pub(crate) object_edit_dialog: Option<crate::ui::dialogs::object_edit::ObjectEditDialog>,
 
     // Display overrides
     pub(crate) xray_enabled: bool,
@@ -1138,6 +1276,16 @@ pub(crate) struct EditorState {
     pub(crate) slice_direction: [f64; 2],
     /// Half-width of the section currently visible in the main viewport.
     pub(crate) slice_half_length: f64,
+    /// Whether the section shows the world grid (constant-elevation and easting/northing lines).
+    pub(crate) slice_grid_enabled: bool,
+    pub(crate) section_grid_px: Vec<SectionGridLine>,
+    /// The section grid's look, from the grid button's right-click dialog.
+    pub(crate) section_grid_style: SectionGridStyle,
+    /// The plan grid's look, from the same button's right click in plan.
+    pub(crate) xy_grid_style: PlanGridStyle,
+    pub(crate) grid_dialog: Option<GridOptionsDialog>,
+    /// The RL spacing in force this frame, chosen or automatic.
+    pub(crate) section_grid_level_spacing: f64,
 
     // Selection box
     /// Physical-pixel bounds of an in-progress box selection.
@@ -1435,6 +1583,9 @@ pub(crate) struct EditorState {
     pub(crate) block_model_table_pages: HashMap<BlockModelId, usize>,
     /// Model edited by the viewport filter controls; retained after deselection.
     pub(crate) viewport_block_model_id: Option<BlockModelId>,
+    /// The fixed centre of rotation while one is set (world space);
+    /// transient, cleared on section exit and project open.
+    pub(crate) rotation_centre: Option<DVec3>,
     pub(crate) block_model_variable_ranges: HashMap<(BlockModelId, String), Option<(f64, f64)>>,
     pub(crate) next_color_stop_id: u64,
     /// Dataset owning the movable drillhole colour popup, when open.
@@ -1588,6 +1739,21 @@ pub(crate) struct EditorState {
 }
 
 impl EditorState {
+    pub(crate) fn overlay_follows_cursor(&self) -> bool {
+        !self.pending_stroke.is_empty() || self.measurement_start.is_some() || !self.batter_angle_points.is_empty() || self.circle_draft.is_some()
+    }
+
+    /// Whether a snap mode is up. The section snaps as the plan does: its
+    /// targets are the ones inside the slab, and off them the cursor falls
+    /// back to the section plane like any unsnapped pick.
+    pub(crate) fn snapping_active(&self) -> bool {
+        self.cursor_mode.snaps()
+    }
+
+    pub(crate) fn view_mode_owns_canvas_click(&self) -> bool {
+        self.fly_mode_enabled || (self.slice_mode_enabled && self.active_tool.section_refuses())
+    }
+
     /// Dialogs that take Enter as their confirm shortcut.
     ///
     /// The GUI only reports a key press as consumed when a text field holds
@@ -1604,11 +1770,16 @@ impl EditorState {
     /// Dialogs that take Escape as their cancel shortcut. The startup splash
     /// is absent on purpose: nothing in the tool chain reacts to Escape while
     /// it is up, so its own handler is enough.
+    ///
+    /// The "Edit Object" dialog is here but not in
+    /// [`Self::dialog_owns_confirm_key`]: Escape must close it rather than
+    /// run the viewport tool-cancel chain and drop the user out of slice
+    /// view, while Enter belongs to the cell being edited, which commits on it.
     pub(crate) fn dialog_owns_cancel_key(&self) -> bool {
         if self.viewport_pick_in_progress() {
             return false;
         }
-        self.dialog_owns_both_keys()
+        self.object_edit_dialog.is_some() || self.dialog_owns_both_keys()
     }
 
     /// A dialog is parked waiting on a click in the 3D viewport. Escape belongs
@@ -1623,7 +1794,8 @@ impl EditorState {
 
     /// The common case: a dialog that confirms on Enter and cancels on Escape.
     fn dialog_owns_both_keys(&self) -> bool {
-        self.exit_confirm_open
+        self.grid_dialog.is_some()
+            || self.exit_confirm_open
             || self.replace_project_confirm_open
             || self.lossy_save_confirm_open
             || self.delete_confirm_open
@@ -1775,6 +1947,7 @@ impl EditorState {
         self.move_to_layer_dialog = None;
         self.move_to_axis_dialog = None;
         self.insert_point_at_elevation_dialog = None;
+        self.object_edit_dialog = None;
         self.measurement_start = None;
         self.measurement_end = None;
         self.batter_angle_points.clear();
@@ -1895,7 +2068,6 @@ impl EditorState {
             show_console: self.show_console,
             panel_chrome: self.panel_chrome,
             show_world_axis_gizmo: self.show_world_axis_gizmo,
-            show_xy_grid: self.show_xy_grid,
             show_scale_bar: self.show_scale_bar,
             snap_poll_rate: self.snap_poll_rate,
             vsync_enabled: self.vsync_enabled,
@@ -1945,7 +2117,7 @@ impl EditorState {
             show_console: crate::app::io::default_show_console(),
             panel_chrome: crate::app::io::default_panel_chrome(),
             show_world_axis_gizmo: crate::app::io::default_show_world_axis_gizmo(),
-            show_xy_grid: crate::app::io::default_show_xy_grid(),
+            show_xy_grid: true,
             show_scale_bar: crate::app::io::default_show_scale_bar(),
             renderer_background_color: crate::app::io::default_renderer_background_color(),
             show_preferences: false,
@@ -2043,6 +2215,7 @@ impl EditorState {
             move_to_axis_dialog: None,
             selection_has_intersections: false,
             insert_point_at_elevation_dialog: None,
+            object_edit_dialog: None,
             xray_enabled: false,
             vertical_exaggeration_dialog_open: false,
             vertical_exaggeration: 1.0,
@@ -2060,6 +2233,12 @@ impl EditorState {
             slice_center: [0.0; 3],
             slice_direction: [1.0, 0.0],
             slice_half_length: 0.0,
+            slice_grid_enabled: false,
+            section_grid_px: Vec::new(),
+            section_grid_style: SectionGridStyle::default(),
+            xy_grid_style: PlanGridStyle::default(),
+            grid_dialog: None,
+            section_grid_level_spacing: 10.0,
             selection_box_start_px: None,
             selection_box_current_px: None,
             drape_phase: DrapePhase::Designs,
@@ -2220,6 +2399,7 @@ impl EditorState {
             point_cloud_tin_hole_fill: 0.0,
             block_model_table_pages: HashMap::new(),
             viewport_block_model_id: None,
+            rotation_centre: None,
             block_model_variable_ranges: HashMap::new(),
             next_color_stop_id: FIRST_CUSTOM_COLOR_STOP_ID,
             drill_hole_color_dialog: None,
@@ -2317,9 +2497,11 @@ impl EditorState {
     }
 
     /// Left-click that landed on entity geometry: selects it and reports the
-    /// picked world point (with the geometry's true Z).
+    /// picked world point (with the geometry's true Z), except in the slice view.
     pub(crate) fn on_canvas_pick(&mut self, handle: SceneEntityId, world: DVec3, mode: SelectionMode) {
-        self.cursor_world = Some(world);
+        if !self.slice_mode_enabled {
+            self.cursor_world = Some(world);
+        }
         match mode {
             SelectionMode::Replace => self.replace_selection(handle),
             SelectionMode::Add => self.add_selection(handle),
@@ -2330,7 +2512,9 @@ impl EditorState {
     /// Left-click that landed on one drill hole, in a workspace that works a
     /// hole at a time: selects the hole rather than the dataset holding it.
     pub(crate) fn on_drill_hole_pick(&mut self, hole: DrillHoleRef, world: DVec3, mode: SelectionMode) {
-        self.cursor_world = Some(world);
+        if !self.slice_mode_enabled {
+            self.cursor_world = Some(world);
+        }
         match mode {
             SelectionMode::Replace => {
                 self.clear_scene_selection();
@@ -2471,6 +2655,8 @@ pub(crate) enum ActiveTool {
     /// Drill & Blast's initiation tool: a click puts the point a round starts
     /// at on the hole under the cursor, at the delay the products panel holds.
     SetInitiationPoint,
+    /// One click fixes the centre both views orbit about.
+    PickRotationCentre,
     Chamfer,
     BatterBermOffset,
     Bezier,
@@ -2508,6 +2694,35 @@ impl ActiveTool {
     pub(crate) fn acts_on_collars(self) -> bool {
         matches!(self, Self::MoveCollar | Self::RotateCollar)
     }
+
+    /// Tools whose click takes the world point under the cursor, and so want
+    /// the snap poll running while they are armed. Everything else picks an
+    /// entity or drives a gizmo, where a snapped cursor means nothing.
+    pub(crate) fn snaps_cursor(self) -> bool {
+        matches!(
+            self,
+            Self::MakePoint
+                | Self::MakeLine
+                | Self::MakePoly
+                | Self::MakeCircle
+                | Self::MakeText
+                | Self::MeasureDistance
+                | Self::MeasureBatterAngle
+                | Self::VerticalSlice
+                | Self::PickRotationCentre
+        )
+    }
+
+    pub(crate) fn works_in_slice_view(self) -> bool {
+        matches!(
+            self,
+            Self::MeasureDistance | Self::MeasureBatterAngle | Self::MakePoint | Self::MakeLine | Self::MakePoly | Self::PickRotationCentre
+        )
+    }
+
+    pub(crate) fn section_refuses(self) -> bool {
+        self != Self::None && !self.works_in_slice_view()
+    }
 }
 
 /// Immediate commands applied to the current selection (or whole drawing).
@@ -2526,6 +2741,10 @@ pub(crate) enum CursorMode {
 }
 
 impl CursorMode {
+    pub(crate) fn snaps(self) -> bool {
+        matches!(self, CursorMode::SnapToPoint | CursorMode::SnapToLine | CursorMode::SnapToSurface)
+    }
+
     pub(crate) fn next(self) -> Self {
         match self {
             CursorMode::Select => CursorMode::SnapToSurface,
@@ -2573,7 +2792,6 @@ impl ToolHatch {
 pub(crate) enum ViewToggle {
     Console,
     DarkMode,
-    XyGrid,
 }
 
 impl ViewToggle {
@@ -2581,24 +2799,16 @@ impl ViewToggle {
         match self {
             Self::Console => tr!(literal = "Show Console"),
             Self::DarkMode => tr!(literal = "Dark Mode"),
-            Self::XyGrid => tr!(literal = "XY Grid"),
         }
     }
 
-    /// Read this toggle out of a preferences snapshot.
-    pub(crate) fn get(self, preferences: &PreferencesDraft) -> bool {
+    /// Read this toggle's live value. Taken off the editor, which applying
+    /// the preferences keeps in step with them, rather than off a whole
+    /// [`PreferencesDraft`] built to read one bool out of.
+    pub(crate) fn get(self, editor: &EditorState) -> bool {
         match self {
-            Self::Console => preferences.show_console,
-            Self::DarkMode => preferences.dark_mode,
-            Self::XyGrid => preferences.show_xy_grid,
-        }
-    }
-
-    pub(crate) fn set(self, preferences: &mut PreferencesDraft, value: bool) {
-        match self {
-            Self::Console => preferences.show_console = value,
-            Self::DarkMode => preferences.dark_mode = value,
-            Self::XyGrid => preferences.show_xy_grid = value,
+            Self::Console => editor.show_console,
+            Self::DarkMode => editor.dark_mode,
         }
     }
 }
@@ -2713,7 +2923,13 @@ pub(crate) enum UiCommand {
     CancelOffset,
     ConfirmDrapeSelection,
     CancelRelimit,
+    /// Frame everything visible from square on. Sliced, square on means the
+    /// section plane, and the mode is kept - the section is the view.
     ResetView,
+    /// Arm a click that fixes the centre of rotation, or release the one that is set.
+    ToggleRotationCentre,
+    /// The grid button: the RL grid in a section, the XY grid in plan.
+    SetGridShown(bool),
     SetTopologyWireframes(bool),
     SetShowPoints(bool),
     SetStandardView(StandardView),
@@ -3012,6 +3228,17 @@ pub(crate) enum UiCommand {
     FitPlotScaleToData,
     /// Render and write the configured plot sheet.
     ExportPlotSheet,
+
+    /// Open the "Edit Object" dialog on one design object, seeding its working
+    /// copy from the document.
+    OpenObjectEditDialog(ObjectId),
+    /// Write the dialog's working copy back as one undoable replace; `close`
+    /// shuts the dialog once the write went through (OK), Apply leaves it open.
+    ApplyObjectEdit {
+        id: ObjectId,
+        object: Box<Object>,
+        close: bool,
+    },
 }
 
 impl UiCommand {
@@ -3062,6 +3289,7 @@ impl UiCommand {
             | Self::OpenCreateTriangulation
             | Self::OpenMoveToAxisDialog(_)
             | Self::OpenInsertPointAtElevationDialog
+            | Self::OpenObjectEditDialog(_)
             | Self::OpenPointCloudTin
             | Self::OpenCutTriangulationByPolyline
             | Self::BeginCutPolyPick
@@ -3140,10 +3368,12 @@ impl UiCommand {
             Self::CommitStrokeOpen => report(tr!(literal = "Create Line"), tr!(literal = "Finish open polyline")),
             Self::CommitCircleTypedRadius => report(tr!(literal = "Create Circle"), tr!(literal = "Use typed radius")),
             Self::ResetView => report(tr!(literal = "Reset View"), tr!(literal = "Fit to extents")),
+            Self::ToggleRotationCentre => report(tr!(literal = "Centre of Rotation"), tr!(literal = "Fix or release the centre both views orbit about")),
             Self::SetTopologyWireframes(enabled) => report(
                 tr!(literal = "Set Topology Wireframes"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
             ),
+            Self::SetGridShown(shown) => report(tr!(literal = "Set Grid"), if *shown { tr!(literal = "Shown") } else { tr!(literal = "Hidden") }),
             Self::SetShowPoints(enabled) => report(
                 tr!(literal = "Set Point Visibility"),
                 if *enabled { tr!(literal = "Shown") } else { tr!(literal = "Hidden") },
@@ -3235,6 +3465,7 @@ impl UiCommand {
             Self::RelimitLineResize { source_id, .. } => report(tr!(literal = "Relimit Line"), format!("{source_id:?}")),
             Self::CommitBatterBerm => report(tr!(literal = "Create Batter Berm"), tr!(literal = "Apply generated rings")),
             Self::InsertPointsAtIntersections => report(tr!(literal = "Insert Intersection Points"), tr!(literal = "Selected polylines")),
+            Self::ApplyObjectEdit { object, .. } => report(tr!(literal = "Edit Object"), object.kind_name()),
             Self::InsertPointsAtElevation { object_ids, elevation } => report(
                 tr!(literal = "Insert Points at Elevation"),
                 tr_format!(literal = "%count% object(s) · Z %elevation%", count = object_ids.len(), elevation = elevation),

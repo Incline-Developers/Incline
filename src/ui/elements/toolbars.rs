@@ -1,13 +1,17 @@
 //! Two toolbar panels: left (drawing tools) and bottom (cursor mode,
 //! measuring, task progress).
 //!
+//! The bottom strip is three clusters like the viewport bar above it: the
+//! measuring run at the left, task progress at the right, and the cursor modes
+//! centred on the window between them.
+//!
 //! The project actions, the layer/Z/line/fill settings and the view controls
 //! that used to be a strip over the explorer, a strip over the scene and a
 //! floating tile at the scene's right edge are one row now - see
 //! [`crate::ui::elements::viewport_bar`].
 
 use crate::{
-    i18n::tr,
+    i18n::{tr, tr_format},
     ui::{
         EditorState, UiProjectView,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
@@ -23,6 +27,9 @@ pub(crate) fn bottom_toolbar_height(ctx: &egui::Context) -> f32 {
 
 /// Id of the drawing toolbar's column panel.
 pub(crate) const LEFT_TOOLBAR_PANEL_ID: &str = "left_toolbar_panel";
+
+/// Clear space the centred cursor run keeps from the clusters either side of it.
+const CENTRE_CLEARANCE: f32 = 16.0;
 
 /// What one of the drawing toolbar's buttons does when clicked.
 enum LeftToolAction {
@@ -41,6 +48,8 @@ struct LeftTool {
     action: LeftToolAction,
     /// Whether the tool can be used at all this frame.
     enabled: bool,
+    /// Said on hover in place of `tooltip` while the view, not the project, greys the cell.
+    hint: Option<String>,
 }
 
 /// The drawing tools in the order they are drawn: the project action, the
@@ -50,11 +59,16 @@ struct LeftTool {
 /// One flat list rather than clusters: the column is a single run of cells, so
 /// what a tool belongs to is its neighbours' business, not a tile's.
 fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
-    let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| LeftTool {
-        icon: egui::Image::new(icon),
-        tooltip,
-        action: LeftToolAction::Tool(tool),
-        enabled: editing_enabled && (!tool.requires_active_layer() || editor.active_layer.is_some()),
+    let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| {
+        let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some();
+        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
+        LeftTool {
+            icon: egui::Image::new(icon),
+            hint: (blocked_by_section && editing_enabled && layer_ok).then(|| tr_format!(literal = "%tool% - not available in the section view", tool = tooltip.as_str())),
+            tooltip,
+            action: LeftToolAction::Tool(tool),
+            enabled: editing_enabled && layer_ok && !blocked_by_section,
+        }
     };
     vec![
         LeftTool {
@@ -62,6 +76,7 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
             tooltip: tr!(literal = "New Layer"),
             action: LeftToolAction::NewLayer,
             enabled: project_active,
+            hint: None,
         },
         tool(themed_icon!(ui, "create_point.svg"), tr!(literal = "Create Point"), ActiveTool::MakePoint),
         tool(themed_icon!(ui, "create_line.svg"), tr!(literal = "Create Line"), ActiveTool::MakeLine),
@@ -101,12 +116,14 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
     let has_active_dataset = editor
         .active_drill_hole
         .is_some_and(|id| project.drill_holes.iter().any(|dataset| dataset.id == id && dataset.is_loaded));
+    let editing_enabled = editing_enabled && !editor.slice_mode_enabled;
     vec![
         LeftTool {
             icon: egui::Image::new(themed_icon!(ui, "create_drill_pattern.svg")),
             tooltip: tr!(literal = "Create Drill Pattern"),
             action: LeftToolAction::DrillPattern,
             enabled: project_active,
+            hint: None,
         },
         LeftTool {
             // The same mark production's Move Design carries: one translate
@@ -115,6 +132,7 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             tooltip: tr!(literal = "Move Collar"),
             action: LeftToolAction::Tool(ActiveTool::MoveCollar),
             enabled: editing_enabled,
+            hint: None,
         },
         LeftTool {
             // Move Collar's counterpart: the same holes, turned instead of
@@ -123,18 +141,21 @@ fn blast_tools(ui: &egui::Ui, project: &UiProjectView, editor: &EditorState, edi
             tooltip: tr!(literal = "Rotate Collar"),
             action: LeftToolAction::Tool(ActiveTool::RotateCollar),
             enabled: editing_enabled,
+            hint: None,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("tie_holes.svg")),
             tooltip: tr!(literal = "Tie Holes"),
             action: LeftToolAction::Tool(ActiveTool::TieHoles),
             enabled: editing_enabled && has_active_dataset,
+            hint: None,
         },
         LeftTool {
             icon: egui::Image::new(unthemed_icon!("initiation_point.svg")),
             tooltip: tr!(literal = "Set Initiation Point"),
             action: LeftToolAction::Tool(ActiveTool::SetInitiationPoint),
             enabled: editing_enabled && has_active_dataset,
+            hint: None,
         },
     ]
 }
@@ -153,7 +174,11 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     let button = ToolbarButton::new(tool.icon.clone(), tool.tooltip.as_str())
         .id_salt(("left_tool", tool.tooltip.as_str()))
         .selected(selected);
-    if !ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner.clicked() {
+    let mut response = ui.add_enabled_ui(tool.enabled, |ui| ui.add(button)).inner;
+    if let Some(hint) = tool.hint.as_deref() {
+        response = response.on_disabled_hover_text(hint);
+    }
+    if !response.clicked() {
         return;
     }
     match tool.action {
@@ -234,7 +259,7 @@ pub(crate) fn draw_left_toolbar(
         .rect
 }
 
-/// Draw the bottom toolbar (cursor mode, measure distance).
+/// Draw the bottom toolbar (cursor mode, measuring, task progress).
 ///
 /// Visibility and locking are per-item concerns now, so they live on the
 /// explorer's rows rather than as whole-scene toolbar actions: see
@@ -254,94 +279,125 @@ pub(crate) fn draw_bottom_toolbar(ui: &mut egui::Ui, editor: &mut EditorState, c
         // them is what rounds whichever fill reaches an outer corner.
         .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
-            let side = ui.available_height();
-            let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
-            ui.scope_builder(egui::UiBuilder::new().id(contents_id), |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    draw_cursor_modes(ui, editor, commands, side);
-
-                    if editor.active_workspace.has_production_tools() {
-                        ui.add_space(12.);
-
-                        ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
-                            tool_button(
-                                ui,
-                                egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
-                                tr!(literal = "Measure Distance").as_str(),
-                                editor,
-                                commands,
-                                ActiveTool::MeasureDistance,
-                                side,
-                            );
-
-                            tool_button(
-                                ui,
-                                egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
-                                tr!(literal = "Strike and Dip").as_str(),
-                                editor,
-                                commands,
-                                ActiveTool::MeasureBatterAngle,
-                                side,
-                            );
-                        });
-                    }
-
+            // Where the middle of the *window* falls on this bar. The panel
+            // starts where the explorer leaves off, so its own middle is not
+            // the window's, and the cursor run is meant to sit under the middle
+            // of the screen. Taken as an offset rather than an absolute, so the
+            // run travels with the strip when the strip is scrolled.
+            let centre_offset = ui.ctx().content_rect().center().x - ui.max_rect().left();
+            // Stop narrowing and scroll under the wheel once the window is too
+            // narrow for what is on the bar, rather than letting the clusters
+            // run into each other - the same strip the two bars across the top
+            // of the window use. See `elements::bar_strip`.
+            crate::ui::elements::bar_strip(ui, "bottom_toolbar_strip", ui.available_height(), |ui, strip| {
+                let side = strip.height();
+                let contents_id = ui.make_persistent_id("bottom_toolbar_buttons");
+                ui.scope_builder(egui::UiBuilder::new().id(contents_id).max_rect(strip), |ui| {
+                    // Three clusters placed against the same strip, the way the
+                    // viewport bar lays its own out - see [`cluster`] - so the
+                    // centred run is not pushed along by what is beside it.
+                    let left = cluster(ui, strip, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        draw_measure_tools(ui, editor, commands, side);
+                    });
                     // Task progress hugs the right end of the strip, out of the
                     // way of the tools and with room to say what is running -
                     // the status bar had neither.
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let right = cluster(ui, strip, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         crate::ui::widgets::progress::draw_task_progress(ui, editor);
                     });
-                });
+
+                    // Held clear of the left cluster first and slid back from
+                    // the right only where there is room, so the window centre
+                    // landing behind a cluster crowds the run rather than
+                    // hiding it - these are how the canvas is clicked at all.
+                    // Opened to the right of where the run starts rather than
+                    // sized to it, so that crowding never clips a button.
+                    let width = cursor_modes_width(side);
+                    let band_left = left.right() + CENTRE_CLEARANCE;
+                    let band_right = right.left() - CENTRE_CLEARANCE;
+                    let x = (strip.left() + centre_offset - width / 2.0).clamp(band_left, (band_right - width).max(band_left));
+                    let run = egui::Rect::from_min_max(egui::pos2(x, strip.top()), egui::pos2(strip.right(), strip.bottom()));
+                    cluster(ui, run, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        draw_cursor_modes(ui, editor, commands, side);
+                    });
+
+                    // The width the strip has to keep: the three clusters, the
+                    // centre one with its clearance either side.
+                    left.width() + CENTRE_CLEARANCE + width + CENTRE_CLEARANCE + right.width()
+                })
+                .inner
             });
         })
         .response
         .rect
 }
 
-/// The run of cursor modes at the head of the bottom toolbar: what a click in
-/// the scene snaps to.
+/// Lay one of the bottom toolbar's clusters out over `rect`, and report what it
+/// drew into.
+///
+/// The three are placed against the same strip rather than in sequence, so each
+/// is given the rect it should align itself in and none of them consumes space
+/// the next one wanted.
+fn cluster(ui: &mut egui::Ui, rect: egui::Rect, layout: egui::Layout, add_contents: impl FnOnce(&mut egui::Ui)) -> egui::Rect {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        add_contents(ui);
+    })
+    .response
+    .rect
+}
+
+/// The measuring run, which only a workspace designing a pit has anything to
+/// measure in - see [`crate::ui::state::Workspace::has_production_tools`].
+fn draw_measure_tools(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
+    if !editor.active_workspace.has_production_tools() {
+        return;
+    }
+
+    ui.add_enabled_ui(!editor.fly_mode_enabled, |ui| {
+        tool_button(
+            ui,
+            egui::Image::new(themed_icon!(ui, "measure_distance.svg")),
+            tr!(literal = "Measure Distance").as_str(),
+            editor,
+            commands,
+            ActiveTool::MeasureDistance,
+            side,
+        );
+
+        tool_button(
+            ui,
+            egui::Image::new(themed_icon!(ui, "measure_batter_angle.svg")),
+            tr!(literal = "Strike and Dip").as_str(),
+            editor,
+            commands,
+            ActiveTool::MeasureBatterAngle,
+            side,
+        );
+    });
+}
+
+/// The cursor modes in the order the centre run draws them.
+const CURSOR_MODES: [CursorMode; 4] = [CursorMode::Select, CursorMode::SnapToSurface, CursorMode::SnapToLine, CursorMode::SnapToPoint];
+
+/// Width of that run, which the strip needs before it has been laid out in
+/// order to centre it. The buttons are square and sit flush against each other,
+/// so it is theirs alone.
+fn cursor_modes_width(side: f32) -> f32 {
+    side * CURSOR_MODES.len() as f32
+}
+
+/// The centred run of cursor modes: what a click in the scene snaps to.
 fn draw_cursor_modes(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, side: f32) {
-    cursor_mode_button(
-        ui,
-        egui::Image::new(themed_icon!(ui, "cursor_select.svg")),
-        tr!(literal = "Cursor: Regular").as_str(),
-        editor,
-        commands,
-        CursorMode::Select,
-        side,
-    );
-
-    cursor_mode_button(
-        ui,
-        egui::Image::new(themed_icon!(ui, "snap_to_surface.svg")),
-        tr!(literal = "Cursor: Snap to Surface").as_str(),
-        editor,
-        commands,
-        CursorMode::SnapToSurface,
-        side,
-    );
-
-    cursor_mode_button(
-        ui,
-        egui::Image::new(themed_icon!(ui, "snap_to_line.svg")),
-        tr!(literal = "Cursor: Snap to Line").as_str(),
-        editor,
-        commands,
-        CursorMode::SnapToLine,
-        side,
-    );
-
-    cursor_mode_button(
-        ui,
-        egui::Image::new(themed_icon!(ui, "snap_to_point.svg")),
-        tr!(literal = "Cursor: Snap to Point").as_str(),
-        editor,
-        commands,
-        CursorMode::SnapToPoint,
-        side,
-    );
+    for mode in CURSOR_MODES {
+        let (icon, tooltip) = match mode {
+            CursorMode::Select => (themed_icon!(ui, "cursor_select.svg"), tr!(literal = "Cursor: Regular")),
+            CursorMode::SnapToSurface => (themed_icon!(ui, "snap_to_surface.svg"), tr!(literal = "Cursor: Snap to Surface")),
+            CursorMode::SnapToLine => (themed_icon!(ui, "snap_to_line.svg"), tr!(literal = "Cursor: Snap to Line")),
+            CursorMode::SnapToPoint => (themed_icon!(ui, "snap_to_point.svg"), tr!(literal = "Cursor: Snap to Point")),
+        };
+        cursor_mode_button(ui, egui::Image::new(icon), tooltip.as_str(), editor, commands, mode, side);
+    }
 }
 
 /// Draw a tool button in a horizontal toolbar; sets `editor.active_tool` on click.

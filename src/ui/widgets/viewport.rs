@@ -4,7 +4,7 @@ use crate::{
     i18n::{tr, tr_format},
     model::block_model::{BlockModelSlice, Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES, OpenBlockModel, color_variable_default, render_value_range},
     ui::{
-        state::{EditorState, UiCommand},
+        state::{EditorState, SectionGridAxis, SectionGridLineKind, UiCommand},
         widgets::menu,
     },
 };
@@ -284,6 +284,8 @@ const SLICE_PREVIEW_TOP: f32 = 10.0;
 /// and a large one is not handed most of the scene as a minimap.
 const SLICE_PREVIEW_MIN_SIZE: f32 = 160.0;
 const SLICE_PREVIEW_MAX_SIZE: f32 = 320.0;
+/// Clearance between a section-grid label and the end of the line it names.
+const SECTION_GRID_LABEL_GAP: f32 = 4.0;
 
 /// Clamps `raw_t` to `0..1` and, if that lands within `STOP_EPSILON` of an
 /// existing stop, nudges it just outside that stop's epsilon band.
@@ -982,6 +984,34 @@ impl<'a> BlockModelProperties<'a> {
     }
 }
 
+/// Ink/outline pair for overlay text: black-on-white over a light background,
+/// white-on-black over a dark one, split at 0.45 Rec. 709 luminance.
+fn contrast_ink(background: [f32; 4]) -> (egui::Color32, egui::Color32) {
+    let luminance = crate::rendering::color::relative_luminance(background);
+    if luminance > 0.45 {
+        (egui::Color32::BLACK, egui::Color32::WHITE)
+    } else {
+        (egui::Color32::WHITE, egui::Color32::BLACK)
+    }
+}
+
+/// Font shared by the scale bar and section-grid overlay labels.
+fn overlay_label_font() -> egui::FontId {
+    egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()))
+}
+
+/// Draws `text` with a 1px outline pass behind the ink pass, readable with no solid backdrop.
+fn outlined_label(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, text: &str, font: &egui::FontId, ink: egui::Color32, outline: egui::Color32) {
+    outlined_galley(painter, pos, align, painter.layout_no_wrap(text.to_owned(), font.clone(), ink), ink, outline);
+}
+
+/// [`outlined_label`] for a caller holding an already-laid-out galley.
+fn outlined_galley(painter: &egui::Painter, pos: egui::Pos2, align: egui::Align2, galley: std::sync::Arc<egui::Galley>, ink: egui::Color32, outline: egui::Color32) {
+    let rect = align.anchor_size(pos, galley.size());
+    painter.galley_with_override_text_color(rect.min + egui::vec2(1.0, 1.0), galley.clone(), outline);
+    painter.galley_with_override_text_color(rect.min, galley, ink);
+}
+
 /// A cartographic scale bar pinned to the viewport's bottom-right corner.
 ///
 /// `world_per_point` is measured in metres per egui logical point. The scene
@@ -1013,12 +1043,7 @@ impl ViewportScaleBar {
             self.viewport_rect.right() - SCALE_BAR_VIEWPORT_MARGIN,
             self.viewport_rect.bottom() - SCALE_BAR_VIEWPORT_MARGIN,
         );
-        let luminance = 0.2126 * viewport_background[0] + 0.7152 * viewport_background[1] + 0.0722 * viewport_background[2];
-        let (ink, outline) = if luminance > 0.45 {
-            (egui::Color32::BLACK, egui::Color32::WHITE)
-        } else {
-            (egui::Color32::WHITE, egui::Color32::BLACK)
-        };
+        let (ink, outline) = contrast_ink(viewport_background);
 
         egui::Area::new(self.id)
             .order(egui::Order::Background)
@@ -1045,16 +1070,129 @@ impl ViewportScaleBar {
                 }
 
                 let labels = scale_bar_labels(distance);
-                let font = egui::FontId::new(11.0, egui::FontFamily::Name("noto_sans_bold".into()));
+                let font = overlay_label_font();
                 let label_y = bar_rect.bottom() + 2.0;
                 for (index, fraction) in SCALE_BAR_SEGMENT_FRACTIONS.iter().copied().enumerate() {
                     let x = bar_rect.left() + bar_width * fraction as f32;
                     let label = &labels[index];
                     let position = egui::pos2(x, label_y);
-                    painter.text(position + egui::vec2(1.0, 1.0), egui::Align2::CENTER_TOP, label, font.clone(), outline);
-                    painter.text(position, egui::Align2::CENTER_TOP, label, font.clone(), ink);
+                    outlined_label(painter, position, egui::Align2::CENTER_TOP, label, &font, ink, outline);
                 }
             });
+    }
+}
+
+/// Clips a line segment to a rectangle with the Liang-Barsky algorithm,
+/// narrowing `t0..=t1` (0 at `from`, 1 at `to`) to the portion inside all
+/// four edges. Returns `None` when that range is empty.
+fn clip_segment_to_rect(from: egui::Pos2, to: egui::Pos2, rect: egui::Rect) -> Option<(egui::Pos2, egui::Pos2)> {
+    let delta = to - from;
+    let mut t0 = 0.0_f32;
+    let mut t1 = 1.0_f32;
+    // (p, q) per edge: p is the rate of approach (negative = entering), q is how far `from` already sits inside it.
+    let edges = [
+        (-delta.x, from.x - rect.left()),
+        (delta.x, rect.right() - from.x),
+        (-delta.y, from.y - rect.top()),
+        (delta.y, rect.bottom() - from.y),
+    ];
+    for (p, q) in edges {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            if t > t1 {
+                return None;
+            }
+            t0 = t0.max(t);
+        } else {
+            if t < t0 {
+                return None;
+            }
+            t1 = t1.min(t);
+        }
+    }
+    Some((from + delta * t0, from + delta * t1))
+}
+
+/// Paints the vertical slice view's grid: levels of constant elevation and the eastings/northings
+/// the cut crosses, projected to window pixels once per frame by the renderer and published on `EditorState`.
+pub(crate) fn draw_section_grid(ui: &egui::Ui, editor: &EditorState, canvas_rect: egui::Rect) {
+    if editor.section_grid_px.is_empty() {
+        return;
+    }
+    // Panels paint over the scene rather than clipping it, so the grid must clip itself to the viewport.
+    let painter = ui.painter().with_clip_rect(canvas_rect);
+    let ppp = ui.ctx().pixels_per_point();
+    let to_pos = |px: (f32, f32)| egui::pos2(px.0 / ppp, px.1 / ppp);
+
+    let (ink, outline) = contrast_ink(editor.renderer_background_color);
+    let font = overlay_label_font();
+
+    // A label under a floating panel is dropped rather than drawn unreadable; panel areas are
+    // collected as a set rather than by name, since the dock alone is a dozen panels.
+    let mut obscured_by: Vec<egui::Rect> = ui.ctx().memory(|memory| {
+        let mut rects: Vec<egui::Rect> = memory
+            .areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter(|layer| layer.order != egui::Order::Background)
+            .filter_map(|layer| memory.area_rect(layer.id))
+            .collect();
+        if editor.show_scale_bar {
+            rects.extend(memory.area_rect(egui::Id::new("viewport_scale_bar")));
+        }
+        rects
+    });
+    if editor.show_world_axis_gizmo {
+        obscured_by.push(crate::ui::elements::cursors::orientation_gizmo_rect(canvas_rect));
+    }
+
+    let mut placed: Vec<egui::Rect> = Vec::new();
+    for line in &editor.section_grid_px {
+        let from = to_pos(line.from_px);
+        let to = to_pos(line.to_px);
+        // The line itself is drawn on the plane by the renderer, under the
+        // geometry; only its label is placed here, at the on-screen end.
+        let Some((from, to)) = clip_segment_to_rect(from, to, canvas_rect) else {
+            continue;
+        };
+
+        // A level's number stands alone as an RL; eastings and northings need their axis prefixed to tell them apart.
+        // A negative zero from the index arithmetic would print as "-0".
+        let value = if line.value == 0.0 { 0.0 } else { line.value };
+        let number = format!("{value:.0}");
+        let text = match line.kind {
+            SectionGridLineKind::Level => number,
+            SectionGridLineKind::Upright(SectionGridAxis::Easting) => format!("{}{number}", tr!(literal = "E ")),
+            SectionGridLineKind::Upright(SectionGridAxis::Northing) => format!("{}{number}", tr!(literal = "N ")),
+        };
+        // RLs read down the right edge, not the left, to clear the slice view's bottom-left dock panel.
+        let (endpoint, align, offset) = match line.kind {
+            SectionGridLineKind::Level => {
+                let endpoint = if from.x >= to.x { from } else { to };
+                (endpoint, egui::Align2::RIGHT_CENTER, egui::vec2(-SECTION_GRID_LABEL_GAP, 0.0))
+            }
+            SectionGridLineKind::Upright(_) => {
+                // Screen y grows downward, so the larger-y end is the lower one; eastings and northings read along the bottom.
+                let endpoint = if from.y >= to.y { from } else { to };
+                (endpoint, egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -SECTION_GRID_LABEL_GAP))
+            }
+        };
+        let position = endpoint + offset;
+
+        let galley = painter.layout_no_wrap(text, font.clone(), ink);
+        let label_rect = align.anchor_size(position, galley.size());
+        // A label landing on one already drawn is dropped; the line stays.
+        if obscured_by.iter().chain(&placed).any(|taken| taken.intersects(label_rect)) {
+            continue;
+        }
+        placed.push(label_rect);
+        outlined_galley(&painter, position, align, galley, ink, outline);
     }
 }
 

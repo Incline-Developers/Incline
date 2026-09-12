@@ -10,7 +10,10 @@ use crate::{
         spatial::ObjectSnapIndex,
         triangulation::OpenTriangulation,
     },
-    rendering::pick::{closest_t_on_segment, perspective_correct_segment_point, world_to_screen},
+    rendering::{
+        camera::SectionSlab,
+        pick::{closest_t_on_segment, perspective_correct_segment_point, slab_clipped_segment, world_to_screen, world_to_screen_unclipped_depth},
+    },
     ui::state::CursorMode,
 };
 
@@ -20,6 +23,72 @@ pub(crate) struct SnapHit {
 }
 
 pub(crate) const SNAP_THRESHOLD_PX: f32 = 15.0;
+
+/// Where the cursor is and how world points reach it. `slab` is the section's
+/// two walls when one is up: it snaps to what the section draws, so anything
+/// the slab clips away is no target, and a segment snaps only along the run
+/// of it that survives the clip.
+struct SnapView {
+    view_proj: DMat4,
+    screen: Size,
+    cursor: DVec2,
+    slab: Option<SectionSlab>,
+}
+
+impl SnapView {
+    /// Project a world point to screen pixels. Inside a section the slab is
+    /// the depth gate, so the camera's fitted depth range must not also
+    /// reject a point the section shows.
+    fn project(&self, world: DVec3) -> Option<DVec2> {
+        if self.slab.is_some() {
+            world_to_screen_unclipped_depth(&self.view_proj, world, self.screen)
+        } else {
+            world_to_screen(&self.view_proj, world, self.screen)
+        }
+    }
+
+    fn shows(&self, world: DVec3) -> bool {
+        self.slab.is_none_or(|slab| slab.contains(world))
+    }
+}
+
+/// Running nearest target, in squared screen pixels from the cursor.
+struct Nearest {
+    hit: Option<SnapHit>,
+    distance_sq: f64,
+}
+
+impl Nearest {
+    fn consider_point(&mut self, view: &SnapView, world: DVec3) {
+        if !view.shows(world) {
+            return;
+        }
+        if let Some(screen_point) = view.project(world) {
+            let distance = screen_point.distance_squared(view.cursor);
+            if distance < self.distance_sq {
+                self.distance_sq = distance;
+                self.hit = Some(SnapHit { world });
+            }
+        }
+    }
+
+    fn consider_segment(&mut self, view: &SnapView, a: DVec3, b: DVec3) {
+        let Some((a, b)) = slab_clipped_segment(view.slab, a, b) else {
+            return;
+        };
+        let (Some(screen_a), Some(screen_b)) = (view.project(a), view.project(b)) else {
+            return;
+        };
+        let t = closest_t_on_segment(view.cursor, screen_a, screen_b);
+        let distance = (screen_a + (screen_b - screen_a) * t).distance_squared(view.cursor);
+        if distance < self.distance_sq {
+            self.distance_sq = distance;
+            self.hit = Some(SnapHit {
+                world: perspective_correct_segment_point(&view.view_proj, a, b, t),
+            });
+        }
+    }
+}
 
 /// Find the nearest snap target to `cursor_px` given `mode`.
 ///
@@ -37,15 +106,23 @@ pub(crate) fn snap_cursor(
     screen: Size,
     cursor_px: (f32, f32),
     threshold_px: f32,
+    slab: Option<SectionSlab>,
 ) -> Option<SnapHit> {
-    let cursor = DVec2::new(cursor_px.0 as f64, cursor_px.1 as f64);
+    let view = SnapView {
+        view_proj: *view_proj,
+        screen,
+        cursor: DVec2::new(cursor_px.0 as f64, cursor_px.1 as f64),
+        slab,
+    };
     let threshold = threshold_px as f64;
-    let mut best_dist_sq = threshold * threshold;
-    let mut best: Option<SnapHit> = None;
+    let mut nearest = Nearest {
+        hit: None,
+        distance_sq: threshold * threshold,
+    };
     let mut best_surface_depth = f64::INFINITY;
 
     // BVH narrows candidates to objects whose projected AABB overlaps the cursor region.
-    let candidates = snap_index.candidates(view_proj, screen, cursor, threshold);
+    let candidates = snap_index.candidates(view_proj, screen, view.cursor, threshold);
 
     for obj_idx in candidates {
         let object = &document.objects()[obj_idx];
@@ -60,15 +137,7 @@ pub(crate) fn snap_cursor(
         match mode {
             CursorMode::SnapToSurface => {}
             CursorMode::SnapToPoint => match object {
-                Object::Point { pos, .. } => {
-                    if let Some(sp) = world_to_screen(view_proj, *pos, screen) {
-                        let d = sp.distance_squared(cursor);
-                        if d < best_dist_sq {
-                            best_dist_sq = d;
-                            best = Some(SnapHit { world: *pos });
-                        }
-                    }
-                }
+                Object::Point { pos, .. } => nearest.consider_point(&view, *pos),
                 Object::Polyline { verts, closed, .. } => {
                     let circle_center = compact_circle_center(verts, *closed);
                     let points = circle_center
@@ -76,13 +145,7 @@ pub(crate) fn snap_cursor(
                         .copied()
                         .chain(circle_center.is_none().then_some(()).into_iter().flat_map(|()| verts.iter().map(|v| v.pos)));
                     for point in points {
-                        if let Some(sp) = world_to_screen(view_proj, point, screen) {
-                            let d = sp.distance_squared(cursor);
-                            if d < best_dist_sq {
-                                best_dist_sq = d;
-                                best = Some(SnapHit { world: point });
-                            }
-                        }
+                        nearest.consider_point(&view, point);
                     }
                 }
                 _ => {}
@@ -103,31 +166,10 @@ pub(crate) fn snap_cursor(
                     let b = verts[(i + 1) % n].pos;
                     let bulge = verts[i].bulge;
                     if bulge.abs() <= f64::EPSILON {
-                        let (Some(sa), Some(sb)) = (world_to_screen(view_proj, a, screen), world_to_screen(view_proj, b, screen)) else {
-                            continue;
-                        };
-                        let t = closest_t_on_segment(cursor, sa, sb);
-                        let d = (sa + (sb - sa) * t).distance_squared(cursor);
-                        if d < best_dist_sq {
-                            best_dist_sq = d;
-                            best = Some(SnapHit {
-                                world: perspective_correct_segment_point(view_proj, a, b, t),
-                            });
-                        }
+                        nearest.consider_segment(&view, a, b);
                     } else {
-                        let points = tessellate_bulge_segment(a, b, bulge);
-                        for pair in points.windows(2) {
-                            let (Some(sa), Some(sb)) = (world_to_screen(view_proj, pair[0], screen), world_to_screen(view_proj, pair[1], screen)) else {
-                                continue;
-                            };
-                            let t = closest_t_on_segment(cursor, sa, sb);
-                            let d = (sa + (sb - sa) * t).distance_squared(cursor);
-                            if d < best_dist_sq {
-                                best_dist_sq = d;
-                                best = Some(SnapHit {
-                                    world: perspective_correct_segment_point(view_proj, pair[0], pair[1], t),
-                                });
-                            }
+                        for pair in tessellate_bulge_segment(a, b, bulge).windows(2) {
+                            nearest.consider_segment(&view, pair[0], pair[1]);
                         }
                     }
                 }
@@ -141,7 +183,7 @@ pub(crate) fn snap_cursor(
     // cursor is exactly the first surface along the cursor ray, and the BVH
     // answers that in O(log n) instead of projecting every candidate
     // triangle of a dense mesh to screen space.
-    let surface_ray = matches!(mode, CursorMode::SnapToSurface).then(|| screen_ray(view_proj, screen, cursor)).flatten();
+    let surface_ray = matches!(mode, CursorMode::SnapToSurface).then(|| screen_ray(view_proj, screen, view.cursor)).flatten();
 
     for tri in triangulations {
         let entity = tri.entity_id();
@@ -153,42 +195,25 @@ pub(crate) fn snap_cursor(
                 let Some((origin, direction)) = surface_ray else {
                     continue;
                 };
-                if let Some(world) = tri.spatial.ray_hit(&tri.mesh, origin, direction) {
-                    let depth = (world - origin).dot(direction);
+                if let Some(hit) = tri.spatial.ray_hit_details_where(&tri.mesh, origin, direction, |point| view.shows(point)) {
+                    let depth = (hit.point - origin).dot(direction);
                     if depth < best_surface_depth {
                         best_surface_depth = depth;
-                        best = Some(SnapHit { world });
+                        nearest.hit = Some(SnapHit { world: hit.point });
                     }
                 }
             }
             CursorMode::SnapToPoint => {
                 tri.spatial.for_each_screen_candidate(&tri.mesh, view_proj, screen, cursor_px, threshold_px, |triangle| {
                     for pos in triangle {
-                        if let Some(sp) = world_to_screen(view_proj, pos, screen) {
-                            let d = sp.distance_squared(cursor);
-                            if d < best_dist_sq {
-                                best_dist_sq = d;
-                                best = Some(SnapHit { world: pos });
-                            }
-                        }
+                        nearest.consider_point(&view, pos);
                     }
                 });
             }
             CursorMode::SnapToLine => {
                 tri.spatial.for_each_screen_candidate(&tri.mesh, view_proj, screen, cursor_px, threshold_px, |triangle| {
                     for (a, b) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
-                        let (Some(sa), Some(sb)) = (world_to_screen(view_proj, a, screen), world_to_screen(view_proj, b, screen)) else {
-                            continue;
-                        };
-                        let ab = sb - sa;
-                        let t = closest_t_on_segment(cursor, sa, sb);
-                        let d = (sa + ab * t).distance_squared(cursor);
-                        if d < best_dist_sq {
-                            best_dist_sq = d;
-                            best = Some(SnapHit {
-                                world: perspective_correct_segment_point(view_proj, a, b, t),
-                            });
-                        }
+                        nearest.consider_segment(&view, a, b);
                     }
                 });
             }
@@ -196,7 +221,7 @@ pub(crate) fn snap_cursor(
         }
     }
 
-    best
+    nearest.hit
 }
 
 /// World-space ray through a screen pixel, from the near plane forward.

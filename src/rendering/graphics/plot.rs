@@ -185,6 +185,8 @@ impl<'a> Graphics<'a> {
         self.fit_depth_to_scene(document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles);
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);
+        // A plot borrows the viewport's camera uniform, so switch off the section slab (a plot is a plan of the whole ground).
+        self.camera_uniform.set_section_slab(None, self.scene_origin);
         self.camera_uniform.update_viewport(width, height);
         // Plots are never interactive, so the volume raycaster always runs at
         // full quality regardless of what the viewport was last doing.
@@ -223,8 +225,9 @@ impl<'a> Graphics<'a> {
         // explicitly as well. Otherwise the next viewport pass reconstructs
         // screen-space rays (most visibly for the XY grid) using the plot
         // texture's dimensions.
+        // The section slab cleared above is put back here.
         self.camera_uniform.update_viewport(self.size.width, self.size.height);
-        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor);
+        self.upload_camera_uniform(editor.block_model_interaction_resolution_divisor, self.section_slab());
         // The cached scene image was rendered for the window, and the depth
         // range has just been refitted, so make the next frame redraw it.
         self.scene_cache_key = None;

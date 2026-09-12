@@ -3,7 +3,8 @@
 use super::*;
 use crate::{
     app::commands::drawing::rotate_collar::{ring_axis, ring_basis},
-    ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen},
+    rendering::section_grid,
+    ui::state::{MoveGizmoScreen, ROTATE_GIZMO_AZIMUTH_RING, ROTATE_GIZMO_DIP_RING, RotateGizmoScreen, SectionGridAxis, SectionGridLine, SectionGridLineKind},
 };
 
 pub(crate) type ScreenSegmentPx = ((f32, f32), (f32, f32));
@@ -79,6 +80,13 @@ const ROTATE_RING_FADE_FULL: f32 = 0.28;
 /// units. Long enough to measure cleanly, short enough that a perspective
 /// view's scale is still the collar's own.
 const CARD_SCALE_PROBE_WORLD: f64 = 1.0;
+
+/// Cap on grid lines per axis; `grid_values` coarsens spacing to stay under
+/// it rather than dropping the axis.
+const MAX_GRID_LINES: usize = 64;
+
+/// How far the ruled area may stretch under tilt, in square-on screens.
+const GRID_REACH_MAX: f64 = 4.0;
 
 fn fade_ramp(value: f32, min: f32, max: f32) -> f32 {
     if value <= min {
@@ -376,6 +384,91 @@ impl<'a> Graphics<'a> {
         )
     }
 
+    /// The section grid's spacing: which world axis the uprights follow and
+    /// the two spacings, sized from the square-on spans so an orbit does not
+    /// re-rule the grid; exaggeration keeps a screen cell from being square.
+    pub(super) fn section_grid_spacing(&self, level_spacing: Option<f64>) -> Option<(SectionGridAxis, f64, f64)> {
+        let slice = self.slice_view.as_ref()?;
+        let screen = self.screen_size();
+        let half_length = slice_visible_half_length(self.projection.zoom, screen);
+        let half_height = self.projection.zoom;
+        let world_per_pixel = 2.0 * self.projection.zoom / f64::from(screen.1.max(1.0));
+        let points_per_pixel = 1.0 / self.window.scale_factor();
+        let strike_pt = 2.0 * half_length / world_per_pixel * points_per_pixel;
+        let height_pt = 2.0 * half_height / world_per_pixel * points_per_pixel;
+        let axis = section_grid::upright_axis(slice.direction);
+        let axis_spacing = section_grid::grid_spacing(section_grid::upright_span(slice.direction, half_length), strike_pt);
+        // half_height is display units (exaggerated); the span is true metres.
+        let true_span = 2.0 * half_height / self.vertical_exaggeration;
+        // A chosen spacing is thinned once here, for the lines and their labels
+        // alike, so the widest reach still fits the line budget.
+        let elevation_spacing = level_spacing.map_or_else(
+            || section_grid::grid_spacing(true_span, height_pt),
+            |chosen| section_grid::coarsen_to_fit(chosen, true_span * GRID_REACH_MAX, MAX_GRID_LINES),
+        );
+        Some((axis, axis_spacing, elevation_spacing))
+    }
+
+    /// Section grid in window pixels: elevation levels plus world easting/northing lines where the cut crosses them.
+    /// The lines are drawn on the plane by the section grid shader; these
+    /// place the labels.
+    fn build_section_grid(&self, level_spacing: Option<f64>) -> (Vec<SectionGridLine>, Option<f64>) {
+        let Some(slice) = self.slice_view.as_ref() else { return (Vec::new(), None) };
+        let Some((axis, axis_spacing, elevation_spacing)) = self.section_grid_spacing(level_spacing) else {
+            return (Vec::new(), None);
+        };
+        let screen = self.screen_size();
+
+        // Sized from zoom alone, not the viewport corners, so an orbit does not re-rule the grid.
+        let half_length = slice_visible_half_length(self.projection.zoom, screen);
+        let half_height = self.projection.zoom;
+
+        // Ruled about the anchor, the eye's foot on the plane (`set_eye`).
+        let (forward, right, up) = slice.camera_basis();
+        // The shader fades the lines out towards edge-on; the labels go too.
+        if forward.dot(slice.normal()).abs() < 0.1 {
+            return (Vec::new(), None);
+        }
+        let strike = slice.direction.extend(0.0);
+        let foot = slice.center;
+        // Spacing is sized from the square-on spans, so an orbit does not
+        // re-rule the grid; the reach grows with the tilt, which shows more.
+        let stretch = |cosine: f64| (1.0 / cosine.abs()).min(GRID_REACH_MAX);
+        let strike_reach = half_length * stretch(right.dot(strike));
+        // Yawed and pitched together, screen-up also runs along the strike.
+        let height_reach = ((half_height + strike_reach * up.dot(strike).abs()) / up.z.abs()).min(half_height * GRID_REACH_MAX);
+        // The reach is display units (exaggerated); the ruled range is true
+        // metres via unexaggeration - eastings/northings need no such step.
+        let rule_bottom = self.unexaggerate_point(foot - DVec3::Z * height_reach).z;
+        let rule_top = self.unexaggerate_point(foot + DVec3::Z * height_reach).z;
+
+        let view_proj = self.view_proj();
+        let center_xy = foot.truncate();
+        // Unclipped depth: a line must not vanish for reaching outside the section's thin depth slab.
+        let project =
+            |along_strike: f64, elevation: f64| self.world_to_window_px_unclipped_depth(&view_proj, section_grid::plane_point(center_xy, slice.direction, along_strike, elevation));
+        let mut lines = Vec::new();
+        let mut push = |from: (f64, f64), to: (f64, f64), value: f64, kind: SectionGridLineKind| {
+            if let (Some(from_px), Some(to_px)) = (project(from.0, from.1), project(to.0, to.1)) {
+                lines.push(SectionGridLine { from_px, to_px, value, kind });
+            }
+        };
+
+        // Level = constant true elevation; Upright = fixed at a world easting/northing regardless of orbit.
+        for elevation in section_grid::grid_values((rule_bottom, rule_top), elevation_spacing, MAX_GRID_LINES) {
+            push((-strike_reach, elevation), (strike_reach, elevation), elevation, SectionGridLineKind::Level);
+        }
+        for crossing in section_grid::upright_crossings(center_xy, slice.direction, strike_reach, axis_spacing, MAX_GRID_LINES) {
+            push(
+                (crossing.along_strike, rule_bottom),
+                (crossing.along_strike, rule_top),
+                crossing.value,
+                SectionGridLineKind::Upright(axis),
+            );
+        }
+        (lines, Some(elevation_spacing))
+    }
+
     pub(super) fn update_tool_projections(&self, editor: &mut EditorState, document: &Document, drill_holes: &[OpenDrillHoleDataset]) {
         // Where the snap landed, for the drawn cursor to mark. The snapped
         // point is the one the tool will use, and it is not the pointer: it
@@ -388,6 +481,7 @@ impl<'a> Graphics<'a> {
 
         if editor.active_workspace == crate::ui::state::Workspace::DrillAndBlast {
             let view_proj = self.view_proj();
+            let slab = self.section_slab();
             // The delay card is drawn at a world size, so each one carries the
             // screen scale measured at its own collar: project a probe one
             // world unit across the view and take the pixels it covers. Under
@@ -402,6 +496,10 @@ impl<'a> Graphics<'a> {
                     dataset.dataset.initiations.iter().filter_map(|initiation| {
                         let hole = dataset.dataset.holes.get(initiation.hole)?;
                         let collar = hole.collar_position();
+                        // Drop the card when its anchor is outside the section slab.
+                        if slab.is_some_and(|slab| !slab.contains(collar)) {
+                            return None;
+                        }
                         let screen_px = self.world_to_window_px(&view_proj, collar)?;
                         let probe_px = self.world_to_window_px_unclipped_depth(&view_proj, collar + probe_offset)?;
                         Some(crate::ui::state::InitiationCard {
@@ -422,11 +520,20 @@ impl<'a> Graphics<'a> {
 
         if let Some(failure) = &editor.tri_create_failure {
             let vp = self.view_proj();
-            editor.tri_create_diagnostic_markers_screen_px = failure.diagnostic.markers_world.iter().filter_map(|&point| self.world_to_window_px(&vp, point)).collect();
+            let slab = self.section_slab();
+            // Drop a marker or segment outside the slab; a segment needs both ends inside.
+            editor.tri_create_diagnostic_markers_screen_px = failure
+                .diagnostic
+                .markers_world
+                .iter()
+                .filter(|&&point| slab.is_none_or(|slab| slab.contains(point)))
+                .filter_map(|&point| self.world_to_window_px(&vp, point))
+                .collect();
             editor.tri_create_diagnostic_segments_screen_px = failure
                 .diagnostic
                 .segments_world
                 .iter()
+                .filter(|segment| segment.iter().all(|&point| slab.is_none_or(|slab| slab.contains(point))))
                 .map(|segment| segment.map(|point| self.world_to_window_px(&vp, point)))
                 .collect();
         } else {
@@ -457,6 +564,17 @@ impl<'a> Graphics<'a> {
         } else {
             editor.batter_berm_source_screen_px.clear();
             editor.batter_berm_rings_screen_px.clear();
+        }
+
+        if editor.slice_grid_enabled {
+            // The spacing in force is kept; the grid's options open on it.
+            let (lines, level_spacing) = self.build_section_grid(editor.section_grid_style.level_spacing);
+            editor.section_grid_px = lines;
+            if let Some(level_spacing) = level_spacing {
+                editor.section_grid_level_spacing = level_spacing;
+            }
+        } else {
+            editor.section_grid_px.clear();
         }
 
         use crate::ui::state::ActiveTool;
