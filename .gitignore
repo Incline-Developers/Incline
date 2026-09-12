@@ -28,4 +28,4 @@ tmp/
 .vscode/
 
 # datasets
-examples/
+/examples/

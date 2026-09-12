@@ -1,0 +1,10 @@
+[package]
+name = "mineflow"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust implementation of Matthew Deutsch's MineFlow"
+license = "MIT"
+repository = "https://github.com/Incline-Developers/Incline"
+
+[dependencies]
+web-time = "1.1.0"

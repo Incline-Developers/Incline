@@ -1,5 +1,11 @@
 cargo-features = ["profile-rustflags"]
 
+[workspace]
+resolver = "3"
+members = [".", "crates/mineflow"]
+default-members = ["."]
+exclude = ["vendor/egui-winit"]
+
 [package]
 name = "incline-design"
 version = "0.3.2"
@@ -35,6 +41,7 @@ i18n-embed-fl = "0.10.1"
 laz = { version = "0.13.0", features = ["parallel"] }
 log = "0.4.33"
 lyon = "1.0.19"
+#mineflow = { path = "crates/mineflow" } # Crate is ready to be implemented
 omf = { git = "https://github.com/Incline-Developers/omf-rust.git", rev = "5df717106c489b725aec32e97e2bf61e668cef5b", default-features = false, features = ["image", "parquet"] }
 png = "0.18.1"
 rayon = "1.12.0"
@@ -60,7 +67,6 @@ dirs = "7.0.0"
 egui-winit = "0.36.2"
 i18n-embed = { version = "0.16.0", features = ["desktop-requester"] }
 memmap2 = "0.9.11"
-mineflow = {git = "https://github.com/Incline-Developers/MineFlow-rs.git", rev = "3a6a3b541aa55a50eebd5efadea4943c82353a08"}
 pollster = "1.0.1"
 sys-locale = "0.3.2"
 tempfile = "3.27.0"
