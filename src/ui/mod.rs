@@ -633,11 +633,10 @@ fn draw_ui(
         (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor))
     };
     if products_island.is_none() {
-        // An island is two direct children of `root_ui`: the panel itself and
-        // the spacer that keeps the layout honest while it slides. Keep the
-        // root auto-id sequence identical in the workspaces without this
-        // panel, or every panel drawn after it receives a different unique id.
-        root_ui.skip_ahead_auto_ids(2);
+        // `Panel::show` creates one direct child of `root_ui`. Keep the root
+        // auto-id sequence identical in the workspaces without this panel, or
+        // every panel drawn after it receives a different unique id.
+        root_ui.skip_ahead_auto_ids(1);
     }
 
     // The drawing tools are a docked column between the explorer and the
@@ -1160,8 +1159,6 @@ fn draw_ui(
     let ctx = root_ui.ctx().clone();
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
-    // The right-edge island is one region open and one per section shut, so it
-    // hands back a list rather than a rect.
     let products_regions: Vec<egui::Rect> = products_island.as_ref().map(|island| island.regions.clone()).unwrap_or_default();
     chrome::paint_regions(
         &ctx,

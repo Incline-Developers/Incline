@@ -21,7 +21,7 @@ use crate::{
 const PANEL_ID: &str = "planning_blasting_panel";
 
 pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> IslandResponse<()> {
-    Island::new(PANEL_ID, Side::Right, tr!("planning-blasts"))
+    Island::new(PANEL_ID, Side::Right)
         .fill(crate::ui::widgets::tree_row_colors(ui).0)
         .default_width(260.0)
         .min_width(200.0)

@@ -59,7 +59,7 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -
     // The explorer's row colours, because these are the explorer's rows: the
     // two side panels share one palette rather than each mixing its own.
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    Island::new(PANEL_ID, Side::Right, tr!(literal = "Products"))
+    Island::new(PANEL_ID, Side::Right)
         .default_width(DEFAULT_WIDTH)
         .min_width(MIN_WIDTH)
         .max_width(MAX_WIDTH)

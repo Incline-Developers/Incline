@@ -873,13 +873,9 @@ impl Default for PlanningLayout {
     }
 }
 
-/// One column of a planning step, drawn as an island the user can drag shut.
-///
-/// `title` is what the closed spine carries; it is the heading the content
-/// draws for itself, so the island reads the same open or shut. The content's
-/// value comes back only while the island is open.
-fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, title: &str, width: f32, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> Option<R> {
-    let response = Island::new(id, Side::Left, title).default_width(width).min_width(120.0).flush().show(ui, content);
+/// One column of a planning step.
+fn island<R>(ui: &mut egui::Ui, layout: &mut PlanningLayout, id: &'static str, width: f32, content: impl FnOnce(&mut egui::Ui, egui::Rect) -> R) -> R {
+    let response = Island::new(id, Side::Left).default_width(width).min_width(120.0).flush().show(ui, content);
     layout.regions.extend(response.regions);
     layout.grips.push(response.grip);
     response.inner
@@ -900,15 +896,13 @@ fn central_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, content: impl 
     layout.regions.push(rect);
 }
 
-/// The object tree, down the far side of every Solids step. Closed until the
-/// user pulls it open, since a step is worked from the columns beside it.
+/// The object tree, down the far side of every Solids step.
 fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     let title = tr!(literal = "Objects");
-    let response = Island::new("planning_objects_island", Side::Right, title.clone())
+    let response = Island::new("planning_objects_island", Side::Right)
         .default_width(280.0)
         .min_width(140.0)
         .flush()
-        .open_by_default(false)
         .show(ui, |ui, rect| {
             framed_render_pane(ui, rect, &title, |ui, body| {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("planning_solid_objects").max_rect(body), |ui| {
@@ -925,22 +919,17 @@ fn objects_island(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut E
 
 fn draw_solids_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     objects_island(ui, layout, editor, project, commands);
-    island(ui, layout, "planning_solids_list_island", &tr!("planning-solids"), 240.0, |ui, rect| {
+    island(ui, layout, "planning_solids_list_island", 240.0, |ui, rect| {
         draw_solid_list(ui, rect, editor, document, commands)
     });
-    island(
-        ui,
-        layout,
-        "planning_solids_properties_island",
-        &tr!("planning-properties"),
-        320.0,
-        |ui, rect| match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
+    island(ui, layout, "planning_solids_properties_island", 320.0, |ui, rect| {
+        match editor.planning_selected_solid.and_then(|id| document.solid(id)) {
             Some(solid) => draw_solid_properties(ui, rect, project, solid, commands),
             None => PropertyTable::new("planning_solid_properties_empty", rect, &tr!("planning-properties")).show(ui, |rows| {
                 rows.header(&tr!("planning-property"), &tr!("planning-value"));
             }),
-        },
-    );
+        }
+    });
     central_island(ui, layout, |ui, rect| draw_solid_render(ui, rect, editor, commands));
     crate::ui::dialogs::solids::draw_new_solid_dialog(ui, editor, project, commands);
 }
@@ -1169,7 +1158,7 @@ const DEFAULT_RANGE_DEPTH: f64 = 120.0;
 
 fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &mut EditorState, project: &UiProjectView, document: &Document, commands: &mut Vec<UiCommand>) {
     objects_island(ui, layout, editor, project, commands);
-    island(ui, layout, "planning_bench_solids_island", &tr!("planning-solids"), 240.0, |ui, rect| {
+    island(ui, layout, "planning_bench_solids_island", 240.0, |ui, rect| {
         draw_solid_list(ui, rect, editor, document, commands)
     });
     let selected = editor.planning_selected_solid.and_then(|id| document.solid(id));
@@ -1181,8 +1170,7 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
     // This column arranges two panes rather than being one, so it carries no
     // frame of its own and they halve its height between them. It still closes
     // as a whole: the seam down its side drags both of them shut.
-    let settings = Island::new("planning_bench_settings_column", Side::Left, tr!("planning-benching"))
-        .section(tr!(literal = "Flitching"))
+    let settings = Island::new("planning_bench_settings_column", Side::Left)
         .default_width(240.0)
         .min_width(140.0)
         .bare()
@@ -1216,15 +1204,10 @@ fn draw_benching_step(ui: &mut egui::Ui, layout: &mut PlanningLayout, editor: &m
             });
             [flitching, benching]
         });
-    // Open, the two panes are the regions - clipped back to the column, so
-    // neither reaches over its neighbour while the column slides shut. Shut,
-    // the island hands back the two strips of its spine instead.
-    if let Some(panes) = settings.inner {
-        layout.regions.extend(panes.map(|pane| pane.intersect(settings.rect)));
-    }
-    layout.regions.extend(settings.regions);
+    // The column is not a region itself: the two panes inside it are.
+    layout.regions.extend(settings.inner);
     layout.grips.push(settings.grip);
-    island(ui, layout, "planning_bench_results_island", &tr!(literal = "Results"), 240.0, |ui, rect| {
+    island(ui, layout, "planning_bench_results_island", 240.0, |ui, rect| {
         if solid_id.is_some() {
             draw_bench_results(ui, rect, &plan, editor);
         } else {
@@ -1263,9 +1246,7 @@ fn draw_solids_details(
         SolidsStep::Solids => draw_solids_step(ui, layout, editor, project, document, commands),
         SolidsStep::Benching => draw_benching_step(ui, layout, editor, project, document, commands),
         SolidsStep::BlockModels => {
-            island(ui, layout, "planning_models_island", &tr!("planning-block-models"), 280.0, |ui, rect| {
-                draw_block_model_list(ui, rect, editor, project)
-            });
+            island(ui, layout, "planning_models_island", 280.0, |ui, rect| draw_block_model_list(ui, rect, editor, project));
             central_island(ui, layout, |ui, rect| {
                 if let Some(model) = editor.planning_selected_block_model.and_then(|id| block_models.iter().find(|model| model.id == id)) {
                     draw_block_model_mapping(ui, rect, document, model, commands);
@@ -1370,14 +1351,8 @@ pub(crate) fn draw_details(
             central_island(ui, &mut layout, |ui, rect| draw_configuration(ui, rect, page));
             return;
         }
-        // Closed, the category list still stands at whatever was last picked.
-        let category = island(ui, &mut layout, "planning_categories_island", &tr!("planning-content"), 260.0, |ui, rect| {
-            draw_content_categories(ui, rect, page)
-        })
-        .unwrap_or_else(|| current_category(ui, page));
-        island(ui, &mut layout, "planning_items_island", &category_labels()[category], 320.0, |ui, rect| {
-            draw_items(ui, rect, category)
-        });
+        let category = island(ui, &mut layout, "planning_categories_island", 260.0, |ui, rect| draw_content_categories(ui, rect, page));
+        island(ui, &mut layout, "planning_items_island", 320.0, |ui, rect| draw_items(ui, rect, category));
         central_island(ui, &mut layout, draw_item_properties);
     });
     layout.rect = response.response.rect;

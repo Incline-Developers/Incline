@@ -67,10 +67,9 @@ const CUT_STEPS_PANEL_ID: &str = "planning_cut_steps";
 
 /// What the explorer column claimed.
 pub(crate) struct ExplorerLayout {
-    /// The regions to round off: the run controls, the step list and the tree
-    /// while the column is open, or the spine alone once it is dragged shut.
+    /// The regions to round off: the run controls, the step list and the tree.
     pub(crate) regions: Vec<egui::Rect>,
-    /// The seam down the column's side, which drags it narrower and shut.
+    /// The seam down the column's side, which drags it narrower.
     pub(crate) grip: crate::ui::chrome::Grip,
 }
 
@@ -86,7 +85,7 @@ pub(crate) fn draw_explorer(
     // The column arranges panes rather than being one, so it takes no frame of
     // its own; the panes below are its regions. Dragging its seam past the
     // minimum closes the lot, the way every other island closes.
-    let column = Island::new(PANEL_ID, Side::Left, tr!(literal = "Explorer"))
+    let column = Island::new(PANEL_ID, Side::Left)
         .fill(surface)
         .default_width(280.0)
         .min_width(220.0)
@@ -157,12 +156,9 @@ pub(crate) fn draw_explorer(
             [run_controls, steps, tree]
         });
 
-    // Clipped back to the column: a pane must not reach over the workspace
-    // beside it while the column slides shut. Shut, there are no panes and the
-    // island hands back the strips of its spine instead.
-    let panes = column.inner.into_iter().flatten().map(|pane| pane.intersect(column.rect));
+    // The panes are the regions; the column itself carries no frame.
     ExplorerLayout {
-        regions: panes.chain(column.regions).collect(),
+        regions: column.inner.into_iter().chain(column.regions).collect(),
         grip: column.grip,
     }
 }
