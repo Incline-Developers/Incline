@@ -4,6 +4,7 @@
 
 Incline Design is a Rust 2024 desktop/WebAssembly mine design application using `winit`, `wgpu`, and `egui`.
 
+- `crates/mineflow/`: pure Rust ultimate pit optimization library; see its README for API, numerical behavior, and upstream references.
 - `src/app/`: application state, command handling, and background jobs.
 - `src/model/`: domain geometry, project persistence, and import/export formats.
 - `src/rendering/`: GPU rendering, scene caches, picking, and WGSL shaders.
@@ -13,12 +14,13 @@ Incline Design is a Rust 2024 desktop/WebAssembly mine design application using 
 
 ## Task Entry Points & Efficient Navigation
 
-Paths below are relative to `src/`:
+Paths below are relative to `src/`, except `crates/` paths, which are relative to the repository root:
 
 | Task | Start here / rule |
 | --- | --- |
 | Add a UI action | `ui/state.rs` (`UiCommand`, `console_report_spec`), UI call site, `app/commands/mod.rs` (dispatch, `requires_project`). |
 | Change state | `app/mod.rs` owns durable state; `ui/state.rs` owns transient `EditorState`; `model/project.rs` manages projects. |
+| Change ultimate pit optimization | `crates/mineflow/src/` (`pseudoflow.rs`, `solver.rs`, `pattern.rs`, `precedence.rs`); check with `cargo check -p mineflow`. |
 | Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry/cache), `rendering/shaders/` (WGSL). |
 | Add background work | Reuse `app/jobs.rs`: compute on workers, apply on the UI thread; preserve `JobKey` dependencies and poll cancellation in long loops. |
 | Change asset loading | `app/commands/residency.rs` owns transitions; `model/asset_residency.rs`, `layer_residency.rs`, and `history_storage.rs` move payloads to temporary backing in `asset_storage.rs`. |
