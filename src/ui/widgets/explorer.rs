@@ -94,6 +94,8 @@ pub(crate) struct EntryToggles {
 pub(crate) struct ExplorerEntryResponse {
     /// The row's label, carrying selection clicks and the context menu.
     pub(crate) response: egui::Response,
+    /// Actual leading-icon bounds, for decorations connecting adjacent rows.
+    pub(crate) icon_rect: Option<egui::Rect>,
     pub(crate) visibility_clicked: bool,
     pub(crate) lock_clicked: bool,
 }
@@ -235,19 +237,23 @@ impl ExplorerEntry {
                     Some(_) => Some((crate::ui::unthemed_icon!("step_error.svg"), egui::Color32::WHITE)),
                     None => leading_icon,
                 };
+                let mut leading_icon_rect = None;
                 match leading_icon {
                     Some((icon, color)) => {
                         let (rect, response) = ui.allocate_exact_size(egui::vec2(ENTRY_LABEL_GUTTER, height), egui::Sense::hover());
                         if let Some(hint) = &error {
                             response.on_hover_text(hint.clone());
                         }
-                        if ui.is_rect_visible(rect) {
+                        {
                             let icon_rect = if header_aligned_icon {
                                 egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - 8.0), egui::vec2(16.0, 16.0))
                             } else {
                                 egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(TOGGLE_ICON))
                             };
-                            egui::Image::new(icon).tint(color).paint_at(ui, icon_rect);
+                            leading_icon_rect = Some(icon_rect);
+                            if ui.is_rect_visible(rect) {
+                                egui::Image::new(icon).tint(color).paint_at(ui, icon_rect);
+                            }
                         }
                     }
                     None => ui.add_space(ENTRY_LABEL_GUTTER),
@@ -303,6 +309,7 @@ impl ExplorerEntry {
                 };
                 ExplorerEntryResponse {
                     response,
+                    icon_rect: leading_icon_rect,
                     visibility_clicked,
                     lock_clicked,
                 }

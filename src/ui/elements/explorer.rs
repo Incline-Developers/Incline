@@ -11,6 +11,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator},
             explorer::{EntryToggles, ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
+            island::{Island, Side},
         },
     },
 };
@@ -57,17 +58,19 @@ fn section_heading_menu(response: &egui::Response, section: ExplorerSection, ite
     });
 }
 
-/// Id of the explorer's column panel. Shared with [`crate::ui::chrome`],
-/// which reads the panel's resize interaction to light up its grip.
-pub(crate) const PANEL_ID: &str = "explorer_panel";
+/// Id of the explorer's column panel. It keys the column's persisted width,
+/// whether it is open, and the grip [`ExplorerLayout`] hands back.
+const PANEL_ID: &str = "explorer_panel";
 
-/// The explorer column and its tree surface.
+/// Id of the step-list pane the cut steps put above the bench tree.
+const CUT_STEPS_PANEL_ID: &str = "planning_cut_steps";
+
+/// What the explorer column claimed.
 pub(crate) struct ExplorerLayout {
-    /// The whole column, gaps included: what the panels drawn after it lay out
-    /// against.
-    pub(crate) column: egui::Rect,
-    /// What the data tree claimed.
-    pub(crate) tree: egui::Rect,
+    /// The regions to round off: the run controls, the step list and the tree.
+    pub(crate) regions: Vec<egui::Rect>,
+    /// The seam down the column's side, which drags it narrower.
+    pub(crate) grip: crate::ui::chrome::Grip,
 }
 
 /// Draw the full-height project explorer.
@@ -79,17 +82,48 @@ pub(crate) fn draw_explorer(
     commands: &mut Vec<UiCommand>,
 ) -> ExplorerLayout {
     let (surface, _) = crate::ui::widgets::tree_row_colors(ui);
-    let column = egui::Panel::left(PANEL_ID)
-        .resizable(true)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        .default_size(280.0)
-        .min_size(220.0)
-        .frame(egui::Frame::NONE)
-        .show(ui, |ui| {
-            // Prevent content from forcing the panel wider than the user has dragged it.
-            ui.set_max_width(ui.available_width());
+    // The column arranges panes rather than being one, so it takes no frame of
+    // its own; the panes below are its regions. Dragging its seam past the
+    // minimum closes the lot, the way every other island closes.
+    let column = Island::new(PANEL_ID, Side::Left)
+        .fill(surface)
+        .default_width(280.0)
+        .min_width(220.0)
+        .bare()
+        .show(ui, |ui, _| {
+            let show_run_controls =
+                editor.is_solids_view() || editor.is_planning_cut_step() || (editor.is_planning_setup() && editor.planning_page == crate::ui::state::PlanningPage::Solids);
+            let run_controls = if show_run_controls {
+                egui::Panel::top("planning_run_controls")
+                    .resizable(false)
+                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .exact_size(super::toolbars::bottom_toolbar_height(ui.ctx()))
+                    .frame(crate::ui::chrome::region_frame(ui).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| super::planning_setup::draw_solids_run_controls(ui, editor, commands))
+                    .response
+                    .rect
+            } else {
+                egui::Rect::NOTHING
+            };
 
-            crate::ui::chrome::region_frame(ui)
+            // Blasting and Dig Strips frame the viewport, so their step tree
+            // shares the column with the benches it divides. The two are
+            // separate panes, halving between them whatever the run controls
+            // left.
+            let steps = if editor.is_planning_cut_step() {
+                egui::Panel::top(CUT_STEPS_PANEL_ID)
+                    .resizable(false)
+                    .show_separator_line(crate::ui::chrome::show_separator_line(ui))
+                    .exact_size(ui.available_height() * 0.5)
+                    .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands))
+                    .response
+                    .rect
+            } else {
+                egui::Rect::NOTHING
+            };
+
+            let tree = crate::ui::chrome::region_frame(ui)
                 .fill(surface)
                 .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
@@ -97,32 +131,15 @@ pub(crate) fn draw_explorer(
                     // other full-window planning page lists its own steps.
                     if editor.is_solids_view() {
                         super::solids_view::tree_heading(ui);
-                        // View inspects a completed run and never finishes one
-                        // by being opened, so it carries the run controls too -
-                        // otherwise there would be no way to start from here.
-                        super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        ui.separator();
                         super::solids_view::draw_tree(ui, editor, document);
                         return;
                     }
                     if editor.is_planning_setup() {
                         let page = editor.planning_page;
                         super::planning_setup::draw_steps(ui, editor, page, commands);
-                        if page == crate::ui::state::PlanningPage::Solids {
-                            super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        }
                         return;
                     }
-                    // Blasting frames the viewport, so its step tree shares the
-                    // column with the benches it divides. The steps take only
-                    // the rows they need; the benches scroll in what is left.
                     if editor.is_planning_cut_step() {
-                        let steps = crate::ui::widgets::explorer::row_height(ui) * crate::ui::state::SolidsStep::ALL.len() as f32;
-                        ui.allocate_ui(egui::vec2(ui.available_width(), steps.min(ui.available_height())), |ui| {
-                            super::planning_setup::draw_steps(ui, editor, crate::ui::state::PlanningPage::Solids, commands);
-                        });
-                        super::planning_setup::draw_solids_run_controls(ui, editor, commands);
-                        ui.separator();
                         super::solids_view::bench_tree_heading(ui);
                         if editor.is_dig_strips_step() {
                             super::solids_view::draw_flitch_tree(ui, editor, document);
@@ -135,13 +152,14 @@ pub(crate) fn draw_explorer(
                     draw_object_tree(ui, editor, project, commands);
                 })
                 .response
-                .rect
+                .rect;
+            [run_controls, steps, tree]
         });
 
-    let tree = column.inner;
+    // The panes are the regions; the column itself carries no frame.
     ExplorerLayout {
-        column: column.response.rect,
-        tree,
+        regions: column.inner.into_iter().chain(column.regions).collect(),
+        grip: column.grip,
     }
 }
 

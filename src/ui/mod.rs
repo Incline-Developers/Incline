@@ -555,10 +555,12 @@ fn draw_ui(
         });
         let console = console_rect.unwrap_or(egui::Rect::NOTHING);
         let planning_page = editor.planning_page;
+        let mut planning_layout = elements::planning_setup::PlanningLayout::default();
         let details = if editor.is_solids_view() {
             elements::solids_view::draw_details(root_ui, editor, project, document, commands)
         } else {
-            elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page)
+            planning_layout = elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, planning_page);
+            planning_layout.rect
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
         elements::properties::draw_preferences(root_ui, editor, commands);
@@ -580,14 +582,16 @@ fn draw_ui(
         geometry_dirty |= draw_global_dialogs(root_ui, editor, document, project, block_models, drill_holes, commands);
         let ctx = root_ui.ctx();
         chrome::paint_window_background(ctx, window_background, egui::Rect::ZERO);
-        chrome::paint_regions(ctx, [viewport_bar_rect, explorer.tree, console, details]);
-        chrome::paint_grips(
+        let details_region = if editor.is_solids_view() { details } else { egui::Rect::NOTHING };
+        chrome::paint_regions(
             ctx,
-            [
-                chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
-                chrome::Grip::new(console, chrome::Edge::Top, elements::console::PANEL_ID),
-            ],
+            [viewport_bar_rect, console, details_region]
+                .into_iter()
+                .chain(explorer.regions)
+                .chain(planning_layout.regions),
         );
+        chrome::paint_grips(ctx, planning_layout.grips);
+        chrome::paint_grips(ctx, [explorer.grip, chrome::Grip::new(console, chrome::Edge::Top, elements::console::PANEL_ID)]);
         return geometry_dirty;
     }
 
@@ -617,7 +621,7 @@ fn draw_ui(
     // and they carry on underneath it, and after the viewport bar, so it
     // starts directly under it: the mockup's shape, and the order it takes to
     // get there.
-    let products_rect = if editor.is_planning_cut_step() {
+    let products_island = if editor.is_planning_cut_step() {
         Some(if editor.is_dig_strips_step() {
             elements::dig_strips::draw_panel(root_ui, editor, commands)
         } else {
@@ -628,7 +632,7 @@ fn draw_ui(
     } else {
         (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor))
     };
-    if products_rect.is_none() {
+    if products_island.is_none() {
         // `Panel::show` creates one direct child of `root_ui`. Keep the root
         // auto-id sequence identical in the workspaces without this panel, or
         // every panel drawn after it receives a different unique id.
@@ -1155,35 +1159,24 @@ fn draw_ui(
     let ctx = root_ui.ctx().clone();
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
-    let products_claimed = products_rect.unwrap_or(egui::Rect::NOTHING);
+    let products_regions: Vec<egui::Rect> = products_island.as_ref().map(|island| island.regions.clone()).unwrap_or_default();
     chrome::paint_regions(
         &ctx,
-        [
-            viewport_bar_rect,
-            explorer.tree,
-            left_toolbar_rect,
-            bottom_toolbar_rect,
-            console_claimed,
-            products_claimed,
-            scene_claimed,
-        ],
+        [viewport_bar_rect, left_toolbar_rect, bottom_toolbar_rect, console_claimed, scene_claimed]
+            .into_iter()
+            .chain(products_regions),
     );
     // Centre the explorer resize grip on its full-height column.
     chrome::paint_grips(
         &ctx,
         [
-            chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
+            explorer.grip,
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
-            chrome::Grip::new(
-                products_claimed,
-                chrome::Edge::Left,
-                if editor.is_planning_viewport() {
-                    elements::planning_reserves::PANEL_ID
-                } else {
-                    elements::products::PANEL_ID
-                },
-            ),
-        ],
+        ]
+        .into_iter()
+        // The island names its own seam, so the grip lights up for whichever
+        // of the four right-edge panels the workspace drew.
+        .chain(products_island.map(|island| island.grip)),
     );
 
     geometry_dirty

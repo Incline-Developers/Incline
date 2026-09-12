@@ -7,27 +7,26 @@
 use crate::{
     i18n::tr,
     ui::{
-        EditorState, chrome,
+        EditorState,
         state::{BlastShapeRef, RenameTarget, UiCommand},
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             data_grid::{GridRow, grid_row},
             explorer::explorer_note,
+            island::{Island, IslandResponse, Side},
         },
     },
 };
 
 const PANEL_ID: &str = "planning_blasting_panel";
 
-pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> egui::Rect {
-    egui::Panel::right(PANEL_ID)
-        .resizable(true)
-        .default_size(260.0)
-        .min_size(200.0)
-        .max_size(420.0)
-        .show_separator_line(chrome::show_separator_line(ui))
-        .frame(chrome::region_frame(ui))
-        .show(ui, |ui| {
+pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) -> IslandResponse<()> {
+    Island::new(PANEL_ID, Side::Right)
+        .fill(crate::ui::widgets::tree_row_colors(ui).0)
+        .default_width(260.0)
+        .min_width(200.0)
+        .max_width(420.0)
+        .show(ui, |ui, _| {
             ui.set_min_height(ui.available_height());
             ui.label(crate::ui::fonts::bold(&tr!("planning-blasts")));
             ui.separator();
@@ -83,8 +82,6 @@ pub(crate) fn draw_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
             });
             editor.scroll_to_blast = false;
         })
-        .response
-        .rect
 }
 
 /// The anchor the derivation stored for this outline. Recomputing it here

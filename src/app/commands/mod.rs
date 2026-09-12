@@ -128,7 +128,6 @@ impl<'a> App<'a> {
                 | UiCommand::RecomputeReserveStats(_)
                 | UiCommand::RunPlanningStage(_)
                 | UiCommand::RunAllPlanningStages
-                | UiCommand::ForceRebuildPlanning
         );
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!("Create or open a project before importing, drawing, or generating data");
@@ -413,10 +412,6 @@ impl<'a> App<'a> {
             }
             UiCommand::CancelPlanningRun => {
                 self.cancel_planning_run();
-                Ok(())
-            }
-            UiCommand::ForceRebuildPlanning => {
-                self.force_rebuild_planning();
                 Ok(())
             }
             UiCommand::UpdateSolid { solid, edit } => {

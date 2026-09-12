@@ -27,6 +27,7 @@ use crate::{
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup},
             explorer::{ExplorerEntry, ExplorerHeader, explorer_note, paint_fixed_stripes, reserve_fixed_stripes},
+            island::{Island, IslandResponse, Side},
         },
     },
 };
@@ -54,20 +55,17 @@ const HEADER_DELAY_PALETTE: egui::Color32 = egui::Color32::from_rgb(0xE2, 0x3B, 
 const LABEL_GAP: f32 = 6.0;
 
 /// Draw the products panel and return what it claimed.
-pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -> egui::Rect {
+pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -> IslandResponse<()> {
     // The explorer's row colours, because these are the explorer's rows: the
     // two side panels share one palette rather than each mixing its own.
     let (surface, stripe) = crate::ui::widgets::tree_row_colors(ui);
-    egui::Panel::right(PANEL_ID)
-        .resizable(true)
-        .default_size(DEFAULT_WIDTH)
-        .min_size(MIN_WIDTH)
-        .max_size(MAX_WIDTH)
-        .show_separator_line(crate::ui::chrome::show_separator_line(ui))
-        .frame(crate::ui::chrome::region_frame(ui).fill(surface).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| {
-            // Prevent content from forcing the panel wider than the user has dragged it.
-            ui.set_max_width(ui.available_width());
+    Island::new(PANEL_ID, Side::Right)
+        .default_width(DEFAULT_WIDTH)
+        .min_width(MIN_WIDTH)
+        .max_width(MAX_WIDTH)
+        .fill(surface)
+        .flush()
+        .show(ui, |ui, _| {
             // The palette can outgrow a short viewport. Keep that content
             // inside the height the surrounding bottom panels left us; if it
             // overflows, scroll it rather than allowing the side panel's frame
@@ -105,8 +103,6 @@ pub(crate) fn draw_products_panel(ui: &mut egui::Ui, editor: &mut EditorState) -
                     paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
                 });
         })
-        .response
-        .rect
 }
 
 /// The palette itself: one row per stored product.

@@ -1625,12 +1625,6 @@ pub(crate) struct EditorState {
     pub(crate) solid_view_bands: std::collections::HashMap<crate::model::SolidId, Vec<BenchSelection>>,
     pub(crate) solid_preview_sources: std::collections::HashSet<crate::model::triangulation::TriangulationId>,
     pub(crate) solid_preview_z_range: Option<(f64, f64)>,
-    /// Widths of the Solids step's two draggable columns, in points, and
-    /// whether its object tab is open. The page lays its columns out by rect,
-    /// so the seams keep their positions here rather than in an egui panel.
-    pub(crate) planning_solid_list_width: f32,
-    pub(crate) planning_solid_properties_width: f32,
-    pub(crate) planning_solid_objects_open: bool,
     /// The bench or flitch picked out in the Benching step's results, and so
     /// highlighted in the preview.
     pub(crate) planning_selected_bench: Option<BenchSelection>,
@@ -2639,9 +2633,6 @@ impl EditorState {
             solid_view_bands: Default::default(),
             solid_preview_sources: Default::default(),
             solid_preview_z_range: None,
-            planning_solid_list_width: 240.0,
-            planning_solid_properties_width: 320.0,
-            planning_solid_objects_open: false,
             planning_selected_bench: None,
             slice_preview_size_px: [440, 440],
             slice_preview_navigation: SlicePreviewNavigation::default(),
@@ -3358,15 +3349,12 @@ pub(crate) enum UiCommand {
     /// Ask for one block model's whole-model reserve statistics again, after
     /// a scan that failed or could not load its inputs.
     RecomputeReserveStats(BlockModelId),
-    /// Run one stage of the Solids pipeline across its configured scope.
+    /// Reset pipeline status and rerun from the first step through this stage.
     RunPlanningStage(SolidsStep),
-    /// Run from the earliest stage that is not current through Dig Strips.
+    /// Reset pipeline status and rerun all six stages.
     RunAllPlanningStages,
     /// Stop a run in flight, leaving completed stages alone.
     CancelPlanningRun,
-    /// Discard every artifact and run all six stages again. Distinct from
-    /// Run All, which skips stages whose inputs have not moved.
-    ForceRebuildPlanning,
     /// Change one field of a solid from its property table.
     UpdateSolid {
         solid: crate::model::SolidId,
@@ -3772,8 +3760,7 @@ impl UiCommand {
             | Self::RecomputeReserveStats(_)
             | Self::RunPlanningStage(_)
             | Self::RunAllPlanningStages
-            | Self::CancelPlanningRun
-            | Self::ForceRebuildPlanning => None,
+            | Self::CancelPlanningRun => None,
 
             #[cfg(target_arch = "wasm32")]
             Self::ClearBrowserImportSelection(_) => None,

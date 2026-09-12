@@ -15,6 +15,7 @@ Paths relative to `src/`.
 | Add a UI action | `ui/state.rs` (`UiCommand`, `console_report_spec`) → UI call site → `app/commands/mod.rs` (match arm, `requires_project`) |
 | Change state | `app/mod.rs` (durable), `ui/state.rs` (`EditorState`, transient), `model/project.rs` (projects) |
 | Fix rendering | `rendering/graphics/init.rs` (pipelines), `passes.rs` (draw passes), `rendering/scene/` (geometry + caches), `rendering/shaders/` (WGSL) |
+| Add or change a side panel | `ui/widgets/island.rs` (width, surface, region, seam), then the panel's own `ui/elements/*.rs` |
 | Background work | `app/jobs.rs` |
 | Persistence | `model/formats/`, `model/atomic_file.rs` (native), `app/web_storage.rs` (browser) |
 | Translations | `src/i18n.rs`, `i18n/en/incline_design.ftl` |

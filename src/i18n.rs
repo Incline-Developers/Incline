@@ -306,9 +306,11 @@ fn literal_id(source: &str) -> String {
             separator = true;
         }
     }
-    if id.ends_with('-') {
-        id.pop();
-    }
+    // Nothing but punctuation ("?", "-") leaves the stem empty, still holding
+    // the dash the id started with. The catalog spells those `literal-value-`,
+    // so name them that rather than trimming back to a bare `literal-`. A dash
+    // is only ever pushed immediately before the character it separates, so
+    // this is the one case where the id can still end in one.
     if id == "literal-" {
         id.push_str("value");
     }
